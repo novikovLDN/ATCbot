@@ -1,116 +1,131 @@
-import aiosqlite
+import asyncpg
+import os
+import sys
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
-import config
 import logging
 
 logger = logging.getLogger(__name__)
 
-DATABASE_FILE = "bot.db"
+# Получаем DATABASE_URL из переменных окружения
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL environment variable is not set!", file=sys.stderr)
+    sys.exit(1)
+
+# Глобальный пул соединений
+_pool: Optional[asyncpg.Pool] = None
+
+
+async def get_pool() -> asyncpg.Pool:
+    """Получить пул соединений, создав его при необходимости"""
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+        logger.info("Database connection pool created")
+    return _pool
+
+
+async def close_pool():
+    """Закрыть пул соединений"""
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
+        logger.info("Database connection pool closed")
 
 
 async def init_db():
     """Инициализация базы данных и создание таблиц"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
+    pool = await get_pool()
+    
+    async with pool.acquire() as conn:
         # Таблица users
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                telegram_id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
                 username TEXT,
                 language TEXT DEFAULT 'ru',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
         # Таблица payments
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS payments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER,
-                tariff TEXT,
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT NOT NULL,
+                tariff TEXT NOT NULL,
+                amount INTEGER,
                 status TEXT DEFAULT 'pending',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
         # Таблица subscriptions
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
-                telegram_id INTEGER PRIMARY KEY,
-                vpn_key TEXT,
-                expires_at DATETIME,
-                is_active INTEGER DEFAULT 1,
-                reminder_sent INTEGER DEFAULT 0
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                vpn_key TEXT NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                reminder_sent BOOLEAN DEFAULT FALSE
             )
         """)
         
-        # Миграция: добавить поле reminder_sent если его нет
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS _migration_reminder_sent (
-                id INTEGER PRIMARY KEY
-            )
-        """)
-        async with db.execute("PRAGMA table_info(subscriptions)") as cursor:
-            columns = [row[1] for row in await cursor.fetchall()]
-            if 'reminder_sent' not in columns:
-                await db.execute("ALTER TABLE subscriptions ADD COLUMN reminder_sent INTEGER DEFAULT 0")
-                await db.execute("INSERT INTO _migration_reminder_sent (id) VALUES (1)")
-                logger.info("Migration: Added reminder_sent column to subscriptions")
-        
-        await db.commit()
+        logger.info("Database tables initialized")
 
 
 async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить пользователя по Telegram ID"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM users WHERE telegram_id = $1", telegram_id
+        )
+        return dict(row) if row else None
 
 
 async def create_user(telegram_id: int, username: Optional[str] = None, language: str = "ru"):
     """Создать нового пользователя"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users (telegram_id, username, language) VALUES (?, ?, ?)",
-            (telegram_id, username, language)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO users (telegram_id, username, language) VALUES ($1, $2, $3) ON CONFLICT (telegram_id) DO NOTHING",
+            telegram_id, username, language
         )
-        await db.commit()
 
 
 async def update_user_language(telegram_id: int, language: str):
     """Обновить язык пользователя"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        await db.execute(
-            "UPDATE users SET language = ? WHERE telegram_id = ?",
-            (language, telegram_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET language = $1 WHERE telegram_id = $2",
+            language, telegram_id
         )
-        await db.commit()
 
 
 async def update_username(telegram_id: int, username: Optional[str]):
     """Обновить username пользователя"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        await db.execute(
-            "UPDATE users SET username = ? WHERE telegram_id = ?",
-            (username, telegram_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET username = $1 WHERE telegram_id = $2",
+            username, telegram_id
         )
-        await db.commit()
 
 
 async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить pending платеж пользователя"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM payments WHERE telegram_id = ? AND status = 'pending'",
-            (telegram_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM payments WHERE telegram_id = $1 AND status = 'pending'",
+            telegram_id
+        )
+        return dict(row) if row else None
 
 
 async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
@@ -120,49 +135,51 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
     if existing_payment:
         return None  # У пользователя уже есть pending платеж
     
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        cursor = await db.execute(
-            "INSERT INTO payments (telegram_id, tariff, status) VALUES (?, ?, 'pending')",
-            (telegram_id, tariff)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        payment_id = await conn.fetchval(
+            "INSERT INTO payments (telegram_id, tariff, status) VALUES ($1, $2, 'pending') RETURNING id",
+            telegram_id, tariff
         )
-        await db.commit()
-        return cursor.lastrowid
+        return payment_id
 
 
 async def get_payment(payment_id: int) -> Optional[Dict[str, Any]]:
     """Получить платеж по ID"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM payments WHERE id = ?", (payment_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM payments WHERE id = $1", payment_id
+        )
+        return dict(row) if row else None
 
 
 async def update_payment_status(payment_id: int, status: str):
     """Обновить статус платежа"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        await db.execute(
-            "UPDATE payments SET status = ? WHERE id = ?",
-            (status, payment_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE payments SET status = $1 WHERE id = $2",
+            status, payment_id
         )
-        await db.commit()
 
 
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
-    """Получить активную подписку пользователя"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM subscriptions WHERE telegram_id = ? AND is_active = 1",
-            (telegram_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+    """Получить активную подписку пользователя
+    
+    Активной считается подписка, у которой expires_at > текущего времени.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        row = await conn.fetchrow(
+            "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
+            telegram_id, now
+        )
+        return dict(row) if row else None
 
 
-async def create_subscription(telegram_id: int, vpn_key: str, months: int):
+async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tuple[datetime, bool]:
     """Создать или продлить подписку для пользователя
     
     Если подписка уже существует, продлевает её срок действия.
@@ -176,7 +193,7 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int):
     
     if current_subscription:
         # Продление: берем максимальное значение между текущим expires_at и now
-        current_expires_at = datetime.fromisoformat(current_subscription["expires_at"])
+        current_expires_at = current_subscription["expires_at"]
         base_date = max(current_expires_at, now)
         expires_at = base_date + tariff_duration
         is_renewal = True
@@ -185,12 +202,15 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int):
         expires_at = now + tariff_duration
         is_renewal = False
     
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO subscriptions (telegram_id, vpn_key, expires_at, is_active, reminder_sent) VALUES (?, ?, ?, 1, 0)",
-            (telegram_id, vpn_key, expires_at.isoformat())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent)
+               VALUES ($1, $2, $3, FALSE)
+               ON CONFLICT (telegram_id) 
+               DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
+            telegram_id, vpn_key, expires_at
         )
-        await db.commit()
         return expires_at, is_renewal
 
 
@@ -204,125 +224,106 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
     Возвращает (expires_at, is_renewal) или (None, False) при ошибке.
     При любой ошибке транзакция откатывается.
     """
-    db = None
-    try:
-        db = await aiosqlite.connect(DATABASE_FILE)
-        db.row_factory = aiosqlite.Row
-        
-        # Отключаем автокоммит для управления транзакцией вручную
-        await db.execute("BEGIN")
-        
-        try:
-            # 1. Проверяем, что платеж существует и в статусе pending
-            async with db.execute(
-                "SELECT * FROM payments WHERE id = ? AND status = 'pending'",
-                (payment_id,)
-            ) as cursor:
-                payment_row = await cursor.fetchone()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # 1. Проверяем, что платеж существует и в статусе pending
+                payment_row = await conn.fetchrow(
+                    "SELECT * FROM payments WHERE id = $1 AND status = 'pending'",
+                    payment_id
+                )
                 if not payment_row:
-                    await db.rollback()
                     logger.error(f"Payment {payment_id} not found or not pending for atomic approve")
                     return None, False
                 
                 payment = dict(payment_row)
                 telegram_id = payment["telegram_id"]
-            
-            # 2. Обновляем статус платежа на approved
-            await db.execute(
-                "UPDATE payments SET status = 'approved' WHERE id = ?",
-                (payment_id,)
-            )
-            
-            # 3. Получаем текущую подписку (если есть)
-            now = datetime.now()
-            tariff_duration = timedelta(days=months * 30)
-            
-            async with db.execute(
-                "SELECT * FROM subscriptions WHERE telegram_id = ? AND is_active = 1",
-                (telegram_id,)
-            ) as cursor:
-                sub_row = await cursor.fetchone()
-                current_subscription = dict(sub_row) if sub_row else None
-            
-            # 4. Рассчитываем expires_at (продление или новая подписка)
-            if current_subscription:
-                current_expires_at = datetime.fromisoformat(current_subscription["expires_at"])
-                base_date = max(current_expires_at, now)
-                expires_at = base_date + tariff_duration
-                is_renewal = True
-                logger.info(f"Renewing subscription for user {telegram_id}: {current_expires_at} -> {expires_at}")
-            else:
-                expires_at = now + tariff_duration
-                is_renewal = False
-                logger.info(f"Creating new subscription for user {telegram_id}: expires_at = {expires_at}")
-            
-            # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в 0 при продлении)
-            await db.execute(
-                "INSERT OR REPLACE INTO subscriptions (telegram_id, vpn_key, expires_at, is_active, reminder_sent) VALUES (?, ?, ?, 1, 0)",
-                (telegram_id, vpn_key, expires_at.isoformat())
-            )
-            
-            # 6. Коммитим транзакцию
-            await db.commit()
-            
-            logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
-            return expires_at, is_renewal
-            
-        except Exception as e:
-            # Откатываем транзакцию при любой ошибке
-            await db.rollback()
-            logger.exception(f"Error in atomic approve for payment {payment_id}, transaction rolled back")
-            raise
-            
-    except Exception as e:
-        logger.exception(f"Database error in approve_payment_atomic for payment {payment_id}")
-        return None, False
-    finally:
-        if db:
-            await db.close()
+                
+                # 2. Обновляем статус платежа на approved
+                await conn.execute(
+                    "UPDATE payments SET status = 'approved' WHERE id = $1",
+                    payment_id
+                )
+                
+                # 3. Получаем текущую подписку (если есть)
+                now = datetime.now()
+                tariff_duration = timedelta(days=months * 30)
+                
+                current_subscription_row = await conn.fetchrow(
+                    "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
+                    telegram_id, now
+                )
+                current_subscription = dict(current_subscription_row) if current_subscription_row else None
+                
+                # 4. Рассчитываем expires_at (продление или новая подписка)
+                if current_subscription:
+                    current_expires_at = current_subscription["expires_at"]
+                    base_date = max(current_expires_at, now)
+                    expires_at = base_date + tariff_duration
+                    is_renewal = True
+                    logger.info(f"Renewing subscription for user {telegram_id}: {current_expires_at} -> {expires_at}")
+                else:
+                    expires_at = now + tariff_duration
+                    is_renewal = False
+                    logger.info(f"Creating new subscription for user {telegram_id}: expires_at = {expires_at}")
+                
+                # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в FALSE при продлении)
+                await conn.execute(
+                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent)
+                       VALUES ($1, $2, $3, FALSE)
+                       ON CONFLICT (telegram_id) 
+                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
+                    telegram_id, vpn_key, expires_at
+                )
+                
+                logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
+                return expires_at, is_renewal
+                
+            except Exception as e:
+                logger.exception(f"Error in atomic approve for payment {payment_id}, transaction rolled back")
+                raise
 
 
 async def get_pending_payments() -> list:
     """Получить все pending платежи (для админа)"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             "SELECT * FROM payments WHERE status = 'pending' ORDER BY created_at DESC"
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+        )
+        return [dict(row) for row in rows]
 
 
 async def get_subscriptions_needing_reminder() -> list:
     """Получить подписки, которым нужно отправить напоминание
     
     Возвращает список подписок, где:
-    - is_active = 1
-    - reminder_sent = 0
+    - expires_at > now (активная)
+    - reminder_sent = FALSE
     - expires_at <= now + 3 days
     """
     now = datetime.now()
     reminder_date = now + timedelta(days=3)
     
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             """SELECT * FROM subscriptions 
-               WHERE is_active = 1 
-               AND reminder_sent = 0 
-               AND expires_at <= ?
+               WHERE expires_at > $1 
+               AND expires_at <= $2
+               AND reminder_sent = FALSE
                ORDER BY expires_at ASC""",
-            (reminder_date.isoformat(),)
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+            now, reminder_date
+        )
+        return [dict(row) for row in rows]
 
 
 async def mark_reminder_sent(telegram_id: int):
     """Отметить, что напоминание отправлено пользователю"""
-    async with aiosqlite.connect(DATABASE_FILE) as db:
-        await db.execute(
-            "UPDATE subscriptions SET reminder_sent = 1 WHERE telegram_id = ?",
-            (telegram_id,)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET reminder_sent = TRUE WHERE telegram_id = $1",
+            telegram_id
         )
-        await db.commit()

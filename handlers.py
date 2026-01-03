@@ -260,7 +260,10 @@ async def show_profile(message_or_query, language: str):
     subscription = await database.get_subscription(telegram_id)
     
     if subscription:
-        expires_at = datetime.fromisoformat(subscription["expires_at"])
+        # asyncpg возвращает datetime объекты напрямую, не строки
+        expires_at = subscription["expires_at"]
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
         expires_str = expires_at.strftime("%d.%m.%Y")
         text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=subscription["vpn_key"])
         text += localization.get_text(language, "profile_renewal_hint")

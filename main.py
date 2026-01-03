@@ -44,6 +44,9 @@ async def main():
             await reminder_task
         except asyncio.CancelledError:
             pass
+        # Закрываем пул соединений к БД
+        await database.close_pool()
+        logger.info("Database connection pool closed")
 
 
 if __name__ == "__main__":
