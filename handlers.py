@@ -106,6 +106,10 @@ def get_main_menu_keyboard(language: str):
             text=localization.get_text(language, "instruction"),
             callback_data="menu_instruction"
         )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "service_status"),
+            callback_data="menu_service_status"
+        )],
         [
             InlineKeyboardButton(
                 text=localization.get_text(language, "about"),
@@ -247,8 +251,27 @@ def get_about_keyboard(language: str):
             callback_data="about_privacy"
         )],
         [InlineKeyboardButton(
+            text=localization.get_text(language, "service_status"),
+            callback_data="menu_service_status"
+        )],
+        [InlineKeyboardButton(
             text=localization.get_text(language, "back"),
             callback_data="menu_main"
+        )],
+    ])
+    return keyboard
+
+
+def get_service_status_keyboard(language: str):
+    """Клавиатура экрана 'Статус сервиса'"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back"),
+            callback_data="menu_main"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "support"),
+            callback_data="menu_support"
         )],
     ])
     return keyboard
@@ -675,6 +698,18 @@ async def callback_about(callback: CallbackQuery):
     
     text = localization.get_text(language, "about_text")
     await callback.message.edit_text(text, reply_markup=get_about_keyboard(language))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu_service_status")
+async def callback_service_status(callback: CallbackQuery):
+    """Статус сервиса"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "service_status_text")
+    await callback.message.edit_text(text, reply_markup=get_service_status_keyboard(language))
     await callback.answer()
 
 
