@@ -243,7 +243,7 @@ async def show_profile(message_or_query, language: str):
         
         text = f"{localization.get_text(language, 'subscription_active')}\n"
         text += localization.get_text(language, "subscription_expires", date=expires_str) + "\n"
-        text += localization.get_text(language, "vpn_key", key=subscription["vpn_key"])
+        text += localization.get_text(language, "vpn_key", vpn_key=subscription["vpn_key"])
     else:
         text = localization.get_text(language, "no_subscription")
     
