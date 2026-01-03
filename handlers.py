@@ -1,16 +1,67 @@
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import database
 import localization
 import config
 
+# Время последней отправки алерта о ключах (для предотвращения спама)
+_last_keys_alert_time: datetime = None
+_last_keys_alert_count: int = -1  # Количество ключей при последнем алерте
+_ALERT_COOLDOWN_MINUTES = 30  # Минимальный интервал между алертами (в минутах)
+
 router = Router()
 
 logging.basicConfig(level=logging.INFO)
+
+
+async def send_vpn_keys_alert(bot: Bot, keys_count: int):
+    """Отправить алерт администратору о количестве VPN-ключей
+    
+    Args:
+        bot: Экземпляр бота для отправки сообщения
+        keys_count: Текущее количество свободных ключей
+    """
+    global _last_keys_alert_time, _last_keys_alert_count
+    
+    now = datetime.now()
+    
+    # Проверяем, нужно ли отправлять алерт
+    should_send = False
+    
+    if keys_count == 0:
+        # Критический алерт - отправляем всегда
+        should_send = True
+        alert_text = "🚨 КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ\n\nСвободные VPN-ключи закончились!\nПодтверждение платежей заблокировано.\n\nНеобходимо срочно пополнить таблицу vpn_keys."
+    elif keys_count <= 5:
+        # Предупреждение - отправляем не чаще раза в N минут
+        if _last_keys_alert_time is None:
+            should_send = True
+        else:
+            time_since_last = now - _last_keys_alert_time
+            if time_since_last >= timedelta(minutes=_ALERT_COOLDOWN_MINUTES):
+                should_send = True
+            # Также отправляем, если количество изменилось (уменьшилось)
+            elif keys_count < _last_keys_alert_count:
+                should_send = True
+        
+        if should_send:
+            alert_text = f"⚠️ Предупреждение\n\nСвободных VPN-ключей осталось: {keys_count}\nРекомендуется пополнить таблицу vpn_keys."
+    else:
+        # Достаточно ключей - не отправляем
+        should_send = False
+    
+    if should_send:
+        try:
+            await bot.send_message(config.ADMIN_TELEGRAM_ID, alert_text)
+            _last_keys_alert_time = now
+            _last_keys_alert_count = keys_count
+            logging.info(f"VPN keys alert sent to admin: {keys_count} keys remaining")
+        except Exception as e:
+            logging.error(f"Error sending VPN keys alert to admin: {e}")
 
 
 def get_language_keyboard():
@@ -535,9 +586,22 @@ async def approve_payment(callback: CallbackQuery):
         tariff_key = payment["tariff"]
         tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
         
+        # Проверяем количество свободных ключей перед approve
+        keys_count = await database.get_free_vpn_keys_count()
+        
+        # Отправляем алерт если нужно
+        await send_vpn_keys_alert(callback.bot, keys_count)
+        
+        # Если ключей нет - блокируем approve
+        if keys_count == 0:
+            logging.error(f"Cannot approve payment {payment_id}: no free VPN keys available")
+            await callback.answer("Нет свободных VPN-ключей. Подтверждение платежей заблокировано. Пополните таблицу vpn_keys.", show_alert=True)
+            return
+        
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
         # Логика получения ключа находится внутри approve_payment_atomic
-        result = await database.approve_payment_atomic(payment_id, tariff_data["months"])
+        admin_telegram_id = callback.from_user.id
+        result = await database.approve_payment_atomic(payment_id, tariff_data["months"], admin_telegram_id)
         expires_at, is_renewal, vpn_key = result
         
         if expires_at is None or vpn_key is None:
@@ -614,9 +678,10 @@ async def reject_payment(callback: CallbackQuery):
             return
         
         telegram_id = payment["telegram_id"]
+        admin_telegram_id = callback.from_user.id
         
-        # Обновляем статус платежа на rejected
-        await database.update_payment_status(payment_id, "rejected")
+        # Обновляем статус платежа на rejected (аудит записывается внутри функции)
+        await database.update_payment_status(payment_id, "rejected", admin_telegram_id)
         logging.info(f"Payment {payment_id} rejected for user {telegram_id}")
         
         # Уведомляем пользователя

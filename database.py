@@ -85,6 +85,18 @@ async def init_db():
             )
         """)
         
+        # Таблица audit_log
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id SERIAL PRIMARY KEY,
+                action TEXT NOT NULL,
+                telegram_id BIGINT NOT NULL,
+                target_user BIGINT,
+                details TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         logger.info("Database tables initialized")
 
 
@@ -165,14 +177,35 @@ async def get_payment(payment_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
-async def update_payment_status(payment_id: int, status: str):
-    """Обновить статус платежа"""
+async def update_payment_status(payment_id: int, status: str, admin_telegram_id: Optional[int] = None):
+    """Обновить статус платежа
+    
+    Args:
+        payment_id: ID платежа
+        status: Новый статус ('approved', 'rejected', и т.д.)
+        admin_telegram_id: Telegram ID администратора (опционально, для аудита)
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE payments SET status = $1 WHERE id = $2",
-            status, payment_id
-        )
+        async with conn.transaction():
+            # Получаем информацию о платеже для аудита
+            payment_row = await conn.fetchrow(
+                "SELECT telegram_id FROM payments WHERE id = $1",
+                payment_id
+            )
+            target_user = payment_row["telegram_id"] if payment_row else None
+            
+            # Обновляем статус
+            await conn.execute(
+                "UPDATE payments SET status = $1 WHERE id = $2",
+                status, payment_id
+            )
+            
+            # Записываем в audit_log, если указан admin_telegram_id
+            if admin_telegram_id is not None:
+                action_type = "payment_rejected" if status == "rejected" else f"payment_status_changed_{status}"
+                details = f"Payment ID: {payment_id}, Status: {status}"
+                await _log_audit_event_atomic(conn, action_type, admin_telegram_id, target_user, details)
 
 
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -239,6 +272,35 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tu
         return expires_at, is_renewal
 
 
+async def get_free_vpn_keys_count() -> int:
+    """Получить количество свободных VPN-ключей"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM vpn_keys WHERE is_used = FALSE"
+        )
+        return count if count else 0
+
+
+async def _log_audit_event_atomic(conn, action: str, telegram_id: int, target_user: Optional[int] = None, details: Optional[str] = None):
+    """Записать событие аудита в таблицу audit_log
+    
+    Должна вызываться ТОЛЬКО внутри активной транзакции.
+    
+    Args:
+        conn: Соединение с БД (внутри транзакции)
+        action: Тип действия (например, 'payment_approved', 'payment_rejected', 'vpn_key_issued', 'subscription_renewed')
+        telegram_id: Telegram ID администратора, который выполнил действие
+        target_user: Telegram ID пользователя, над которым выполнено действие (опционально)
+        details: Дополнительные детали действия (опционально)
+    """
+    await conn.execute(
+        """INSERT INTO audit_log (action, telegram_id, target_user, details)
+           VALUES ($1, $2, $3, $4)""",
+        action, telegram_id, target_user, details
+    )
+
+
 async def _get_free_vpn_key_atomic(conn, telegram_id: int) -> Optional[str]:
     """Атомарно получить свободный VPN-ключ из таблицы vpn_keys
     
@@ -275,17 +337,23 @@ async def _get_free_vpn_key_atomic(conn, telegram_id: int) -> Optional[str]:
     return vpn_key
 
 
-async def approve_payment_atomic(payment_id: int, months: int) -> Tuple[Optional[datetime], bool, Optional[str]]:
+async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id: int) -> Tuple[Optional[datetime], bool, Optional[str]]:
     """Атомарно подтвердить платеж в одной транзакции
     
     В одной транзакции:
     - обновляет payment → approved
     - получает VPN-ключ из таблицы vpn_keys (если нужен новый)
     - создает/продлевает subscription с VPN-ключом
+    - записывает событие в audit_log
     
     Логика выдачи ключей:
     - Если подписка активна (expires_at > now): переиспользуется существующий ключ
     - Если подписка закончилась (expires_at <= now) или её нет: используется новый ключ из БД
+    
+    Args:
+        payment_id: ID платежа
+        months: Количество месяцев подписки
+        admin_telegram_id: Telegram ID администратора, который выполняет approve
     
     Returns:
         (expires_at, is_renewal, vpn_key) или (None, False, None) при ошибке или отсутствии ключей
@@ -362,6 +430,11 @@ async def approve_payment_atomic(payment_id: int, months: int) -> Tuple[Optional
                        DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
                     telegram_id, final_vpn_key, expires_at
                 )
+                
+                # 6. Записываем событие в audit_log
+                action_type = "subscription_renewed" if is_renewal else "payment_approved"
+                details = f"Payment ID: {payment_id}, Tariff: {months} months, Expires: {expires_at.isoformat()}, VPN key: {final_vpn_key[:20]}..."
+                await _log_audit_event_atomic(conn, action_type, admin_telegram_id, telegram_id, details)
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
                 return expires_at, is_renewal, final_vpn_key
