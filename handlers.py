@@ -487,7 +487,7 @@ async def approve_payment(callback: CallbackQuery):
         else:
             expires_str = "не определено"
         
-        text = localization.get_text(language, "payment_approved", key=vpn_key, date=expires_str)
+        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
         
         try:
             await callback.bot.send_message(telegram_id, text)
