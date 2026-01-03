@@ -40,6 +40,10 @@ def get_main_menu_keyboard(language: str):
             text=localization.get_text(language, "buy_vpn"),
             callback_data="menu_buy_vpn"
         )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "instruction"),
+            callback_data="menu_instruction"
+        )],
         [
             InlineKeyboardButton(
                 text=localization.get_text(language, "about"),
@@ -65,12 +69,18 @@ def get_back_keyboard(language: str):
 
 
 def get_profile_keyboard(language: str):
-    """Клавиатура с кнопкой профиля"""
+    """Клавиатура с кнопками профиля и инструкции (после активации)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "profile"),
-            callback_data="menu_profile"
-        )]
+        [
+            InlineKeyboardButton(
+                text=localization.get_text(language, "profile"),
+                callback_data="menu_profile"
+            ),
+            InlineKeyboardButton(
+                text=localization.get_text(language, "instruction"),
+                callback_data="menu_instruction"
+            ),
+        ]
     ])
     return keyboard
 
@@ -169,6 +179,21 @@ def get_support_keyboard(language: str):
         [InlineKeyboardButton(
             text=localization.get_text(language, "back"),
             callback_data="menu_main"
+        )],
+    ])
+    return keyboard
+
+
+def get_instruction_keyboard(language: str):
+    """Клавиатура экрана 'Инструкция'"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back"),
+            callback_data="menu_main"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "support"),
+            callback_data="menu_support"
         )],
     ])
     return keyboard
@@ -443,6 +468,18 @@ async def callback_privacy(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "menu_instruction")
+async def callback_instruction(callback: CallbackQuery):
+    """Инструкция"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "instruction_text")
+    await callback.message.edit_text(text, reply_markup=get_instruction_keyboard(language))
+    await callback.answer()
+
+
 @router.callback_query(F.data == "menu_support")
 async def callback_support(callback: CallbackQuery):
     """Поддержка"""
@@ -451,7 +488,7 @@ async def callback_support(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(
-        language, 
+        language,
         "support_text",
         email=config.SUPPORT_EMAIL,
         telegram=config.SUPPORT_TELEGRAM

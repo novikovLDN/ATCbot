@@ -11,6 +11,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "buy_vpn": "🔐 Купить доступ",
         "about": "ℹ️ О сервисе",
         "support": "🛡 Поддержка",
+        "instruction": "📖 Инструкция",
         "back": "🔙 Назад",
         
         # Выбор тарифа
@@ -60,8 +61,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "support_text": "🛡 Поддержка Atlas Secure\n\nПо вопросам доступа, оплаты или работы сервиса\nвы можете связаться с нами напрямую.\n\nКаждое обращение рассматривается индивидуально\nв приоритетном порядке.\n\nКонтакты:\nEmail: {email}\nTelegram: {telegram}",
         "change_language": "🌍 Изменить язык",
         
+        # Инструкция
+        "instruction_text": "Подключение Outline\n\nДоступ предоставляется через персональный ключ.\n\n1. Ключ доступа\nВыдаётся после активации Atlas Secure.\n\n2. Приложение\nУстановите Outline VPN из официального магазина приложений\nдля вашей операционной системы.\n\n3. Подключение\nОткройте Outline, нажмите (＋) и введите выданный ключ.\nСоединение активируется автоматически.",
+        
         # Администратор (без изменений)
-        "admin_payment_notification": "💰 Новая оплата\nПользователь: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} месяцев\nСтоимость: {price} руб.",
+        "admin_payment_notification": "💰 Новая оплата\nПользователь: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} месяцев\nСтоимость: {price} ₽",
         "admin_approve": "Подтвердить",
         "admin_reject": "Отклонить",
     },
@@ -74,18 +78,19 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "buy_vpn": "🔐 Buy Access",
         "about": "ℹ️ About",
         "support": "🛡 Support",
+        "instruction": "📖 Instruction",
         "back": "🔙 Back",
         
         # Выбор тарифа
         "select_tariff": "Select access period\n\nAtlas Secure operates on a limited access principle.\nEach period is a private configuration, not a mass tariff.\n\nEach access level includes:\n— individual VPN key assigned exclusively to you\n— zero-logs architecture without session and metadata storage\n— stable connection without limits and speed degradation\n— priority support",
-        "tariff_button_1": "1 month\nTemporary access · {price} ₽",
-        "tariff_button_3": "3 months\nStandard access · {price} ₽",
-        "tariff_button_6": "6 months\nExtended access · {price} ₽",
-        "tariff_button_12": "12 months\nPriority access · {price} ₽",
+        "tariff_button_1": "1 month Temporary Access · 299 ₽",
+        "tariff_button_3": "3 months Standard Access · 799 ₽",
+        "tariff_button_6": "6 months Extended Access · 1 499 ₽",
+        "tariff_button_12": "12 months Priority Access · 2 799 ₽",
         
         # Выбор способа оплаты
         "select_payment": "Choose payment method.",
-        "payment_test": "Service mode\nUnavailable",
+        "payment_test": "Service mode Unavailable",
         "payment_sbp": "SBP",
         
         # Оплата СБП
@@ -123,8 +128,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "support_text": "🛡 Atlas Secure Support\n\nFor questions about access, payment, or service operation\nyou can contact us directly.\n\nEach request is considered individually\nwith priority.\n\nContacts:\nEmail: {email}\nTelegram: {telegram}",
         "change_language": "🌍 Change language",
         
+        # Инструкция
+        "instruction_text": "Connecting to Outline\n\nAccess is provided through a personal key.\n\n1. Access Key\nIssued after Atlas Secure activation.\n\n2. Application\nInstall Outline VPN from the official app store\nfor your operating system.\n\n3. Connection\nOpen Outline, press (＋) and enter the issued key.\nConnection is activated automatically.",
+        
         # Администратор
-        "admin_payment_notification": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} rub.",
+        "admin_payment_notification": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
         "admin_approve": "Approve",
         "admin_reject": "Reject",
     },
@@ -135,16 +143,17 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "buy_vpn": "🔐 Kirishni sotib olish",
         "about": "ℹ️ Xizmat haqida",
         "support": "🛡 Qo'llab-quvvatlash",
+        "instruction": "📖 Ko'rsatma",
         "back": "🔙 Orqaga",
         "select_tariff": "Kirish muddatini tanlang\n\nAtlas Secure cheklangan kirish printsipi asosida ishlaydi.\nHar bir davr — bu shaxsiy konfiguratsiya, emas ommaviy tarif.\n\nHar bir kirish darajasi quyidagilarni o'z ichiga oladi:\n— sizga xos qilingan individual VPN kalit\n— sessiya va metama'lumotlarni saqlashsiz zero-logs arxitektura\n— cheklovlar va tezlik pasayishi bo'lmagan barqaror ulanish\n— ustuvor qo'llab-quvvatlash",
-        "tariff_button_1": "1 oy\nVaqtinchalik kirish · {price} so'm",
-        "tariff_button_3": "3 oy\nStandart kirish · {price} so'm",
-        "tariff_button_6": "6 oy\nKengaytirilgan kirish · {price} so'm",
-        "tariff_button_12": "12 oy\nUstuvor kirish · {price} so'm",
+        "tariff_button_1": "1 oy Vaqtinchalik kirish · 299 ₽",
+        "tariff_button_3": "3 oy Standart kirish · 799 ₽",
+        "tariff_button_6": "6 oy Kengaytirilgan kirish · 1 499 ₽",
+        "tariff_button_12": "12 oy Ustuvor kirish · 2 799 ₽",
         "select_payment": "To'lov usulini tanlang.",
-        "payment_test": "Xizmat rejimi\nMavjud emas",
+        "payment_test": "Xizmat rejimi Mavjud emas",
         "payment_sbp": "SBP",
-        "sbp_payment_text": "Kirishni moliyaviy tasdiqlash\n\nQo'lda tasdiqlash avtomatik to'lovlarni istisno qiladi\nva sizga xos qilingan shaxsiy VPN kirish konfiguratsiyasini yaratishga imkon beradi.\n\nO'tkazmadan keyin to'lovni tasdiqlang.\n\n⸻\n\nO'tkazma ma'lumotlari\n\nBank: {bank}\nHisob: {account}\nQabul qiluvchi: {name}\n\nTasdiqlash uchun summa: {price} so'm",
+        "sbp_payment_text": "Kirishni moliyaviy tasdiqlash\n\nQo'lda tasdiqlash avtomatik to'lovlarni istisno qiladi\nva sizga xos qilingan shaxsiy VPN kirish konfiguratsiyasini yaratishga imkon beradi.\n\nO'tkazmadan keyin to'lovni tasdiqlang.\n\n⸻\n\nO'tkazma ma'lumotlari\n\nBank: {bank}\nHisob: {account}\nQabul qiluvchi: {name}\n\nTasdiqlash uchun summa: {price} ₽",
         "paid_button": "To'lovni tasdiqlash",
         "payment_pending": "Tasdiqlash jarayonda\n\nTo'lov ro'yxatga olingan.\nTekshiruv 5 minutgacha davom etadi.\nKirish faollashtirish avtomatik ravishda amalga oshiriladi.",
         "payment_approved": "✅ Kirish faollashtirildi.\n\nSizning shaxsiy VPN kalitingiz:\n{vpn_key}\n\nAmal qilish muddati:\n{date} gacha\n\nKalitni xavfsiz joyda saqlashni tavsiya etamiz.",
@@ -159,7 +168,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "privacy_policy_text": "Maxfiylik siyosati\n\nBiz VPN xizmatlarini taqdim etish uchun faqat zarur ma'lumotlarni saqlaymiz.",
         "support_text": "🛡 Atlas Secure qo'llab-quvvatlash\n\nKirish, to'lov yoki xizmat ishlashi haqida savollar bo'yicha\nsiz biz bilan to'g'ridan-to'g'ri bog'lanishingiz mumkin.\n\nHar bir murojaat individual ravishda ko'rib chiqiladi\nustuvor tartibda.\n\nKontaktlar:\nEmail: {email}\nTelegram: {telegram}",
         "change_language": "🌍 Tilni o'zgartirish",
-        "admin_payment_notification": "💰 Yangi to'lov\nFoydalanuvchi: @{username}\nTelegram ID: {telegram_id}\nTarif: {tariff} oy\nNarx: {price} so'm",
+        
+        # Инструкция
+        "instruction_text": "Outline-ga ulanish\n\nKirish shaxsiy kalit orqali ta'minlanadi.\n\n1. Kirish kaliti\nAtlas Secure faollashtirilgandan keyin beriladi.\n\n2. Ilova\nOperatsion tizimingiz uchun rasmiy ilova do'konidan\nOutline VPN-ni o'rnating.\n\n3. Ulanish\nOutline-ni oching, (＋) tugmasini bosing va berilgan kalitni kiriting.\nUlanish avtomatik ravishda faollashtiriladi.",
+        "admin_payment_notification": "💰 Yangi to'lov\nFoydalanuvchi: @{username}\nTelegram ID: {telegram_id}\nTarif: {tariff} oy\nNarx: {price} ₽",
         "admin_approve": "Tasdiqlash",
         "admin_reject": "Rad etish",
     },
@@ -170,16 +182,17 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "buy_vpn": "🔐 Хариди дастрасӣ",
         "about": "ℹ️ Дар бораи хизмат",
         "support": "🛡 Дастгирӣ",
+        "instruction": "📖 Дастур",
         "back": "🔙 Бозгашт",
         "select_tariff": "Муддати дастрасиро интихоб кунед\n\nAtlas Secure ба принсипи дастрасии маҳдуд кор мекунад.\nҲар як давра — ин конфигуратсияи хусусӣ аст, на тарифи оммавӣ.\n\nҲар як сатҳи дастрасӣ дорои:\n— калиди VPN-и шахсӣ, ки хусусан ба шумо закреп шудааст\n— меъмории zero-logs бе нигоҳдории сессияҳо ва метамаълумот\n— пайванди устувор бе маҳдудияту коҳиши суръат\n— дастгирии афзалиятнок",
-        "tariff_button_1": "1 моҳ\nДастрасии муваққатӣ · {price} сом.",
-        "tariff_button_3": "3 моҳ\nДастрасии стандартӣ · {price} сом.",
-        "tariff_button_6": "6 моҳ\nДастрасии васеъ · {price} сом.",
-        "tariff_button_12": "12 моҳ\nДастрасии афзалиятнок · {price} сом.",
+        "tariff_button_1": "1 моҳ Дастрасии муваққатӣ · 299 ₽",
+        "tariff_button_3": "3 моҳ Дастрасии стандартӣ · 799 ₽",
+        "tariff_button_6": "6 моҳ Дастрасии васеъ · 1 499 ₽",
+        "tariff_button_12": "12 моҳ Дастрасии афзалиятнок · 2 799 ₽",
         "select_payment": "Усули пардохтро интихоб кунед.",
-        "payment_test": "Реҷаи хизматӣ\nДастрас нест",
+        "payment_test": "Реҷаи хизматӣ Дастрас нест",
         "payment_sbp": "СБП",
-        "sbp_payment_text": "Тасдиқи молиявии дастрасӣ\n\nТасдиқи дастӣ пардохтҳои худкорро истисно мекунад\nва имкон медиҳад конфигуратсияи шахсии дастрасии VPN-ро\nэҷод кунед, ки хусусан ба шумо закреп шудааст.\n\nПас аз интиқол, пардохтро тасдиқ кунед.\n\n⸻\n\nМаълумоти интиқол\n\nБонк: {bank}\nҲисоб: {account}\nҚабулкунанда: {name}\n\nМаблағи тасдиқ: {price} сом.",
+        "sbp_payment_text": "Тасдиқи молиявии дастрасӣ\n\nТасдиқи дастӣ пардохтҳои худкорро истисно мекунад\nва имкон медиҳад конфигуратсияи шахсии дастрасии VPN-ро\nэҷод кунед, ки хусусан ба шумо закреп шудааст.\n\nПас аз интиқол, пардохтро тасдиқ кунед.\n\n⸻\n\nМаълумоти интиқол\n\nБонк: {bank}\nҲисоб: {account}\nҚабулкунанда: {name}\n\nМаблағи тасдиқ: {price} ₽",
         "paid_button": "Пардохтро тасдиқ кардан",
         "payment_pending": "Тасдиқ дар раванд аст\n\nПардохт ба қайд гирифта шуд.\nСанҷиш то 5 дақиқа давом мекунад.\nФаъолсозии дастрасӣ ба таври худкор иҷро мешавад.",
         "payment_approved": "✅ Дастрасӣ фаъол шуд.\n\nКалиди VPN-и шахсии шумо:\n{vpn_key}\n\nМуддати амал:\nто {date}\n\nТавсия медиҳем, ки калидро дар ҷойи бехатар нигоҳ доред.",
@@ -194,7 +207,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "privacy_policy_text": "Сиёсати махфият\n\nМо танҳо маълумоти зарурӣ барои таъмини хидматҳои VPN нигоҳ медорем.",
         "support_text": "🛡 Дастгирии Atlas Secure\n\nДар бораи дастрасӣ, пардохт ё амали хизмат саволҳо\nшумо метавонед бо мо бевосита тавонос шавед.\n\nҲар як мурожаат ба таври шахсӣ баррасӣ карда мешавад\nдар тартиби афзалиятнок.\n\nКонтактҳо:\nEmail: {email}\nTelegram: {telegram}",
         "change_language": "🌍 Тағйири забон",
-        "admin_payment_notification": "💰 Пардохти нав\nКорбар: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} моҳ\nНарх: {price} сом.",
+        
+        # Инструкция
+        "instruction_text": "Пайвастшавӣ ба Outline\n\nДастрасӣ тавассути калиди шахсӣ таъмин карда мешавад.\n\n1. Калиди дастрасӣ\nПас аз фаъолсозии Atlas Secure дода мешавад.\n\n2. Барнома\nOutline VPN-ро аз мағозаи расмии барномаҳо\nбарои системаи оператсионии шумо насб кунед.\n\n3. Пайвастшавӣ\nOutline-ро кушоед, (＋) -ро пахш кунед ва калиди додашударо ворид кунед.\nПайванд ба таври худкор фаъол мешавад.",
+        "admin_payment_notification": "💰 Пардохти нав\nКорбар: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} моҳ\nНарх: {price} ₽",
         "admin_approve": "Тасдиқ кардан",
         "admin_reject": "Рад кардан",
     },
