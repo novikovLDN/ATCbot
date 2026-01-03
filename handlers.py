@@ -510,21 +510,20 @@ async def approve_payment(callback: CallbackQuery):
     await callback.answer()  # ОБЯЗАТЕЛЬНО
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        logging.warning(f"Unauthorized approve attempt by user {callback.from_user.id}")
         await callback.answer("Нет доступа", show_alert=True)
         return
     
     try:
         payment_id = int(callback.data.split(":")[1])
         
-        logging.info(
-            f"APPROVE pressed by {callback.from_user.id}, payment_id={payment_id}"
-        )
+        logging.info(f"APPROVE pressed by admin {callback.from_user.id}, payment_id={payment_id}")
         
         # Получить платеж из БД
         payment = await database.get_payment(payment_id)
         
         if not payment:
-            logging.warning(f"Payment {payment_id} not found")
+            logging.warning(f"Payment {payment_id} not found for approve")
             await callback.answer("Платеж не найден", show_alert=True)
             return
         
@@ -537,35 +536,50 @@ async def approve_payment(callback: CallbackQuery):
             await callback.message.edit_reply_markup(reply_markup=None)
             return
         
+        # Проверка наличия свободных VPN-ключей
+        if not vpn_utils.has_free_vpn_keys():
+            logging.error(f"No free VPN keys available for payment {payment_id}")
+            await callback.answer("Нет свободных VPN-ключей. Пополните файл vpn_keys.txt", show_alert=True)
+            # Статус платежа НЕ меняем
+            return
+        
         telegram_id = payment["telegram_id"]
         tariff_key = payment["tariff"]
         tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
         
         # Получаем свободный VPN-ключ
-        vpn_key = vpn_utils.get_free_vpn_key()
+        try:
+            vpn_key = vpn_utils.get_free_vpn_key()
+        except Exception as e:
+            logging.exception(f"Error getting VPN key for payment {payment_id}: {e}")
+            await callback.answer("Ошибка получения VPN-ключа. Проверь логи.", show_alert=True)
+            return
         
-        # Создаем подписку
-        await database.create_subscription(telegram_id, vpn_key, tariff_data["months"])
+        # Атомарно подтверждаем платеж и создаем/продлеваем подписку
+        result = await database.approve_payment_atomic(payment_id, vpn_key, tariff_data["months"])
+        expires_at, is_renewal = result
         
-        # Обновляем статус платежа на approved
-        await database.update_payment_status(payment_id, "approved")
+        if expires_at is None:
+            logging.error(f"Failed to approve payment {payment_id} atomically")
+            await callback.answer("Ошибка подтверждения платежа. Проверь логи.", show_alert=True)
+            return
+        
+        # Логируем продление, если было
+        if is_renewal:
+            logging.info(f"Subscription renewed for user {telegram_id}, payment_id={payment_id}, expires_at={expires_at}")
+        else:
+            logging.info(f"New subscription created for user {telegram_id}, payment_id={payment_id}, expires_at={expires_at}")
         
         # Уведомляем пользователя
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         
-        # Получаем expires_at из подписки
-        subscription = await database.get_subscription(telegram_id)
-        if subscription:
-            expires_at = datetime.fromisoformat(subscription["expires_at"])
-            expires_str = expires_at.strftime("%d.%m.%Y")
-        else:
-            expires_str = "не определено"
-        
+        expires_str = expires_at.strftime("%d.%m.%Y")
         text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
         
         try:
             await callback.bot.send_message(telegram_id, text)
+            logging.info(f"Approval message sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
             logging.error(f"Error sending approval message to user {telegram_id}: {e}")
         
@@ -574,7 +588,7 @@ async def approve_payment(callback: CallbackQuery):
         await callback.message.edit_reply_markup(reply_markup=None)
         
     except Exception as e:
-        logging.exception("Error in approve_payment callback")
+        logging.exception(f"Error in approve_payment callback for payment_id={payment_id if 'payment_id' in locals() else 'unknown'}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
@@ -584,21 +598,20 @@ async def reject_payment(callback: CallbackQuery):
     await callback.answer()  # ОБЯЗАТЕЛЬНО
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        logging.warning(f"Unauthorized reject attempt by user {callback.from_user.id}")
         await callback.answer("Нет доступа", show_alert=True)
         return
     
     try:
         payment_id = int(callback.data.split(":")[1])
         
-        logging.info(
-            f"REJECT pressed by {callback.from_user.id}, payment_id={payment_id}"
-        )
+        logging.info(f"REJECT pressed by admin {callback.from_user.id}, payment_id={payment_id}")
         
         # Получить платеж из БД
         payment = await database.get_payment(payment_id)
         
         if not payment:
-            logging.warning(f"Payment {payment_id} not found")
+            logging.warning(f"Payment {payment_id} not found for reject")
             await callback.answer("Платеж не найден", show_alert=True)
             return
         
@@ -615,6 +628,7 @@ async def reject_payment(callback: CallbackQuery):
         
         # Обновляем статус платежа на rejected
         await database.update_payment_status(payment_id, "rejected")
+        logging.info(f"Payment {payment_id} rejected for user {telegram_id}")
         
         # Уведомляем пользователя
         user = await database.get_user(telegram_id)
@@ -624,6 +638,7 @@ async def reject_payment(callback: CallbackQuery):
         
         try:
             await callback.bot.send_message(telegram_id, text)
+            logging.info(f"Rejection message sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
             logging.error(f"Error sending rejection message to user {telegram_id}: {e}")
         
@@ -632,7 +647,7 @@ async def reject_payment(callback: CallbackQuery):
         await callback.message.edit_reply_markup(reply_markup=None)
         
     except Exception as e:
-        logging.exception("Error in reject_payment callback")
+        logging.exception(f"Error in reject_payment callback for payment_id={payment_id if 'payment_id' in locals() else 'unknown'}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
