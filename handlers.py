@@ -1,5 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -9,6 +9,9 @@ import database
 import localization
 import config
 import time
+import csv
+import tempfile
+import os
 
 # Время последней отправки алерта о ключах (для предотвращения спама)
 _last_keys_alert_time: datetime = None
@@ -285,6 +288,7 @@ def get_admin_dashboard_keyboard():
         [InlineKeyboardButton(text="🔑 VPN-ключи", callback_data="admin:keys")],
         [InlineKeyboardButton(text="👤 Пользователь", callback_data="admin:user")],
         [InlineKeyboardButton(text="🚨 Система", callback_data="admin:system")],
+        [InlineKeyboardButton(text="📤 Экспорт данных", callback_data="admin:export")],
     ])
     return keyboard
 
@@ -292,6 +296,16 @@ def get_admin_dashboard_keyboard():
 def get_admin_back_keyboard():
     """Клавиатура с кнопкой 'Назад' для админ-разделов"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    return keyboard
+
+
+def get_admin_export_keyboard():
+    """Клавиатура выбора типа экспорта"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:export:users")],
+        [InlineKeyboardButton(text="🔑 Активные подписки", callback_data="admin:export:subscriptions")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
     ])
     return keyboard
@@ -1129,6 +1143,126 @@ async def callback_admin_system(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_system: {e}")
         await callback.answer("Ошибка при получении системной информации", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:export")
+async def callback_admin_export(callback: CallbackQuery):
+    """Раздел Экспорт данных"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    text = "📤 Экспорт данных\n\nВыберите тип данных для экспорта:"
+    await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:export:"))
+async def callback_admin_export_data(callback: CallbackQuery):
+    """Обработка экспорта данных"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        export_type = callback.data.split(":")[2]  # users или subscriptions
+        
+        # Получаем данные из БД
+        if export_type == "users":
+            data = await database.get_all_users_for_export()
+            filename = "users_export.csv"
+            headers = ["ID", "Telegram ID", "Username", "Language", "Created At"]
+        elif export_type == "subscriptions":
+            data = await database.get_active_subscriptions_for_export()
+            filename = "active_subscriptions_export.csv"
+            headers = ["ID", "Telegram ID", "VPN Key", "Expires At", "Reminder Sent"]
+        else:
+            await callback.message.answer("Неверный тип экспорта")
+            return
+        
+        if not data:
+            await callback.message.answer("Нет данных для экспорта")
+            return
+        
+        # Создаём временный файл
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8', newline='') as tmp_file:
+            csv_file_path = tmp_file.name
+            
+            # Записываем CSV
+            writer = csv.writer(tmp_file)
+            writer.writerow(headers)
+            
+            # Маппинг заголовков на ключи в данных
+            if export_type == "users":
+                key_mapping = {
+                    "ID": "id",
+                    "Telegram ID": "telegram_id",
+                    "Username": "username",
+                    "Language": "language",
+                    "Created At": "created_at"
+                }
+            else:  # subscriptions
+                key_mapping = {
+                    "ID": "id",
+                    "Telegram ID": "telegram_id",
+                    "VPN Key": "vpn_key",
+                    "Expires At": "expires_at",
+                    "Reminder Sent": "reminder_sent"
+                }
+            
+            for row in data:
+                csv_row = []
+                for header in headers:
+                    key = key_mapping[header]
+                    value = row.get(key)
+                    
+                    if key == "created_at" or key == "expires_at":
+                        # Форматируем дату
+                        if value:
+                            if isinstance(value, datetime):
+                                csv_row.append(value.strftime("%Y-%m-%d %H:%M:%S"))
+                            elif isinstance(value, str):
+                                csv_row.append(value)
+                            else:
+                                csv_row.append(str(value))
+                        else:
+                            csv_row.append("")
+                    elif key == "reminder_sent":
+                        # Преобразуем boolean в строку
+                        csv_row.append("Да" if value else "Нет")
+                    else:
+                        csv_row.append(str(value) if value is not None else "")
+                writer.writerow(csv_row)
+        
+        # Отправляем файл
+        try:
+            file_to_send = FSInputFile(csv_file_path, filename=filename)
+            await callback.bot.send_document(
+                config.ADMIN_TELEGRAM_ID,
+                file_to_send,
+                caption=f"📤 Экспорт: {export_type}"
+            )
+            await callback.message.answer("✅ Файл отправлен")
+            
+            # Логируем экспорт
+            await database._log_audit_event_atomic_standalone(
+                "admin_export_data",
+                callback.from_user.id,
+                None,
+                f"Exported {export_type}: {len(data)} records"
+            )
+        finally:
+            # Удаляем временный файл
+            try:
+                os.unlink(csv_file_path)
+            except Exception as e:
+                logging.error(f"Error deleting temp file {csv_file_path}: {e}")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_export_data: {e}")
+        await callback.message.answer("Ошибка при экспорте данных. Проверь логи.")
 
 
 @router.message(Command("admin_audit"))
