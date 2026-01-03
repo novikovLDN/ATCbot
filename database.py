@@ -179,6 +179,20 @@ async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Получить подписку пользователя независимо от статуса (активная или истекшая)
+    
+    Возвращает подписку, если она существует, даже если expires_at <= now.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM subscriptions WHERE telegram_id = $1",
+            telegram_id
+        )
+        return dict(row) if row else None
+
+
 async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tuple[datetime, bool]:
     """Создать или продлить подписку для пользователя
     
@@ -221,6 +235,10 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
     - обновляет payment → approved
     - создает/продлевает subscription с VPN-ключом
     
+    Логика выдачи ключей:
+    - Если подписка активна (expires_at > now): переиспользуется существующий ключ
+    - Если подписка закончилась (expires_at <= now) или её нет: используется новый ключ
+    
     Возвращает (expires_at, is_renewal) или (None, False) при ошибке.
     При любой ошибке транзакция откатывается.
     """
@@ -246,27 +264,38 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
                     payment_id
                 )
                 
-                # 3. Получаем текущую подписку (если есть)
+                # 3. Получаем подписку БЕЗ фильтра по активности (нужно проверить expires_at)
                 now = datetime.now()
                 tariff_duration = timedelta(days=months * 30)
                 
-                current_subscription_row = await conn.fetchrow(
-                    "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
-                    telegram_id, now
+                subscription_row = await conn.fetchrow(
+                    "SELECT * FROM subscriptions WHERE telegram_id = $1",
+                    telegram_id
                 )
-                current_subscription = dict(current_subscription_row) if current_subscription_row else None
+                subscription = dict(subscription_row) if subscription_row else None
                 
-                # 4. Рассчитываем expires_at (продление или новая подписка)
-                if current_subscription:
-                    current_expires_at = current_subscription["expires_at"]
-                    base_date = max(current_expires_at, now)
-                    expires_at = base_date + tariff_duration
-                    is_renewal = True
-                    logger.info(f"Renewing subscription for user {telegram_id}: {current_expires_at} -> {expires_at}")
+                # 4. Определяем, какой ключ использовать
+                if subscription:
+                    subscription_expires_at = subscription["expires_at"]
+                    if subscription_expires_at > now:
+                        # Подписка активна - переиспользуем существующий ключ
+                        final_vpn_key = subscription["vpn_key"]
+                        base_date = max(subscription_expires_at, now)
+                        expires_at = base_date + tariff_duration
+                        is_renewal = True
+                        logger.info(f"Renewing active subscription for user {telegram_id}, reusing vpn_key, expires_at: {subscription_expires_at} -> {expires_at}")
+                    else:
+                        # Подписка закончилась - используем новый ключ
+                        final_vpn_key = vpn_key
+                        expires_at = now + tariff_duration
+                        is_renewal = False
+                        logger.info(f"Subscription expired for user {telegram_id}, using new vpn_key, expires_at: {expires_at}")
                 else:
+                    # Подписки никогда не было - используем новый ключ
+                    final_vpn_key = vpn_key
                     expires_at = now + tariff_duration
                     is_renewal = False
-                    logger.info(f"Creating new subscription for user {telegram_id}: expires_at = {expires_at}")
+                    logger.info(f"Creating new subscription for user {telegram_id}, expires_at: {expires_at}")
                 
                 # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в FALSE при продлении)
                 await conn.execute(
@@ -274,7 +303,7 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
                        VALUES ($1, $2, $3, FALSE)
                        ON CONFLICT (telegram_id) 
                        DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
-                    telegram_id, vpn_key, expires_at
+                    telegram_id, final_vpn_key, expires_at
                 )
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")

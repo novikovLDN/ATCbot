@@ -532,24 +532,39 @@ async def approve_payment(callback: CallbackQuery):
             await callback.message.edit_reply_markup(reply_markup=None)
             return
         
-        # Проверка наличия свободных VPN-ключей
-        if not vpn_utils.has_free_vpn_keys():
-            logging.error(f"No free VPN keys available for payment {payment_id}")
-            await callback.answer("Нет свободных VPN-ключей. Пополните файл vpn_keys.txt", show_alert=True)
-            # Статус платежа НЕ меняем
-            return
-        
         telegram_id = payment["telegram_id"]
         tariff_key = payment["tariff"]
         tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
         
-        # Получаем свободный VPN-ключ
-        try:
-            vpn_key = vpn_utils.get_free_vpn_key()
-        except Exception as e:
-            logging.exception(f"Error getting VPN key for payment {payment_id}: {e}")
-            await callback.answer("Ошибка получения VPN-ключа. Проверь логи.", show_alert=True)
-            return
+        # Проверяем статус подписки, чтобы определить, нужен ли новый ключ
+        subscription = await database.get_subscription_any(telegram_id)
+        need_new_key = True
+        vpn_key = None
+        
+        if subscription:
+            subscription_expires_at = subscription["expires_at"]
+            if subscription_expires_at > datetime.now():
+                # Подписка активна - используем существующий ключ
+                need_new_key = False
+                vpn_key = subscription["vpn_key"]
+                logging.info(f"Active subscription found for user {telegram_id}, will reuse existing vpn_key")
+        
+        # Получаем новый VPN-ключ только если он нужен
+        if need_new_key:
+            # Проверка наличия свободных VPN-ключей
+            if not vpn_utils.has_free_vpn_keys():
+                logging.error(f"No free VPN keys available for payment {payment_id}")
+                await callback.answer("Нет свободных VPN-ключей. Пополните файл vpn_keys.txt", show_alert=True)
+                # Статус платежа НЕ меняем
+                return
+            
+            try:
+                vpn_key = vpn_utils.get_free_vpn_key()
+                logging.info(f"New VPN key obtained for user {telegram_id}")
+            except Exception as e:
+                logging.exception(f"Error getting VPN key for payment {payment_id}: {e}")
+                await callback.answer("Ошибка получения VPN-ключа. Проверь логи.", show_alert=True)
+                return
         
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
         result = await database.approve_payment_atomic(payment_id, vpn_key, tariff_data["months"])
