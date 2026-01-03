@@ -272,6 +272,22 @@ def get_support_keyboard(language: str):
 def get_instruction_keyboard(language: str):
     """Клавиатура экрана 'Инструкция'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=localization.get_text(language, "instruction_device_ios"),
+                url="https://apps.apple.com/app/outline-app/id1356177741"
+            ),
+            InlineKeyboardButton(
+                text=localization.get_text(language, "instruction_device_android"),
+                url="https://play.google.com/store/apps/details?id=org.outline.android.client"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=localization.get_text(language, "instruction_device_desktop"),
+                url="https://getoutline.org/ru/get-started/"
+            ),
+        ],
         [InlineKeyboardButton(
             text=localization.get_text(language, "back"),
             callback_data="menu_main"
