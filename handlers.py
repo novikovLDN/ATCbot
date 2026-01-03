@@ -38,6 +38,10 @@ class BroadcastCreate(StatesGroup):
     waiting_for_segment = State()
     waiting_for_confirm = State()
 
+
+class IncidentEdit(StatesGroup):
+    waiting_for_text = State()
+
 router = Router()
 
 logging.basicConfig(level=logging.INFO)
@@ -102,6 +106,18 @@ def get_language_keyboard():
         ],
     ])
     return keyboard
+
+
+async def format_text_with_incident(text: str, language: str) -> str:
+    """Добавить баннер инцидента к тексту, если режим активен"""
+    incident = await database.get_incident_settings()
+    if incident["is_active"]:
+        banner = localization.get_text(language, "incident_banner")
+        incident_text = incident.get("incident_text")
+        if incident_text:
+            banner += f"\n{incident_text}"
+        return f"{banner}\n\n⸻\n\n{text}"
+    return text
 
 
 def get_main_menu_keyboard(language: str):
@@ -549,6 +565,7 @@ async def callback_language(callback: CallbackQuery):
     await database.update_user_language(telegram_id, language)
     
     text = localization.get_text(language, "welcome")
+    text = await format_text_with_incident(text, language)
     await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
 
@@ -561,6 +578,7 @@ async def callback_main_menu(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "welcome")
+    text = await format_text_with_incident(text, language)
     await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
 
@@ -833,6 +851,14 @@ async def callback_service_status(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "service_status_text")
+    
+    # Добавляем предупреждение об инциденте, если режим активен
+    incident = await database.get_incident_settings()
+    if incident["is_active"]:
+        incident_text = incident.get("incident_text") or localization.get_text(language, "incident_banner")
+        warning = localization.get_text(language, "incident_status_warning", incident_text=incident_text)
+        text = text + warning
+    
     await callback.message.edit_text(text, reply_markup=get_service_status_keyboard(language))
     await callback.answer()
 
@@ -1563,6 +1589,113 @@ async def callback_admin_export_data(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_export_data: {e}")
         await callback.message.answer("Ошибка при экспорте данных. Проверь логи.")
+
+
+@router.callback_query(F.data == "admin:incident")
+async def callback_admin_incident(callback: CallbackQuery):
+    """Раздел управления инцидентом"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    incident = await database.get_incident_settings()
+    is_active = incident["is_active"]
+    incident_text = incident.get("incident_text") or "Текст не указан"
+    
+    status_text = "🟢 Режим инцидента активен" if is_active else "⚪ Режим инцидента выключен"
+    text = f"🚨 Инцидент\n\n{status_text}\n\nТекст инцидента:\n{incident_text}"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="✅ Включить" if not is_active else "❌ Выключить",
+            callback_data="admin:incident:toggle"
+        )],
+        [InlineKeyboardButton(text="📝 Изменить текст", callback_data="admin:incident:edit")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    
+    # Логируем действие
+    await database._log_audit_event_atomic_standalone("admin_view_incident", callback.from_user.id, None, f"Viewed incident settings (active: {is_active})")
+
+
+@router.callback_query(F.data == "admin:incident:toggle")
+async def callback_admin_incident_toggle(callback: CallbackQuery):
+    """Переключение режима инцидента"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    incident = await database.get_incident_settings()
+    new_state = not incident["is_active"]
+    
+    await database.set_incident_mode(new_state)
+    
+    action = "включен" if new_state else "выключен"
+    await callback.answer(f"Режим инцидента {action}", show_alert=True)
+    
+    # Логируем действие
+    await database._log_audit_event_atomic_standalone(
+        "incident_mode_toggled",
+        callback.from_user.id,
+        None,
+        f"Incident mode {'enabled' if new_state else 'disabled'}"
+    )
+    
+    # Возвращаемся к экрану инцидента
+    await callback_admin_incident(callback)
+
+
+@router.callback_query(F.data == "admin:incident:edit")
+async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContext):
+    """Начало редактирования текста инцидента"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    text = "Введите текст инцидента (или отправьте /cancel для отмены):"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:incident")],
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await state.set_state(IncidentEdit.waiting_for_text)
+
+
+@router.message(IncidentEdit.waiting_for_text)
+async def process_incident_text(message: Message, state: FSMContext):
+    """Обработка текста инцидента"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    
+    if message.text and message.text.startswith("/cancel"):
+        await state.clear()
+        await message.answer("Отменено")
+        return
+    
+    incident_text = message.text
+    
+    # Включаем режим инцидента и сохраняем текст
+    await database.set_incident_mode(True, incident_text)
+    
+    await message.answer(f"✅ Текст инцидента сохранён. Режим инцидента включён.")
+    
+    # Логируем действие
+    await database._log_audit_event_atomic_standalone(
+        "incident_text_updated",
+        message.from_user.id,
+        None,
+        f"Incident text updated: {incident_text[:50]}..."
+    )
+    
+    await state.clear()
 
 
 @router.callback_query(F.data == "admin:broadcast")

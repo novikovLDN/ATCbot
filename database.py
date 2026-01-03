@@ -154,6 +154,24 @@ async def init_db():
         except Exception:
             # Колонка уже существует или таблицы нет
             pass
+
+        # Таблица incident_settings (режим инцидента)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS incident_settings (
+                id SERIAL PRIMARY KEY,
+                is_active BOOLEAN DEFAULT FALSE,
+                incident_text TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Создаём одну строку, если её нет
+        existing = await conn.fetchval("SELECT COUNT(*) FROM incident_settings")
+        if existing == 0:
+            await conn.execute("""
+                INSERT INTO incident_settings (is_active, incident_text)
+                VALUES (FALSE, NULL)
+            """)
         
         logger.info("Database tables initialized")
 
@@ -984,6 +1002,47 @@ async def get_broadcast_stats(broadcast_id: int) -> Dict[str, int]:
         return {"sent": sent_count or 0, "failed": failed_count or 0}
 
 
+async def get_incident_settings() -> Dict[str, Any]:
+    """Получить настройки инцидента
+    
+    Returns:
+        Словарь с is_active и incident_text
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT is_active, incident_text FROM incident_settings ORDER BY id LIMIT 1"
+        )
+        if row:
+            return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
+        return {"is_active": False, "incident_text": None}
+
+
+async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None):
+    """Установить режим инцидента
+    
+    Args:
+        is_active: Активен ли режим инцидента
+        incident_text: Текст инцидента (опционально)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if incident_text is not None:
+            await conn.execute(
+                """UPDATE incident_settings 
+                   SET is_active = $1, incident_text = $2, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                is_active, incident_text
+            )
+        else:
+            await conn.execute(
+                """UPDATE incident_settings 
+                   SET is_active = $1, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                is_active
+            )
+
+
 async def get_ab_test_broadcasts() -> list:
     """Получить список всех A/B тестов (уведомлений с is_ab_test = true)
     
@@ -999,6 +1058,47 @@ async def get_ab_test_broadcasts() -> list:
                ORDER BY created_at DESC"""
         )
         return [dict(row) for row in rows]
+
+
+async def get_incident_settings() -> Dict[str, Any]:
+    """Получить настройки инцидента
+    
+    Returns:
+        Словарь с is_active и incident_text
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT is_active, incident_text FROM incident_settings ORDER BY id LIMIT 1"
+        )
+        if row:
+            return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
+        return {"is_active": False, "incident_text": None}
+
+
+async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None):
+    """Установить режим инцидента
+    
+    Args:
+        is_active: Активен ли режим инцидента
+        incident_text: Текст инцидента (опционально)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if incident_text is not None:
+            await conn.execute(
+                """UPDATE incident_settings 
+                   SET is_active = $1, incident_text = $2, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                is_active, incident_text
+            )
+        else:
+            await conn.execute(
+                """UPDATE incident_settings 
+                   SET is_active = $1, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                is_active
+            )
 
 
 async def get_ab_test_stats(broadcast_id: int) -> Optional[Dict[str, Any]]:
