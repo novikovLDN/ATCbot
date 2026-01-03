@@ -547,3 +547,23 @@ async def mark_reminder_sent(telegram_id: int):
             "UPDATE subscriptions SET reminder_sent = TRUE WHERE telegram_id = $1",
             telegram_id
         )
+
+
+async def get_last_audit_logs(limit: int = 10) -> list:
+    """Получить последние записи из audit_log
+    
+    Args:
+        limit: Количество записей для получения (по умолчанию 10)
+    
+    Returns:
+        Список словарей с записями audit_log, отсортированных по created_at DESC
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT * FROM audit_log 
+               ORDER BY created_at DESC 
+               LIMIT $1""",
+            limit
+        )
+        return [dict(row) for row in rows]
