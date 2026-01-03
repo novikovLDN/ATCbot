@@ -68,25 +68,11 @@ def get_tariff_keyboard(language: str):
     """Клавиатура выбора тарифа"""
     buttons = []
     for tariff_key, tariff_data in config.TARIFFS.items():
-        months = tariff_data["months"]
         price = tariff_data["price"]
         
-        # Форматирование текста в зависимости от языка
-        if language == "ru":
-            if months == 1:
-                text = f"{months} месяц — {price} руб."
-            elif months in [3, 6]:
-                text = f"{months} месяца — {price} руб."
-            else:
-                text = f"{months} месяцев — {price} руб."
-        elif language == "en":
-            text = f"{months} month{'s' if months > 1 else ''} — {price} rub."
-        elif language == "uz":
-            text = f"{months} oy — {price} so'm"
-        elif language == "tj":
-            text = f"{months} моҳ — {price} сом."
-        else:
-            text = f"{months} — {price}"
+        # Используем локализованные тексты кнопок
+        tariff_button_key = f"tariff_button_{tariff_key}"
+        text = localization.get_text(language, tariff_button_key, price=price)
         
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}")])
     
@@ -362,12 +348,16 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     
     # Формируем текст с реквизитами
-    text = localization.get_text(language, "sbp_payment_text")
-    text += f"\n\n"
-    text += f"Банк: {config.SBP_DETAILS['bank']}\n"
-    text += f"Счет: {config.SBP_DETAILS['account']}\n"
-    text += f"Получатель: {config.SBP_DETAILS['name']}\n"
-    text += f"\nСумма: {tariff_data['price']} руб."
+    # Форматируем счет с пробелами (каждые 4 цифры)
+    account_formatted = ' '.join(config.SBP_DETAILS['account'][i:i+4] for i in range(0, len(config.SBP_DETAILS['account']), 4))
+    text = localization.get_text(
+        language, 
+        "sbp_payment_text",
+        bank=config.SBP_DETAILS['bank'],
+        account=account_formatted,
+        name=config.SBP_DETAILS['name'],
+        price=tariff_data['price']
+    )
     
     await callback.message.edit_text(text, reply_markup=get_sbp_payment_keyboard(language))
     await callback.answer()
@@ -473,8 +463,7 @@ async def callback_support_payment(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(language, "support_text")
-    text += f"\n\nEmail: {config.SUPPORT_EMAIL}\nTelegram: {config.SUPPORT_TELEGRAM}"
+    text = localization.get_text(language, "support_theme_selection")
     await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
     await callback.answer()
 
@@ -486,8 +475,7 @@ async def callback_support_vpn(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(language, "support_text")
-    text += f"\n\nEmail: {config.SUPPORT_EMAIL}\nTelegram: {config.SUPPORT_TELEGRAM}"
+    text = localization.get_text(language, "support_theme_selection")
     await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
     await callback.answer()
 
@@ -499,8 +487,7 @@ async def callback_support_other(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(language, "support_text")
-    text += f"\n\nEmail: {config.SUPPORT_EMAIL}\nTelegram: {config.SUPPORT_TELEGRAM}"
+    text = localization.get_text(language, "support_theme_selection")
     await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
     await callback.answer()
 
