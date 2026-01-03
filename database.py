@@ -301,6 +301,67 @@ async def _log_audit_event_atomic(conn, action: str, telegram_id: int, target_us
     )
 
 
+async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tuple[Optional[str], Optional[str]]:
+    """Атомарно перевыпустить VPN-ключ для пользователя
+    
+    Перевыпуск возможен ТОЛЬКО если у пользователя есть активная подписка.
+    В одной транзакции:
+    - получает новый vpn_key из vpn_keys
+    - обновляет subscriptions.vpn_key
+    - старый ключ НЕ возвращается в пул
+    - expires_at НЕ меняется
+    - записывает событие в audit_log
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        admin_telegram_id: Telegram ID администратора, который выполняет перевыпуск
+    
+    Returns:
+        (new_vpn_key, old_vpn_key) или (None, None) если нет активной подписки или нет свободных ключей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # 1. Проверяем, что у пользователя есть активная подписка
+                now = datetime.now()
+                subscription_row = await conn.fetchrow(
+                    "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
+                    telegram_id, now
+                )
+                
+                if not subscription_row:
+                    logger.error(f"Cannot reissue VPN key for user {telegram_id}: no active subscription")
+                    return None, None
+                
+                subscription = dict(subscription_row)
+                old_vpn_key = subscription["vpn_key"]
+                
+                # 2. Получаем новый VPN-ключ из таблицы vpn_keys
+                new_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
+                
+                if not new_vpn_key:
+                    logger.error(f"Cannot reissue VPN key for user {telegram_id}: no free VPN keys available")
+                    return None, None
+                
+                # 3. Обновляем подписку (expires_at НЕ меняется)
+                await conn.execute(
+                    "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
+                    new_vpn_key, telegram_id
+                )
+                
+                # 4. Записываем событие в audit_log
+                details = f"User {telegram_id}, Old key: {old_vpn_key[:20]}..., New key: {new_vpn_key[:20]}..., Expires: {subscription['expires_at'].isoformat()}"
+                await _log_audit_event_atomic(conn, "vpn_key_reissued", admin_telegram_id, telegram_id, details)
+                
+                logger.info(f"VPN key reissued for user {telegram_id} by admin {admin_telegram_id}")
+                return new_vpn_key, old_vpn_key
+                
+            except Exception as e:
+                logger.exception(f"Error in reissue_vpn_key_atomic for user {telegram_id}, transaction rolled back")
+                raise
+
+
 async def _get_free_vpn_key_atomic(conn, telegram_id: int) -> Optional[str]:
     """Атомарно получить свободный VPN-ключ из таблицы vpn_keys
     
