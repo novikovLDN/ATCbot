@@ -115,7 +115,10 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS broadcasts (
                 id SERIAL PRIMARY KEY,
                 title TEXT NOT NULL,
-                message TEXT NOT NULL,
+                message TEXT,
+                message_a TEXT,
+                message_b TEXT,
+                is_ab_test BOOLEAN DEFAULT FALSE,
                 type TEXT NOT NULL,
                 segment TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -123,11 +126,14 @@ async def init_db():
             )
         """)
         
-        # Добавляем колонку segment, если её нет (для миграции)
+        # Добавляем колонки для миграции
         try:
             await conn.execute("ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS segment TEXT")
+            await conn.execute("ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS is_ab_test BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS message_a TEXT")
+            await conn.execute("ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS message_b TEXT")
         except Exception:
-            # Колонка уже существует или таблицы нет
+            # Колонки уже существуют или таблицы нет
             pass
         
         # Таблица broadcast_log
@@ -137,9 +143,17 @@ async def init_db():
                 broadcast_id INTEGER NOT NULL REFERENCES broadcasts(id) ON DELETE CASCADE,
                 telegram_id BIGINT NOT NULL,
                 status TEXT NOT NULL,
+                variant TEXT,
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Добавляем колонку variant для миграции
+        try:
+            await conn.execute("ALTER TABLE broadcast_log ADD COLUMN IF NOT EXISTS variant TEXT")
+        except Exception:
+            # Колонка уже существует или таблицы нет
+            pass
         
         logger.info("Database tables initialized")
 
@@ -827,27 +841,38 @@ async def get_last_audit_logs(limit: int = 10) -> list:
         return [dict(row) for row in rows]
 
 
-async def create_broadcast(title: str, message: str, broadcast_type: str, segment: str, sent_by: int) -> int:
+async def create_broadcast(title: str, message: str, broadcast_type: str, segment: str, sent_by: int, is_ab_test: bool = False, message_a: str = None, message_b: str = None) -> int:
     """Создать новое уведомление
     
     Args:
         title: Заголовок уведомления
-        message: Текст уведомления
+        message: Текст уведомления (для обычных уведомлений)
         broadcast_type: Тип уведомления (info | maintenance | security | promo)
         segment: Сегмент получателей (all_users | active_subscriptions)
         sent_by: Telegram ID администратора
+        is_ab_test: Является ли уведомление A/B тестом
+        message_a: Текст варианта A (для A/B тестов)
+        message_b: Текст варианта B (для A/B тестов)
     
     Returns:
         ID созданного уведомления
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """INSERT INTO broadcasts (title, message, type, segment, sent_by)
-               VALUES ($1, $2, $3, $4, $5)
-               RETURNING id""",
-            title, message, broadcast_type, segment, sent_by
-        )
+        if is_ab_test:
+            row = await conn.fetchrow(
+                """INSERT INTO broadcasts (title, message_a, message_b, is_ab_test, type, segment, sent_by)
+                   VALUES ($1, $2, $3, TRUE, $4, $5, $6)
+                   RETURNING id""",
+                title, message_a, message_b, broadcast_type, segment, sent_by
+            )
+        else:
+            row = await conn.fetchrow(
+                """INSERT INTO broadcasts (title, message, is_ab_test, type, segment, sent_by)
+                   VALUES ($1, $2, FALSE, $3, $4, $5)
+                   RETURNING id""",
+                title, message, broadcast_type, segment, sent_by
+            )
         return row["id"]
 
 
@@ -898,20 +923,21 @@ async def get_users_by_segment(segment: str) -> list:
             return []
 
 
-async def log_broadcast_send(broadcast_id: int, telegram_id: int, status: str):
+async def log_broadcast_send(broadcast_id: int, telegram_id: int, status: str, variant: str = None):
     """Записать результат отправки уведомления
     
     Args:
         broadcast_id: ID уведомления
         telegram_id: Telegram ID пользователя
         status: Статус отправки (sent | failed)
+        variant: Вариант сообщения (A или B для A/B тестов)
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            """INSERT INTO broadcast_log (broadcast_id, telegram_id, status)
-               VALUES ($1, $2, $3)""",
-            broadcast_id, telegram_id, status
+            """INSERT INTO broadcast_log (broadcast_id, telegram_id, status, variant)
+               VALUES ($1, $2, $3, $4)""",
+            broadcast_id, telegram_id, status, variant
         )
 
 

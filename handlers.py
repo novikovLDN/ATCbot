@@ -13,6 +13,7 @@ import csv
 import tempfile
 import os
 import asyncio
+import random
 
 # Время последней отправки алерта о ключах (для предотвращения спама)
 _last_keys_alert_time: datetime = None
@@ -29,7 +30,10 @@ class AdminUserSearch(StatesGroup):
 
 class BroadcastCreate(StatesGroup):
     waiting_for_title = State()
+    waiting_for_test_type = State()
     waiting_for_message = State()
+    waiting_for_message_a = State()
+    waiting_for_message_b = State()
     waiting_for_type = State()
     waiting_for_segment = State()
     waiting_for_confirm = State()
@@ -350,6 +354,16 @@ def get_admin_back_keyboard():
     """Клавиатура с кнопкой 'Назад' для админ-разделов"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    return keyboard
+
+
+def get_broadcast_test_type_keyboard():
+    """Клавиатура выбора типа тестирования"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Обычное уведомление", callback_data="broadcast_test_type:normal")],
+        [InlineKeyboardButton(text="🔬 A/B тест", callback_data="broadcast_test_type:ab")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:broadcast")],
     ])
     return keyboard
 
@@ -1520,8 +1534,50 @@ async def process_broadcast_title(message: Message, state: FSMContext):
         return
     
     await state.update_data(title=message.text)
-    await state.set_state(BroadcastCreate.waiting_for_message)
-    await message.answer("Введите текст уведомления:")
+    await state.set_state(BroadcastCreate.waiting_for_test_type)
+    await message.answer("Выберите тип уведомления:", reply_markup=get_broadcast_test_type_keyboard())
+
+
+@router.callback_query(F.data.startswith("broadcast_test_type:"))
+async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора типа тестирования"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    test_type = callback.data.split(":")[1]
+    
+    await state.update_data(is_ab_test=(test_type == "ab"))
+    
+    if test_type == "ab":
+        await state.set_state(BroadcastCreate.waiting_for_message_a)
+        await callback.message.edit_text("Введите текст варианта A:")
+    else:
+        await state.set_state(BroadcastCreate.waiting_for_message)
+        await callback.message.edit_text("Введите текст уведомления:")
+
+
+@router.message(BroadcastCreate.waiting_for_message_a)
+async def process_broadcast_message_a(message: Message, state: FSMContext):
+    """Обработка текста варианта A"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    
+    await state.update_data(message_a=message.text)
+    await state.set_state(BroadcastCreate.waiting_for_message_b)
+    await message.answer("Введите текст варианта B:")
+
+
+@router.message(BroadcastCreate.waiting_for_message_b)
+async def process_broadcast_message_b(message: Message, state: FSMContext):
+    """Обработка текста варианта B"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    
+    await state.update_data(message_b=message.text)
+    await state.set_state(BroadcastCreate.waiting_for_type)
+    await message.answer("Выберите тип уведомления:", reply_markup=get_broadcast_type_keyboard())
 
 
 @router.message(BroadcastCreate.waiting_for_message)
@@ -1605,12 +1661,28 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
         "active_subscriptions": "Только активные подписки"
     }
     
-    preview_text = (
-        f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n"
-        f"{message_text}\n\n"
-        f"Тип: {type_name.get(broadcast_type, broadcast_type)}\n"
-        f"Сегмент: {segment_name.get(segment, segment)}"
-    )
+    data_for_preview = await state.get_data()
+    is_ab_test = data_for_preview.get("is_ab_test", False)
+    
+    if is_ab_test:
+        message_a = data_for_preview.get("message_a", "")
+        message_b = data_for_preview.get("message_b", "")
+        preview_text = (
+            f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n"
+            f"🔬 A/B ТЕСТ\n\n"
+            f"Вариант A:\n{message_a}\n\n"
+            f"Вариант B:\n{message_b}\n\n"
+            f"Тип: {type_name.get(broadcast_type, broadcast_type)}\n"
+            f"Сегмент: {segment_name.get(segment, segment)}"
+        )
+    else:
+        message_text = data_for_preview.get("message", "")
+        preview_text = (
+            f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n"
+            f"{message_text}\n\n"
+            f"Тип: {type_name.get(broadcast_type, broadcast_type)}\n"
+            f"Сегмент: {segment_name.get(segment, segment)}"
+        )
     
     await state.update_data(segment=segment)
     await state.set_state(BroadcastCreate.waiting_for_confirm)
@@ -1633,19 +1705,37 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     data = await state.get_data()
     title = data.get("title")
     message_text = data.get("message")
+    message_a = data.get("message_a")
+    message_b = data.get("message_b")
+    is_ab_test = data.get("is_ab_test", False)
     broadcast_type = data.get("type")
     segment = data.get("segment")
     
-    if not all([title, message_text, broadcast_type, segment]):
+    # Проверка данных
+    if not all([title, broadcast_type, segment]):
         await callback.message.answer("Ошибка: не все данные заполнены. Начните заново.")
         await state.clear()
         return
     
+    if is_ab_test:
+        if not all([message_a, message_b]):
+            await callback.message.answer("Ошибка: не заполнены тексты вариантов A и B. Начните заново.")
+            await state.clear()
+            return
+    else:
+        if not message_text:
+            await callback.message.answer("Ошибка: не заполнен текст уведомления. Начните заново.")
+            await state.clear()
+            return
+    
     try:
         # Создаем уведомление в БД
-        broadcast_id = await database.create_broadcast(title, message_text, broadcast_type, segment, callback.from_user.id)
+        broadcast_id = await database.create_broadcast(
+            title, message_text, broadcast_type, segment, callback.from_user.id,
+            is_ab_test=is_ab_test, message_a=message_a, message_b=message_b
+        )
         
-        # Формируем сообщение для отправки
+        # Формируем сообщения для отправки
         type_emoji = {
             "info": "ℹ️",
             "maintenance": "🔧",
@@ -1653,7 +1743,12 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             "promo": "🎯"
         }
         emoji = type_emoji.get(broadcast_type, "📢")
-        final_message = f"{emoji} {title}\n\n{message_text}"
+        
+        if is_ab_test:
+            final_message_a = f"{emoji} {title}\n\n{message_a}"
+            final_message_b = f"{emoji} {title}\n\n{message_b}"
+        else:
+            final_message = f"{emoji} {title}\n\n{message_text}"
         
         # Получаем список пользователей по сегменту
         user_ids = await database.get_users_by_segment(segment)
@@ -1670,8 +1765,16 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         
         for user_id in user_ids:
             try:
-                await bot.send_message(user_id, final_message)
-                await database.log_broadcast_send(broadcast_id, user_id, "sent")
+                if is_ab_test:
+                    # Случайно выбираем вариант A или B (50/50)
+                    variant = "A" if random.random() < 0.5 else "B"
+                    message_to_send = final_message_a if variant == "A" else final_message_b
+                    await bot.send_message(user_id, message_to_send)
+                    await database.log_broadcast_send(broadcast_id, user_id, "sent", variant)
+                else:
+                    await bot.send_message(user_id, final_message)
+                    await database.log_broadcast_send(broadcast_id, user_id, "sent")
+                
                 sent_count += 1
                 
                 # Задержка между отправками (0.3-0.5 сек)
@@ -1679,7 +1782,11 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                 
             except Exception as e:
                 logging.error(f"Error sending broadcast to user {user_id}: {e}")
-                await database.log_broadcast_send(broadcast_id, user_id, "failed")
+                variant = None
+                if is_ab_test:
+                    # Для неудачных отправок тоже логируем вариант, если можем определить
+                    variant = "A" if random.random() < 0.5 else "B"
+                await database.log_broadcast_send(broadcast_id, user_id, "failed", variant)
                 failed_count += 1
         
         # Логируем действие
