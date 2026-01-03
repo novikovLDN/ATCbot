@@ -147,22 +147,31 @@ def get_back_keyboard(language: str):
     ])
 
 
-def get_profile_keyboard_with_copy(language: str):
+def get_profile_keyboard_with_copy(language: str, last_tariff: str = None):
     """Клавиатура профиля с кнопкой копирования ключа и историей"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "copy_key"),
-            callback_data="copy_key"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "subscription_history"),
-            callback_data="subscription_history"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
-            callback_data="menu_main"
-        )]
-    ])
+    buttons = []
+    
+    # Кнопка продления, если известен предыдущий тариф
+    if last_tariff:
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "renew_subscription"),
+            callback_data=f"renew_subscription:{last_tariff}"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "copy_key"),
+        callback_data="copy_key"
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "subscription_history"),
+        callback_data="subscription_history"
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "back"),
+        callback_data="menu_main"
+    )])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
 
 
@@ -507,7 +516,12 @@ async def show_profile(message_or_query, language: str):
         expires_str = expires_at.strftime("%d.%m.%Y")
         text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=subscription["vpn_key"])
         text += localization.get_text(language, "profile_renewal_hint")
-        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language))
+        
+        # Получаем последний утверждённый платёж для определения тарифа
+        last_payment = await database.get_last_approved_payment(telegram_id)
+        last_tariff = last_payment.get("tariff") if last_payment else None
+        
+        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, last_tariff))
     else:
         # Проверяем, есть ли pending платеж
         pending_payment = await database.get_pending_payment_by_user(telegram_id)
@@ -560,6 +574,44 @@ async def callback_profile(callback: CallbackQuery):
     
     await show_profile(callback, language)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("renew_subscription:"))
+async def callback_renew_subscription(callback: CallbackQuery, state: FSMContext):
+    """Продление подписки на тот же период"""
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Получаем тариф из callback_data
+    tariff_key = callback.data.split(":")[1]
+    
+    # Проверяем наличие pending платежа
+    existing_payment = await database.get_pending_payment_by_user(telegram_id)
+    if existing_payment:
+        text = localization.get_text(language, "payment_pending")
+        await callback.message.answer(text, reply_markup=get_pending_payment_keyboard(language))
+        return
+    
+    # Сохраняем тариф в состоянии
+    await state.update_data(tariff=tariff_key)
+    
+    # Получаем данные тарифа
+    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    
+    # Формируем текст с реквизитами
+    account_formatted = ' '.join(config.SBP_DETAILS['account'][i:i+4] for i in range(0, len(config.SBP_DETAILS['account']), 4))
+    text = localization.get_text(
+        language, 
+        "sbp_payment_text",
+        bank=config.SBP_DETAILS['bank'],
+        account=account_formatted,
+        price=tariff_data['price']
+    )
+    
+    await callback.message.edit_text(text, reply_markup=get_sbp_payment_keyboard(language))
 
 
 @router.callback_query(F.data == "copy_key")

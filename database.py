@@ -266,6 +266,27 @@ async def get_payment(payment_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def get_last_approved_payment(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Получить последний утверждённый платёж пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        Словарь с данными платежа или None, если платёж не найден
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT * FROM payments 
+               WHERE telegram_id = $1 AND status = 'approved'
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            telegram_id
+        )
+        return dict(row) if row else None
+
+
 async def update_payment_status(payment_id: int, status: str, admin_telegram_id: Optional[int] = None):
     """Обновить статус платежа
     
