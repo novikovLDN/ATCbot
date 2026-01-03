@@ -961,3 +961,87 @@ async def get_broadcast_stats(broadcast_id: int) -> Dict[str, int]:
             broadcast_id
         )
         return {"sent": sent_count or 0, "failed": failed_count or 0}
+
+
+async def get_ab_test_broadcasts() -> list:
+    """Получить список всех A/B тестов (уведомлений с is_ab_test = true)
+    
+    Returns:
+        Список словарей с данными A/B тестов, отсортированных по created_at DESC
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, title, created_at 
+               FROM broadcasts 
+               WHERE is_ab_test = TRUE 
+               ORDER BY created_at DESC"""
+        )
+        return [dict(row) for row in rows]
+
+
+async def get_ab_test_stats(broadcast_id: int) -> Optional[Dict[str, Any]]:
+    """Получить статистику A/B теста
+    
+    Args:
+        broadcast_id: ID уведомления (должно быть A/B тестом)
+    
+    Returns:
+        Словарь с статистикой:
+        - variant_a_sent: количество отправок варианта A
+        - variant_b_sent: количество отправок варианта B
+        - variant_a_failed: количество неудачных отправок варианта A
+        - variant_b_failed: количество неудачных отправок варианта B
+        - total_sent: общее количество отправленных
+        - total: общее количество (sent + failed)
+        Или None, если данных недостаточно
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Проверяем, что это A/B тест
+        broadcast = await conn.fetchrow(
+            "SELECT is_ab_test FROM broadcasts WHERE id = $1", broadcast_id
+        )
+        if not broadcast or not broadcast["is_ab_test"]:
+            return None
+        
+        # Статистика по варианту A
+        variant_a_sent = await conn.fetchval(
+            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'A' AND status = 'sent'",
+            broadcast_id
+        )
+        variant_a_failed = await conn.fetchval(
+            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'A' AND status = 'failed'",
+            broadcast_id
+        )
+        
+        # Статистика по варианту B
+        variant_b_sent = await conn.fetchval(
+            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'B' AND status = 'sent'",
+            broadcast_id
+        )
+        variant_b_failed = await conn.fetchval(
+            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND variant = 'B' AND status = 'failed'",
+            broadcast_id
+        )
+        
+        variant_a_sent = variant_a_sent or 0
+        variant_a_failed = variant_a_failed or 0
+        variant_b_sent = variant_b_sent or 0
+        variant_b_failed = variant_b_failed or 0
+        
+        total_sent = variant_a_sent + variant_b_sent
+        total_failed = variant_a_failed + variant_b_failed
+        total = total_sent + total_failed
+        
+        if total == 0:
+            return None
+        
+        return {
+            "variant_a_sent": variant_a_sent,
+            "variant_b_sent": variant_b_sent,
+            "variant_a_failed": variant_a_failed,
+            "variant_b_failed": variant_b_failed,
+            "total_sent": total_sent,
+            "total": total
+        }
