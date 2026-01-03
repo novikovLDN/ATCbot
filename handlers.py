@@ -439,7 +439,7 @@ async def callback_support(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(lambda c: c.data.startswith("approve_payment:"))
+@router.callback_query(F.data.startswith("approve_payment:"))
 async def approve_payment(callback: CallbackQuery):
     """Админ подтвердил платеж"""
     await callback.answer()  # ОБЯЗАТЕЛЬНО
@@ -501,7 +501,7 @@ async def approve_payment(callback: CallbackQuery):
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
-@router.callback_query(lambda c: c.data.startswith("reject_payment:"))
+@router.callback_query(F.data.startswith("reject_payment:"))
 async def reject_payment(callback: CallbackQuery):
     """Админ отклонил платеж"""
     await callback.answer()  # ОБЯЗАТЕЛЬНО
@@ -545,4 +545,13 @@ async def reject_payment(callback: CallbackQuery):
     except Exception as e:
         logging.exception("Error in reject_payment callback")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+# DEBUG: Тестовый обработчик для проверки работы callbacks (в конце файла, ловит необработанные callback'и)
+@router.callback_query()
+async def debug_all_callbacks(callback: CallbackQuery):
+    """DEBUG обработчик для необработанных callback'и"""
+    logging.info(f"DEBUG CALLBACK: data={callback.data}, from_user_id={callback.from_user.id}")
+    print(f"DEBUG CALLBACK: {callback.data} FROM {callback.from_user.id}")
+    await callback.answer("DEBUG: Callback получен, но не обработан", show_alert=True)
 
