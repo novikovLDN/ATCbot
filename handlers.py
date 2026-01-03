@@ -64,6 +64,17 @@ def get_back_keyboard(language: str):
     ])
 
 
+def get_profile_keyboard(language: str):
+    """Клавиатура с кнопкой профиля"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "profile"),
+            callback_data="menu_profile"
+        )]
+    ])
+    return keyboard
+
+
 def get_tariff_keyboard(language: str):
     """Клавиатура выбора тарифа"""
     buttons = []
@@ -566,7 +577,11 @@ async def approve_payment(callback: CallbackQuery):
         text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
         
         try:
-            await callback.bot.send_message(telegram_id, text)
+            await callback.bot.send_message(
+                telegram_id, 
+                text, 
+                reply_markup=get_profile_keyboard(language)
+            )
             logging.info(f"Approval message sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
             logging.error(f"Error sending approval message to user {telegram_id}: {e}")
