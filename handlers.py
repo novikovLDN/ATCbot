@@ -31,6 +31,7 @@ class BroadcastCreate(StatesGroup):
     waiting_for_title = State()
     waiting_for_message = State()
     waiting_for_type = State()
+    waiting_for_segment = State()
     waiting_for_confirm = State()
 
 router = Router()
@@ -360,6 +361,16 @@ def get_broadcast_type_keyboard():
         [InlineKeyboardButton(text="🔧 Технические работы", callback_data="broadcast_type:maintenance")],
         [InlineKeyboardButton(text="🔒 Безопасность", callback_data="broadcast_type:security")],
         [InlineKeyboardButton(text="🎯 Промо", callback_data="broadcast_type:promo")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:broadcast")],
+    ])
+    return keyboard
+
+
+def get_broadcast_segment_keyboard():
+    """Клавиатура выбора сегмента получателей"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌍 Все пользователи", callback_data="broadcast_segment:all_users")],
+        [InlineKeyboardButton(text="🔐 Только активные подписки", callback_data="broadcast_segment:active_subscriptions")],
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:broadcast")],
     ])
     return keyboard
@@ -1552,9 +1563,56 @@ async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
         "promo": "Промо"
     }
     
-    preview_text = f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n{message_text}\n\nТип: {type_name.get(broadcast_type, broadcast_type)}"
-    
     await state.update_data(type=broadcast_type)
+    await state.set_state(BroadcastCreate.waiting_for_segment)
+    
+    await callback.message.edit_text(
+        "Выберите сегмент получателей:",
+        reply_markup=get_broadcast_segment_keyboard()
+    )
+
+
+@router.callback_query(F.data.startswith("broadcast_segment:"))
+async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора сегмента получателей"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    segment = callback.data.split(":")[1]
+    
+    data = await state.get_data()
+    title = data.get("title")
+    message_text = data.get("message")
+    broadcast_type = data.get("type")
+    
+    # Формируем предпросмотр
+    type_emoji = {
+        "info": "ℹ️",
+        "maintenance": "🔧",
+        "security": "🔒",
+        "promo": "🎯"
+    }
+    type_name = {
+        "info": "Информация",
+        "maintenance": "Технические работы",
+        "security": "Безопасность",
+        "promo": "Промо"
+    }
+    segment_name = {
+        "all_users": "Все пользователи",
+        "active_subscriptions": "Только активные подписки"
+    }
+    
+    preview_text = (
+        f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n"
+        f"{message_text}\n\n"
+        f"Тип: {type_name.get(broadcast_type, broadcast_type)}\n"
+        f"Сегмент: {segment_name.get(segment, segment)}"
+    )
+    
+    await state.update_data(segment=segment)
     await state.set_state(BroadcastCreate.waiting_for_confirm)
     
     await callback.message.edit_text(
@@ -1576,15 +1634,16 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     title = data.get("title")
     message_text = data.get("message")
     broadcast_type = data.get("type")
+    segment = data.get("segment")
     
-    if not all([title, message_text, broadcast_type]):
+    if not all([title, message_text, broadcast_type, segment]):
         await callback.message.answer("Ошибка: не все данные заполнены. Начните заново.")
         await state.clear()
         return
     
     try:
         # Создаем уведомление в БД
-        broadcast_id = await database.create_broadcast(title, message_text, broadcast_type, callback.from_user.id)
+        broadcast_id = await database.create_broadcast(title, message_text, broadcast_type, segment, callback.from_user.id)
         
         # Формируем сообщение для отправки
         type_emoji = {
@@ -1596,8 +1655,8 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         emoji = type_emoji.get(broadcast_type, "📢")
         final_message = f"{emoji} {title}\n\n{message_text}"
         
-        # Получаем список всех пользователей
-        user_ids = await database.get_all_users_telegram_ids()
+        # Получаем список пользователей по сегменту
+        user_ids = await database.get_users_by_segment(segment)
         total_users = len(user_ids)
         
         await callback.message.edit_text(
@@ -1628,7 +1687,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             "broadcast_sent",
             callback.from_user.id,
             None,
-            f"Broadcast ID: {broadcast_id}, Sent: {sent_count}, Failed: {failed_count}"
+            f"Broadcast ID: {broadcast_id}, Segment: {segment}, Sent: {sent_count}, Failed: {failed_count}"
         )
         
         # Показываем результат
