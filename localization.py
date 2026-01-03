@@ -39,6 +39,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Профиль - активная подписка
         "profile_active": "👤 Профиль доступа\n\nСтатус: Активен\nСрок действия: до {date}\n\nПерсональный VPN-ключ:\n{vpn_key}\n\nПодключение стабильно и защищено.",
+        "profile_renewal_hint": "\n\nЛюбая повторная покупка автоматически продлевает срок действия подписки.",
         
         # Профиль - платеж на проверке
         "profile_payment_check": "🕒 Платёж на проверке.\n\nЭто стандартная процедура безопасности.\nПосле подтверждения доступ появится автоматически.",
@@ -100,6 +101,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Профиль - активная подписка
         "profile_active": "👤 Access Profile\n\nStatus: Active\nValid until: {date}\n\nPersonal VPN key:\n{vpn_key}\n\nConnection is stable and protected.",
+        "profile_renewal_hint": "\n\nAny repeated purchase automatically extends the subscription period.",
         
         # Профиль - платеж на проверке
         "profile_payment_check": "🕒 Payment under verification.\n\nThis is a standard security procedure.\nAfter confirmation, access will appear automatically.",
@@ -145,6 +147,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_approved": "✅ Kirish faollashtirildi.\n\nSizning shaxsiy VPN kalitingiz:\n{vpn_key}\n\nAmal qilish muddati:\n{date} gacha\n\nKalitni xavfsiz joyda saqlashni tavsiya etamiz.",
         "payment_rejected": "❌ To'lov tasdiqlanmadi.\n\nAgar to'laganingizga ishonchingiz komil bo'lsa — qo'llab-quvvatlashga murojaat qiling.",
         "profile_active": "👤 Kirish profili\n\nHolati: Faol\nAmal qilish muddati: {date} gacha\n\nShaxsiy VPN kalit:\n{vpn_key}\n\nUlanish barqaror va himoyalangan.",
+        "profile_renewal_hint": "\n\nHar qanday takroriy xarid obuna muddatini avtomatik ravishda uzaytiradi.",
         "profile_payment_check": "🕒 To'lov tekshiruvda.\n\nBu standart xavfsizlik protsedurasi.\nTasdiqlanganidan keyin kirish avtomatik ravishda paydo bo'ladi.",
         "no_subscription": "❌ Faol kirish yo'q.\n\nAtlas Secure — individual ulanish kalitlari bilan maxfiy VPN xizmati.\n\nSiz istalgan vaqtda kirish olishingiz mumkin.",
         "about_text": "Atlas Secure — maxfiylik va ishonchlilikka yo'naltirilgan yopiq VPN xizmati.\n\nBiz quyidagilardan foydalanmaymiz:\n— umumiy kalitlar\n— avtomatik berish\n— ommaviy ulanishlar\n\nHar bir kirish qo'lda tasdiqlanadi.",
@@ -180,6 +183,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_approved": "✅ Дастрасӣ фаъол шуд.\n\nКалиди VPN-и шахсии шумо:\n{vpn_key}\n\nМуддати амал:\nто {date}\n\nТавсия медиҳем, ки калидро дар ҷойи бехатар нигоҳ доред.",
         "payment_rejected": "❌ Пардохт тасдиқ нашуд.\n\nАгар мӯътақид ҳастед, ки пардохт кардед — ба дастгирӣ муроҷиат кунед.",
         "profile_active": "👤 Профили дастрасӣ\n\nҲолат: Фаъол\nМуддати амал: то {date}\n\nКалиди VPN-и шахсӣ:\n{vpn_key}\n\nПайванд устувор ва ҳимояшуда аст.",
+        "profile_renewal_hint": "\n\nҲар як хариди такрори обунаро ба таври худкор васеъ мекунад.",
         "profile_payment_check": "🕒 Пардохт дар санҷиш аст.\n\nИн процедураи стандартии амният аст.\nПас аз тасдиқ, дастрасӣ худкор пайдо мешавад.",
         "no_subscription": "❌ Дастрасии фаъол нест.\n\nAtlas Secure — хизмати махфии VPN\nбо калидҳои пайванди шахсӣ.\n\nШумо метавонед дар ҳар вақт дастрасӣ гиред.",
         "about_text": "Atlas Secure — хизмати махфии VPN,\nки ба махфият ва эътимоднокӣ равона аст.\n\nМо истифода намебарем:\n— калидҳои умумӣ\n— додани худкор\n— пайвандҳои оммавӣ\n\nҲар як дастрасӣ дастӣ тасдиқ карда мешавад.",
