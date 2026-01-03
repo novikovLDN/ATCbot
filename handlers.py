@@ -884,12 +884,12 @@ async def callback_admin_keys(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin:user")
 async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
-    """Раздел Пользователь - запрос Telegram ID"""
+    """Раздел Пользователь - запрос Telegram ID или username"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
     
-    text = "👤 Пользователь\n\nВведите Telegram ID пользователя:"
+    text = "👤 Пользователь\n\nВведите Telegram ID или username пользователя:"
     await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
     await state.set_state(AdminUserSearch.waiting_for_user_id)
     await callback.answer()
@@ -897,32 +897,48 @@ async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminUserSearch.waiting_for_user_id)
 async def process_admin_user_id(message: Message, state: FSMContext):
-    """Обработка введённого Telegram ID пользователя"""
+    """Обработка введённого Telegram ID или username пользователя"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         await message.answer("Недостаточно прав доступа")
         await state.clear()
         return
     
     try:
+        user_input = message.text.strip()
+        
+        # Определяем, является ли ввод числом (ID) или строкой (username)
         try:
-            target_user_id = int(message.text.strip())
+            target_user_id = int(user_input)
+            # Это число - ищем по ID
+            user = await database.find_user_by_id_or_username(telegram_id=target_user_id)
+            search_by = "ID"
+            search_value = str(target_user_id)
         except ValueError:
-            await message.answer("Неверный формат. Введите число (Telegram ID).")
+            # Это строка - ищем по username
+            username = user_input.lstrip('@')  # Убираем @, если есть
+            if not username:  # Пустая строка после удаления @
+                await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+                await state.clear()
+                return
+            username = username.lower()  # Приводим к нижнему регистру
+            user = await database.find_user_by_id_or_username(username=username)
+            search_by = "username"
+            search_value = username
+        
+        # Если пользователь не найден
+        if not user:
+            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+            await state.clear()
             return
         
-        # Получаем информацию о пользователе
-        user = await database.get_user(target_user_id)
-        subscription = await database.get_subscription(target_user_id)
+        # Получаем информацию о подписке
+        subscription = await database.get_subscription(user["telegram_id"])
         
-        text = "👤 Информация о пользователе\n\n"
-        
-        if user:
-            text += f"Telegram ID: {target_user_id}\n"
-            text += f"Username: @{user.get('username', 'не указан')}\n"
-        else:
-            text += f"Telegram ID: {target_user_id}\n"
-            text += "Username: пользователь не найден\n"
-        
+        # Формируем карточку пользователя
+        text = "👤 Пользователь\n\n"
+        text += f"Telegram ID: {user['telegram_id']}\n"
+        username_display = user.get('username') or 'не указан'
+        text += f"Username: @{username_display}\n"
         text += "\n"
         
         if subscription:
@@ -937,22 +953,23 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 text += f"Срок действия: до {expires_str}\n"
                 text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
                 
-                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id), parse_mode="Markdown")
+                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=user["telegram_id"]), parse_mode="Markdown")
             else:
                 text += "Статус подписки: ⛔ Истекла\n"
                 text += f"Срок действия: до {expires_str}\n"
                 text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
                 
-                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=target_user_id), parse_mode="Markdown")
+                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"]), parse_mode="Markdown")
         else:
             text += "Статус подписки: ❌ Нет подписки\n"
             text += "VPN-ключ: —\n"
             text += "Срок действия: —\n"
             
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=target_user_id))
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"]))
         
         # Логируем просмотр информации о пользователе
-        await database._log_audit_event_atomic_standalone("admin_view_user", message.from_user.id, target_user_id, f"Admin viewed user info for {target_user_id}")
+        details = f"Admin searched by {search_by}: {search_value}, found user {user['telegram_id']}"
+        await database._log_audit_event_atomic_standalone("admin_view_user", message.from_user.id, user["telegram_id"], details)
         
         await state.clear()
         
