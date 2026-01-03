@@ -117,10 +117,18 @@ async def init_db():
                 title TEXT NOT NULL,
                 message TEXT NOT NULL,
                 type TEXT NOT NULL,
+                segment TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 sent_by BIGINT NOT NULL
             )
         """)
+        
+        # Добавляем колонку segment, если её нет (для миграции)
+        try:
+            await conn.execute("ALTER TABLE broadcasts ADD COLUMN IF NOT EXISTS segment TEXT")
+        except Exception:
+            # Колонка уже существует или таблицы нет
+            pass
         
         # Таблица broadcast_log
         await conn.execute("""
@@ -819,13 +827,14 @@ async def get_last_audit_logs(limit: int = 10) -> list:
         return [dict(row) for row in rows]
 
 
-async def create_broadcast(title: str, message: str, broadcast_type: str, sent_by: int) -> int:
+async def create_broadcast(title: str, message: str, broadcast_type: str, segment: str, sent_by: int) -> int:
     """Создать новое уведомление
     
     Args:
         title: Заголовок уведомления
         message: Текст уведомления
         broadcast_type: Тип уведомления (info | maintenance | security | promo)
+        segment: Сегмент получателей (all_users | active_subscriptions)
         sent_by: Telegram ID администратора
     
     Returns:
@@ -834,10 +843,10 @@ async def create_broadcast(title: str, message: str, broadcast_type: str, sent_b
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """INSERT INTO broadcasts (title, message, type, sent_by)
-               VALUES ($1, $2, $3, $4)
+            """INSERT INTO broadcasts (title, message, type, segment, sent_by)
+               VALUES ($1, $2, $3, $4, $5)
                RETURNING id""",
-            title, message, broadcast_type, sent_by
+            title, message, broadcast_type, segment, sent_by
         )
         return row["id"]
 
@@ -858,6 +867,35 @@ async def get_all_users_telegram_ids() -> list:
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT telegram_id FROM users")
         return [row["telegram_id"] for row in rows]
+
+
+async def get_users_by_segment(segment: str) -> list:
+    """Получить список Telegram ID пользователей по сегменту
+    
+    Args:
+        segment: Сегмент получателей (all_users | active_subscriptions)
+    
+    Returns:
+        Список Telegram ID пользователей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if segment == "all_users":
+            rows = await conn.fetch("SELECT telegram_id FROM users")
+            return [row["telegram_id"] for row in rows]
+        elif segment == "active_subscriptions":
+            now = datetime.now()
+            rows = await conn.fetch(
+                """SELECT DISTINCT u.telegram_id 
+                   FROM users u
+                   INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
+                   WHERE s.expires_at > $1""",
+                now
+            )
+            return [row["telegram_id"] for row in rows]
+        else:
+            logging.warning(f"Unknown segment: {segment}, returning empty list")
+            return []
 
 
 async def log_broadcast_send(broadcast_id: int, telegram_id: int, status: str):
