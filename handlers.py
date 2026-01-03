@@ -399,6 +399,23 @@ def get_broadcast_confirm_keyboard():
     return keyboard
 
 
+def get_ab_test_list_keyboard(ab_tests: list) -> InlineKeyboardMarkup:
+    """Клавиатура списка A/B тестов"""
+    buttons = []
+    for test in ab_tests[:20]:  # Ограничиваем 20 тестами
+        test_id = test["id"]
+        title = test["title"][:30] + "..." if len(test["title"]) > 30 else test["title"]
+        created_at = test["created_at"]
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+        date_str = created_at.strftime("%d.%m.%Y")
+        button_text = f"#{test_id} {title} ({date_str})"
+        buttons.append([InlineKeyboardButton(text=button_text, callback_data=f"broadcast:ab_stat:{test_id}")])
+    
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_admin_export_keyboard():
     """Клавиатура выбора типа экспорта"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1506,6 +1523,7 @@ async def callback_admin_broadcast(callback: CallbackQuery):
     text = "📣 Уведомления\n\nВыберите действие:"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Создать уведомление", callback_data="broadcast:create")],
+        [InlineKeyboardButton(text="📊 A/B статистика", callback_data="broadcast:ab_stats")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
     ])
     await callback.message.edit_text(text, reply_markup=keyboard)
@@ -1818,6 +1836,105 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     
     finally:
         await state.clear()
+
+
+@router.callback_query(F.data == "broadcast:ab_stats")
+async def callback_broadcast_ab_stats(callback: CallbackQuery):
+    """Список A/B тестов"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        ab_tests = await database.get_ab_test_broadcasts()
+        
+        if not ab_tests:
+            text = "📊 A/B статистика\n\nA/B тестов не найдено."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            return
+        
+        text = "📊 A/B статистика\n\nВыберите уведомление для просмотра статистики:"
+        keyboard = get_ab_test_list_keyboard(ab_tests)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        # Логируем действие
+        await database._log_audit_event_atomic_standalone("admin_view_ab_stats_list", callback.from_user.id, None, f"Viewed {len(ab_tests)} A/B tests")
+    
+    except Exception as e:
+        logging.exception(f"Error in callback_broadcast_ab_stats: {e}")
+        await callback.message.answer("Ошибка при получении списка A/B тестов. Проверь логи.")
+
+
+@router.callback_query(F.data.startswith("broadcast:ab_stat:"))
+async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
+    """Статистика конкретного A/B теста"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        broadcast_id = int(callback.data.split(":")[2])
+        
+        # Получаем информацию об уведомлении
+        broadcast = await database.get_broadcast(broadcast_id)
+        if not broadcast:
+            await callback.message.answer("Уведомление не найдено.")
+            return
+        
+        # Получаем статистику
+        stats = await database.get_ab_test_stats(broadcast_id)
+        
+        if not stats:
+            text = f"📊 A/B статистика\n\nУведомление: #{broadcast_id}\n\nНедостаточно данных для анализа."
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:ab_stats")],
+            ])
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        
+        # Формируем текст статистики
+        total_sent = stats["total_sent"]
+        variant_a_sent = stats["variant_a_sent"]
+        variant_b_sent = stats["variant_b_sent"]
+        
+        # Проценты
+        if total_sent > 0:
+            percent_a = round((variant_a_sent / total_sent) * 100)
+            percent_b = round((variant_b_sent / total_sent) * 100)
+        else:
+            percent_a = 0
+            percent_b = 0
+        
+        text = (
+            f"📊 A/B статистика\n\n"
+            f"Уведомление: #{broadcast_id}\n"
+            f"Заголовок: {broadcast.get('title', '—')}\n\n"
+            f"Вариант A:\n"
+            f"— Отправлено: {variant_a_sent} ({percent_a}%)\n\n"
+            f"Вариант B:\n"
+            f"— Отправлено: {variant_b_sent} ({percent_b}%)\n\n"
+            f"Всего отправлено: {total_sent}"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:ab_stats")],
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        # Логируем действие
+        await database._log_audit_event_atomic_standalone("admin_view_ab_stat_detail", callback.from_user.id, None, f"Viewed A/B stats for broadcast {broadcast_id}")
+    
+    except (ValueError, IndexError) as e:
+        logging.error(f"Error parsing broadcast ID: {e}")
+        await callback.message.answer("Ошибка: неверный ID уведомления.")
+    except Exception as e:
+        logging.exception(f"Error in callback_broadcast_ab_stat_detail: {e}")
+        await callback.message.answer("Ошибка при получении статистики A/B теста. Проверь логи.")
 
 
 @router.message(Command("admin_audit"))
