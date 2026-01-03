@@ -239,18 +239,58 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tu
         return expires_at, is_renewal
 
 
-async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> Tuple[Optional[datetime], bool]:
+async def _get_free_vpn_key_atomic(conn, telegram_id: int) -> Optional[str]:
+    """Атомарно получить свободный VPN-ключ из таблицы vpn_keys
+    
+    Использует SELECT ... FOR UPDATE для защиты от race condition.
+    Должна вызываться ТОЛЬКО внутри активной транзакции.
+    
+    Returns:
+        VPN-ключ (str) или None, если свободных ключей нет
+    """
+    # Выбираем один свободный ключ с блокировкой строки
+    row = await conn.fetchrow(
+        """SELECT vpn_key FROM vpn_keys
+           WHERE is_used = FALSE
+           LIMIT 1
+           FOR UPDATE""",
+    )
+    
+    if not row:
+        return None
+    
+    vpn_key = row["vpn_key"]
+    now = datetime.now()
+    
+    # Помечаем ключ как использованный
+    await conn.execute(
+        """UPDATE vpn_keys
+           SET is_used = TRUE,
+               assigned_to = $1,
+               assigned_at = $2
+           WHERE vpn_key = $3""",
+        telegram_id, now, vpn_key
+    )
+    
+    return vpn_key
+
+
+async def approve_payment_atomic(payment_id: int, months: int) -> Tuple[Optional[datetime], bool, Optional[str]]:
     """Атомарно подтвердить платеж в одной транзакции
     
     В одной транзакции:
     - обновляет payment → approved
+    - получает VPN-ключ из таблицы vpn_keys (если нужен новый)
     - создает/продлевает subscription с VPN-ключом
     
     Логика выдачи ключей:
     - Если подписка активна (expires_at > now): переиспользуется существующий ключ
-    - Если подписка закончилась (expires_at <= now) или её нет: используется новый ключ
+    - Если подписка закончилась (expires_at <= now) или её нет: используется новый ключ из БД
     
-    Возвращает (expires_at, is_renewal) или (None, False) при ошибке.
+    Returns:
+        (expires_at, is_renewal, vpn_key) или (None, False, None) при ошибке или отсутствии ключей
+        vpn_key - ключ, который был использован/переиспользован
+    
     При любой ошибке транзакция откатывается.
     """
     pool = await get_pool()
@@ -264,7 +304,7 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
                 )
                 if not payment_row:
                     logger.error(f"Payment {payment_id} not found or not pending for atomic approve")
-                    return None, False
+                    return None, False, None
                 
                 payment = dict(payment_row)
                 telegram_id = payment["telegram_id"]
@@ -296,17 +336,23 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
                         is_renewal = True
                         logger.info(f"Renewing active subscription for user {telegram_id}, reusing vpn_key, expires_at: {subscription_expires_at} -> {expires_at}")
                     else:
-                        # Подписка закончилась - используем новый ключ
-                        final_vpn_key = vpn_key
+                        # Подписка закончилась - получаем новый ключ из БД
+                        final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
+                        if not final_vpn_key:
+                            logger.error(f"No free VPN keys available for payment {payment_id}, user {telegram_id}")
+                            return None, False, None
                         expires_at = now + tariff_duration
                         is_renewal = False
-                        logger.info(f"Subscription expired for user {telegram_id}, using new vpn_key, expires_at: {expires_at}")
+                        logger.info(f"Subscription expired for user {telegram_id}, using new vpn_key from DB, expires_at: {expires_at}")
                 else:
-                    # Подписки никогда не было - используем новый ключ
-                    final_vpn_key = vpn_key
+                    # Подписки никогда не было - получаем новый ключ из БД
+                    final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
+                    if not final_vpn_key:
+                        logger.error(f"No free VPN keys available for payment {payment_id}, user {telegram_id}")
+                        return None, False, None
                     expires_at = now + tariff_duration
                     is_renewal = False
-                    logger.info(f"Creating new subscription for user {telegram_id}, expires_at: {expires_at}")
+                    logger.info(f"Creating new subscription for user {telegram_id}, using new vpn_key from DB, expires_at: {expires_at}")
                 
                 # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в FALSE при продлении)
                 await conn.execute(
@@ -318,7 +364,7 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
                 )
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
-                return expires_at, is_renewal
+                return expires_at, is_renewal, final_vpn_key
                 
             except Exception as e:
                 logger.exception(f"Error in atomic approve for payment {payment_id}, transaction rolled back")
