@@ -110,6 +110,29 @@ async def init_db():
             )
         """)
         
+        # Таблица broadcasts
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcasts (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                type TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                sent_by BIGINT NOT NULL
+            )
+        """)
+        
+        # Таблица broadcast_log
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_log (
+                id SERIAL PRIMARY KEY,
+                broadcast_id INTEGER NOT NULL REFERENCES broadcasts(id) ON DELETE CASCADE,
+                telegram_id BIGINT NOT NULL,
+                status TEXT NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         logger.info("Database tables initialized")
 
 
@@ -794,3 +817,83 @@ async def get_last_audit_logs(limit: int = 10) -> list:
             limit
         )
         return [dict(row) for row in rows]
+
+
+async def create_broadcast(title: str, message: str, broadcast_type: str, sent_by: int) -> int:
+    """Создать новое уведомление
+    
+    Args:
+        title: Заголовок уведомления
+        message: Текст уведомления
+        broadcast_type: Тип уведомления (info | maintenance | security | promo)
+        sent_by: Telegram ID администратора
+    
+    Returns:
+        ID созданного уведомления
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO broadcasts (title, message, type, sent_by)
+               VALUES ($1, $2, $3, $4)
+               RETURNING id""",
+            title, message, broadcast_type, sent_by
+        )
+        return row["id"]
+
+
+async def get_broadcast(broadcast_id: int) -> Optional[Dict[str, Any]]:
+    """Получить уведомление по ID"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM broadcasts WHERE id = $1", broadcast_id
+        )
+        return dict(row) if row else None
+
+
+async def get_all_users_telegram_ids() -> list:
+    """Получить список всех Telegram ID пользователей"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT telegram_id FROM users")
+        return [row["telegram_id"] for row in rows]
+
+
+async def log_broadcast_send(broadcast_id: int, telegram_id: int, status: str):
+    """Записать результат отправки уведомления
+    
+    Args:
+        broadcast_id: ID уведомления
+        telegram_id: Telegram ID пользователя
+        status: Статус отправки (sent | failed)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO broadcast_log (broadcast_id, telegram_id, status)
+               VALUES ($1, $2, $3)""",
+            broadcast_id, telegram_id, status
+        )
+
+
+async def get_broadcast_stats(broadcast_id: int) -> Dict[str, int]:
+    """Получить статистику отправки уведомления
+    
+    Args:
+        broadcast_id: ID уведомления
+    
+    Returns:
+        Словарь с количеством отправленных и неудачных отправок
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        sent_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND status = 'sent'",
+            broadcast_id
+        )
+        failed_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM broadcast_log WHERE broadcast_id = $1 AND status = 'failed'",
+            broadcast_id
+        )
+        return {"sent": sent_count or 0, "failed": failed_count or 0}

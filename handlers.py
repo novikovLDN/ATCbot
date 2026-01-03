@@ -12,6 +12,7 @@ import time
 import csv
 import tempfile
 import os
+import asyncio
 
 # Время последней отправки алерта о ключах (для предотвращения спама)
 _last_keys_alert_time: datetime = None
@@ -24,6 +25,13 @@ _bot_start_time = time.time()
 
 class AdminUserSearch(StatesGroup):
     waiting_for_user_id = State()
+
+
+class BroadcastCreate(StatesGroup):
+    waiting_for_title = State()
+    waiting_for_message = State()
+    waiting_for_type = State()
+    waiting_for_confirm = State()
 
 router = Router()
 
@@ -332,6 +340,7 @@ def get_admin_dashboard_keyboard():
         [InlineKeyboardButton(text="👤 Пользователь", callback_data="admin:user")],
         [InlineKeyboardButton(text="🚨 Система", callback_data="admin:system")],
         [InlineKeyboardButton(text="📤 Экспорт данных", callback_data="admin:export")],
+        [InlineKeyboardButton(text="📣 Уведомления", callback_data="admin:broadcast")],
     ])
     return keyboard
 
@@ -340,6 +349,27 @@ def get_admin_back_keyboard():
     """Клавиатура с кнопкой 'Назад' для админ-разделов"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    return keyboard
+
+
+def get_broadcast_type_keyboard():
+    """Клавиатура выбора типа уведомления"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="ℹ️ Информация", callback_data="broadcast_type:info")],
+        [InlineKeyboardButton(text="🔧 Технические работы", callback_data="broadcast_type:maintenance")],
+        [InlineKeyboardButton(text="🔒 Безопасность", callback_data="broadcast_type:security")],
+        [InlineKeyboardButton(text="🎯 Промо", callback_data="broadcast_type:promo")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:broadcast")],
+    ])
+    return keyboard
+
+
+def get_broadcast_confirm_keyboard():
+    """Клавиатура подтверждения отправки уведомления"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Отправить", callback_data="broadcast:confirm_send")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:broadcast")],
     ])
     return keyboard
 
@@ -1439,6 +1469,189 @@ async def callback_admin_export_data(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_export_data: {e}")
         await callback.message.answer("Ошибка при экспорте данных. Проверь логи.")
+
+
+@router.callback_query(F.data == "admin:broadcast")
+async def callback_admin_broadcast(callback: CallbackQuery):
+    """Раздел уведомлений"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    text = "📣 Уведомления\n\nВыберите действие:"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать уведомление", callback_data="broadcast:create")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+    
+    # Логируем действие
+    await database._log_audit_event_atomic_standalone("admin_broadcast_view", callback.from_user.id, None, "Admin viewed broadcast section")
+
+
+@router.callback_query(F.data == "broadcast:create")
+async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
+    """Начать создание уведомления"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    await state.set_state(BroadcastCreate.waiting_for_title)
+    await callback.message.answer("Введите заголовок уведомления:")
+
+
+@router.message(BroadcastCreate.waiting_for_title)
+async def process_broadcast_title(message: Message, state: FSMContext):
+    """Обработка заголовка уведомления"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    
+    await state.update_data(title=message.text)
+    await state.set_state(BroadcastCreate.waiting_for_message)
+    await message.answer("Введите текст уведомления:")
+
+
+@router.message(BroadcastCreate.waiting_for_message)
+async def process_broadcast_message(message: Message, state: FSMContext):
+    """Обработка текста уведомления"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    
+    await state.update_data(message=message.text)
+    await state.set_state(BroadcastCreate.waiting_for_type)
+    await message.answer("Выберите тип уведомления:", reply_markup=get_broadcast_type_keyboard())
+
+
+@router.callback_query(F.data.startswith("broadcast_type:"))
+async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора типа уведомления"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    broadcast_type = callback.data.split(":")[1]
+    
+    data = await state.get_data()
+    title = data.get("title")
+    message_text = data.get("message")
+    
+    # Формируем предпросмотр
+    type_emoji = {
+        "info": "ℹ️",
+        "maintenance": "🔧",
+        "security": "🔒",
+        "promo": "🎯"
+    }
+    type_name = {
+        "info": "Информация",
+        "maintenance": "Технические работы",
+        "security": "Безопасность",
+        "promo": "Промо"
+    }
+    
+    preview_text = f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n{message_text}\n\nТип: {type_name.get(broadcast_type, broadcast_type)}"
+    
+    await state.update_data(type=broadcast_type)
+    await state.set_state(BroadcastCreate.waiting_for_confirm)
+    
+    await callback.message.edit_text(
+        f"📋 Предпросмотр уведомления:\n\n{preview_text}\n\nПодтвердите отправку:",
+        reply_markup=get_broadcast_confirm_keyboard()
+    )
+
+
+@router.callback_query(F.data == "broadcast:confirm_send")
+async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Подтверждение и отправка уведомления"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    data = await state.get_data()
+    title = data.get("title")
+    message_text = data.get("message")
+    broadcast_type = data.get("type")
+    
+    if not all([title, message_text, broadcast_type]):
+        await callback.message.answer("Ошибка: не все данные заполнены. Начните заново.")
+        await state.clear()
+        return
+    
+    try:
+        # Создаем уведомление в БД
+        broadcast_id = await database.create_broadcast(title, message_text, broadcast_type, callback.from_user.id)
+        
+        # Формируем сообщение для отправки
+        type_emoji = {
+            "info": "ℹ️",
+            "maintenance": "🔧",
+            "security": "🔒",
+            "promo": "🎯"
+        }
+        emoji = type_emoji.get(broadcast_type, "📢")
+        final_message = f"{emoji} {title}\n\n{message_text}"
+        
+        # Получаем список всех пользователей
+        user_ids = await database.get_all_users_telegram_ids()
+        total_users = len(user_ids)
+        
+        await callback.message.edit_text(
+            f"📤 Отправка уведомления...\n\nПользователей: {total_users}\nОжидайте завершения.",
+            reply_markup=None
+        )
+        
+        # Отправляем уведомления с задержкой
+        sent_count = 0
+        failed_count = 0
+        
+        for user_id in user_ids:
+            try:
+                await bot.send_message(user_id, final_message)
+                await database.log_broadcast_send(broadcast_id, user_id, "sent")
+                sent_count += 1
+                
+                # Задержка между отправками (0.3-0.5 сек)
+                await asyncio.sleep(0.4)
+                
+            except Exception as e:
+                logging.error(f"Error sending broadcast to user {user_id}: {e}")
+                await database.log_broadcast_send(broadcast_id, user_id, "failed")
+                failed_count += 1
+        
+        # Логируем действие
+        await database._log_audit_event_atomic_standalone(
+            "broadcast_sent",
+            callback.from_user.id,
+            None,
+            f"Broadcast ID: {broadcast_id}, Sent: {sent_count}, Failed: {failed_count}"
+        )
+        
+        # Показываем результат
+        result_text = (
+            f"✅ Уведомление отправлено\n\n"
+            f"📊 Статистика:\n"
+            f"✅ Отправлено: {sent_count}\n"
+            f"❌ Ошибок: {failed_count}\n"
+            f"📝 ID уведомления: {broadcast_id}"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
+        ])
+        
+        await callback.message.edit_text(result_text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logging.exception(f"Error in broadcast send: {e}")
+        await callback.message.answer(f"Ошибка при отправке уведомления: {e}")
+    
+    finally:
+        await state.clear()
 
 
 @router.message(Command("admin_audit"))
