@@ -764,8 +764,9 @@ async def callback_admin_stats(callback: CallbackQuery):
         text += f"👥 Всего пользователей: {stats['total_users']}\n"
         text += f"🔑 Активных подписок: {stats['active_subscriptions']}\n"
         text += f"⛔ Истёкших подписок: {stats['expired_subscriptions']}\n"
-        text += f"💳 Платежей всего: {stats['total_payments']}\n"
-        text += f"💰 Подтверждённых платежей: {stats['approved_payments']}\n"
+        text += f"💳 Всего платежей: {stats['total_payments']}\n"
+        text += f"✅ Подтверждённых платежей: {stats['approved_payments']}\n"
+        text += f"❌ Отклонённых платежей: {stats['rejected_payments']}\n"
         text += f"🔓 Свободных VPN-ключей: {stats['free_vpn_keys']}"
         
         await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())

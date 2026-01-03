@@ -607,6 +607,7 @@ async def get_admin_stats() -> Dict[str, int]:
         - expired_subscriptions: истёкших подписок
         - total_payments: всего платежей
         - approved_payments: подтверждённых платежей
+        - rejected_payments: отклонённых платежей
         - free_vpn_keys: свободных VPN-ключей
     """
     pool = await get_pool()
@@ -636,6 +637,11 @@ async def get_admin_stats() -> Dict[str, int]:
             "SELECT COUNT(*) FROM payments WHERE status = 'approved'"
         )
         
+        # Отклонённых платежей
+        rejected_payments = await conn.fetchval(
+            "SELECT COUNT(*) FROM payments WHERE status = 'rejected'"
+        )
+        
         # Свободных VPN-ключей
         free_vpn_keys = await conn.fetchval(
             "SELECT COUNT(*) FROM vpn_keys WHERE is_used = FALSE"
@@ -647,6 +653,7 @@ async def get_admin_stats() -> Dict[str, int]:
             "expired_subscriptions": expired_subscriptions or 0,
             "total_payments": total_payments or 0,
             "approved_payments": approved_payments or 0,
+            "rejected_payments": rejected_payments or 0,
             "free_vpn_keys": free_vpn_keys or 0,
         }
 
