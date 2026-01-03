@@ -79,15 +79,11 @@ def get_tariff_keyboard(language: str):
     """Клавиатура выбора тарифа"""
     buttons = []
     for tariff_key, tariff_data in config.TARIFFS.items():
-        tariff_button_key = f"tariff_button_{tariff_key}"
+        price = tariff_data["price"]
         
-        # Для русского языка цены захардкожены в текстах
-        # Для других языков передаем price как параметр
-        if language == "ru":
-            text = localization.get_text(language, tariff_button_key)
-        else:
-            price = tariff_data["price"]
-            text = localization.get_text(language, tariff_button_key, price=price)
+        # Используем локализованные тексты кнопок
+        tariff_button_key = f"tariff_button_{tariff_key}"
+        text = localization.get_text(language, tariff_button_key, price=price)
         
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}")])
     
