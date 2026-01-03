@@ -131,11 +131,15 @@ def get_back_keyboard(language: str):
 
 
 def get_profile_keyboard_with_copy(language: str):
-    """Клавиатура профиля с кнопкой копирования ключа"""
+    """Клавиатура профиля с кнопкой копирования ключа и историей"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=localization.get_text(language, "copy_key"),
             callback_data="copy_key"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "subscription_history"),
+            callback_data="subscription_history"
         )],
         [InlineKeyboardButton(
             text=localization.get_text(language, "back"),
@@ -317,6 +321,8 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
     if has_active_subscription:
         callback_data = f"admin:user_reissue:{user_id}" if user_id else "admin:user_reissue"
         buttons.append([InlineKeyboardButton(text="🔁 Перевыпустить ключ", callback_data=callback_data)])
+    if user_id:
+        buttons.append([InlineKeyboardButton(text="🧾 История подписок", callback_data=f"admin:user_history:{user_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -465,6 +471,58 @@ async def callback_copy_key(callback: CallbackQuery):
     # Отправляем VPN-ключ отдельным сообщением
     vpn_key = subscription["vpn_key"]
     await callback.message.answer(f"`{vpn_key}`", parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "subscription_history")
+async def callback_subscription_history(callback: CallbackQuery):
+    """История подписок"""
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Получаем историю подписок
+    history = await database.get_subscription_history(telegram_id, limit=5)
+    
+    if not history:
+        text = localization.get_text(language, "subscription_history_empty")
+        await callback.message.answer(text)
+        return
+    
+    # Формируем текст истории
+    text = localization.get_text(language, "subscription_history") + "\n\n"
+    
+    action_type_map = {
+        "purchase": localization.get_text(language, "subscription_history_action_purchase"),
+        "renewal": localization.get_text(language, "subscription_history_action_renewal"),
+        "reissue": localization.get_text(language, "subscription_history_action_reissue"),
+        "manual_reissue": localization.get_text(language, "subscription_history_action_manual_reissue"),
+    }
+    
+    for record in history:
+        start_date = record["start_date"]
+        if isinstance(start_date, str):
+            start_date = datetime.fromisoformat(start_date)
+        start_str = start_date.strftime("%d.%m.%Y")
+        
+        end_date = record["end_date"]
+        if isinstance(end_date, str):
+            end_date = datetime.fromisoformat(end_date)
+        end_str = end_date.strftime("%d.%m.%Y")
+        
+        action_type = record["action_type"]
+        action_text = action_type_map.get(action_type, action_type)
+        
+        text += f"• {start_str} — {action_text}\n"
+        
+        # Для purchase и reissue показываем ключ
+        if action_type in ["purchase", "reissue", "manual_reissue"]:
+            text += f"  Ключ: {record['vpn_key']}\n"
+        
+        text += f"  До: {end_str}\n\n"
+    
+    await callback.message.answer(text, reply_markup=get_back_keyboard(language))
 
 
 @router.callback_query(F.data == "menu_buy_vpn")
@@ -1033,6 +1091,73 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         logging.exception(f"Error in process_admin_user_id: {e}")
         await message.answer("Ошибка при получении информации о пользователе. Проверь логи.")
         await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:user_history:"))
+async def callback_admin_user_history(callback: CallbackQuery):
+    """История подписок пользователя (админ)"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        # Получаем user_id из callback_data
+        target_user_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка: неверный формат команды", show_alert=True)
+        return
+    
+    try:
+        # Получаем историю подписок
+        history = await database.get_subscription_history(target_user_id, limit=10)
+        
+        if not history:
+            text = "🧾 История подписок\n\nИстория подписок пуста."
+            await callback.message.answer(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer()
+            return
+        
+        # Формируем текст истории
+        text = "🧾 История подписок\n\n"
+        
+        action_type_map = {
+            "purchase": "Покупка",
+            "renewal": "Продление",
+            "reissue": "Выдача нового ключа",
+            "manual_reissue": "Перевыпуск ключа",
+        }
+        
+        for record in history:
+            start_date = record["start_date"]
+            if isinstance(start_date, str):
+                start_date = datetime.fromisoformat(start_date)
+            start_str = start_date.strftime("%d.%m.%Y")
+            
+            end_date = record["end_date"]
+            if isinstance(end_date, str):
+                end_date = datetime.fromisoformat(end_date)
+            end_str = end_date.strftime("%d.%m.%Y")
+            
+            action_type = record["action_type"]
+            action_text = action_type_map.get(action_type, action_type)
+            
+            text += f"• {start_str} — {action_text}\n"
+            
+            # Для purchase и reissue показываем ключ
+            if action_type in ["purchase", "reissue", "manual_reissue"]:
+                text += f"  Ключ: {record['vpn_key']}\n"
+            
+            text += f"  До: {end_str}\n\n"
+        
+        await callback.message.answer(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+        # Логируем просмотр истории
+        await database._log_audit_event_atomic_standalone("admin_view_user_history", callback.from_user.id, target_user_id, f"Admin viewed subscription history for user {target_user_id}")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_user_history: {e}")
+        await callback.answer("Ошибка при получении истории подписок", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin:user_reissue:"))

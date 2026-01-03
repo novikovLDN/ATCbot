@@ -15,6 +15,12 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "back": "🔙 Назад",
         "copy_key": "📋 Скопировать ключ",
         "no_active_subscription": "Активная подписка не найдена.",
+        "subscription_history": "🧾 История подписок",
+        "subscription_history_empty": "История подписок пуста",
+        "subscription_history_action_purchase": "Покупка",
+        "subscription_history_action_renewal": "Продление",
+        "subscription_history_action_reissue": "Выдача нового ключа",
+        "subscription_history_action_manual_reissue": "Перевыпуск ключа",
         
         # Выбор тарифа
         "select_tariff": "Выберите срок доступа\n\nAtlas Secure работает по принципу ограниченного доступа.\nКаждый период — это частная конфигурация, а не массовый тариф.\n\nКаждый уровень доступа включает:\n— индивидуальный VPN-ключ, закреплённый исключительно за вами\n— zero-logs архитектуру без хранения сессий и метаданных\n— стабильное соединение без лимитов и деградации скорости\n— приоритетную поддержку",
@@ -84,6 +90,12 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "back": "🔙 Back",
         "copy_key": "📋 Copy Key",
         "no_active_subscription": "Active subscription not found.",
+        "subscription_history": "🧾 Subscription History",
+        "subscription_history_empty": "Subscription history is empty",
+        "subscription_history_action_purchase": "Purchase",
+        "subscription_history_action_renewal": "Renewal",
+        "subscription_history_action_reissue": "Key reissue",
+        "subscription_history_action_manual_reissue": "Manual key reissue",
         
         # Выбор тарифа
         "select_tariff": "Select access period\n\nAtlas Secure operates on a limited access principle.\nEach period is a private configuration, not a mass tariff.\n\nEach access level includes:\n— individual VPN key assigned exclusively to you\n— zero-logs architecture without session and metadata storage\n— stable connection without limits and speed degradation\n— priority support",
@@ -192,6 +204,12 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "back": "🔙 Бозгашт",
         "copy_key": "📋 Калидро нусхабардорӣ кардан",
         "no_active_subscription": "Обунаи фаъол ёфт нашуд.",
+        "subscription_history": "🧾 Таърихи обунаҳо",
+        "subscription_history_empty": "Таърихи обунаҳо холӣ аст",
+        "subscription_history_action_purchase": "Харид",
+        "subscription_history_action_renewal": "Тоза кардан",
+        "subscription_history_action_reissue": "Додани калиди нав",
+        "subscription_history_action_manual_reissue": "Аз нав додани калид",
         "select_tariff": "Муддати дастрасиро интихоб кунед\n\nAtlas Secure ба принсипи дастрасии маҳдуд кор мекунад.\nҲар як давра — ин конфигуратсияи хусусӣ аст, на тарифи оммавӣ.\n\nҲар як сатҳи дастрасӣ дорои:\n— калиди VPN-и шахсӣ, ки хусусан ба шумо закреп шудааст\n— меъмории zero-logs бе нигоҳдории сессияҳо ва метамаълумот\n— пайванди устувор бе маҳдудияту коҳиши суръат\n— дастгирии афзалиятнок",
         "tariff_button_1": "1 моҳ Дастрасии муваққатӣ · 299 ₽",
         "tariff_button_3": "3 моҳ Дастрасии стандартӣ · 799 ₽",
