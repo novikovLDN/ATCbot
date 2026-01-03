@@ -127,6 +127,21 @@ def get_back_keyboard(language: str):
     ])
 
 
+def get_profile_keyboard_with_copy(language: str):
+    """Клавиатура профиля с кнопкой копирования ключа"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "copy_key"),
+            callback_data="copy_key"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back"),
+            callback_data="menu_main"
+        )]
+    ])
+    return keyboard
+
+
 def get_profile_keyboard(language: str):
     """Клавиатура с кнопками профиля и инструкции (после активации)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -139,7 +154,11 @@ def get_profile_keyboard(language: str):
                 text=localization.get_text(language, "instruction"),
                 callback_data="menu_instruction"
             ),
-        ]
+        ],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "copy_key"),
+            callback_data="copy_key"
+        )]
     ])
     return keyboard
 
@@ -357,6 +376,7 @@ async def show_profile(message_or_query, language: str):
         expires_str = expires_at.strftime("%d.%m.%Y")
         text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=subscription["vpn_key"])
         text += localization.get_text(language, "profile_renewal_hint")
+        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language))
     else:
         # Проверяем, есть ли pending платеж
         pending_payment = await database.get_pending_payment_by_user(telegram_id)
@@ -364,8 +384,7 @@ async def show_profile(message_or_query, language: str):
             text = localization.get_text(language, "profile_payment_check")
         else:
             text = localization.get_text(language, "no_subscription")
-    
-    await send_func(text, reply_markup=get_back_keyboard(language))
+        await send_func(text, reply_markup=get_back_keyboard(language))
 
 
 @router.callback_query(F.data == "change_language")
@@ -410,6 +429,28 @@ async def callback_profile(callback: CallbackQuery):
     
     await show_profile(callback, language)
     await callback.answer()
+
+
+@router.callback_query(F.data == "copy_key")
+async def callback_copy_key(callback: CallbackQuery):
+    """Копировать VPN-ключ"""
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Проверяем, что у пользователя есть активная подписка
+    subscription = await database.get_subscription(telegram_id)
+    
+    if not subscription:
+        text = localization.get_text(language, "no_active_subscription")
+        await callback.message.answer(text)
+        return
+    
+    # Отправляем VPN-ключ отдельным сообщением
+    vpn_key = subscription["vpn_key"]
+    await callback.message.answer(f"`{vpn_key}`", parse_mode="Markdown")
 
 
 @router.callback_query(F.data == "menu_buy_vpn")
