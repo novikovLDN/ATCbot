@@ -85,8 +85,25 @@ async def update_username(telegram_id: int, username: Optional[str]):
         await db.commit()
 
 
-async def create_payment(telegram_id: int, tariff: str) -> int:
-    """Создать платеж и вернуть его ID"""
+async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Получить pending платеж пользователя"""
+    async with aiosqlite.connect(DATABASE_FILE) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM payments WHERE telegram_id = ? AND status = 'pending'",
+            (telegram_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
+    """Создать платеж и вернуть его ID. Возвращает None, если уже есть pending платеж"""
+    # Проверяем наличие pending платежа
+    existing_payment = await get_pending_payment_by_user(telegram_id)
+    if existing_payment:
+        return None  # У пользователя уже есть pending платеж
+    
     async with aiosqlite.connect(DATABASE_FILE) as db:
         cursor = await db.execute(
             "INSERT INTO payments (telegram_id, tariff, status) VALUES (?, ?, 'pending')",

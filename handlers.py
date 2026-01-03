@@ -166,6 +166,18 @@ def get_support_keyboard(language: str):
     """Клавиатура раздела 'Поддержка'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
+            text=localization.get_text(language, "support_payment_not_confirmed"),
+            callback_data="support_payment"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "support_vpn_not_working"),
+            callback_data="support_vpn"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "support_other"),
+            callback_data="support_other"
+        )],
+        [InlineKeyboardButton(
             text=localization.get_text(language, "change_language"),
             callback_data="change_language"
         )],
@@ -240,12 +252,14 @@ async def show_profile(message_or_query, language: str):
     if subscription:
         expires_at = datetime.fromisoformat(subscription["expires_at"])
         expires_str = expires_at.strftime("%d.%m.%Y")
-        
-        text = f"{localization.get_text(language, 'subscription_active')}\n"
-        text += localization.get_text(language, "subscription_expires", date=expires_str) + "\n"
-        text += localization.get_text(language, "vpn_key", vpn_key=subscription["vpn_key"])
+        text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=subscription["vpn_key"])
     else:
-        text = localization.get_text(language, "no_subscription")
+        # Проверяем, есть ли pending платеж
+        pending_payment = await database.get_pending_payment_by_user(telegram_id)
+        if pending_payment:
+            text = localization.get_text(language, "profile_payment_check")
+        else:
+            text = localization.get_text(language, "no_subscription")
     
     await send_func(text, reply_markup=get_back_keyboard(language))
 
@@ -368,8 +382,25 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tariff_key = data.get("tariff", "1")
     
+    # Проверяем наличие pending платежа перед созданием
+    existing_payment = await database.get_pending_payment_by_user(telegram_id)
+    if existing_payment:
+        text = localization.get_text(language, "payment_pending")
+        await callback.message.edit_text(text, reply_markup=get_pending_payment_keyboard(language))
+        await callback.answer("У вас уже есть ожидающий платеж", show_alert=True)
+        await state.clear()
+        return
+    
     # Создаем платеж
     payment_id = await database.create_payment(telegram_id, tariff_key)
+    
+    if payment_id is None:
+        # Это не должно произойти, так как мы проверили выше, но на всякий случай
+        text = localization.get_text(language, "payment_pending")
+        await callback.message.edit_text(text, reply_markup=get_pending_payment_keyboard(language))
+        await callback.answer("Не удалось создать платеж. Попробуйте позже.", show_alert=True)
+        await state.clear()
+        return
     
     # Отправляем сообщение пользователю
     text = localization.get_text(language, "payment_pending")
@@ -429,12 +460,46 @@ async def callback_support(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(
-        language,
-        "support_text",
-        email=config.SUPPORT_EMAIL,
-        telegram=config.SUPPORT_TELEGRAM
-    )
+    text = localization.get_text(language, "support_text")
+    await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "support_payment")
+async def callback_support_payment(callback: CallbackQuery):
+    """Поддержка - платеж не подтвердили"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "support_text")
+    text += f"\n\nEmail: {config.SUPPORT_EMAIL}\nTelegram: {config.SUPPORT_TELEGRAM}"
+    await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "support_vpn")
+async def callback_support_vpn(callback: CallbackQuery):
+    """Поддержка - VPN не работает"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "support_text")
+    text += f"\n\nEmail: {config.SUPPORT_EMAIL}\nTelegram: {config.SUPPORT_TELEGRAM}"
+    await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "support_other")
+async def callback_support_other(callback: CallbackQuery):
+    """Поддержка - другой вопрос"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "support_text")
+    text += f"\n\nEmail: {config.SUPPORT_EMAIL}\nTelegram: {config.SUPPORT_TELEGRAM}"
     await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
     await callback.answer()
 
@@ -458,8 +523,18 @@ async def approve_payment(callback: CallbackQuery):
         # Получить платеж из БД
         payment = await database.get_payment(payment_id)
         
-        if not payment or payment["status"] != "pending":
-            await callback.answer("Платеж не найден или уже обработан", show_alert=True)
+        if not payment:
+            logging.warning(f"Payment {payment_id} not found")
+            await callback.answer("Платеж не найден", show_alert=True)
+            return
+        
+        if payment["status"] != "pending":
+            logging.warning(
+                f"Attempt to approve already processed payment {payment_id}, status={payment['status']}"
+            )
+            await callback.answer("Платеж уже обработан", show_alert=True)
+            # Удаляем кнопки даже если платеж уже обработан
+            await callback.message.edit_reply_markup(reply_markup=None)
             return
         
         telegram_id = payment["telegram_id"]
@@ -495,6 +570,8 @@ async def approve_payment(callback: CallbackQuery):
             logging.error(f"Error sending approval message to user {telegram_id}: {e}")
         
         await callback.message.edit_text(f"✅ Платеж {payment_id} подтвержден")
+        # Удаляем inline-кнопки после обработки
+        await callback.message.edit_reply_markup(reply_markup=None)
         
     except Exception as e:
         logging.exception("Error in approve_payment callback")
@@ -520,8 +597,18 @@ async def reject_payment(callback: CallbackQuery):
         # Получить платеж из БД
         payment = await database.get_payment(payment_id)
         
-        if not payment or payment["status"] != "pending":
-            await callback.answer("Платеж не найден или уже обработан", show_alert=True)
+        if not payment:
+            logging.warning(f"Payment {payment_id} not found")
+            await callback.answer("Платеж не найден", show_alert=True)
+            return
+        
+        if payment["status"] != "pending":
+            logging.warning(
+                f"Attempt to reject already processed payment {payment_id}, status={payment['status']}"
+            )
+            await callback.answer("Платеж уже обработан", show_alert=True)
+            # Удаляем кнопки даже если платеж уже обработан
+            await callback.message.edit_reply_markup(reply_markup=None)
             return
         
         telegram_id = payment["telegram_id"]
@@ -541,6 +628,8 @@ async def reject_payment(callback: CallbackQuery):
             logging.error(f"Error sending rejection message to user {telegram_id}: {e}")
         
         await callback.message.edit_text(f"❌ Платеж {payment_id} отклонен")
+        # Удаляем inline-кнопки после обработки
+        await callback.message.edit_reply_markup(reply_markup=None)
         
     except Exception as e:
         logging.exception("Error in reject_payment callback")
