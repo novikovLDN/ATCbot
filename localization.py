@@ -58,10 +58,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Поддержка
         "support_text": "🛡 Поддержка Atlas Secure\n\nПо вопросам доступа, оплаты или работы сервиса\nвы можете связаться с нами напрямую.\n\nКаждое обращение рассматривается индивидуально\nв приоритетном порядке.\n\nКонтакты:\nEmail: {email}\nTelegram: {telegram}",
-        "support_theme_selection": "🛡 Сопровождение Atlas Secure\n\nВыберите тему обращения.\nЗапрос будет рассмотрен в индивидуальном порядке\nс учётом приоритетности доступа.",
-        "support_payment_not_confirmed": "💳 Платёж не подтвердили",
-        "support_vpn_not_working": "🔌 VPN не работает",
-        "support_other": "✉️ Другой вопрос",
         "change_language": "🌍 Изменить язык",
         
         # Администратор (без изменений)
@@ -125,10 +121,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Поддержка
         "support_text": "🛡 Atlas Secure Support\n\nFor questions about access, payment, or service operation\nyou can contact us directly.\n\nEach request is considered individually\nwith priority.\n\nContacts:\nEmail: {email}\nTelegram: {telegram}",
-        "support_theme_selection": "🛡 Atlas Secure Support\n\nSelect inquiry topic.\nRequest will be considered individually\nwith regard to access priority.",
-        "support_payment_not_confirmed": "💳 Payment not confirmed",
-        "support_vpn_not_working": "🔌 VPN not working",
-        "support_other": "✉️ Other question",
         "change_language": "🌍 Change language",
         
         # Администратор
@@ -166,10 +158,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "privacy_policy": "Maxfiylik siyosati",
         "privacy_policy_text": "Maxfiylik siyosati\n\nBiz VPN xizmatlarini taqdim etish uchun faqat zarur ma'lumotlarni saqlaymiz.",
         "support_text": "🛡 Atlas Secure qo'llab-quvvatlash\n\nKirish, to'lov yoki xizmat ishlashi haqida savollar bo'yicha\nsiz biz bilan to'g'ridan-to'g'ri bog'lanishingiz mumkin.\n\nHar bir murojaat individual ravishda ko'rib chiqiladi\nustuvor tartibda.\n\nKontaktlar:\nEmail: {email}\nTelegram: {telegram}",
-        "support_theme_selection": "🛡 Atlas Secure qo'llab-quvvatlash\n\nMurojaat mavzusini tanlang.\nSo'rov individual ravishda ko'rib chiqiladi\nkirish ustuvorligini hisobga olgan holda.",
-        "support_payment_not_confirmed": "💳 To'lov tasdiqlanmadi",
-        "support_vpn_not_working": "🔌 VPN ishlamaydi",
-        "support_other": "✉️ Boshqa savol",
         "change_language": "🌍 Tilni o'zgartirish",
         "admin_payment_notification": "💰 Yangi to'lov\nFoydalanuvchi: @{username}\nTelegram ID: {telegram_id}\nTarif: {tariff} oy\nNarx: {price} so'm",
         "admin_approve": "Tasdiqlash",
@@ -205,10 +193,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "privacy_policy": "Сиёсати махфият",
         "privacy_policy_text": "Сиёсати махфият\n\nМо танҳо маълумоти зарурӣ барои таъмини хидматҳои VPN нигоҳ медорем.",
         "support_text": "🛡 Дастгирии Atlas Secure\n\nДар бораи дастрасӣ, пардохт ё амали хизмат саволҳо\nшумо метавонед бо мо бевосита тавонос шавед.\n\nҲар як мурожаат ба таври шахсӣ баррасӣ карда мешавад\nдар тартиби афзалиятнок.\n\nКонтактҳо:\nEmail: {email}\nTelegram: {telegram}",
-        "support_theme_selection": "🛡 Дастгирии Atlas Secure\n\nМавзӯи мурожаатро интихоб кунед.\nДархост ба таври шахсӣ баррасӣ карда мешавад\nбо назардошти афзалиятнокӣи дастрасӣ.",
-        "support_payment_not_confirmed": "💳 Пардохт тасдиқ нашуд",
-        "support_vpn_not_working": "🔌 VPN кор намекунад",
-        "support_other": "✉️ Саволи дигар",
         "change_language": "🌍 Тағйири забон",
         "admin_payment_notification": "💰 Пардохти нав\nКорбар: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} моҳ\nНарх: {price} сом.",
         "admin_approve": "Тасдиқ кардан",

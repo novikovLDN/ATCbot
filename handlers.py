@@ -163,18 +163,6 @@ def get_support_keyboard(language: str):
     """Клавиатура раздела 'Поддержка'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "support_payment_not_confirmed"),
-            callback_data="support_payment"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "support_vpn_not_working"),
-            callback_data="support_vpn"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "support_other"),
-            callback_data="support_other"
-        )],
-        [InlineKeyboardButton(
             text=localization.get_text(language, "change_language"),
             callback_data="change_language"
         )],
@@ -462,43 +450,12 @@ async def callback_support(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(language, "support_text")
-    await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
-    await callback.answer()
-
-
-@router.callback_query(F.data == "support_payment")
-async def callback_support_payment(callback: CallbackQuery):
-    """Поддержка - платеж не подтвердили"""
-    telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
-    text = localization.get_text(language, "support_theme_selection")
-    await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
-    await callback.answer()
-
-
-@router.callback_query(F.data == "support_vpn")
-async def callback_support_vpn(callback: CallbackQuery):
-    """Поддержка - VPN не работает"""
-    telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
-    text = localization.get_text(language, "support_theme_selection")
-    await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
-    await callback.answer()
-
-
-@router.callback_query(F.data == "support_other")
-async def callback_support_other(callback: CallbackQuery):
-    """Поддержка - другой вопрос"""
-    telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
-    text = localization.get_text(language, "support_theme_selection")
+    text = localization.get_text(
+        language, 
+        "support_text",
+        email=config.SUPPORT_EMAIL,
+        telegram=config.SUPPORT_TELEGRAM
+    )
     await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
     await callback.answer()
 
