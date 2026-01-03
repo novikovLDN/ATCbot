@@ -2,16 +2,25 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime, timedelta
 import logging
 import database
 import localization
 import config
+import time
 
 # Время последней отправки алерта о ключах (для предотвращения спама)
 _last_keys_alert_time: datetime = None
 _last_keys_alert_count: int = -1  # Количество ключей при последнем алерте
 _ALERT_COOLDOWN_MINUTES = 30  # Минимальный интервал между алертами (в минутах)
+
+# Время запуска бота (для uptime)
+_bot_start_time = time.time()
+
+
+class AdminUserSearch(StatesGroup):
+    waiting_for_user_id = State()
 
 router = Router()
 
@@ -246,6 +255,37 @@ def get_instruction_keyboard(language: str):
             callback_data="menu_support"
         )],
     ])
+    return keyboard
+
+
+def get_admin_dashboard_keyboard():
+    """Клавиатура главного экрана админ-дашборда"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
+        [InlineKeyboardButton(text="📜 Аудит", callback_data="admin:audit")],
+        [InlineKeyboardButton(text="🔑 VPN-ключи", callback_data="admin:keys")],
+        [InlineKeyboardButton(text="👤 Пользователь", callback_data="admin:user")],
+        [InlineKeyboardButton(text="🚨 Система", callback_data="admin:system")],
+    ])
+    return keyboard
+
+
+def get_admin_back_keyboard():
+    """Клавиатура с кнопкой 'Назад' для админ-разделов"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    return keyboard
+
+
+def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None):
+    """Клавиатура для раздела пользователя"""
+    buttons = []
+    if has_active_subscription:
+        callback_data = f"admin:user_reissue:{user_id}" if user_id else "admin:user_reissue"
+        buttons.append([InlineKeyboardButton(text="🔁 Перевыпустить ключ", callback_data=callback_data)])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
 
 
@@ -643,6 +683,393 @@ async def approve_payment(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in approve_payment callback for payment_id={payment_id if 'payment_id' in locals() else 'unknown'}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.message(Command("admin"))
+async def cmd_admin(message: Message):
+    """Административный дашборд"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        logging.warning(f"Unauthorized admin dashboard attempt by user {message.from_user.id}")
+        await message.answer("Недостаточно прав доступа")
+        return
+    
+    text = "🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:"
+    await message.answer(text, reply_markup=get_admin_dashboard_keyboard())
+
+
+@router.callback_query(F.data == "admin:main")
+async def callback_admin_main(callback: CallbackQuery):
+    """Главный экран админ-дашборда"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    text = "🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:"
+    await callback.message.edit_text(text, reply_markup=get_admin_dashboard_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:stats")
+async def callback_admin_stats(callback: CallbackQuery):
+    """Раздел Статистика"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        stats = await database.get_admin_stats()
+        
+        text = "📊 Статистика\n\n"
+        text += f"👥 Всего пользователей: {stats['total_users']}\n"
+        text += f"🔑 Активных подписок: {stats['active_subscriptions']}\n"
+        text += f"⛔ Истёкших подписок: {stats['expired_subscriptions']}\n"
+        text += f"💳 Платежей всего: {stats['total_payments']}\n"
+        text += f"💰 Подтверждённых платежей: {stats['approved_payments']}\n"
+        text += f"🔓 Свободных VPN-ключей: {stats['free_vpn_keys']}"
+        
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+        # Логируем просмотр статистики
+        await database._log_audit_event_atomic_standalone("admin_view_stats", callback.from_user.id, None, "Admin viewed statistics")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_stats: {e}")
+        await callback.answer("Ошибка при получении статистики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:audit")
+async def callback_admin_audit(callback: CallbackQuery):
+    """Раздел Аудит (переиспользование логики /admin_audit)"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        # Получаем последние 10 записей из audit_log
+        audit_logs = await database.get_last_audit_logs(limit=10)
+        
+        if not audit_logs:
+            text = "📜 Аудит\n\nАудит пуст. Действий не зафиксировано."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer()
+            return
+        
+        # Формируем сообщение
+        lines = ["📜 Аудит", ""]
+        
+        for log in audit_logs:
+            # Форматируем дату и время
+            created_at = log["created_at"]
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            elif isinstance(created_at, datetime):
+                pass
+            else:
+                created_at = datetime.now()
+            
+            created_str = created_at.strftime("%Y-%m-%d %H:%M")
+            
+            lines.append(f"🕒 {created_str}")
+            lines.append(f"Действие: {log['action']}")
+            lines.append(f"Админ: {log['telegram_id']}")
+            
+            if log['target_user']:
+                lines.append(f"Пользователь: {log['target_user']}")
+            else:
+                lines.append("Пользователь: —")
+            
+            if log['details']:
+                details = log['details']
+                if len(details) > 150:
+                    details = details[:150] + "..."
+                lines.append(f"Детали: {details}")
+            else:
+                lines.append("Детали: —")
+            
+            lines.append("")
+            lines.append("⸻")
+            lines.append("")
+        
+        # Убираем последний разделитель
+        if lines[-1] == "" and lines[-2] == "⸻":
+            lines = lines[:-2]
+        
+        text = "\n".join(lines)
+        
+        # Проверяем лимит Telegram (4096 символов на сообщение)
+        if len(text) > 4000:
+            # Уменьшаем до 5 записей
+            audit_logs = await database.get_last_audit_logs(limit=5)
+            lines = ["📜 Аудит", ""]
+            
+            for log in audit_logs:
+                created_at = log["created_at"]
+                if isinstance(created_at, str):
+                    created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                elif isinstance(created_at, datetime):
+                    pass
+                else:
+                    created_at = datetime.now()
+                
+                created_str = created_at.strftime("%Y-%m-%d %H:%M")
+                
+                lines.append(f"🕒 {created_str}")
+                lines.append(f"Действие: {log['action']}")
+                lines.append(f"Админ: {log['telegram_id']}")
+                
+                if log['target_user']:
+                    lines.append(f"Пользователь: {log['target_user']}")
+                else:
+                    lines.append("Пользователь: —")
+                
+                if log['details']:
+                    details = log['details']
+                    if len(details) > 100:
+                        details = details[:100] + "..."
+                    lines.append(f"Детали: {details}")
+                else:
+                    lines.append("Детали: —")
+                
+                lines.append("")
+                lines.append("⸻")
+                lines.append("")
+            
+            if lines[-1] == "" and lines[-2] == "⸻":
+                lines = lines[:-2]
+            
+            text = "\n".join(lines)
+        
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+        # Логируем просмотр аудита
+        await database._log_audit_event_atomic_standalone("admin_view_audit", callback.from_user.id, None, "Admin viewed audit log")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_audit: {e}")
+        await callback.answer("Ошибка при получении audit log", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:keys")
+async def callback_admin_keys(callback: CallbackQuery):
+    """Раздел VPN-ключи"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        stats = await database.get_vpn_keys_stats()
+        
+        text = "🔑 VPN-ключи\n\n"
+        text += f"Всего ключей: {stats['total']}\n"
+        text += f"Использованных: {stats['used']}\n"
+        
+        if stats['free'] <= 5:
+            text += f"⚠️ Свободных: {stats['free']}\n"
+            text += "\n⚠️ ВНИМАНИЕ: Количество свободных ключей критически низкое!"
+        else:
+            text += f"Свободных: {stats['free']}"
+        
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+        # Логируем просмотр статистики ключей
+        await database._log_audit_event_atomic_standalone("admin_view_keys", callback.from_user.id, None, f"Admin viewed VPN keys stats: {stats['free']} free")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_keys: {e}")
+        await callback.answer("Ошибка при получении статистики ключей", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:user")
+async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
+    """Раздел Пользователь - запрос Telegram ID"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    text = "👤 Пользователь\n\nВведите Telegram ID пользователя:"
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+    await state.set_state(AdminUserSearch.waiting_for_user_id)
+    await callback.answer()
+
+
+@router.message(AdminUserSearch.waiting_for_user_id)
+async def process_admin_user_id(message: Message, state: FSMContext):
+    """Обработка введённого Telegram ID пользователя"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Недостаточно прав доступа")
+        await state.clear()
+        return
+    
+    try:
+        try:
+            target_user_id = int(message.text.strip())
+        except ValueError:
+            await message.answer("Неверный формат. Введите число (Telegram ID).")
+            return
+        
+        # Получаем информацию о пользователе
+        user = await database.get_user(target_user_id)
+        subscription = await database.get_subscription(target_user_id)
+        
+        text = "👤 Информация о пользователе\n\n"
+        
+        if user:
+            text += f"Telegram ID: {target_user_id}\n"
+            text += f"Username: @{user.get('username', 'не указан')}\n"
+        else:
+            text += f"Telegram ID: {target_user_id}\n"
+            text += "Username: пользователь не найден\n"
+        
+        text += "\n"
+        
+        if subscription:
+            expires_at = subscription["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            
+            now = datetime.now()
+            if expires_at > now:
+                text += "Статус подписки: ✅ Активна\n"
+                text += f"Срок действия: до {expires_str}\n"
+                text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
+                
+                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id), parse_mode="Markdown")
+            else:
+                text += "Статус подписки: ⛔ Истекла\n"
+                text += f"Срок действия: до {expires_str}\n"
+                text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
+                
+                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=target_user_id), parse_mode="Markdown")
+        else:
+            text += "Статус подписки: ❌ Нет подписки\n"
+            text += "VPN-ключ: —\n"
+            text += "Срок действия: —\n"
+            
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=target_user_id))
+        
+        # Логируем просмотр информации о пользователе
+        await database._log_audit_event_atomic_standalone("admin_view_user", message.from_user.id, target_user_id, f"Admin viewed user info for {target_user_id}")
+        
+        await state.clear()
+        
+    except Exception as e:
+        logging.exception(f"Error in process_admin_user_id: {e}")
+        await message.answer("Ошибка при получении информации о пользователе. Проверь логи.")
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:user_reissue:"))
+async def callback_admin_user_reissue(callback: CallbackQuery):
+    """Перевыпуск ключа из админ-дашборда"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        # Получаем user_id из callback_data
+        target_user_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка: неверный формат команды", show_alert=True)
+        return
+    
+    try:
+        admin_telegram_id = callback.from_user.id
+        
+        # Атомарно перевыпускаем ключ
+        result = await database.reissue_vpn_key_atomic(target_user_id, admin_telegram_id)
+        new_vpn_key, old_vpn_key = result
+        
+        if new_vpn_key is None:
+            await callback.answer("Не удалось перевыпустить ключ. Нет активной подписки или свободных ключей.", show_alert=True)
+            return
+        
+        # Обновляем информацию о пользователе
+        user = await database.get_user(target_user_id)
+        subscription = await database.get_subscription(target_user_id)
+        
+        text = "👤 Информация о пользователе\n\n"
+        text += f"Telegram ID: {target_user_id}\n"
+        text += f"Username: @{user.get('username', 'не указан') if user else 'не указан'}\n"
+        text += "\n"
+        
+        if subscription:
+            expires_at = subscription["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            
+            text += "Статус подписки: ✅ Активна\n"
+            text += f"Срок действия: до {expires_str}\n"
+            text += f"VPN-ключ: `{new_vpn_key}`\n"
+            text += f"\n✅ Ключ перевыпущен!\nСтарый ключ: `{old_vpn_key[:20]}...`"
+            
+            await callback.message.edit_text(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id), parse_mode="Markdown")
+        
+        await callback.answer("Ключ успешно перевыпущен")
+        
+        # Уведомляем пользователя
+        try:
+            user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: `{new_vpn_key}`\nРекомендуем сохранить новый ключ в надёжном месте."
+            await callback.bot.send_message(target_user_id, user_text, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Error sending reissue notification to user {target_user_id}: {e}")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_user_reissue: {e}")
+        await callback.answer("Ошибка при перевыпуске ключа", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:system")
+async def callback_admin_system(callback: CallbackQuery):
+    """Раздел Система"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        # Проверяем статус БД
+        db_status = "ERROR"
+        db_connections = "—"
+        
+        try:
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+                db_status = "ONLINE"
+                # asyncpg не предоставляет прямых методов для получения количества соединений
+                # Поэтому просто указываем, что пул работает
+                db_connections = "Активен"
+        except Exception as e:
+            logging.error(f"Database health check failed: {e}")
+            db_status = "ERROR"
+            db_connections = "—"
+        
+        # Вычисляем uptime
+        uptime_seconds = int(time.time() - _bot_start_time)
+        uptime_days = uptime_seconds // 86400
+        uptime_hours = (uptime_seconds % 86400) // 3600
+        uptime_minutes = (uptime_seconds % 3600) // 60
+        
+        uptime_str = f"{uptime_days}д {uptime_hours}ч {uptime_minutes}м"
+        
+        text = "🚨 Система\n\n"
+        text += f"Статус БД: {db_status}\n"
+        text += f"Активных соединений: {db_connections}\n"
+        text += f"Время работы бота: {uptime_str}"
+        
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+        # Логируем просмотр системной информации
+        await database._log_audit_event_atomic_standalone("admin_view_system", callback.from_user.id, None, f"Admin viewed system info: DB={db_status}")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_system: {e}")
+        await callback.answer("Ошибка при получении системной информации", show_alert=True)
 
 
 @router.message(Command("admin_audit"))

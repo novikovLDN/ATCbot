@@ -301,6 +301,23 @@ async def _log_audit_event_atomic(conn, action: str, telegram_id: int, target_us
     )
 
 
+async def _log_audit_event_atomic_standalone(action: str, telegram_id: int, target_user: Optional[int] = None, details: Optional[str] = None):
+    """Записать событие аудита в таблицу audit_log (standalone версия)
+    
+    Создает свою транзакцию. Используется когда нужно записать событие вне существующей транзакции.
+    
+    Args:
+        action: Тип действия (например, 'payment_approved', 'payment_rejected', 'vpn_key_issued', 'subscription_renewed')
+        telegram_id: Telegram ID администратора, который выполнил действие
+        target_user: Telegram ID пользователя, над которым выполнено действие (опционально)
+        details: Дополнительные детали действия (опционально)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await _log_audit_event_atomic(conn, action, telegram_id, target_user, details)
+
+
 async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tuple[Optional[str], Optional[str]]:
     """Атомарно перевыпустить VPN-ключ для пользователя
     
@@ -547,6 +564,82 @@ async def mark_reminder_sent(telegram_id: int):
             "UPDATE subscriptions SET reminder_sent = TRUE WHERE telegram_id = $1",
             telegram_id
         )
+
+
+async def get_admin_stats() -> Dict[str, int]:
+    """Получить статистику для админ-дашборда
+    
+    Returns:
+        Словарь с ключами:
+        - total_users: всего пользователей
+        - active_subscriptions: активных подписок
+        - expired_subscriptions: истёкших подписок
+        - total_payments: всего платежей
+        - approved_payments: подтверждённых платежей
+        - free_vpn_keys: свободных VPN-ключей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        
+        # Всего пользователей
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+        
+        # Активных подписок (expires_at > now)
+        active_subscriptions = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions WHERE expires_at > $1",
+            now
+        )
+        
+        # Истёкших подписок (expires_at <= now)
+        expired_subscriptions = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions WHERE expires_at <= $1",
+            now
+        )
+        
+        # Всего платежей
+        total_payments = await conn.fetchval("SELECT COUNT(*) FROM payments")
+        
+        # Подтверждённых платежей
+        approved_payments = await conn.fetchval(
+            "SELECT COUNT(*) FROM payments WHERE status = 'approved'"
+        )
+        
+        # Свободных VPN-ключей
+        free_vpn_keys = await conn.fetchval(
+            "SELECT COUNT(*) FROM vpn_keys WHERE is_used = FALSE"
+        )
+        
+        return {
+            "total_users": total_users or 0,
+            "active_subscriptions": active_subscriptions or 0,
+            "expired_subscriptions": expired_subscriptions or 0,
+            "total_payments": total_payments or 0,
+            "approved_payments": approved_payments or 0,
+            "free_vpn_keys": free_vpn_keys or 0,
+        }
+
+
+async def get_vpn_keys_stats() -> Dict[str, int]:
+    """Получить статистику по VPN-ключам
+    
+    Returns:
+        Словарь с ключами:
+        - total: всего ключей
+        - used: использованных ключей
+        - free: свободных ключей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM vpn_keys")
+        used = await conn.fetchval("SELECT COUNT(*) FROM vpn_keys WHERE is_used = TRUE")
+        free = await conn.fetchval("SELECT COUNT(*) FROM vpn_keys WHERE is_used = FALSE")
+        
+        return {
+            "total": total or 0,
+            "used": used or 0,
+            "free": free or 0,
+        }
 
 
 async def get_last_audit_logs(limit: int = 10) -> list:
