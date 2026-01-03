@@ -658,6 +658,34 @@ async def get_admin_stats() -> Dict[str, int]:
         }
 
 
+async def get_all_users_for_export() -> list:
+    """Получить всех пользователей для экспорта
+    
+    Returns:
+        Список словарей с данными пользователей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM users ORDER BY created_at DESC")
+        return [dict(row) for row in rows]
+
+
+async def get_active_subscriptions_for_export() -> list:
+    """Получить все активные подписки для экспорта
+    
+    Returns:
+        Список словарей с данными активных подписок
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        rows = await conn.fetch(
+            "SELECT * FROM subscriptions WHERE expires_at > $1 ORDER BY expires_at DESC",
+            now
+        )
+        return [dict(row) for row in rows]
+
+
 async def get_vpn_keys_stats() -> Dict[str, int]:
     """Получить статистику по VPN-ключам
     
