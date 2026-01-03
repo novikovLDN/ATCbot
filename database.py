@@ -97,6 +97,19 @@ async def init_db():
             )
         """)
         
+        # Таблица subscription_history
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscription_history (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT NOT NULL,
+                vpn_key TEXT NOT NULL,
+                start_date TIMESTAMP NOT NULL,
+                end_date TIMESTAMP NOT NULL,
+                action_type TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         logger.info("Database tables initialized")
 
 
@@ -332,6 +345,26 @@ async def _log_audit_event_atomic(conn, action: str, telegram_id: int, target_us
     )
 
 
+async def _log_subscription_history_atomic(conn, telegram_id: int, vpn_key: str, start_date: datetime, end_date: datetime, action_type: str):
+    """Записать запись в историю подписок
+    
+    Должна вызываться ТОЛЬКО внутри активной транзакции.
+    
+    Args:
+        conn: Соединение с БД (внутри транзакции)
+        telegram_id: Telegram ID пользователя
+        vpn_key: VPN-ключ
+        start_date: Дата начала периода
+        end_date: Дата окончания периода
+        action_type: Тип действия ('purchase', 'renewal', 'reissue', 'manual_reissue')
+    """
+    await conn.execute(
+        """INSERT INTO subscription_history (telegram_id, vpn_key, start_date, end_date, action_type)
+           VALUES ($1, $2, $3, $4, $5)""",
+        telegram_id, vpn_key, start_date, end_date, action_type
+    )
+
+
 async def _log_audit_event_atomic_standalone(action: str, telegram_id: int, target_user: Optional[int] = None, details: Optional[str] = None):
     """Записать событие аудита в таблицу audit_log (standalone версия)
     
@@ -398,8 +431,12 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                     new_vpn_key, telegram_id
                 )
                 
-                # 4. Записываем событие в audit_log
-                details = f"User {telegram_id}, Old key: {old_vpn_key[:20]}..., New key: {new_vpn_key[:20]}..., Expires: {subscription['expires_at'].isoformat()}"
+                # 4. Записываем в историю подписок
+                expires_at = subscription["expires_at"]
+                await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
+                
+                # 5. Записываем событие в audit_log
+                details = f"User {telegram_id}, Old key: {old_vpn_key[:20]}..., New key: {new_vpn_key[:20]}..., Expires: {expires_at.isoformat()}"
                 await _log_audit_event_atomic(conn, "vpn_key_reissued", admin_telegram_id, telegram_id, details)
                 
                 logger.info(f"VPN key reissued for user {telegram_id} by admin {admin_telegram_id}")
@@ -511,6 +548,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                         base_date = max(subscription_expires_at, now)
                         expires_at = base_date + tariff_duration
                         is_renewal = True
+                        history_action_type = "renewal"
+                        start_date = subscription_expires_at if subscription_expires_at > now else now
                         logger.info(f"Renewing active subscription for user {telegram_id}, reusing vpn_key, expires_at: {subscription_expires_at} -> {expires_at}")
                     else:
                         # Подписка закончилась - получаем новый ключ из БД
@@ -520,6 +559,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                             return None, False, None
                         expires_at = now + tariff_duration
                         is_renewal = False
+                        history_action_type = "reissue"
+                        start_date = now
                         logger.info(f"Subscription expired for user {telegram_id}, using new vpn_key from DB, expires_at: {expires_at}")
                 else:
                     # Подписки никогда не было - получаем новый ключ из БД
@@ -529,6 +570,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                         return None, False, None
                     expires_at = now + tariff_duration
                     is_renewal = False
+                    history_action_type = "purchase"
+                    start_date = now
                     logger.info(f"Creating new subscription for user {telegram_id}, using new vpn_key from DB, expires_at: {expires_at}")
                 
                 # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в FALSE при продлении)
@@ -540,10 +583,13 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                     telegram_id, final_vpn_key, expires_at
                 )
                 
-                # 6. Записываем событие в audit_log
-                action_type = "subscription_renewed" if is_renewal else "payment_approved"
+                # 6. Записываем в историю подписок
+                await _log_subscription_history_atomic(conn, telegram_id, final_vpn_key, start_date, expires_at, history_action_type)
+                
+                # 7. Записываем событие в audit_log
+                audit_action_type = "subscription_renewed" if is_renewal else "payment_approved"
                 details = f"Payment ID: {payment_id}, Tariff: {months} months, Expires: {expires_at.isoformat()}, VPN key: {final_vpn_key[:20]}..."
-                await _log_audit_event_atomic(conn, action_type, admin_telegram_id, telegram_id, details)
+                await _log_audit_event_atomic(conn, audit_action_type, admin_telegram_id, telegram_id, details)
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
                 return expires_at, is_renewal, final_vpn_key
@@ -706,6 +752,28 @@ async def get_vpn_keys_stats() -> Dict[str, int]:
             "used": used or 0,
             "free": free or 0,
         }
+
+
+async def get_subscription_history(telegram_id: int, limit: int = 5) -> list:
+    """Получить историю подписок пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        limit: Максимальное количество записей (по умолчанию 5)
+    
+    Returns:
+        Список словарей с записями истории, отсортированные по created_at DESC
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT * FROM subscription_history 
+               WHERE telegram_id = $1 
+               ORDER BY created_at DESC 
+               LIMIT $2""",
+            telegram_id, limit
+        )
+        return [dict(row) for row in rows]
 
 
 async def get_last_audit_logs(limit: int = 10) -> list:
