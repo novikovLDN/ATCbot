@@ -110,6 +110,37 @@ async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def find_user_by_id_or_username(telegram_id: Optional[int] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Найти пользователя по Telegram ID или username
+    
+    Args:
+        telegram_id: Telegram ID пользователя (опционально)
+        username: Username пользователя без @ (опционально)
+    
+    Returns:
+        Словарь с данными пользователя или None, если не найден
+    
+    Note:
+        Должен быть указан хотя бы один параметр. Если указаны оба, приоритет у telegram_id.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if telegram_id is not None:
+            # Поиск по ID имеет приоритет
+            row = await conn.fetchrow(
+                "SELECT * FROM users WHERE telegram_id = $1", telegram_id
+            )
+            return dict(row) if row else None
+        elif username is not None:
+            # Поиск по username (case-insensitive)
+            row = await conn.fetchrow(
+                "SELECT * FROM users WHERE LOWER(username) = LOWER($1)", username
+            )
+            return dict(row) if row else None
+        else:
+            return None
+
+
 async def create_user(telegram_id: int, username: Optional[str] = None, language: str = "ru"):
     """Создать нового пользователя"""
     pool = await get_pool()
