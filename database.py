@@ -39,9 +39,23 @@ async def init_db():
                 telegram_id INTEGER PRIMARY KEY,
                 vpn_key TEXT,
                 expires_at DATETIME,
-                is_active INTEGER DEFAULT 1
+                is_active INTEGER DEFAULT 1,
+                reminder_sent INTEGER DEFAULT 0
             )
         """)
+        
+        # Миграция: добавить поле reminder_sent если его нет
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS _migration_reminder_sent (
+                id INTEGER PRIMARY KEY
+            )
+        """)
+        async with db.execute("PRAGMA table_info(subscriptions)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+            if 'reminder_sent' not in columns:
+                await db.execute("ALTER TABLE subscriptions ADD COLUMN reminder_sent INTEGER DEFAULT 0")
+                await db.execute("INSERT INTO _migration_reminder_sent (id) VALUES (1)")
+                logger.info("Migration: Added reminder_sent column to subscriptions")
         
         await db.commit()
 
@@ -173,7 +187,7 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int):
     
     async with aiosqlite.connect(DATABASE_FILE) as db:
         await db.execute(
-            "INSERT OR REPLACE INTO subscriptions (telegram_id, vpn_key, expires_at, is_active) VALUES (?, ?, ?, 1)",
+            "INSERT OR REPLACE INTO subscriptions (telegram_id, vpn_key, expires_at, is_active, reminder_sent) VALUES (?, ?, ?, 1, 0)",
             (telegram_id, vpn_key, expires_at.isoformat())
         )
         await db.commit()
@@ -242,9 +256,9 @@ async def approve_payment_atomic(payment_id: int, vpn_key: str, months: int) -> 
                 is_renewal = False
                 logger.info(f"Creating new subscription for user {telegram_id}: expires_at = {expires_at}")
             
-            # 5. Создаем/обновляем подписку
+            # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в 0 при продлении)
             await db.execute(
-                "INSERT OR REPLACE INTO subscriptions (telegram_id, vpn_key, expires_at, is_active) VALUES (?, ?, ?, 1)",
+                "INSERT OR REPLACE INTO subscriptions (telegram_id, vpn_key, expires_at, is_active, reminder_sent) VALUES (?, ?, ?, 1, 0)",
                 (telegram_id, vpn_key, expires_at.isoformat())
             )
             
@@ -277,3 +291,38 @@ async def get_pending_payments() -> list:
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+
+async def get_subscriptions_needing_reminder() -> list:
+    """Получить подписки, которым нужно отправить напоминание
+    
+    Возвращает список подписок, где:
+    - is_active = 1
+    - reminder_sent = 0
+    - expires_at <= now + 3 days
+    """
+    now = datetime.now()
+    reminder_date = now + timedelta(days=3)
+    
+    async with aiosqlite.connect(DATABASE_FILE) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT * FROM subscriptions 
+               WHERE is_active = 1 
+               AND reminder_sent = 0 
+               AND expires_at <= ?
+               ORDER BY expires_at ASC""",
+            (reminder_date.isoformat(),)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def mark_reminder_sent(telegram_id: int):
+    """Отметить, что напоминание отправлено пользователю"""
+    async with aiosqlite.connect(DATABASE_FILE) as db:
+        await db.execute(
+            "UPDATE subscriptions SET reminder_sent = 1 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        await db.commit()

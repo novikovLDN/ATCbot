@@ -425,7 +425,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
             reply_markup=get_admin_payment_keyboard(payment_id)
         )
     except Exception as e:
-        print(f"Error sending admin notification: {e}")
+        logging.error(f"Error sending admin notification: {e}")
     
     await state.clear()
 
@@ -652,11 +652,4 @@ async def reject_payment(callback: CallbackQuery):
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
-# DEBUG: Тестовый обработчик для проверки работы callbacks (в конце файла, ловит необработанные callback'и)
-@router.callback_query()
-async def debug_all_callbacks(callback: CallbackQuery):
-    """DEBUG обработчик для необработанных callback'и"""
-    logging.info(f"DEBUG CALLBACK: data={callback.data}, from_user_id={callback.from_user.id}")
-    print(f"DEBUG CALLBACK: {callback.data} FROM {callback.from_user.id}")
-    await callback.answer("DEBUG: Callback получен, но не обработан", show_alert=True)
 

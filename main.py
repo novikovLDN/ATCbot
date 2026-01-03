@@ -5,6 +5,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 import config
 import database
 import handlers
+import reminders
 
 # Настройка логирования
 logging.basicConfig(
@@ -29,9 +30,20 @@ async def main():
     await database.init_db()
     logger.info("База данных инициализирована")
     
+    # Запуск фоновой задачи для напоминаний
+    reminder_task = asyncio.create_task(reminders.reminders_task(bot))
+    logger.info("Reminders task started")
+    
     # Запуск бота
     logger.info("Бот запущен")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        reminder_task.cancel()
+        try:
+            await reminder_task
+        except asyncio.CancelledError:
+            pass
 
 
 if __name__ == "__main__":

@@ -44,6 +44,9 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Профиль - платеж на проверке
         "profile_payment_check": "🕒 Платёж на проверке.\n\nЭто стандартная процедура безопасности.\nПосле подтверждения доступ появится автоматически.",
         
+        # Напоминание об окончании подписки
+        "subscription_expiring_reminder": "⏳ Срок доступа скоро истекает.\n\nДо окончания вашей подписки осталось 3 дня.\n\nВы можете продлить доступ в любое время —\nповторная покупка автоматически увеличит срок действия.",
+        
         # Профиль - без подписки
         "no_subscription": "❌ Активного доступа нет.\n\nAtlas Secure — приватный VPN-сервис\nс индивидуальными ключами подключения.\n\nВы можете оформить доступ в любое время.",
         
@@ -106,6 +109,9 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Профиль - платеж на проверке
         "profile_payment_check": "🕒 Payment under verification.\n\nThis is a standard security procedure.\nAfter confirmation, access will appear automatically.",
         
+        # Напоминание об окончании подписки
+        "subscription_expiring_reminder": "⏳ Access period expires soon.\n\n3 days left until your subscription expires.\n\nYou can renew access at any time —\na repeated purchase will automatically extend the period.",
+        
         # Профиль - без подписки
         "no_subscription": "❌ No active access.\n\nAtlas Secure — private VPN service\nwith individual connection keys.\n\nYou can get access at any time.",
         
@@ -149,6 +155,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_active": "👤 Kirish profili\n\nHolati: Faol\nAmal qilish muddati: {date} gacha\n\nShaxsiy VPN kalit:\n{vpn_key}\n\nUlanish barqaror va himoyalangan.",
         "profile_renewal_hint": "\n\nHar qanday takroriy xarid obuna muddatini avtomatik ravishda uzaytiradi.",
         "profile_payment_check": "🕒 To'lov tekshiruvda.\n\nBu standart xavfsizlik protsedurasi.\nTasdiqlanganidan keyin kirish avtomatik ravishda paydo bo'ladi.",
+        "subscription_expiring_reminder": "⏳ Kirish muddati yaqin orada tugaydi.\n\nObunangiz tugashiga 3 kun qoldi.\n\nSiz istalgan vaqtda kirishni uzaytirishingiz mumkin —\ntakroriy xarid avtomatik ravishda muddatni uzaytiradi.",
         "no_subscription": "❌ Faol kirish yo'q.\n\nAtlas Secure — individual ulanish kalitlari bilan maxfiy VPN xizmati.\n\nSiz istalgan vaqtda kirish olishingiz mumkin.",
         "about_text": "Atlas Secure — maxfiylik va ishonchlilikka yo'naltirilgan yopiq VPN xizmati.\n\nBiz quyidagilardan foydalanmaymiz:\n— umumiy kalitlar\n— avtomatik berish\n— ommaviy ulanishlar\n\nHar bir kirish qo'lda tasdiqlanadi.",
         "privacy_policy": "Maxfiylik siyosati",
@@ -185,6 +192,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_active": "👤 Профили дастрасӣ\n\nҲолат: Фаъол\nМуддати амал: то {date}\n\nКалиди VPN-и шахсӣ:\n{vpn_key}\n\nПайванд устувор ва ҳимояшуда аст.",
         "profile_renewal_hint": "\n\nҲар як хариди такрори обунаро ба таври худкор васеъ мекунад.",
         "profile_payment_check": "🕒 Пардохт дар санҷиш аст.\n\nИн процедураи стандартии амният аст.\nПас аз тасдиқ, дастрасӣ худкор пайдо мешавад.",
+        "subscription_expiring_reminder": "⏳ Муддати дастрасӣ ба зудӣ анҷом мешавад.\n\nТо анҷоми обунаи шумо 3 рӯз боқӣ мондааст.\n\nШумо метавонед дар ҳар вақт дастрасиро васеъ кунед —\nхариди такрориҳо муддатро ба таври худкор васеъ мекунад.",
         "no_subscription": "❌ Дастрасии фаъол нест.\n\nAtlas Secure — хизмати махфии VPN\nбо калидҳои пайванди шахсӣ.\n\nШумо метавонед дар ҳар вақт дастрасӣ гиред.",
         "about_text": "Atlas Secure — хизмати махфии VPN,\nки ба махфият ва эътимоднокӣ равона аст.\n\nМо истифода намебарем:\n— калидҳои умумӣ\n— додани худкор\n— пайвандҳои оммавӣ\n\nҲар як дастрасӣ дастӣ тасдиқ карда мешавад.",
         "privacy_policy": "Сиёсати махфият",
