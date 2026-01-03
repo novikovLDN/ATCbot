@@ -74,6 +74,17 @@ async def init_db():
             )
         """)
         
+        # Таблица vpn_keys
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS vpn_keys (
+                id SERIAL PRIMARY KEY,
+                vpn_key TEXT UNIQUE NOT NULL,
+                is_used BOOLEAN DEFAULT FALSE,
+                assigned_to BIGINT,
+                assigned_at TIMESTAMP
+            )
+        """)
+        
         logger.info("Database tables initialized")
 
 
