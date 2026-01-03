@@ -645,6 +645,63 @@ async def approve_payment(callback: CallbackQuery):
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
+@router.message(Command("reissue_key"))
+async def cmd_reissue_key(message: Message):
+    """Перевыпустить VPN-ключ для пользователя (только для админа)"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        logging.warning(f"Unauthorized reissue_key attempt by user {message.from_user.id}")
+        await message.answer("Нет доступа")
+        return
+    
+    try:
+        # Парсим команду: /reissue_key <telegram_id>
+        parts = message.text.split()
+        if len(parts) != 2:
+            await message.answer("Использование: /reissue_key <telegram_id>")
+            return
+        
+        try:
+            target_telegram_id = int(parts[1])
+        except ValueError:
+            await message.answer("Неверный формат telegram_id. Используйте число.")
+            return
+        
+        admin_telegram_id = message.from_user.id
+        
+        # Атомарно перевыпускаем ключ
+        result = await database.reissue_vpn_key_atomic(target_telegram_id, admin_telegram_id)
+        new_vpn_key, old_vpn_key = result
+        
+        if new_vpn_key is None:
+            await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Нет свободных VPN-ключей")
+            return
+        
+        # Уведомляем пользователя
+        user = await database.get_user(target_telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        
+        # Получаем информацию о подписке для уведомления
+        subscription = await database.get_subscription(target_telegram_id)
+        expires_str = subscription["expires_at"].strftime("%d.%m.%Y") if subscription else "неизвестно"
+        
+        user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: `{new_vpn_key}`\nСрок действия подписки: до {expires_str}\n\nРекомендуем сохранить новый ключ в надёжном месте."
+        
+        try:
+            await message.bot.send_message(target_telegram_id, user_text, parse_mode="Markdown")
+            logging.info(f"Reissue notification sent to user {target_telegram_id}")
+        except Exception as e:
+            logging.error(f"Error sending reissue notification to user {target_telegram_id}: {e}")
+            await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}")
+            return
+        
+        await message.answer(f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\nСтарый ключ: `{old_vpn_key[:20]}...`\nНовый ключ: `{new_vpn_key}`", parse_mode="Markdown")
+        logging.info(f"VPN key reissued for user {target_telegram_id} by admin {admin_telegram_id}")
+        
+    except Exception as e:
+        logging.exception(f"Error in cmd_reissue_key: {e}")
+        await message.answer("Ошибка при перевыпуске ключа. Проверь логи.")
+
+
 @router.callback_query(F.data.startswith("reject_payment:"))
 async def reject_payment(callback: CallbackQuery):
     """Админ отклонил платеж"""
