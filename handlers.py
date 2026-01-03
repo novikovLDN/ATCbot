@@ -3,12 +3,15 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
+import logging
 import database
 import localization
 import config
 import vpn_utils
 
 router = Router()
+
+logging.basicConfig(level=logging.INFO)
 
 
 def get_language_keyboard():
@@ -180,11 +183,11 @@ def get_admin_payment_keyboard(payment_id: int):
         [
             InlineKeyboardButton(
                 text="✅ Подтвердить",
-                callback_data=f"admin_approve_{payment_id}"
+                callback_data=f"approve_payment:{payment_id}"
             ),
             InlineKeyboardButton(
                 text="❌ Отклонить",
-                callback_data=f"admin_reject_{payment_id}"
+                callback_data=f"reject_payment:{payment_id}"
             ),
         ],
     ])
@@ -436,32 +439,40 @@ async def callback_support(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_approve_"))
-async def callback_admin_approve(callback: CallbackQuery):
+@router.callback_query(lambda c: c.data.startswith("approve_payment:"))
+async def approve_payment(callback: CallbackQuery):
     """Админ подтвердил платеж"""
+    await callback.answer()  # ОБЯЗАТЕЛЬНО
+    
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer("Доступ запрещен", show_alert=True)
+        await callback.answer("Нет доступа", show_alert=True)
         return
-    
-    payment_id = int(callback.data.split("_")[2])
-    payment = await database.get_payment(payment_id)
-    
-    if not payment or payment["status"] != "pending":
-        await callback.answer("Платеж не найден или уже обработан", show_alert=True)
-        return
-    
-    telegram_id = payment["telegram_id"]
-    tariff_key = payment["tariff"]
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     
     try:
+        payment_id = int(callback.data.split(":")[1])
+        
+        logging.info(
+            f"APPROVE pressed by {callback.from_user.id}, payment_id={payment_id}"
+        )
+        
+        # Получить платеж из БД
+        payment = await database.get_payment(payment_id)
+        
+        if not payment or payment["status"] != "pending":
+            await callback.answer("Платеж не найден или уже обработан", show_alert=True)
+            return
+        
+        telegram_id = payment["telegram_id"]
+        tariff_key = payment["tariff"]
+        tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+        
         # Получаем свободный VPN-ключ
         vpn_key = vpn_utils.get_free_vpn_key()
         
         # Создаем подписку
         await database.create_subscription(telegram_id, vpn_key, tariff_data["months"])
         
-        # Обновляем статус платежа
+        # Обновляем статус платежа на approved
         await database.update_payment_status(payment_id, "approved")
         
         # Уведомляем пользователя
@@ -481,45 +492,57 @@ async def callback_admin_approve(callback: CallbackQuery):
         try:
             await callback.bot.send_message(telegram_id, text)
         except Exception as e:
-            print(f"Error sending approval message: {e}")
+            logging.error(f"Error sending approval message to user {telegram_id}: {e}")
         
         await callback.message.edit_text(f"✅ Платеж {payment_id} подтвержден")
-        await callback.answer("Платеж подтвержден")
         
-    except ValueError as e:
-        await callback.answer(f"Ошибка: {str(e)}", show_alert=True)
+    except Exception as e:
+        logging.exception("Error in approve_payment callback")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
-@router.callback_query(F.data.startswith("admin_reject_"))
-async def callback_admin_reject(callback: CallbackQuery):
+@router.callback_query(lambda c: c.data.startswith("reject_payment:"))
+async def reject_payment(callback: CallbackQuery):
     """Админ отклонил платеж"""
+    await callback.answer()  # ОБЯЗАТЕЛЬНО
+    
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer("Доступ запрещен", show_alert=True)
+        await callback.answer("Нет доступа", show_alert=True)
         return
-    
-    payment_id = int(callback.data.split("_")[2])
-    payment = await database.get_payment(payment_id)
-    
-    if not payment or payment["status"] != "pending":
-        await callback.answer("Платеж не найден или уже обработан", show_alert=True)
-        return
-    
-    telegram_id = payment["telegram_id"]
-    
-    # Обновляем статус платежа
-    await database.update_payment_status(payment_id, "rejected")
-    
-    # Уведомляем пользователя
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
-    text = localization.get_text(language, "payment_rejected")
     
     try:
-        await callback.bot.send_message(telegram_id, text)
+        payment_id = int(callback.data.split(":")[1])
+        
+        logging.info(
+            f"REJECT pressed by {callback.from_user.id}, payment_id={payment_id}"
+        )
+        
+        # Получить платеж из БД
+        payment = await database.get_payment(payment_id)
+        
+        if not payment or payment["status"] != "pending":
+            await callback.answer("Платеж не найден или уже обработан", show_alert=True)
+            return
+        
+        telegram_id = payment["telegram_id"]
+        
+        # Обновляем статус платежа на rejected
+        await database.update_payment_status(payment_id, "rejected")
+        
+        # Уведомляем пользователя
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        
+        text = localization.get_text(language, "payment_rejected")
+        
+        try:
+            await callback.bot.send_message(telegram_id, text)
+        except Exception as e:
+            logging.error(f"Error sending rejection message to user {telegram_id}: {e}")
+        
+        await callback.message.edit_text(f"❌ Платеж {payment_id} отклонен")
+        
     except Exception as e:
-        print(f"Error sending rejection message: {e}")
-    
-    await callback.message.edit_text(f"❌ Платеж {payment_id} отклонен")
-    await callback.answer("Платеж отклонен")
+        logging.exception("Error in reject_payment callback")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
