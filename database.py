@@ -240,8 +240,9 @@ async def _init_promo_codes(conn):
     await conn.execute("""
         INSERT INTO promo_codes (code, discount_percent, max_uses, is_active)
         VALUES 
-            ('ELVIRA046', 50, 50, TRUE),
-            ('YAbx30', 30, NULL, TRUE)
+            ('ELVIRA064', 50, 50, TRUE),
+            ('YAbx30', 30, NULL, TRUE),
+            ('FAM50', 50, 50, TRUE)
         ON CONFLICT (code) DO NOTHING
     """)
 
