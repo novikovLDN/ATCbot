@@ -734,87 +734,44 @@ async def callback_vip_access(callback: CallbackQuery):
 @router.callback_query(F.data == "renew_same_period")
 async def callback_renew_same_period(callback: CallbackQuery):
     """Продление подписки на тот же период - сразу вызывает sendInvoice"""
-    logging.info("RENEW CALLBACK TRIGGERED")
     await callback.answer()
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
     
     # Проверяем наличие активной подписки
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
-        await callback.answer(localization.get_text(language, "no_active_subscription"), show_alert=True)
+        await callback.message.answer("Активная подписка не найдена")
         return
     
     # Получаем тариф из последнего утвержденного платежа
     last_payment = await database.get_last_approved_payment(telegram_id)
     if not last_payment:
-        await callback.answer(localization.get_text(language, "no_active_subscription"), show_alert=True)
+        await callback.message.answer("Активная подписка не найдена")
         return
     
     tariff_key = last_payment.get("tariff")
     if not tariff_key:
-        await callback.answer(localization.get_text(language, "no_active_subscription"), show_alert=True)
+        await callback.message.answer("Ошибка тарифа")
         return
     
-    # Проверяем наличие pending платежа
-    existing_payment = await database.get_pending_payment_by_user(telegram_id)
-    if existing_payment:
-        text = localization.get_text(language, "payment_pending")
-        await callback.message.answer(text, reply_markup=get_pending_payment_keyboard(language))
-        return
-    
-    # Проверяем наличие provider_token
-    if not config.TG_PROVIDER_TOKEN:
-        await callback.answer("Платежи временно недоступны", show_alert=True)
-        return
-    
-    # Получаем данные тарифа
+    # Получаем цену тарифа
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
-    base_price = tariff_data["price"]
-    
-    # ПРИОРИТЕТ 1: VIP-статус
-    is_vip = await database.is_vip_user(telegram_id)
-    
-    if is_vip:
-        amount = int(base_price * 0.70)  # 30% скидка
-    else:
-        # ПРИОРИТЕТ 2: Персональная скидка
-        personal_discount = await database.get_user_discount(telegram_id)
-        
-        if personal_discount:
-            discount_percent = personal_discount["discount_percent"]
-            amount = int(base_price * (1 - discount_percent / 100))
-        else:
-            # ПРИОРИТЕТ 3: Приветственная скидка НЕ применяется при продлении
-            amount = base_price
+    price = tariff_data["price"]
     
     # Формируем payload (формат: renew:user_id:tariff:timestamp для уникальности)
     payload = f"renew:{telegram_id}:{tariff_key}:{int(time.time())}"
     
-    # Формируем описание тарифа
-    months = tariff_data["months"]
-    description = f"Продление доступа на {months} месяц(ев)"
-    
-    # Формируем prices (цена в копейках)
-    prices = [LabeledPrice(label="Продление подписки", amount=amount * 100)]
-    
-    try:
-        # Отправляем invoice сразу
-        await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title="Atlas Secure — продление подписки",
-            description=description,
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=prices,
-            start_parameter=payload  # Для быстрого доступа к платежу
-        )
-    except Exception as e:
-        logger.exception(f"Error sending invoice for renewal: {e}")
-        await callback.answer("Ошибка при создании счета. Попробуйте позже.", show_alert=True)
+    # Отправляем invoice сразу
+    await callback.bot.send_invoice(
+        chat_id=telegram_id,
+        title="Atlas Secure — продление подписки",
+        description=f"Продление доступа на {tariff_key}",
+        payload=payload,
+        provider_token=config.TG_PROVIDER_TOKEN,
+        currency="RUB",
+        prices=[LabeledPrice(label="Продление подписки", amount=price * 100)]
+    )
 
 
 @router.callback_query(F.data.startswith("renewal_pay:"))
