@@ -46,6 +46,11 @@ class IncidentEdit(StatesGroup):
 class AdminGrantAccess(StatesGroup):
     waiting_for_days = State()
 
+
+class AdminDiscountCreate(StatesGroup):
+    waiting_for_percent = State()
+    waiting_for_expires = State()
+
 router = Router()
 
 logging.basicConfig(level=logging.INFO)
@@ -217,38 +222,55 @@ def get_profile_keyboard(language: str):
 
 
 async def get_tariff_keyboard(language: str, telegram_id: int):
-    """Клавиатура выбора тарифа с учетом скидок для первой покупки"""
+    """Клавиатура выбора тарифа с учетом скидок (персональная скидка имеет приоритет)"""
     buttons = []
     
-    # Проверяем, является ли это первой покупкой
-    is_first_purchase = await database.is_user_first_purchase(telegram_id)
+    # ПРИОРИТЕТ 1: Проверяем персональную скидку (высший приоритет)
+    personal_discount = await database.get_user_discount(telegram_id)
+    
+    # ПРИОРИТЕТ 2: Проверяем скидку первой покупки (только если нет персональной)
+    is_first_purchase = await database.is_user_first_purchase(telegram_id) if not personal_discount else False
     
     for tariff_key, tariff_data in config.TARIFFS.items():
         base_price = tariff_data["price"]
+        discount_label = ""
         
-        # Применяем скидку 25% для первой покупки на тарифы 3/6/12 месяцев
-        if is_first_purchase and tariff_key in ["3", "6", "12"]:
+        # Применяем скидку в порядке приоритета
+        if personal_discount:
+            # Персональная скидка применяется ко всем тарифам
+            discount_percent = personal_discount["discount_percent"]
+            discounted_price = int(base_price * (1 - discount_percent / 100))
+            price = discounted_price
+            discount_label = localization.get_text(
+                language, 
+                "personal_discount_label", 
+                default="🎯 Персональная скидка"
+            ).format(percent=discount_percent)
+        elif is_first_purchase and tariff_key in ["3", "6", "12"]:
+            # Скидка первой покупки только для тарифов 3/6/12 месяцев
             discounted_price = int(base_price * 0.75)  # 25% скидка
             price = discounted_price
-            # Формируем текст с пометкой о скидке
-            base_text = localization.get_text(language, f"tariff_button_{tariff_key}")
+            discount_label = localization.get_text(language, "first_purchase_discount_label", default="🎁 Первая покупка")
+        else:
+            price = base_price
+        
+        # Формируем текст кнопки
+        base_text = localization.get_text(language, f"tariff_button_{tariff_key}")
+        
+        if discount_label:
             # Извлекаем базовую часть текста (без цены)
             # Формат: "3 месяца Стандартный доступ · 799 ₽"
             if "·" in base_text:
                 parts = base_text.split("·")
                 base_part = parts[0].strip()
-                discount_label = localization.get_text(language, "first_purchase_discount_label", default="🎁 Первая покупка")
                 text = f"{base_part} · {discount_label} · {price} ₽"
             else:
-                # Если формат неожиданный, просто заменяем цену
+                # Если формат неожиданный, просто заменяем цену и добавляем метку
                 text = base_text.replace(str(base_price), str(price))
-                discount_label = localization.get_text(language, "first_purchase_discount_label", default="🎁 Первая покупка")
                 text = f"{text} · {discount_label}"
         else:
-            price = base_price
             # Используем обычные локализованные тексты кнопок
-            tariff_button_key = f"tariff_button_{tariff_key}"
-            text = localization.get_text(language, tariff_button_key)
+            text = base_text
         
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}")])
     
@@ -480,7 +502,7 @@ def get_admin_export_keyboard():
     return keyboard
 
 
-def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None):
+def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False):
     """Клавиатура для раздела пользователя"""
     buttons = []
     if has_active_subscription:
@@ -493,6 +515,11 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             InlineKeyboardButton(text="🟢 Выдать доступ", callback_data=f"admin:grant:{user_id}"),
             InlineKeyboardButton(text="🔴 Лишить доступа", callback_data=f"admin:revoke:{user_id}")
         ])
+        # Кнопки управления скидками
+        if has_discount:
+            buttons.append([InlineKeyboardButton(text="❌ Удалить скидку", callback_data=f"admin:discount_delete:{user_id}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="🎯 Назначить скидку", callback_data=f"admin:discount_create:{user_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -790,14 +817,20 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     base_price = tariff_data["price"]
     
-    # Проверяем, является ли это первой покупкой, чтобы показать правильную сумму
-    is_first_purchase = await database.is_user_first_purchase(telegram_id)
-    
     # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
-    if is_first_purchase and tariff_key in ["3", "6", "12"]:
-        amount = int(base_price * 0.75)  # 25% скидка
+    # ПРИОРИТЕТ 1: Персональная скидка
+    personal_discount = await database.get_user_discount(telegram_id)
+    
+    if personal_discount:
+        discount_percent = personal_discount["discount_percent"]
+        amount = int(base_price * (1 - discount_percent / 100))
     else:
-        amount = base_price
+        # ПРИОРИТЕТ 2: Скидка первой покупки
+        is_first_purchase = await database.is_user_first_purchase(telegram_id)
+        if is_first_purchase and tariff_key in ["3", "6", "12"]:
+            amount = int(base_price * 0.75)  # 25% скидка
+        else:
+            amount = base_price
     
     # Формируем текст с реквизитами
     text = localization.get_text(
@@ -1384,15 +1417,30 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         text += f"\nКоличество продлений: {stats['renewals_count']}\n"
         text += f"Количество перевыпусков: {stats['reissues_count']}\n"
         
+        # Проверяем наличие персональной скидки
+        user_discount = await database.get_user_discount(user["telegram_id"])
+        has_discount = user_discount is not None
+        
+        if user_discount:
+            discount_percent = user_discount["discount_percent"]
+            expires_at_discount = user_discount.get("expires_at")
+            if expires_at_discount:
+                if isinstance(expires_at_discount, str):
+                    expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
+                expires_str = expires_at_discount.strftime("%d.%m.%Y %H:%M")
+                text += f"\n🎯 Персональная скидка: {discount_percent}% (до {expires_str})\n"
+            else:
+                text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
+        
         if subscription:
             expires_at = subscription["expires_at"]
             if isinstance(expires_at, str):
                 expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
             now = datetime.now()
             has_active = expires_at > now
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"]), parse_mode="Markdown")
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount), parse_mode="Markdown")
         else:
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"]), parse_mode="Markdown")
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"], has_discount=has_discount), parse_mode="Markdown")
         
         # Логируем просмотр информации о пользователе
         details = f"Admin searched by {search_by}: {search_value}, found user {user['telegram_id']}"
@@ -1654,6 +1702,290 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_revoke: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+# ==================== ОБРАБОТЧИКИ ДЛЯ УПРАВЛЕНИЯ ПЕРСОНАЛЬНЫМИ СКИДКАМИ ====================
+
+def get_admin_discount_percent_keyboard(user_id: int):
+    """Клавиатура для выбора процента скидки"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="10%", callback_data=f"admin:discount_percent:{user_id}:10"),
+            InlineKeyboardButton(text="15%", callback_data=f"admin:discount_percent:{user_id}:15"),
+        ],
+        [
+            InlineKeyboardButton(text="25%", callback_data=f"admin:discount_percent:{user_id}:25"),
+            InlineKeyboardButton(text="Ввести вручную", callback_data=f"admin:discount_percent_manual:{user_id}"),
+        ],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    return keyboard
+
+
+def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int):
+    """Клавиатура для выбора срока действия скидки"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="7 дней", callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:7"),
+            InlineKeyboardButton(text="30 дней", callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:30"),
+        ],
+        [
+            InlineKeyboardButton(text="Бессрочно", callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:0"),
+            InlineKeyboardButton(text="Ввести вручную", callback_data=f"admin:discount_expires_manual:{user_id}:{discount_percent}"),
+        ],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+    ])
+    return keyboard
+
+
+@router.callback_query(F.data.startswith("admin:discount_create:"))
+async def callback_admin_discount_create(callback: CallbackQuery):
+    """Обработчик кнопки 'Назначить скидку'"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        # Проверяем, есть ли уже скидка
+        existing_discount = await database.get_user_discount(user_id)
+        if existing_discount:
+            discount_percent = existing_discount["discount_percent"]
+            text = f"❌ У пользователя уже есть персональная скидка {discount_percent}%.\n\nСначала удалите существующую скидку."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Скидка уже существует", show_alert=True)
+            return
+        
+        text = f"🎯 Назначить скидку\n\nВыберите процент скидки:"
+        await callback.message.edit_text(text, reply_markup=get_admin_discount_percent_keyboard(user_id))
+        await callback.answer()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_discount_create: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:discount_percent:"))
+async def callback_admin_discount_percent(callback: CallbackQuery):
+    """Обработчик выбора процента скидки"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        discount_percent = int(parts[3])
+        
+        text = f"🎯 Назначить скидку {discount_percent}%\n\nВыберите срок действия скидки:"
+        await callback.message.edit_text(text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent))
+        await callback.answer()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_discount_percent: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:discount_percent_manual:"))
+async def callback_admin_discount_percent_manual(callback: CallbackQuery, state: FSMContext):
+    """Обработчик для ввода процента скидки вручную"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        await state.update_data(discount_user_id=user_id)
+        await state.set_state(AdminDiscountCreate.waiting_for_percent)
+        
+        text = "🎯 Назначить скидку\n\nВведите процент скидки (число от 1 до 99):"
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_discount_percent_manual: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.message(AdminDiscountCreate.waiting_for_percent)
+async def process_admin_discount_percent(message: Message, state: FSMContext):
+    """Обработка введённого процента скидки"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Недостаточно прав доступа")
+        await state.clear()
+        return
+    
+    try:
+        data = await state.get_data()
+        user_id = data.get("discount_user_id")
+        
+        try:
+            discount_percent = int(message.text.strip())
+            if discount_percent < 1 or discount_percent > 99:
+                await message.answer("Процент скидки должен быть от 1 до 99. Попробуйте снова:")
+                return
+        except ValueError:
+            await message.answer("Введите число от 1 до 99:")
+            return
+        
+        await state.update_data(discount_percent=discount_percent)
+        
+        text = f"🎯 Назначить скидку {discount_percent}%\n\nВыберите срок действия скидки:"
+        await message.answer(text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent))
+        await state.set_state(AdminDiscountCreate.waiting_for_expires)
+        
+    except Exception as e:
+        logging.exception(f"Error in process_admin_discount_percent: {e}")
+        await message.answer("Ошибка. Проверь логи.")
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:discount_expires:"))
+async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
+    """Обработчик выбора срока действия скидки"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        discount_percent = int(parts[3])
+        expires_days = int(parts[4])
+        
+        # Рассчитываем expires_at
+        expires_at = None
+        if expires_days > 0:
+            expires_at = datetime.now() + timedelta(days=expires_days)
+        
+        # Создаём скидку
+        success = await database.create_user_discount(
+            telegram_id=user_id,
+            discount_percent=discount_percent,
+            expires_at=expires_at,
+            created_by=callback.from_user.id
+        )
+        
+        if success:
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
+            text = f"✅ Персональная скидка {discount_percent}% назначена\n\nСрок действия: {expires_str}"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Скидка назначена", show_alert=True)
+        else:
+            text = "❌ Ошибка при создании скидки"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Ошибка", show_alert=True)
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_discount_expires: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:discount_expires_manual:"))
+async def callback_admin_discount_expires_manual(callback: CallbackQuery, state: FSMContext):
+    """Обработчик для ввода срока действия скидки вручную"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        discount_percent = int(parts[3])
+        
+        await state.update_data(discount_user_id=user_id, discount_percent=discount_percent)
+        await state.set_state(AdminDiscountCreate.waiting_for_expires)
+        
+        text = "🎯 Назначить скидку\n\nВведите количество дней действия скидки (или 0 для бессрочной):"
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_discount_expires_manual: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.message(AdminDiscountCreate.waiting_for_expires)
+async def process_admin_discount_expires(message: Message, state: FSMContext, bot: Bot):
+    """Обработка введённого срока действия скидки"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Недостаточно прав доступа")
+        await state.clear()
+        return
+    
+    try:
+        data = await state.get_data()
+        user_id = data.get("discount_user_id")
+        discount_percent = data.get("discount_percent")
+        
+        try:
+            expires_days = int(message.text.strip())
+            if expires_days < 0:
+                await message.answer("Количество дней должно быть неотрицательным. Попробуйте снова:")
+                return
+        except ValueError:
+            await message.answer("Введите число (количество дней или 0 для бессрочной):")
+            return
+        
+        # Рассчитываем expires_at
+        expires_at = None
+        if expires_days > 0:
+            expires_at = datetime.now() + timedelta(days=expires_days)
+        
+        # Создаём скидку
+        success = await database.create_user_discount(
+            telegram_id=user_id,
+            discount_percent=discount_percent,
+            expires_at=expires_at,
+            created_by=message.from_user.id
+        )
+        
+        if success:
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
+            text = f"✅ Персональная скидка {discount_percent}% назначена\n\nСрок действия: {expires_str}"
+            await message.answer(text, reply_markup=get_admin_back_keyboard())
+        else:
+            text = "❌ Ошибка при создании скидки"
+            await message.answer(text, reply_markup=get_admin_back_keyboard())
+        
+        await state.clear()
+        
+    except Exception as e:
+        logging.exception(f"Error in process_admin_discount_expires: {e}")
+        await message.answer("Ошибка. Проверь логи.")
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:discount_delete:"))
+async def callback_admin_discount_delete(callback: CallbackQuery):
+    """Обработчик кнопки 'Удалить скидку'"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        # Удаляем скидку
+        success = await database.delete_user_discount(
+            telegram_id=user_id,
+            deleted_by=callback.from_user.id
+        )
+        
+        if success:
+            text = "✅ Персональная скидка удалена"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Скидка удалена", show_alert=True)
+        else:
+            text = "❌ Скидка не найдена или уже удалена"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Скидка не найдена", show_alert=True)
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_discount_delete: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 

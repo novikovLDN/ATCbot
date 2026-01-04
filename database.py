@@ -182,6 +182,18 @@ async def init_db():
             )
         """)
         
+        # Таблица user_discounts (персональные скидки)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_discounts (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                discount_percent INTEGER NOT NULL,
+                expires_at TIMESTAMP NULL,
+                created_by BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Создаём одну строку, если её нет
         existing = await conn.fetchval("SELECT COUNT(*) FROM incident_settings")
         if existing == 0:
@@ -278,26 +290,41 @@ async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, An
 async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
     """Создать платеж и вернуть его ID. Возвращает None, если уже есть pending платеж
     
-    Автоматически применяет скидку 25% для первой покупки на тарифы 3/6/12 месяцев.
+    Автоматически применяет скидки в следующем порядке приоритета:
+    1. Персональная скидка (admin) - ВЫСШИЙ ПРИОРИТЕТ
+    2. Скидка первой покупки (25% на тарифы 3/6/12 месяцев)
     """
     # Проверяем наличие pending платежа
     existing_payment = await get_pending_payment_by_user(telegram_id)
     if existing_payment:
         return None  # У пользователя уже есть pending платеж
     
-    # Проверяем, является ли это первой покупкой
-    is_first_purchase = await is_user_first_purchase(telegram_id)
-    
     # Рассчитываем цену с учетом скидки
     tariff_data = config.TARIFFS.get(tariff, config.TARIFFS["1"])
     base_price = tariff_data["price"]
     
-    # Применяем скидку 25% для первой покупки на тарифы 3/6/12 месяцев
-    if is_first_purchase and tariff in ["3", "6", "12"]:
-        discounted_price = int(base_price * 0.75)  # 25% скидка
+    # ПРИОРИТЕТ 1: Проверяем персональную скидку (высший приоритет)
+    personal_discount = await get_user_discount(telegram_id)
+    discount_applied = None
+    discount_type = None
+    
+    if personal_discount:
+        # Применяем персональную скидку
+        discount_percent = personal_discount["discount_percent"]
+        discounted_price = int(base_price * (1 - discount_percent / 100))
         amount = discounted_price
+        discount_applied = discount_percent
+        discount_type = "personal"
     else:
-        amount = base_price
+        # ПРИОРИТЕТ 2: Проверяем скидку первой покупки
+        is_first_purchase = await is_user_first_purchase(telegram_id)
+        if is_first_purchase and tariff in ["3", "6", "12"]:
+            discounted_price = int(base_price * 0.75)  # 25% скидка
+            amount = discounted_price
+            discount_applied = 25
+            discount_type = "first_purchase"
+        else:
+            amount = base_price
     
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -307,9 +334,9 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
         )
         
         # Логируем применение скидки
-        if is_first_purchase and tariff in ["3", "6", "12"]:
-            details = f"First purchase discount applied: tariff={tariff}, base_price={base_price}, discounted_price={discounted_price}"
-            await _log_audit_event_atomic(conn, "first_purchase_discount_applied", telegram_id, telegram_id, details)
+        if discount_applied:
+            details = f"{discount_type} discount applied: tariff={tariff}, base_price={base_price}, discount={discount_applied}%, final_price={amount}"
+            await _log_audit_event_atomic(conn, f"{discount_type}_discount_applied", telegram_id, telegram_id, details)
         
         return payment_id
 
@@ -1518,3 +1545,96 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
             except Exception as e:
                 logger.exception(f"Error in admin_revoke_access_atomic for user {telegram_id}, transaction rolled back")
                 raise
+
+
+# ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С ПЕРСОНАЛЬНЫМИ СКИДКАМИ ====================
+
+async def get_user_discount(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Получить активную персональную скидку пользователя
+    
+    Returns:
+        Словарь с данными скидки или None, если скидки нет или она истекла
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        row = await conn.fetchrow(
+            """SELECT * FROM user_discounts 
+               WHERE telegram_id = $1 
+               AND (expires_at IS NULL OR expires_at > $2)""",
+            telegram_id, now
+        )
+        return dict(row) if row else None
+
+
+async def create_user_discount(telegram_id: int, discount_percent: int, expires_at: Optional[datetime], created_by: int) -> bool:
+    """Создать или обновить персональную скидку пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        discount_percent: Процент скидки (10, 15, 25, и т.д.)
+        expires_at: Дата истечения скидки (None для бессрочной)
+        created_by: Telegram ID администратора, создавшего скидку
+    
+    Returns:
+        True если успешно, False в случае ошибки
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """INSERT INTO user_discounts (telegram_id, discount_percent, expires_at, created_by)
+                   VALUES ($1, $2, $3, $4)
+                   ON CONFLICT (telegram_id) 
+                   DO UPDATE SET discount_percent = $2, expires_at = $3, created_by = $4, created_at = CURRENT_TIMESTAMP""",
+                telegram_id, discount_percent, expires_at, created_by
+            )
+            
+            # Логируем создание/обновление скидки
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
+            details = f"Personal discount created/updated: {discount_percent}%, expires_at: {expires_str}"
+            await _log_audit_event_atomic(conn, "admin_create_discount", created_by, telegram_id, details)
+            
+            return True
+        except Exception as e:
+            logger.exception(f"Error creating user discount: {e}")
+            return False
+
+
+async def delete_user_discount(telegram_id: int, deleted_by: int) -> bool:
+    """Удалить персональную скидку пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        deleted_by: Telegram ID администратора, удалившего скидку
+    
+    Returns:
+        True если успешно, False в случае ошибки
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            # Проверяем, есть ли скидка
+            existing = await conn.fetchrow(
+                "SELECT * FROM user_discounts WHERE telegram_id = $1",
+                telegram_id
+            )
+            
+            if not existing:
+                return False
+            
+            # Удаляем скидку
+            await conn.execute(
+                "DELETE FROM user_discounts WHERE telegram_id = $1",
+                telegram_id
+            )
+            
+            # Логируем удаление скидки
+            discount_percent = existing["discount_percent"]
+            details = f"Personal discount deleted: {discount_percent}%"
+            await _log_audit_event_atomic(conn, "admin_delete_discount", deleted_by, telegram_id, details)
+            
+            return True
+        except Exception as e:
+            logger.exception(f"Error deleting user discount: {e}")
+            return False

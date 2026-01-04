@@ -73,6 +73,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Скидка на первую покупку
         "first_purchase_discount_label": "🎁 Первая покупка",
         "subscribe_1_month_button": "🔐 Подписка на 1 месяц",
+        "personal_discount_label": "🎯 Персональная скидка {percent}%",
         
         # Профиль - без подписки
         "no_subscription": "❌ Активного доступа нет.\n\nAtlas Secure — приватный VPN-сервис\nс индивидуальными ключами подключения.\n\nВы можете оформить доступ в любое время.",
@@ -199,6 +200,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Скидка на первую покупку
         "first_purchase_discount_label": "🎁 First Purchase",
         "subscribe_1_month_button": "🔐 1 Month Subscription",
+        "personal_discount_label": "🎯 Personal Discount {percent}%",
         
         # Профиль - без подписки
         "no_subscription": "❌ No active access.\n\nAtlas Secure — private VPN service\nwith individual connection keys.\n\nYou can get access at any time.",
@@ -294,6 +296,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Скидка на первую покупку
         "first_purchase_discount_label": "🎁 Birinchi xarid",
         "subscribe_1_month_button": "🔐 1 oylik obuna",
+        "personal_discount_label": "🎯 Shaxsiy chegirma {percent}%",
         "no_subscription": "❌ Faol kirish yo'q.\n\nAtlas Secure — individual ulanish kalitlari bilan maxfiy VPN xizmati.\n\nSiz istalgan vaqtda kirish olishingiz mumkin.",
         "about_text": "Atlas Secure orqasida nima bor\n\n🔐 Enterprise darajasidagi kriptografiya (AES-256)\nMoliyaviy va davlat tizimlari ishlatadigan xuddi shu arxitektura.\n\n🧬 Zero-Logs falsafasi\nBiz asosiy ravishda jurnallarni, ulanishlar tarixini yoki metama'lumotlarni saqlamaymiz.\nSaqlash kerak bo'lgan narsa yo'q — himoya qilish kerak bo'lgan narsa yo'q — oshkor qilish kerak bo'lgan narsa yo'q.\n\n🕶 Sukut bo'yicha maxfiylik\nKuzatish, analitika, uchinchi tomon SDK'lari va yashirin ma'lumotlar to'plami yo'q.\n\n⚡ Cheksiz tezlik va barqarorlik\nOversell va sun'iy cheklovlarsiz optimallashtirilgan serverlar.\n\n🌍 Premium global infratuzilma\nTezlik, yurisdiktsiya va ishonchlilik mezonlari bo'yicha tanlangan\n25+ mamlakatdagi ajratilgan serverlar.\n\n📱 To'liq qurilmalar ekotizimi\niOS · Android · macOS · Windows\nBir kirish — barcha qurilmalaringiz.\n\n⸻\n\nAtlas Secure kimlar uchun\n\n• Sezgir ma'lumotlar bilan ishlaydiganlar uchun\n• Tadbirkorlar va investorlar uchun\n• Raqamli kompromisslarsiz sayohat qiladiganlar uchun\n• Maxfiylik haqida gapirmaydiganlar uchun — ular uni ta'minlaydi\n\n⸻\n\nAtlas Secure VPN emas\n\nBu shaxsiy raqamli infratuzilma.\nJimsiz. Ko'rinmas. Ishonchli.\n\nSiz ulangan siz. Qolgani — sizning ishingiz emas.",
         "privacy_policy": "Maxfiylik siyosati",
@@ -392,6 +395,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Скидка на первую покупку
         "first_purchase_discount_label": "🎁 Хариди аввал",
         "subscribe_1_month_button": "🔐 Обуна барои 1 моҳ",
+        "personal_discount_label": "🎯 Чекрамоии шахсӣ {percent}%",
         
         "no_subscription": "❌ Дастрасии фаъол нест.\n\nAtlas Secure — хизмати махфии VPN\nбо калидҳои пайванди шахсӣ.\n\nШумо метавонед дар ҳар вақт дастрасӣ гиред.",
         "about_text": "Чӣ дар пушти Atlas Secure аст\n\n🔐 Криптографияи сатҳи enterprise (AES-256)\nХуди ҳамин меъморӣ, ки системаҳои молиявӣ ва давлатӣ истифода мебаранд.\n\n🧬 Фалсафаи Zero-Logs\nМо асосан журналҳо, таърихи пайвандҳо ё метамаълумотро нигоҳ намедорем.\nЧизе барои нигоҳ доштан нест — чизе барои ҳимоя кардан нест — чизе барои ошкор кардан нест.\n\n🕶 Махфият ба таври сукут\nБе пайгирӣ, аналитика, SDK-ҳои тарафи сеюм ва ҷамъоварии пинҳонии маълумот.\n\n⚡ Суръат ва устувории номаҳдуд\nСерверҳои оптимизатсияшуда бе oversell ва маҳдудияти сунъӣ.\n\n🌍 Инфрасохтори глобалии премиум\nСерверҳои бахшидашуда дар 25+ кишвар, ки бо меъёрҳои суръат,\nюрисдикция ва эътимоднокӣ интихоб шудаанд.\n\n📱 Экосистемаи пурраи дастгоҳҳо\niOS · Android · macOS · Windows\nЯк дастрасӣ — ҳамаи дастгоҳҳои шумо.\n\n⸻\n\nAtlas Secure барои кӣ\n\n• Барои касоне, ки бо маълумоти ҳассос кор мекунанд\n• Барои соҳибкорон ва сармоягузорон\n• Барои саёҳаткунандагони бе компромиссҳои рақамӣ\n• Барои касоне, ки дар бораи махфият суҳбат намекунанд — онҳо танҳо онро таъмин мекунанд\n\n⸻\n\nAtlas Secure VPN нест\n\nИн инфрасохтори рақамии хусусӣ аст.\nОром. Намоён нест. Эътимоднок.\n\nШумо пайванд шудед. Боқимонда — ба шумо тааллуқ надорад.",
