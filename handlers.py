@@ -463,6 +463,7 @@ def get_admin_dashboard_keyboard():
         [InlineKeyboardButton(text="🚨 Система", callback_data="admin:system")],
         [InlineKeyboardButton(text="📤 Экспорт данных", callback_data="admin:export")],
         [InlineKeyboardButton(text="📣 Уведомления", callback_data="admin:broadcast")],
+        [InlineKeyboardButton(text="📊 Статистика промокодов", callback_data="admin_promo_stats")],
     ])
     return keyboard
 
@@ -606,6 +607,38 @@ async def cmd_start(message: Message):
     await message.answer(text, reply_markup=get_language_keyboard())
 
 
+async def format_promo_stats_text(stats: list) -> str:
+    """Форматировать статистику промокодов в текст"""
+    if not stats:
+        return "Промокоды не найдены."
+    
+    text = "📊 Статистика промокодов\n\n"
+    
+    for promo in stats:
+        code = promo["code"]
+        discount_percent = promo["discount_percent"]
+        max_uses = promo["max_uses"]
+        used_count = promo["used_count"]
+        is_active = promo["is_active"]
+        
+        text += f"{code}\n"
+        text += f"— Скидка: {discount_percent}%\n"
+        
+        if max_uses is not None:
+            text += f"— Использовано: {used_count} / {max_uses}\n"
+            if is_active:
+                text += "— Статус: активен\n"
+            else:
+                text += "— Статус: исчерпан\n"
+        else:
+            text += f"— Использовано: {used_count}\n"
+            text += "— Статус: без ограничений\n"
+        
+        text += "\n"
+    
+    return text
+
+
 @router.message(Command("promo_stats"))
 async def cmd_promo_stats(message: Message):
     """Команда для просмотра статистики промокодов (только для администратора)"""
@@ -620,35 +653,8 @@ async def cmd_promo_stats(message: Message):
         # Получаем статистику промокодов
         stats = await database.get_promo_stats()
         
-        if not stats:
-            await message.answer("Промокоды не найдены.")
-            return
-        
         # Формируем текст ответа
-        text = "📊 Статистика промокодов\n\n"
-        
-        for promo in stats:
-            code = promo["code"]
-            discount_percent = promo["discount_percent"]
-            max_uses = promo["max_uses"]
-            used_count = promo["used_count"]
-            is_active = promo["is_active"]
-            
-            text += f"{code}\n"
-            text += f"— Скидка: {discount_percent}%\n"
-            
-            if max_uses is not None:
-                text += f"— Использовано: {used_count} / {max_uses}\n"
-                if is_active:
-                    text += "— Статус: активен\n"
-                else:
-                    text += "— Статус: исчерпан\n"
-            else:
-                text += f"— Использовано: {used_count}\n"
-                text += "— Статус: без ограничений\n"
-            
-            text += "\n"
-        
+        text = await format_promo_stats_text(stats)
         await message.answer(text)
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
@@ -1625,6 +1631,27 @@ async def callback_admin_main(callback: CallbackQuery):
     text = "🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:"
     await callback.message.edit_text(text, reply_markup=get_admin_dashboard_keyboard())
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_promo_stats")
+async def callback_admin_promo_stats(callback: CallbackQuery):
+    """Обработчик кнопки статистики промокодов в админ-дашборде"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        # Получаем статистику промокодов
+        stats = await database.get_promo_stats()
+        
+        # Формируем текст ответа
+        text = await format_promo_stats_text(stats)
+        
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Error getting promo stats: {e}")
+        await callback.answer("Ошибка при получении статистики промокодов.", show_alert=True)
 
 
 @router.callback_query(F.data == "admin:metrics")
