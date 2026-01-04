@@ -33,8 +33,7 @@ async def create_outline_key() -> Optional[Tuple[int, str]]:
         return None
     
     try:
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout, connector=_connector) as session:
+        async with aiohttp.ClientSession(connector=_connector) as session:
             async with session.post(f"{config.OUTLINE_API_URL}/access-keys") as response:
                 if response.status == 201:
                     data = await response.json()
@@ -78,8 +77,7 @@ async def delete_outline_key(key_id: int) -> bool:
         return False
     
     try:
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout, connector=_connector) as session:
+        async with aiohttp.ClientSession(connector=_connector) as session:
             async with session.delete(f"{config.OUTLINE_API_URL}/access-keys/{key_id}") as response:
                 if response.status == 204:
                     logger.info(f"Outline key deleted: key_id={key_id}")
