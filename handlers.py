@@ -1084,7 +1084,15 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
     
     # Формируем описание тарифа
     months = tariff_data["months"]
-    description = f"Atlas Secure VPN подписка на {months} месяц(ев)"
+    if has_promo:
+        description = f"Atlas Secure VPN подписка на {months} месяц(ев) (промокод)"
+    else:
+        description = f"Atlas Secure VPN подписка на {months} месяц(ев)"
+    
+    # Проверяем, что цена корректна
+    if amount <= 0:
+        await callback.answer("Ошибка расчета цены", show_alert=True)
+        return
     
     # Формируем prices (цена в копейках)
     prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
@@ -1098,8 +1106,7 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=prices,
-            start_parameter=payload  # Для быстрого доступа к платежу
+            prices=prices
         )
         await callback.answer()
     except Exception as e:
