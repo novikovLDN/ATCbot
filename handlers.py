@@ -606,6 +606,55 @@ async def cmd_start(message: Message):
     await message.answer(text, reply_markup=get_language_keyboard())
 
 
+@router.message(Command("promo_stats"))
+async def cmd_promo_stats(message: Message):
+    """Команда для просмотра статистики промокодов (только для администратора)"""
+    telegram_id = message.from_user.id
+    
+    # Проверяем, что пользователь - администратор
+    if telegram_id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Доступ запрещён.")
+        return
+    
+    try:
+        # Получаем статистику промокодов
+        stats = await database.get_promo_stats()
+        
+        if not stats:
+            await message.answer("Промокоды не найдены.")
+            return
+        
+        # Формируем текст ответа
+        text = "📊 Статистика промокодов\n\n"
+        
+        for promo in stats:
+            code = promo["code"]
+            discount_percent = promo["discount_percent"]
+            max_uses = promo["max_uses"]
+            used_count = promo["used_count"]
+            is_active = promo["is_active"]
+            
+            text += f"{code}\n"
+            text += f"— Скидка: {discount_percent}%\n"
+            
+            if max_uses is not None:
+                text += f"— Использовано: {used_count} / {max_uses}\n"
+                if is_active:
+                    text += "— Статус: активен\n"
+                else:
+                    text += "— Статус: исчерпан\n"
+            else:
+                text += f"— Использовано: {used_count}\n"
+                text += "— Статус: без ограничений\n"
+            
+            text += "\n"
+        
+        await message.answer(text)
+    except Exception as e:
+        logger.error(f"Error getting promo stats: {e}")
+        await message.answer("Ошибка при получении статистики промокодов.")
+
+
 @router.message(Command("profile"))
 async def cmd_profile(message: Message):
     """Обработчик команды /profile"""
@@ -1150,6 +1199,7 @@ async def process_successful_payment(message: Message):
     # Формат для покупки с промокодом: purchase:promo:CODE:user_id:tariff:timestamp
     # Формат для продления: renew:user_id:tariff:timestamp
     payload = payment.invoice_payload
+    promo_code_used = None  # Инициализируем переменную для промокода
     try:
         if payload.startswith("renew:"):
             # Продление подписки
@@ -1241,15 +1291,32 @@ async def process_successful_payment(message: Message):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         
-        # Если использован промокод, увеличиваем счетчик использований
-        if payload.startswith("purchase:promo:"):
-            parts = payload.split(":")
-            if len(parts) >= 3:
-                promo_code_used = parts[2]
-                try:
+        # Если использован промокод, увеличиваем счетчик использований и логируем
+        if promo_code_used:
+            try:
+                # Получаем данные промокода для логирования
+                promo_data = await database.get_promo_code(promo_code_used)
+                if promo_data:
+                    discount_percent = promo_data["discount_percent"]
+                    # Рассчитываем price_before (базовая цена тарифа)
+                    base_price = tariff_data["price"]
+                    price_before = base_price
+                    price_after = payment_amount
+                    
+                    # Увеличиваем счетчик использований
                     await database.increment_promo_code_use(promo_code_used)
-                except Exception as e:
-                    logger.error(f"Error incrementing promo code use: {e}")
+                    
+                    # Логируем использование промокода
+                    await database.log_promo_code_usage(
+                        promo_code=promo_code_used,
+                        telegram_id=telegram_id,
+                        tariff=tariff_key,
+                        discount_percent=discount_percent,
+                        price_before=price_before,
+                        price_after=price_after
+                    )
+            except Exception as e:
+                logger.error(f"Error processing promo code usage: {e}")
         
         expires_str = expires_at.strftime("%d.%m.%Y")
         text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)

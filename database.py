@@ -220,6 +220,20 @@ async def init_db():
             )
         """)
         
+        # Таблица promo_usage_logs (логи использования промокодов)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS promo_usage_logs (
+                id SERIAL PRIMARY KEY,
+                promo_code TEXT NOT NULL,
+                telegram_id BIGINT NOT NULL,
+                tariff TEXT NOT NULL,
+                discount_percent INTEGER NOT NULL,
+                price_before INTEGER NOT NULL,
+                price_after INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Создаём одну строку, если её нет
         existing = await conn.fetchval("SELECT COUNT(*) FROM incident_settings")
         if existing == 0:
@@ -242,7 +256,8 @@ async def _init_promo_codes(conn):
         VALUES 
             ('ELVIRA064', 50, 50, TRUE),
             ('YAbx30', 30, NULL, TRUE),
-            ('FAM50', 50, 50, TRUE)
+            ('FAM50', 50, 50, TRUE),
+            ('COURIER40', 40, 40, TRUE)
         ON CONFLICT (code) DO NOTHING
     """)
 
@@ -926,6 +941,41 @@ async def increment_promo_code_use(code: str):
                     SET used_count = $1 
                     WHERE UPPER(code) = UPPER($2)
                 """, new_count, code)
+
+
+async def log_promo_code_usage(
+    promo_code: str,
+    telegram_id: int,
+    tariff: str,
+    discount_percent: int,
+    price_before: int,
+    price_after: int
+):
+    """Записать использование промокода в лог"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO promo_usage_logs 
+            (promo_code, telegram_id, tariff, discount_percent, price_before, price_after)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        """, promo_code.upper(), telegram_id, tariff, discount_percent, price_before, price_after)
+
+
+async def get_promo_stats() -> list:
+    """Получить статистику по всем промокодам"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT 
+                code,
+                discount_percent,
+                max_uses,
+                used_count,
+                is_active
+            FROM promo_codes
+            ORDER BY code
+        """)
+        return [dict(row) for row in rows]
 
 
 async def is_user_first_purchase(telegram_id: int) -> bool:
