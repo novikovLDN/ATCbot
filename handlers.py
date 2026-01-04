@@ -1249,38 +1249,64 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         # Получаем информацию о подписке
         subscription = await database.get_subscription(user["telegram_id"])
         
+        # Получаем расширенную статистику
+        stats = await database.get_user_extended_stats(user["telegram_id"])
+        
         # Формируем карточку пользователя
         text = "👤 Пользователь\n\n"
         text += f"Telegram ID: {user['telegram_id']}\n"
         username_display = user.get('username') or 'не указан'
         text += f"Username: @{username_display}\n"
+        
+        # Язык
+        user_language = user.get('language') or 'ru'
+        language_display = localization.LANGUAGE_BUTTONS.get(user_language, user_language)
+        text += f"Язык: {language_display}\n"
+        
+        # Дата регистрации
+        created_at = user.get('created_at')
+        if created_at:
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            created_str = created_at.strftime("%d.%m.%Y %H:%M")
+            text += f"Дата регистрации: {created_str}\n"
+        else:
+            text += "Дата регистрации: —\n"
+        
         text += "\n"
         
         if subscription:
             expires_at = subscription["expires_at"]
             if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at)
+                expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             
             now = datetime.now()
             if expires_at > now:
                 text += "Статус подписки: ✅ Активна\n"
-                text += f"Срок действия: до {expires_str}\n"
-                text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
-                
-                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=user["telegram_id"]), parse_mode="Markdown")
             else:
                 text += "Статус подписки: ⛔ Истекла\n"
-                text += f"Срок действия: до {expires_str}\n"
-                text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
-                
-                await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"]), parse_mode="Markdown")
+            
+            text += f"Срок действия: до {expires_str}\n"
+            text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
         else:
             text += "Статус подписки: ❌ Нет подписки\n"
             text += "VPN-ключ: —\n"
             text += "Срок действия: —\n"
-            
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"]))
+        
+        # Статистика
+        text += f"\nКоличество продлений: {stats['renewals_count']}\n"
+        text += f"Количество перевыпусков: {stats['reissues_count']}\n"
+        
+        if subscription:
+            expires_at = subscription["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            now = datetime.now()
+            has_active = expires_at > now
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"]), parse_mode="Markdown")
+        else:
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"]), parse_mode="Markdown")
         
         # Логируем просмотр информации о пользователе
         details = f"Admin searched by {search_by}: {search_value}, found user {user['telegram_id']}"
