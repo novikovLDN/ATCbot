@@ -9,9 +9,6 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Таймаут для запросов к Outline API (секунды)
-OUTLINE_API_TIMEOUT = aiohttp.ClientTimeout(total=30)
-
 # SSL контекст с отключенной проверкой сертификата
 # (Outline Manager использует self-signed сертификат)
 _ssl_context = ssl.create_default_context()
@@ -36,7 +33,8 @@ async def create_outline_key() -> Optional[Tuple[int, str]]:
         return None
     
     try:
-        async with aiohttp.ClientSession(timeout=OUTLINE_API_TIMEOUT, connector=_connector) as session:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout, connector=_connector) as session:
             async with session.post(f"{config.OUTLINE_API_URL}/access-keys") as response:
                 if response.status == 201:
                     data = await response.json()
@@ -80,7 +78,8 @@ async def delete_outline_key(key_id: int) -> bool:
         return False
     
     try:
-        async with aiohttp.ClientSession(timeout=OUTLINE_API_TIMEOUT, connector=_connector) as session:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout, connector=_connector) as session:
             async with session.delete(f"{config.OUTLINE_API_URL}/access-keys/{key_id}") as response:
                 if response.status == 204:
                     logger.info(f"Outline key deleted: key_id={key_id}")
