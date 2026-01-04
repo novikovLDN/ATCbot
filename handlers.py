@@ -1,5 +1,5 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, LabeledPrice, PreCheckoutQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -53,7 +53,7 @@ class AdminDiscountCreate(StatesGroup):
 
 router = Router()
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 async def send_vpn_keys_alert(bot: Bot, keys_count: int):
@@ -882,18 +882,188 @@ async def callback_buy_vpn(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("tariff_"))
 async def callback_tariff(callback: CallbackQuery, state: FSMContext):
-    """Обработчик выбора тарифа"""
+    """Обработчик выбора тарифа - отправляет invoice через Telegram Payments"""
     tariff_key = callback.data.split("_")[1]
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Сохраняем выбранный тариф в состоянии
-    await state.update_data(tariff=tariff_key)
+    # Проверяем наличие provider_token
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer("Платежи временно недоступны", show_alert=True)
+        return
     
-    text = localization.get_text(language, "select_payment")
-    await callback.message.edit_text(text, reply_markup=get_payment_method_keyboard(language))
-    await callback.answer()
+    # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
+    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    base_price = tariff_data["price"]
+    
+    # ПРИОРИТЕТ 1: VIP-статус
+    is_vip = await database.is_vip_user(telegram_id)
+    
+    if is_vip:
+        amount = int(base_price * 0.70)  # 30% скидка
+    else:
+        # ПРИОРИТЕТ 2: Персональная скидка
+        personal_discount = await database.get_user_discount(telegram_id)
+        
+        if personal_discount:
+            discount_percent = personal_discount["discount_percent"]
+            amount = int(base_price * (1 - discount_percent / 100))
+        else:
+            # ПРИОРИТЕТ 3: Скидка первой покупки
+            is_first_purchase = await database.is_user_first_purchase(telegram_id)
+            if is_first_purchase and tariff_key in ["3", "6", "12"]:
+                amount = int(base_price * 0.75)  # 25% скидка
+            else:
+                amount = base_price
+    
+    # Формируем payload (уникальный идентификатор: user_id + tariff + timestamp для уникальности)
+    import time
+    payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
+    
+    # Формируем описание тарифа
+    months = tariff_data["months"]
+    description = f"Atlas Secure VPN подписка на {months} месяц(ев)"
+    
+    # Формируем prices (цена в копейках)
+    prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
+    
+    try:
+        # Отправляем invoice
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title="Atlas Secure VPN",
+            description=description,
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=prices,
+            start_parameter=payload  # Для быстрого доступа к платежу
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error sending invoice: {e}")
+        await callback.answer("Ошибка при создании счета. Попробуйте позже.", show_alert=True)
+
+
+@router.pre_checkout_query()
+async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
+    """Обработчик pre_checkout_query - подтверждение платежа перед списанием"""
+    # Всегда подтверждаем платеж
+    await pre_checkout_query.answer(ok=True)
+    
+    # Логируем событие
+    payload = pre_checkout_query.invoice_payload
+    telegram_id = pre_checkout_query.from_user.id
+    
+    logger.info(f"Pre-checkout query: user_id={telegram_id}, payload={payload}, amount={pre_checkout_query.total_amount}")
+    
+    # Логируем в audit_log
+    try:
+        await database._log_audit_event_atomic_standalone(
+            "telegram_payment_pre_checkout",
+            telegram_id,
+            telegram_id,
+            f"Pre-checkout query: payload={payload}, amount={pre_checkout_query.total_amount / 100} RUB"
+        )
+    except Exception as e:
+        logger.error(f"Error logging pre-checkout query: {e}")
+
+
+@router.message(F.successful_payment)
+async def process_successful_payment(message: Message):
+    """Обработчик successful_payment - успешная оплата"""
+    telegram_id = message.from_user.id
+    payment = message.successful_payment
+    
+    # Извлекаем данные из payload (формат: user_id_tariff_timestamp)
+    payload = payment.invoice_payload
+    try:
+        parts = payload.split("_")
+        if len(parts) < 2:
+            logger.error(f"Invalid payload format: {payload}")
+            await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+            return
+        
+        payload_user_id = int(parts[0])
+        tariff_key = parts[1]
+        
+        # Проверяем, что платеж для этого пользователя
+        if payload_user_id != telegram_id:
+            logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
+            await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+            return
+        
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing payload {payload}: {e}")
+        await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+        return
+    
+    payment_amount = payment.total_amount // 100  # Конвертируем из копеек
+    
+    # Создаем платеж в БД
+    # Для Telegram Payments создаем платеж при successful_payment
+    # (в отличие от СБП, где платеж создается заранее)
+    # create_payment может вернуть None если есть pending - в этом случае
+    # используем существующий платеж
+    existing_payment = await database.get_pending_payment_by_user(telegram_id)
+    if existing_payment:
+        # Используем существующий pending платеж
+        payment_id = existing_payment["id"]
+        # Обновляем сумму на актуальную из платежа
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE payments SET amount = $1 WHERE id = $2",
+                payment_amount, payment_id
+            )
+    else:
+        # Создаем новый платеж с фактической суммой из платежа
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            payment_id = await conn.fetchval(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
+                telegram_id, tariff_key, payment_amount
+            )
+        if not payment_id:
+            logger.error(f"Failed to create payment record for user {telegram_id}, tariff {tariff_key}")
+            await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+            return
+    
+    # Получаем тариф
+    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    months = tariff_data["months"]
+    
+    # Активируем подписку
+    expires_at, is_renewal, vpn_key = await database.approve_payment_atomic(
+        payment_id,
+        months,
+        admin_telegram_id=config.ADMIN_TELEGRAM_ID  # Используем системного админа
+    )
+    
+    if expires_at and vpn_key:
+        # Успешно активирована подписка
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        
+        expires_str = expires_at.strftime("%d.%m.%Y")
+        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
+        
+        # Отправляем сообщение с VPN-ключом
+        await message.answer(text, reply_markup=get_profile_keyboard(language))
+        
+        logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_key}, amount={payment_amount}")
+        
+        # Логируем событие
+        await database._log_audit_event_atomic_standalone(
+            "telegram_payment_successful",
+            config.ADMIN_TELEGRAM_ID,
+            telegram_id,
+            f"Telegram payment successful: payment_id={payment_id}, payload={payload}, amount={payment_amount} RUB"
+        )
+    else:
+        logger.error(f"Failed to activate subscription for payment {payment_id}")
+        await message.answer("Ошибка активации подписки. Обратитесь в поддержку.")
 
 
 @router.callback_query(F.data == "payment_test")
