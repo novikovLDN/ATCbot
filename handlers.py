@@ -15,11 +15,6 @@ import os
 import asyncio
 import random
 
-# Время последней отправки алерта о ключах (для предотвращения спама)
-_last_keys_alert_time: datetime = None
-_last_keys_alert_count: int = -1  # Количество ключей при последнем алерте
-_ALERT_COOLDOWN_MINUTES = 30  # Минимальный интервал между алертами (в минутах)
-
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
 
@@ -56,51 +51,8 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-async def send_vpn_keys_alert(bot: Bot, keys_count: int):
-    """Отправить алерт администратору о количестве VPN-ключей
-    
-    Args:
-        bot: Экземпляр бота для отправки сообщения
-        keys_count: Текущее количество свободных ключей
-    """
-    global _last_keys_alert_time, _last_keys_alert_count
-    
-    now = datetime.now()
-    
-    # Проверяем, нужно ли отправлять алерт
-    should_send = False
-    
-    if keys_count == 0:
-        # Критический алерт - отправляем всегда
-        should_send = True
-        alert_text = "🚨 КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ\n\nСвободные VPN-ключи закончились!\nПодтверждение платежей заблокировано.\n\nНеобходимо срочно пополнить таблицу vpn_keys."
-    elif keys_count <= 5:
-        # Предупреждение - отправляем не чаще раза в N минут
-        if _last_keys_alert_time is None:
-            should_send = True
-        else:
-            time_since_last = now - _last_keys_alert_time
-            if time_since_last >= timedelta(minutes=_ALERT_COOLDOWN_MINUTES):
-                should_send = True
-            # Также отправляем, если количество изменилось (уменьшилось)
-            elif keys_count < _last_keys_alert_count:
-                should_send = True
-        
-        if should_send:
-            alert_text = f"⚠️ Предупреждение\n\nСвободных VPN-ключей осталось: {keys_count}\nРекомендуется пополнить таблицу vpn_keys."
-    else:
-        # Достаточно ключей - не отправляем
-        should_send = False
-    
-    if should_send:
-        try:
-            await bot.send_message(config.ADMIN_TELEGRAM_ID, alert_text)
-            _last_keys_alert_time = now
-            _last_keys_alert_count = keys_count
-            logging.info(f"VPN keys alert sent to admin: {keys_count} keys remaining")
-        except Exception as e:
-            logging.error(f"Error sending VPN keys alert to admin: {e}")
-
+# Функция send_vpn_keys_alert удалена - больше не используется
+# VPN-ключи теперь создаются динамически через Outline API, лимита нет
 
 def get_language_keyboard():
     """Клавиатура для выбора языка"""
@@ -1292,31 +1244,15 @@ async def approve_payment(callback: CallbackQuery):
         tariff_key = payment["tariff"]
         tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
         
-        # Проверяем количество свободных ключей перед approve
-        keys_count = await database.get_free_vpn_keys_count()
-        
-        # Отправляем алерт если нужно
-        await send_vpn_keys_alert(callback.bot, keys_count)
-        
-        # Если ключей нет - блокируем approve
-        if keys_count == 0:
-            logging.error(f"Cannot approve payment {payment_id}: no free VPN keys available")
-            await callback.answer("Нет свободных VPN-ключей. Подтверждение платежей заблокировано. Пополните таблицу vpn_keys.", show_alert=True)
-            return
-        
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
-        # Логика получения ключа находится внутри approve_payment_atomic
+        # VPN-ключ создается через Outline API
         admin_telegram_id = callback.from_user.id
         result = await database.approve_payment_atomic(payment_id, tariff_data["months"], admin_telegram_id)
         expires_at, is_renewal, vpn_key = result
         
         if expires_at is None or vpn_key is None:
-            if vpn_key is None:
-                logging.error(f"No free VPN keys available for payment {payment_id}")
-                await callback.answer("Нет свободных VPN-ключей. Пополните таблицу vpn_keys в базе данных.", show_alert=True)
-            else:
-                logging.error(f"Failed to approve payment {payment_id} atomically")
-                await callback.answer("Ошибка подтверждения платежа. Проверь логи.", show_alert=True)
+            logging.error(f"Failed to approve payment {payment_id} atomically")
+            await callback.answer("Ошибка создания VPN-ключа. Проверь логи.", show_alert=True)
             return
         
         # Логируем продление, если было
@@ -1872,10 +1808,10 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
         )
         
         if expires_at is None or vpn_key is None:
-            # Нет свободных ключей
-            text = "❌ Нет свободных VPN-ключей"
+            # Ошибка создания ключа
+            text = "❌ Ошибка создания VPN-ключа"
             await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
-            await callback.answer("Нет свободных ключей", show_alert=True)
+            await callback.answer("Ошибка создания ключа", show_alert=True)
         else:
             # Успешно
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
@@ -2472,7 +2408,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         new_vpn_key, old_vpn_key = result
         
         if new_vpn_key is None:
-            await callback.answer("Не удалось перевыпустить ключ. Нет активной подписки или свободных ключей.", show_alert=True)
+            await callback.answer("Не удалось перевыпустить ключ. Нет активной подписки или ошибка создания ключа.", show_alert=True)
             return
         
         # Обновляем информацию о пользователе
@@ -3351,7 +3287,7 @@ async def cmd_reissue_key(message: Message):
         new_vpn_key, old_vpn_key = result
         
         if new_vpn_key is None:
-            await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Нет свободных VPN-ключей")
+            await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
             return
         
         # Уведомляем пользователя

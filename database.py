@@ -492,14 +492,8 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tu
         return expires_at, is_renewal
 
 
-async def get_free_vpn_keys_count() -> int:
-    """Получить количество свободных VPN-ключей"""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        count = await conn.fetchval(
-            "SELECT COUNT(*) FROM vpn_keys WHERE is_used = FALSE"
-        )
-        return count if count else 0
+# Функция get_free_vpn_keys_count удалена - больше не используется
+# VPN-ключи теперь создаются динамически через Outline API, лимита нет
 
 
 async def _log_audit_event_atomic(conn, action: str, telegram_id: int, target_user: Optional[int] = None, details: Optional[str] = None):
@@ -563,9 +557,9 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
     
     Перевыпуск возможен ТОЛЬКО если у пользователя есть активная подписка.
     В одной транзакции:
-    - получает новый vpn_key из vpn_keys
-    - обновляет subscriptions.vpn_key
-    - старый ключ НЕ возвращается в пул
+    - удаляет старый ключ из Outline
+    - создает новый ключ через Outline API
+    - обновляет subscriptions (outline_key_id, vpn_key)
     - expires_at НЕ меняется
     - записывает событие в audit_log
     
@@ -574,7 +568,7 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
         admin_telegram_id: Telegram ID администратора, который выполняет перевыпуск
     
     Returns:
-        (new_vpn_key, old_vpn_key) или (None, None) если нет активной подписки или нет свободных ключей
+        (new_vpn_key, old_vpn_key) или (None, None) если нет активной подписки или ошибка создания ключа
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -592,27 +586,38 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                     return None, None
                 
                 subscription = dict(subscription_row)
-                old_vpn_key = subscription["vpn_key"]
+                old_outline_key_id = subscription.get("outline_key_id")
+                old_vpn_key = subscription.get("vpn_key", "")
                 
-                # 2. Получаем новый VPN-ключ из таблицы vpn_keys
-                new_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
+                # 2. Удаляем старый ключ из Outline (если есть)
+                if old_outline_key_id:
+                    try:
+                        await outline_api.delete_outline_key(old_outline_key_id)
+                        logger.info(f"Deleted old Outline key {old_outline_key_id} for user {telegram_id} during reissue")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete old Outline key {old_outline_key_id} for user {telegram_id}: {e}")
+                        # Продолжаем, даже если не удалось удалить старый ключ
                 
-                if not new_vpn_key:
-                    logger.error(f"Cannot reissue VPN key for user {telegram_id}: no free VPN keys available")
+                # 3. Создаем новый ключ через Outline API
+                key_result = await outline_api.create_outline_key()
+                if not key_result:
+                    logger.error(f"Failed to create Outline key for reissue for user {telegram_id}")
                     return None, None
                 
-                # 3. Обновляем подписку (expires_at НЕ меняется)
+                new_outline_key_id, new_vpn_key = key_result
+                
+                # 4. Обновляем подписку (expires_at НЕ меняется)
                 await conn.execute(
-                    "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
-                    new_vpn_key, telegram_id
+                    "UPDATE subscriptions SET outline_key_id = $1, vpn_key = $2 WHERE telegram_id = $3",
+                    new_outline_key_id, new_vpn_key, telegram_id
                 )
                 
-                # 4. Записываем в историю подписок
+                # 5. Записываем в историю подписок
                 expires_at = subscription["expires_at"]
                 await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
                 
-                # 5. Записываем событие в audit_log
-                details = f"User {telegram_id}, Old key: {old_vpn_key[:20]}..., New key: {new_vpn_key[:20]}..., Expires: {expires_at.isoformat()}"
+                # 6. Записываем событие в audit_log
+                details = f"User {telegram_id}, Old key: {old_vpn_key[:20] if old_vpn_key else 'N/A'}..., New key: {new_vpn_key[:20]}..., Expires: {expires_at.isoformat()}"
                 await _log_audit_event_atomic(conn, "vpn_key_reissued", admin_telegram_id, telegram_id, details)
                 
                 logger.info(f"VPN key reissued for user {telegram_id} by admin {admin_telegram_id}")
@@ -623,40 +628,8 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                 raise
 
 
-async def _get_free_vpn_key_atomic(conn, telegram_id: int) -> Optional[str]:
-    """Атомарно получить свободный VPN-ключ из таблицы vpn_keys
-    
-    Использует SELECT ... FOR UPDATE для защиты от race condition.
-    Должна вызываться ТОЛЬКО внутри активной транзакции.
-    
-    Returns:
-        VPN-ключ (str) или None, если свободных ключей нет
-    """
-    # Выбираем один свободный ключ с блокировкой строки
-    row = await conn.fetchrow(
-        """SELECT vpn_key FROM vpn_keys
-           WHERE is_used = FALSE
-           LIMIT 1
-           FOR UPDATE""",
-    )
-    
-    if not row:
-        return None
-    
-    vpn_key = row["vpn_key"]
-    now = datetime.now()
-    
-    # Помечаем ключ как использованный
-    await conn.execute(
-        """UPDATE vpn_keys
-           SET is_used = TRUE,
-               assigned_to = $1,
-               assigned_at = $2
-           WHERE vpn_key = $3""",
-        telegram_id, now, vpn_key
-    )
-    
-    return vpn_key
+# Функция _get_free_vpn_key_atomic удалена - больше не используется
+# VPN-ключи теперь создаются динамически через Outline API
 
 
 def _calculate_subscription_days(months: int) -> int:
@@ -1017,26 +990,8 @@ async def get_active_subscriptions_for_export() -> list:
         return [dict(row) for row in rows]
 
 
-async def get_vpn_keys_stats() -> Dict[str, int]:
-    """Получить статистику по VPN-ключам
-    
-    Returns:
-        Словарь с ключами:
-        - total: всего ключей
-        - used: использованных ключей
-        - free: свободных ключей
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        total = await conn.fetchval("SELECT COUNT(*) FROM vpn_keys")
-        used = await conn.fetchval("SELECT COUNT(*) FROM vpn_keys WHERE is_used = TRUE")
-        free = await conn.fetchval("SELECT COUNT(*) FROM vpn_keys WHERE is_used = FALSE")
-        
-        return {
-            "total": total or 0,
-            "used": used or 0,
-            "free": free or 0,
-        }
+# Функция get_vpn_keys_stats удалена - больше не используется
+# VPN-ключи теперь создаются динамически через Outline API, статистика по пулу не актуальна
 
 
 async def get_subscription_history(telegram_id: int, limit: int = 5) -> list:

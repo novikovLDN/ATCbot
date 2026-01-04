@@ -8,8 +8,8 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Минимальное количество свободных VPN-ключей (если меньше - отправляется алерт)
-MIN_FREE_VPN_KEYS = 5
+# Минимальное количество свободных VPN-ключей больше не используется
+# VPN-ключи создаются динамически через Outline API
 
 
 async def check_database_connection() -> Tuple[bool, str]:
@@ -52,19 +52,15 @@ async def check_connection_pool() -> Tuple[bool, str]:
 
 
 async def check_vpn_keys() -> Tuple[bool, str]:
-    """Проверить количество свободных VPN-ключей
+    """Проверить доступность Outline API
     
     Returns:
         Кортеж (is_ok, message) - статус проверки и сообщение
     """
     try:
-        stats = await database.get_vpn_keys_stats()
-        free_keys = stats.get("free", 0)
-        
-        if free_keys < MIN_FREE_VPN_KEYS:
-            return False, f"VPN-ключи: Критически мало ({free_keys} свободных, минимум: {MIN_FREE_VPN_KEYS})"
-        else:
-            return True, f"VPN-ключи: OK ({free_keys} свободных)"
+        # VPN-ключи создаются динамически через Outline API
+        # Проверка пула ключей больше не актуальна
+        return True, "VPN-ключи: Создаются через Outline API (без лимита)"
     except Exception as e:
         return False, f"VPN-ключи: Ошибка проверки ({str(e)})"
 
