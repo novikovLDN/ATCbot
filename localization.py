@@ -74,8 +74,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "reminder_paid_24h": "⏳ Срок вашего доступа Atlas Secure истекает через 24 часа.\n\nРекомендуем продлить подписку заранее,\nчтобы сохранить непрерывное соединение.",
         "reminder_paid_3h": "⏳ Срок вашего доступа Atlas Secure истекает через 3 часа.\n\nПродлите подписку сейчас,\nчтобы избежать перерыва в соединении.",
         
-        # Скидка на первую покупку
-        "first_purchase_discount_label": "🎁 Первая покупка",
+        # Приветственная скидка
+        "welcome_discount_label": "🎁 Приветственная скидка",
         "subscribe_1_month_button": "🔐 Подписка на 1 месяц",
         "personal_discount_label": "🎯 Персональная скидка {percent}%",
         "vip_discount_label": "👑 VIP-доступ",
@@ -215,8 +215,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "reminder_paid_24h": "⏳ Your Atlas Secure access expires in 24 hours.\n\nWe recommend renewing your subscription in advance\nto maintain continuous connection.",
         "reminder_paid_3h": "⏳ Your Atlas Secure access expires in 3 hours.\n\nRenew your subscription now\nto avoid connection interruption.",
         
-        # Скидка на первую покупку
-        "first_purchase_discount_label": "🎁 First Purchase",
+        # Приветственная скидка
+        "welcome_discount_label": "🎁 Welcome Discount",
         "subscribe_1_month_button": "🔐 1 Month Subscription",
         "personal_discount_label": "🎯 Personal Discount {percent}%",
         "vip_discount_label": "👑 VIP Access",
@@ -321,8 +321,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "reminder_paid_24h": "⏳ Atlas Secure kirishingiz 24 soatdan keyin tugaydi.\n\nBiz uzluksiz ulanishni saqlash uchun\nobunani oldindan uzaytirishni tavsiya qilamiz.",
         "reminder_paid_3h": "⏳ Atlas Secure kirishingiz 3 soatdan keyin tugaydi.\n\nHozir obunani uzaytiring,\nulanish uzilishini oldini olish uchun.",
         
-        # Скидка на первую покупку
-        "first_purchase_discount_label": "🎁 Birinchi xarid",
+        # Приветственная скидка
+        "welcome_discount_label": "🎁 Salomlashish chegirmasi",
         "subscribe_1_month_button": "🔐 1 oylik obuna",
         "personal_discount_label": "🎯 Shaxsiy chegirma {percent}%",
         "vip_discount_label": "👑 VIP kirish",
@@ -431,8 +431,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "reminder_paid_24h": "⏳ Дастрасии шумо ба Atlas Secure дар 24 соат ба анҷом мерасад.\n\nМо тавсия медиҳем, ки обунаро пеш аз вақт васеъ кунед,\nто пайванди муттасилро нигоҳ доред.",
         "reminder_paid_3h": "⏳ Дастрасии шумо ба Atlas Secure дар 3 соат ба анҷом мерасад.\n\nҲоло обунаро васеъ кунед,\nто аз танаффуси пайванд ҷилавгирӣ кунед.",
         
-        # Скидка на первую покупку
-        "first_purchase_discount_label": "🎁 Хариди аввал",
+        # Приветственная скидка
+        "welcome_discount_label": "🎁 Чекрамоии тавзеҳӣ",
         "subscribe_1_month_button": "🔐 Обуна барои 1 моҳ",
         "personal_discount_label": "🎯 Чекрамоии шахсӣ {percent}%",
         "vip_discount_label": "👑 Дастрасии VIP",

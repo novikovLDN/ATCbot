@@ -220,11 +220,11 @@ async def get_tariff_keyboard(language: str, telegram_id: int):
                 default="🎯 Персональная скидка"
             ).format(percent=discount_percent)
             has_discount_for_tariff = True
-        elif is_first_purchase and tariff_key in ["3", "6", "12"]:
-            # Скидка первой покупки только для тарифов 3/6/12 месяцев
-            discounted_price = int(base_price * 0.75)  # 25% скидка
+        elif is_first_purchase:
+            # Приветственная скидка 50% применяется ко всем тарифам для новых пользователей
+            discounted_price = int(base_price * 0.50)  # 50% скидка
             price = discounted_price
-            discount_label = localization.get_text(language, "first_purchase_discount_label", default="🎁 Первая покупка")
+            discount_label = localization.get_text(language, "welcome_discount_label", default="🎁 Приветственная скидка")
             has_discount_for_tariff = True
         else:
             price = base_price
@@ -766,12 +766,8 @@ async def callback_renewal_pay(callback: CallbackQuery):
             discount_percent = personal_discount["discount_percent"]
             amount = int(base_price * (1 - discount_percent / 100))
         else:
-            # ПРИОРИТЕТ 3: Скидка первой покупки (для продления не применяется, но оставляем для консистентности)
-            is_first_purchase = await database.is_user_first_purchase(telegram_id)
-            if is_first_purchase and tariff_key in ["3", "6", "12"]:
-                amount = int(base_price * 0.75)  # 25% скидка
-            else:
-                amount = base_price
+            # ПРИОРИТЕТ 3: Приветственная скидка НЕ применяется при продлении
+            amount = base_price
     
     # Формируем payload (формат: renew:user_id:tariff:timestamp для уникальности)
     import time
@@ -907,6 +903,7 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
     
     # ПРИОРИТЕТ 1: VIP-статус
     is_vip = await database.is_vip_user(telegram_id)
+    is_first_purchase = False  # Инициализируем переменную
     
     if is_vip:
         amount = int(base_price * 0.70)  # 30% скидка
@@ -918,16 +915,21 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
             discount_percent = personal_discount["discount_percent"]
             amount = int(base_price * (1 - discount_percent / 100))
         else:
-            # ПРИОРИТЕТ 3: Скидка первой покупки
+            # ПРИОРИТЕТ 3: Приветственная скидка (для новых пользователей)
             is_first_purchase = await database.is_user_first_purchase(telegram_id)
-            if is_first_purchase and tariff_key in ["3", "6", "12"]:
-                amount = int(base_price * 0.75)  # 25% скидка
+            if is_first_purchase:
+                amount = int(base_price * 0.50)  # 50% скидка на все тарифы
             else:
                 amount = base_price
     
-    # Формируем payload (уникальный идентификатор: user_id + tariff + timestamp для уникальности)
+    # Формируем payload
     import time
-    payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
+    if is_first_purchase:
+        # Для новых пользователей используем формат с first
+        payload = f"purchase:first:{telegram_id}:{tariff_key}:{int(time.time())}"
+    else:
+        # Для обычных покупок - стандартный формат
+        payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
     
     # Формируем описание тарифа
     months = tariff_data["months"]
@@ -1113,10 +1115,10 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
             discount_percent = personal_discount["discount_percent"]
             amount = int(base_price * (1 - discount_percent / 100))
         else:
-            # ПРИОРИТЕТ 3: Скидка первой покупки
+            # ПРИОРИТЕТ 3: Приветственная скидка (для новых пользователей)
             is_first_purchase = await database.is_user_first_purchase(telegram_id)
-            if is_first_purchase and tariff_key in ["3", "6", "12"]:
-                amount = int(base_price * 0.75)  # 25% скидка
+            if is_first_purchase:
+                amount = int(base_price * 0.50)  # 50% скидка на все тарифы
             else:
                 amount = base_price
     

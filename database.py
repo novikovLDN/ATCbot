@@ -341,13 +341,13 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
             discount_applied = discount_percent
             discount_type = "personal"
         else:
-            # ПРИОРИТЕТ 3: Проверяем скидку первой покупки
+            # ПРИОРИТЕТ 3: Проверяем приветственную скидку (для новых пользователей)
             is_first_purchase = await is_user_first_purchase(telegram_id)
-            if is_first_purchase and tariff in ["3", "6", "12"]:
-                discounted_price = int(base_price * 0.75)  # 25% скидка
+            if is_first_purchase:
+                discounted_price = int(base_price * 0.50)  # 50% скидка на все тарифы
                 amount = discounted_price
-                discount_applied = 25
-                discount_type = "first_purchase"
+                discount_applied = 50
+                discount_type = "welcome_discount"
             else:
                 amount = base_price
     
