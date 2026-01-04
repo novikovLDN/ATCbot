@@ -97,15 +97,21 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_grant_days_1": "1 день",
         "admin_grant_days_7": "7 дней",
         "admin_grant_days_14": "14 дней",
-        "admin_grant_success": "✅ Доступ выдан на {days} дней
-Пользователь уведомлён.",
+        "admin_grant_success": (
+            "✅ Доступ выдан на {days} дней.\n\n"
+            "Доступ активирован администратором."
+        ),
         "admin_grant_fail_no_keys": "❌ Нет свободных VPN-ключей",
-        "admin_revoke_success": "✅ Доступ отозван
-Пользователь уведомлён.",
+        "admin_revoke_success": (
+            "✅ Доступ отозван.\n\n"
+            "Пользователь уведомлён."
+        ),
         "admin_revoke_fail_no_sub": "❌ У пользователя нет активной подписки",
-        "admin_grant_user_notification": "✅ Вам предоставлен доступ к Atlas Secure на {days} дней.
-VPN-ключ: {vpn_key}
-Срок действия: до {date}",
+        "admin_grant_user_notification": (
+            "✅ Вам предоставлен доступ к Atlas Secure на {days} дней.\n"
+            "VPN-ключ: {vpn_key}\n"
+            "Срок действия: до {date}"
+        ),
         "admin_revoke_user_notification": "⛔ Ваш доступ к Atlas Secure был отозван администратором.",
 
     },
@@ -193,15 +199,21 @@ VPN-ключ: {vpn_key}
         "admin_grant_days_1": "1 day",
         "admin_grant_days_7": "7 days",
         "admin_grant_days_14": "14 days",
-        "admin_grant_success": "✅ Access granted for {days} days
-User notified.",
+        "admin_grant_success": (
+            "✅ Access granted for {days} days.\n\n"
+            "Access activated by administrator."
+        ),
         "admin_grant_fail_no_keys": "❌ No free VPN keys available",
-        "admin_revoke_success": "✅ Access revoked
-User notified.",
+        "admin_revoke_success": (
+            "✅ Access revoked.\n\n"
+            "User notified."
+        ),
         "admin_revoke_fail_no_sub": "❌ User has no active subscription",
-        "admin_grant_user_notification": "✅ You have been granted access to Atlas Secure for {days} days.
-VPN key: {vpn_key}
-Expires: {date}",
+        "admin_grant_user_notification": (
+            "✅ You have been granted access to Atlas Secure for {days} days.\n"
+            "VPN key: {vpn_key}\n"
+            "Expires: {date}"
+        ),
         "admin_revoke_user_notification": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
 
         "incident_banner": "⚠️ Technical work in progress",
@@ -263,15 +275,21 @@ Expires: {date}",
         "admin_grant_days_1": "1 kun",
         "admin_grant_days_7": "7 kun",
         "admin_grant_days_14": "14 kun",
-        "admin_grant_success": "✅ {days} kun uchun kirish berildi
-Foydalanuvchi xabardor qilindi.",
+        "admin_grant_success": (
+            "✅ {days} kun uchun kirish berildi.\n\n"
+            "Kirish administrator tomonidan faollashtirildi."
+        ),
         "admin_grant_fail_no_keys": "❌ Bepul VPN kalitlari mavjud emas",
-        "admin_revoke_success": "✅ Kirish bekor qilindi
-Foydalanuvchi xabardor qilindi.",
+        "admin_revoke_success": (
+            "✅ Kirish bekor qilindi.\n\n"
+            "Foydalanuvchi xabardor qilindi."
+        ),
         "admin_revoke_fail_no_sub": "❌ Foydalanuvchining faol obunasi yo'q",
-        "admin_grant_user_notification": "✅ Sizga Atlas Secure ga {days} kun uchun kirish berildi.
-VPN kalit: {vpn_key}
-Muddati: {date} gacha",
+        "admin_grant_user_notification": (
+            "✅ Sizga Atlas Secure ga {days} kun uchun kirish berildi.\n"
+            "VPN kalit: {vpn_key}\n"
+            "Muddati: {date} gacha"
+        ),
         "admin_revoke_user_notification": "⛔ Atlas Secure ga kirishingiz administrator tomonidan bekor qilindi.",
 
         "incident_banner": "⚠️ Texnik ishlar olib borilmoqda",
@@ -342,15 +360,21 @@ Muddati: {date} gacha",
         "admin_grant_days_1": "1 рӯз",
         "admin_grant_days_7": "7 рӯз",
         "admin_grant_days_14": "14 рӯз",
-        "admin_grant_success": "✅ Дастрасӣ барои {days} рӯз дода шуд
-Корбар огоҳ карда шуд.",
+        "admin_grant_success": (
+            "✅ Дастрасӣ барои {days} рӯз дода шуд.\n\n"
+            "Дастрасӣ аз ҷониби мудир фаъол карда шуд."
+        ),
         "admin_grant_fail_no_keys": "❌ Калидҳои VPN-и озод нестанд",
-        "admin_revoke_success": "✅ Дастрасӣ бекор карда шуд
-Корбар огоҳ карда шуд.",
+        "admin_revoke_success": (
+            "✅ Дастрасӣ бекор карда шуд.\n\n"
+            "Корбар огоҳ карда шуд."
+        ),
         "admin_revoke_fail_no_sub": "❌ Корбар обунаи фаъол надорад",
-        "admin_grant_user_notification": "✅ Ба шумо ба Atlas Secure барои {days} рӯз дастрасӣ дода шуд.
-Калиди VPN: {vpn_key}
-Муддат: то {date}",
+        "admin_grant_user_notification": (
+            "✅ Ба шумо ба Atlas Secure барои {days} рӯз дастрасӣ дода шуд.\n"
+            "Калиди VPN: {vpn_key}\n"
+            "Муддат: то {date}"
+        ),
         "admin_revoke_user_notification": "⛔ Дастрасии шумо ба Atlas Secure аз ҷониби мудир бекор карда шуд.",
 
         "incident_banner": "⚠️ Корҳои техникӣ иҷро карда мешавад",
