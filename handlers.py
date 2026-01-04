@@ -730,20 +730,76 @@ async def callback_renew_subscription(callback: CallbackQuery, state: FSMContext
         await callback.message.answer(text, reply_markup=get_pending_payment_keyboard(language))
         return
     
-    # Сохраняем тариф в состоянии
-    await state.update_data(tariff=tariff_key)
+    # Формируем текст экрана продления
+    text = localization.get_text(language, "renewal_payment_text")
     
-    # Получаем данные тарифа
+    await callback.message.edit_text(text, reply_markup=get_renewal_payment_keyboard(language, tariff_key))
+
+
+@router.callback_query(F.data.startswith("renewal_pay:"))
+async def callback_renewal_pay(callback: CallbackQuery):
+    """Обработчик кнопки оплаты продления - отправляет invoice через Telegram Payments"""
+    tariff_key = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Проверяем наличие provider_token
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer("Платежи временно недоступны", show_alert=True)
+        return
+    
+    # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    base_price = tariff_data["price"]
     
-    # Формируем текст с реквизитами
-    text = localization.get_text(
-        language, 
-        "sbp_payment_text",
-        amount=tariff_data['price']
-    )
+    # ПРИОРИТЕТ 1: VIP-статус
+    is_vip = await database.is_vip_user(telegram_id)
     
-    await callback.message.edit_text(text, reply_markup=get_sbp_payment_keyboard(language))
+    if is_vip:
+        amount = int(base_price * 0.70)  # 30% скидка
+    else:
+        # ПРИОРИТЕТ 2: Персональная скидка
+        personal_discount = await database.get_user_discount(telegram_id)
+        
+        if personal_discount:
+            discount_percent = personal_discount["discount_percent"]
+            amount = int(base_price * (1 - discount_percent / 100))
+        else:
+            # ПРИОРИТЕТ 3: Скидка первой покупки (для продления не применяется, но оставляем для консистентности)
+            is_first_purchase = await database.is_user_first_purchase(telegram_id)
+            if is_first_purchase and tariff_key in ["3", "6", "12"]:
+                amount = int(base_price * 0.75)  # 25% скидка
+            else:
+                amount = base_price
+    
+    # Формируем payload (формат: renew:user_id:tariff:timestamp для уникальности)
+    import time
+    payload = f"renew:{telegram_id}:{tariff_key}:{int(time.time())}"
+    
+    # Формируем описание тарифа
+    months = tariff_data["months"]
+    description = f"Atlas Secure VPN продление подписки на {months} месяц(ев)"
+    
+    # Формируем prices (цена в копейках)
+    prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
+    
+    try:
+        # Отправляем invoice
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title="Atlas Secure VPN",
+            description=description,
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=prices,
+            start_parameter=payload  # Для быстрого доступа к платежу
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error sending invoice for renewal: {e}")
+        await callback.answer("Ошибка при создании счета. Попробуйте позже.", show_alert=True)
 
 
 @router.callback_query(F.data == "copy_key")

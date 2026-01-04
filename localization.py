@@ -42,6 +42,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "sbp_payment_text": "После выполнения перевода подтвердите оплату.\n\n⸻\n\nРеквизиты для перевода\n\nБанк: Ozon\nСчёт карты: 2204321075030551\n\nСумма к подтверждению: {amount} ₽",
         "paid_button": "Подтвердить оплату",
         
+        # Продление подписки
+        "renewal_payment_text": "Оплатите продление подписки.\n\nПродление будет выполнено\nна тот же период, что и текущий доступ.",
+        "renewal_pay_button": "💳 Оплатить",
+        
         # Ожидание подтверждения
         "payment_pending": "Подтверждение в процессе\n\nПлатёж зафиксирован.\nВерификация занимает до 5 минут.\nАктивация доступа выполняется автоматически.",
         
@@ -171,6 +175,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_test": "Service mode Unavailable",
         "payment_sbp": "SBP",
         
+        # Продление подписки
+        "renewal_payment_text": "Obuna yangilanishi uchun to'lang.\n\nYangilanish joriy davr bilan bir xil muddatga amalga oshiriladi.",
+        "renewal_pay_button": "💳 To'lash",
+        
+        # Продление подписки
+        "renewal_payment_text": "Pay for subscription renewal.\n\nRenewal will be performed\nfor the same period as current access.",
+        "renewal_pay_button": "💳 Pay",
+        
         # Оплата СБП
         "sbp_payment_text": "After making the transfer, confirm payment.\n\n⸻\n\nTransfer details\n\nBank: Ozon\nCard account: 2204321075030551\n\nAmount to confirm: {amount} ₽",
         "paid_button": "Confirm payment",
@@ -286,6 +298,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "select_payment": "To'lov usulini tanlang.",
         "payment_test": "Xizmat rejimi Mavjud emas",
         "payment_sbp": "SBP",
+        
+        # Продление подписки
+        "renewal_payment_text": "Obuna yangilanishi uchun to'lang.\n\nYangilanish joriy davr bilan bir xil muddatga amalga oshiriladi.",
+        "renewal_pay_button": "💳 To'lash",
         "sbp_payment_text": "O'tkazmadan keyin to'lovni tasdiqlang.\n\n⸻\n\nO'tkazma ma'lumotlari\n\nBank: Ozon\nKarta hisobi: 2204321075030551\n\nTasdiqlash uchun summa: {amount} ₽",
         "paid_button": "To'lovni tasdiqlash",
         "payment_pending": "Tasdiqlash jarayonda\n\nTo'lov ro'yxatga olingan.\nTekshiruv 5 minutgacha davom etadi.\nKirish faollashtirish avtomatik ravishda amalga oshiriladi.",
@@ -393,6 +409,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_sbp": "СБП",
         "sbp_payment_text": "Пас аз интиқол, пардохтро тасдиқ кунед.\n\n⸻\n\nМаълумоти интиқол\n\nБонк: Ozon\nҲисоби корт: 2204321075030551\n\nМаблағи тасдиқ: {amount} ₽",
         "paid_button": "Пардохтро тасдиқ кардан",
+        
+        # Продление подписки
+        "renewal_payment_text": "Барои васеъ кардани обуна пардохт кунед.\n\nВасеъ кардан ба ҳамон давра, ки дастрасии ҷорӣ, иҷро карда мешавад.",
+        "renewal_pay_button": "💳 Пардохт кардан",
+        
         "payment_pending": "Тасдиқ дар раванд аст\n\nПардохт ба қайд гирифта шуд.\nСанҷиш то 5 дақиқа давом мекунад.\nФаъолсозии дастрасӣ ба таври худкор иҷро мешавад.",
         "payment_approved": "✅ Дастрасӣ фаъол шуд.\n\nКалиди VPN-и шахсии шумо:\n{vpn_key}\n\nМуддати амал:\nто {date}\n\nТавсия медиҳем, ки калидро дар ҷойи бехатар нигоҳ доред.",
         "payment_rejected": "❌ Пардохт тасдиқ нашуд.\n\nАгар мӯътақид ҳастед, ки пардохт кардед — ба дастгирӣ муроҷиат кунед.",
