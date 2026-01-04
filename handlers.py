@@ -541,9 +541,9 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             buttons.append([InlineKeyboardButton(text="🎯 Назначить скидку", callback_data=f"admin:discount_create:{user_id}")])
         # Кнопки управления VIP-статусом
         if is_vip:
-            buttons.append([InlineKeyboardButton(text="👑 Отозвать VIP", callback_data=f"admin:vip_revoke:{user_id}")])
+            buttons.append([InlineKeyboardButton(text="❌ Снять VIP", callback_data=f"admin:vip_revoke:{user_id}")])
         else:
-            buttons.append([InlineKeyboardButton(text="👑 Назначить VIP", callback_data=f"admin:vip_grant:{user_id}")])
+            buttons.append([InlineKeyboardButton(text="👑 Выдать VIP", callback_data=f"admin:vip_grant:{user_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -1496,6 +1496,9 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         user_discount = await database.get_user_discount(user["telegram_id"])
         has_discount = user_discount is not None
         
+        # Проверяем VIP-статус (явно определяем переменную)
+        is_vip = await database.is_vip_user(user["telegram_id"])
+        
         if user_discount:
             discount_percent = user_discount["discount_percent"]
             expires_at_discount = user_discount.get("expires_at")
@@ -1506,6 +1509,10 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 text += f"\n🎯 Персональная скидка: {discount_percent}% (до {expires_str})\n"
             else:
                 text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
+        
+        # Добавляем информацию о VIP-статусе
+        if is_vip:
+            text += f"\n👑 VIP-статус: активен\n"
         
         if subscription:
             expires_at = subscription["expires_at"]
@@ -2066,9 +2073,113 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
 
 # ==================== ОБРАБОТЧИКИ ДЛЯ УПРАВЛЕНИЯ VIP-СТАТУСОМ ====================
 
+async def _show_admin_user_card(message_or_callback, user_id: int):
+    """Вспомогательная функция для отображения карточки пользователя администратору"""
+    # Получаем данные пользователя
+    user = await database.find_user_by_id_or_username(telegram_id=user_id)
+    if not user:
+        if hasattr(message_or_callback, 'edit_text'):
+            await message_or_callback.edit_text("❌ Пользователь не найден", reply_markup=get_admin_back_keyboard())
+        else:
+            await message_or_callback.answer("❌ Пользователь не найден")
+        return
+    
+    # Получаем информацию о подписке
+    subscription = await database.get_subscription(user["telegram_id"])
+    
+    # Получаем расширенную статистику
+    stats = await database.get_user_extended_stats(user["telegram_id"])
+    
+    # Формируем карточку пользователя
+    text = "👤 Пользователь\n\n"
+    text += f"Telegram ID: {user['telegram_id']}\n"
+    username_display = user.get('username') or 'не указан'
+    text += f"Username: @{username_display}\n"
+    
+    # Язык
+    user_language = user.get('language') or 'ru'
+    language_display = localization.LANGUAGE_BUTTONS.get(user_language, user_language)
+    text += f"Язык: {language_display}\n"
+    
+    # Дата регистрации
+    created_at = user.get('created_at')
+    if created_at:
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+        created_str = created_at.strftime("%d.%m.%Y %H:%M")
+        text += f"Дата регистрации: {created_str}\n"
+    else:
+        text += "Дата регистрации: —\n"
+    
+    text += "\n"
+    
+    if subscription:
+        expires_at = subscription["expires_at"]
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+        
+        now = datetime.now()
+        if expires_at > now:
+            text += "Статус подписки: ✅ Активна\n"
+        else:
+            text += "Статус подписки: ⛔ Истекла\n"
+        
+        text += f"Срок действия: до {expires_str}\n"
+        text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
+    else:
+        text += "Статус подписки: ❌ Нет подписки\n"
+        text += "VPN-ключ: —\n"
+        text += "Срок действия: —\n"
+    
+    # Статистика
+    text += f"\nКоличество продлений: {stats['renewals_count']}\n"
+    text += f"Количество перевыпусков: {stats['reissues_count']}\n"
+    
+    # Проверяем наличие персональной скидки
+    user_discount = await database.get_user_discount(user["telegram_id"])
+    has_discount = user_discount is not None
+    
+    # Проверяем VIP-статус (явно определяем переменную)
+    is_vip = await database.is_vip_user(user["telegram_id"])
+    
+    if user_discount:
+        discount_percent = user_discount["discount_percent"]
+        expires_at_discount = user_discount.get("expires_at")
+        if expires_at_discount:
+            if isinstance(expires_at_discount, str):
+                expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
+            expires_str = expires_at_discount.strftime("%d.%m.%Y %H:%M")
+            text += f"\n🎯 Персональная скидка: {discount_percent}% (до {expires_str})\n"
+        else:
+            text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
+    
+    # Добавляем информацию о VIP-статусе
+    if is_vip:
+        text += f"\n👑 VIP-статус: активен\n"
+    
+    # Определяем статус подписки для клавиатуры
+    if subscription:
+        expires_at = subscription["expires_at"]
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        now = datetime.now()
+        has_active = expires_at > now
+    else:
+        has_active = False
+    
+    # Отображаем карточку
+    keyboard = get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip)
+    
+    if hasattr(message_or_callback, 'edit_text'):
+        await message_or_callback.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    else:
+        await message_or_callback.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+
+
 @router.callback_query(F.data.startswith("admin:vip_grant:"))
 async def callback_admin_vip_grant(callback: CallbackQuery):
-    """Обработчик кнопки 'Назначить VIP'"""
+    """Обработчик кнопки 'Выдать VIP'"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -2079,8 +2190,8 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
         # Проверяем, есть ли уже VIP-статус
         existing_vip = await database.is_vip_user(user_id)
         if existing_vip:
-            text = "❌ У пользователя уже есть VIP-статус."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            # Если уже есть VIP, просто обновляем карточку
+            await _show_admin_user_card(callback.message, user_id)
             await callback.answer("VIP уже назначен", show_alert=True)
             return
         
@@ -2091,9 +2202,9 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
         )
         
         if success:
-            text = "✅ VIP-статус назначен пользователю"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
-            await callback.answer("VIP назначен", show_alert=True)
+            # После успешного назначения VIP обновляем карточку пользователя
+            await _show_admin_user_card(callback.message, user_id)
+            await callback.answer("✅ VIP-статус выдан", show_alert=True)
         else:
             text = "❌ Ошибка при назначении VIP-статуса"
             await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
@@ -2106,7 +2217,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin:vip_revoke:"))
 async def callback_admin_vip_revoke(callback: CallbackQuery):
-    """Обработчик кнопки 'Отозвать VIP'"""
+    """Обработчик кнопки 'Снять VIP'"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -2121,11 +2232,11 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
         )
         
         if success:
-            text = "✅ VIP-статус отозван у пользователя"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
-            await callback.answer("VIP отозван", show_alert=True)
+            # После успешного снятия VIP обновляем карточку пользователя
+            await _show_admin_user_card(callback.message, user_id)
+            await callback.answer("✅ VIP-статус снят", show_alert=True)
         else:
-            text = "❌ VIP-статус не найден или уже отозван"
+            text = "❌ VIP-статус не найден или уже снят"
             await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
             await callback.answer("VIP не найден", show_alert=True)
         
