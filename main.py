@@ -6,6 +6,7 @@ import config
 import database
 import handlers
 import reminders
+import healthcheck
 
 # Настройка логирования
 logging.basicConfig(
@@ -34,14 +35,23 @@ async def main():
     reminder_task = asyncio.create_task(reminders.reminders_task(bot))
     logger.info("Reminders task started")
     
+    # Запуск фоновой задачи для health-check
+    healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
+    logger.info("Health check task started")
+    
     # Запуск бота
     logger.info("Бот запущен")
     try:
         await dp.start_polling(bot)
     finally:
         reminder_task.cancel()
+        healthcheck_task.cancel()
         try:
             await reminder_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await healthcheck_task
         except asyncio.CancelledError:
             pass
         # Закрываем пул соединений к БД
