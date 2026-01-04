@@ -129,19 +129,10 @@ def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vi
     buttons = []
     
     # Кнопка продления (всегда показываем, если есть активная подписка)
-    # Тариф будет определен в обработчике, если не передан
-    if last_tariff:
-        buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "renew_subscription"),
-            callback_data=f"renew_subscription:{last_tariff}"
-        )])
-    else:
-        # Если тариф не определен, показываем кнопку без тарифа
-        # Тариф будет определен в обработчике из последнего платежа
-        buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "renew_subscription"),
-            callback_data="renew_subscription"
-        )])
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "renew_subscription"),
+        callback_data="renew_same_period"
+    )])
     
     buttons.append([InlineKeyboardButton(
         text=localization.get_text(language, "copy_key"),
@@ -740,8 +731,8 @@ async def callback_vip_access(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("renew_subscription"))
-async def callback_renew_subscription(callback: CallbackQuery):
+@router.callback_query(F.data == "renew_same_period")
+async def callback_renew_same_period(callback: CallbackQuery):
     """Продление подписки на тот же период - сразу вызывает sendInvoice"""
     await callback.answer()
     
@@ -749,21 +740,21 @@ async def callback_renew_subscription(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Определяем тариф из callback_data или из последнего платежа
-    tariff_key = None
-    if ":" in callback.data:
-        # Если тариф передан в callback_data
-        tariff_key = callback.data.split(":")[1]
-    else:
-        # Если тариф не передан, определяем из последнего утвержденного платежа
-        last_payment = await database.get_last_approved_payment(telegram_id)
-        if last_payment:
-            tariff_key = last_payment.get("tariff")
+    # Проверяем наличие активной подписки
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription:
+        await callback.answer(localization.get_text(language, "no_active_subscription"), show_alert=True)
+        return
     
-    # Если тариф не определен, показываем ошибку
+    # Получаем тариф из последнего утвержденного платежа
+    last_payment = await database.get_last_approved_payment(telegram_id)
+    if not last_payment:
+        await callback.answer(localization.get_text(language, "no_active_subscription"), show_alert=True)
+        return
+    
+    tariff_key = last_payment.get("tariff")
     if not tariff_key:
-        text = localization.get_text(language, "no_active_subscription")
-        await callback.message.answer(text)
+        await callback.answer(localization.get_text(language, "no_active_subscription"), show_alert=True)
         return
     
     # Проверяем наличие pending платежа
@@ -778,7 +769,7 @@ async def callback_renew_subscription(callback: CallbackQuery):
         await callback.answer("Платежи временно недоступны", show_alert=True)
         return
     
-    # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
+    # Получаем данные тарифа
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     base_price = tariff_data["price"]
     
@@ -803,16 +794,16 @@ async def callback_renew_subscription(callback: CallbackQuery):
     
     # Формируем описание тарифа
     months = tariff_data["months"]
-    description = f"Atlas Secure VPN продление подписки на {months} месяц(ев)"
+    description = f"Продление доступа на {months} месяц(ев)"
     
     # Формируем prices (цена в копейках)
-    prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
+    prices = [LabeledPrice(label="Продление подписки", amount=amount * 100)]
     
     try:
         # Отправляем invoice сразу
         await callback.bot.send_invoice(
             chat_id=telegram_id,
-            title="Atlas Secure VPN",
+            title="Atlas Secure — продление подписки",
             description=description,
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
