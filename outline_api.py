@@ -3,20 +3,14 @@
 """
 import aiohttp
 import logging
-import ssl
 from typing import Optional, Dict, Any, Tuple
 import config
 
 logger = logging.getLogger(__name__)
 
-# SSL контекст с отключенной проверкой сертификата
-# (Outline Manager использует self-signed сертификат)
-_ssl_context = ssl.create_default_context()
-_ssl_context.check_hostname = False
-_ssl_context.verify_mode = ssl.CERT_NONE
-
 # TCP Connector с отключенной проверкой SSL
-_connector = aiohttp.TCPConnector(ssl=_ssl_context)
+# (Outline Manager использует self-signed сертификат)
+_connector = aiohttp.TCPConnector(ssl=False)
 
 
 async def create_outline_key() -> Optional[Tuple[int, str]]:
