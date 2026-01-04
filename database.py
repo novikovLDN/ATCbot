@@ -194,6 +194,15 @@ async def init_db():
             )
         """)
         
+        # Таблица vip_users (VIP-статус)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS vip_users (
+                telegram_id BIGINT UNIQUE NOT NULL PRIMARY KEY,
+                granted_by BIGINT NOT NULL,
+                granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Создаём одну строку, если её нет
         existing = await conn.fetchval("SELECT COUNT(*) FROM incident_settings")
         if existing == 0:
@@ -291,8 +300,9 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
     """Создать платеж и вернуть его ID. Возвращает None, если уже есть pending платеж
     
     Автоматически применяет скидки в следующем порядке приоритета:
-    1. Персональная скидка (admin) - ВЫСШИЙ ПРИОРИТЕТ
-    2. Скидка первой покупки (25% на тарифы 3/6/12 месяцев)
+    1. VIP-статус (30%) - ВЫСШИЙ ПРИОРИТЕТ
+    2. Персональная скидка (admin)
+    3. Скидка первой покупки (25% на тарифы 3/6/12 месяцев)
     """
     # Проверяем наличие pending платежа
     existing_payment = await get_pending_payment_by_user(telegram_id)
@@ -303,28 +313,38 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
     tariff_data = config.TARIFFS.get(tariff, config.TARIFFS["1"])
     base_price = tariff_data["price"]
     
-    # ПРИОРИТЕТ 1: Проверяем персональную скидку (высший приоритет)
-    personal_discount = await get_user_discount(telegram_id)
+    # ПРИОРИТЕТ 1: Проверяем VIP-статус (высший приоритет)
+    is_vip = await is_vip_user(telegram_id)
     discount_applied = None
     discount_type = None
     
-    if personal_discount:
-        # Применяем персональную скидку
-        discount_percent = personal_discount["discount_percent"]
-        discounted_price = int(base_price * (1 - discount_percent / 100))
+    if is_vip:
+        # Применяем VIP-скидку 30% ко всем тарифам
+        discounted_price = int(base_price * 0.70)  # 30% скидка
         amount = discounted_price
-        discount_applied = discount_percent
-        discount_type = "personal"
+        discount_applied = 30
+        discount_type = "vip"
     else:
-        # ПРИОРИТЕТ 2: Проверяем скидку первой покупки
-        is_first_purchase = await is_user_first_purchase(telegram_id)
-        if is_first_purchase and tariff in ["3", "6", "12"]:
-            discounted_price = int(base_price * 0.75)  # 25% скидка
+        # ПРИОРИТЕТ 2: Проверяем персональную скидку
+        personal_discount = await get_user_discount(telegram_id)
+        
+        if personal_discount:
+            # Применяем персональную скидку
+            discount_percent = personal_discount["discount_percent"]
+            discounted_price = int(base_price * (1 - discount_percent / 100))
             amount = discounted_price
-            discount_applied = 25
-            discount_type = "first_purchase"
+            discount_applied = discount_percent
+            discount_type = "personal"
         else:
-            amount = base_price
+            # ПРИОРИТЕТ 3: Проверяем скидку первой покупки
+            is_first_purchase = await is_user_first_purchase(telegram_id)
+            if is_first_purchase and tariff in ["3", "6", "12"]:
+                discounted_price = int(base_price * 0.75)  # 25% скидка
+                amount = discounted_price
+                discount_applied = 25
+                discount_type = "first_purchase"
+            else:
+                amount = base_price
     
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -1637,4 +1657,90 @@ async def delete_user_discount(telegram_id: int, deleted_by: int) -> bool:
             return True
         except Exception as e:
             logger.exception(f"Error deleting user discount: {e}")
+            return False
+
+
+# ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С VIP-СТАТУСОМ ====================
+
+async def is_vip_user(telegram_id: int) -> bool:
+    """Проверить, является ли пользователь VIP
+    
+    Returns:
+        True если пользователь VIP, False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT telegram_id FROM vip_users WHERE telegram_id = $1",
+            telegram_id
+        )
+        return row is not None
+
+
+async def grant_vip_status(telegram_id: int, granted_by: int) -> bool:
+    """Назначить VIP-статус пользователю
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        granted_by: Telegram ID администратора, назначившего VIP
+    
+    Returns:
+        True если успешно, False в случае ошибки
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """INSERT INTO vip_users (telegram_id, granted_by)
+                   VALUES ($1, $2)
+                   ON CONFLICT (telegram_id) 
+                   DO UPDATE SET granted_by = $2, granted_at = CURRENT_TIMESTAMP""",
+                telegram_id, granted_by
+            )
+            
+            # Логируем назначение VIP
+            details = f"VIP status granted to user {telegram_id}"
+            await _log_audit_event_atomic(conn, "vip_granted", granted_by, telegram_id, details)
+            
+            return True
+        except Exception as e:
+            logger.exception(f"Error granting VIP status: {e}")
+            return False
+
+
+async def revoke_vip_status(telegram_id: int, revoked_by: int) -> bool:
+    """Отозвать VIP-статус у пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        revoked_by: Telegram ID администратора, отозвавшего VIP
+    
+    Returns:
+        True если успешно, False в случае ошибки
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            # Проверяем, есть ли VIP-статус
+            existing = await conn.fetchrow(
+                "SELECT telegram_id FROM vip_users WHERE telegram_id = $1",
+                telegram_id
+            )
+            
+            if not existing:
+                return False
+            
+            # Удаляем VIP-статус
+            await conn.execute(
+                "DELETE FROM vip_users WHERE telegram_id = $1",
+                telegram_id
+            )
+            
+            # Логируем отзыв VIP
+            details = f"VIP status revoked from user {telegram_id}"
+            await _log_audit_event_atomic(conn, "vip_revoked", revoked_by, telegram_id, details)
+            
+            return True
+        except Exception as e:
+            logger.exception(f"Error revoking VIP status: {e}")
             return False

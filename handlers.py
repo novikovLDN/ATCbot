@@ -172,7 +172,7 @@ def get_back_keyboard(language: str):
     ])
 
 
-def get_profile_keyboard_with_copy(language: str, last_tariff: str = None):
+def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False):
     """Клавиатура профиля с кнопкой копирования ключа и историей"""
     buttons = []
     
@@ -191,6 +191,13 @@ def get_profile_keyboard_with_copy(language: str, last_tariff: str = None):
         text=localization.get_text(language, "subscription_history"),
         callback_data="subscription_history"
     )])
+    
+    # Кнопка VIP-доступ (доступна всем)
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "vip_access_button"),
+        callback_data="menu_vip_access"
+    )])
+    
     buttons.append([InlineKeyboardButton(
         text=localization.get_text(language, "back"),
         callback_data="menu_main"
@@ -222,21 +229,33 @@ def get_profile_keyboard(language: str):
 
 
 async def get_tariff_keyboard(language: str, telegram_id: int):
-    """Клавиатура выбора тарифа с учетом скидок (персональная скидка имеет приоритет)"""
+    """Клавиатура выбора тарифа с учетом скидок (VIP имеет высший приоритет)"""
     buttons = []
     
-    # ПРИОРИТЕТ 1: Проверяем персональную скидку (высший приоритет)
-    personal_discount = await database.get_user_discount(telegram_id)
+    # ПРИОРИТЕТ 1: Проверяем VIP-статус (высший приоритет)
+    is_vip = await database.is_vip_user(telegram_id)
     
-    # ПРИОРИТЕТ 2: Проверяем скидку первой покупки (только если нет персональной)
-    is_first_purchase = await database.is_user_first_purchase(telegram_id) if not personal_discount else False
+    # ПРИОРИТЕТ 2: Проверяем персональную скидку (только если нет VIP)
+    personal_discount = await database.get_user_discount(telegram_id) if not is_vip else None
+    
+    # ПРИОРИТЕТ 3: Проверяем скидку первой покупки (только если нет VIP и персональной)
+    is_first_purchase = await database.is_user_first_purchase(telegram_id) if not is_vip and not personal_discount else False
     
     for tariff_key, tariff_data in config.TARIFFS.items():
         base_price = tariff_data["price"]
         discount_label = ""
         
         # Применяем скидку в порядке приоритета
-        if personal_discount:
+        if is_vip:
+            # VIP-скидка 30% применяется ко всем тарифам
+            discounted_price = int(base_price * 0.70)  # 30% скидка
+            price = discounted_price
+            discount_label = localization.get_text(
+                language, 
+                "vip_discount_label", 
+                default="👑 VIP-скидка 30%"
+            )
+        elif personal_discount:
             # Персональная скидка применяется ко всем тарифам
             discount_percent = personal_discount["discount_percent"]
             discounted_price = int(base_price * (1 - discount_percent / 100))
@@ -502,7 +521,7 @@ def get_admin_export_keyboard():
     return keyboard
 
 
-def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False):
+def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False, is_vip: bool = False):
     """Клавиатура для раздела пользователя"""
     buttons = []
     if has_active_subscription:
@@ -520,6 +539,11 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             buttons.append([InlineKeyboardButton(text="❌ Удалить скидку", callback_data=f"admin:discount_delete:{user_id}")])
         else:
             buttons.append([InlineKeyboardButton(text="🎯 Назначить скидку", callback_data=f"admin:discount_create:{user_id}")])
+        # Кнопки управления VIP-статусом
+        if is_vip:
+            buttons.append([InlineKeyboardButton(text="👑 Отозвать VIP", callback_data=f"admin:vip_revoke:{user_id}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="👑 Назначить VIP", callback_data=f"admin:vip_grant:{user_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -585,6 +609,9 @@ async def show_profile(message_or_query, language: str):
     
     subscription = await database.get_subscription(telegram_id)
     
+    # Проверяем VIP-статус
+    is_vip = await database.is_vip_user(telegram_id)
+    
     if subscription:
         # asyncpg возвращает datetime объекты напрямую, не строки
         expires_at = subscription["expires_at"]
@@ -594,11 +621,15 @@ async def show_profile(message_or_query, language: str):
         text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=subscription["vpn_key"])
         text += localization.get_text(language, "profile_renewal_hint")
         
+        # Добавляем информацию о VIP-статусе, если есть
+        if is_vip:
+            text += "\n\n" + localization.get_text(language, "vip_status_badge", default="👑 VIP-статус активен")
+        
         # Получаем последний утверждённый платёж для определения тарифа
         last_payment = await database.get_last_approved_payment(telegram_id)
         last_tariff = last_payment.get("tariff") if last_payment else None
         
-        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, last_tariff))
+        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, last_tariff, is_vip))
     else:
         # Проверяем, есть ли pending платеж
         pending_payment = await database.get_pending_payment_by_user(telegram_id)
@@ -606,7 +637,12 @@ async def show_profile(message_or_query, language: str):
             text = localization.get_text(language, "profile_payment_check")
         else:
             text = localization.get_text(language, "no_subscription")
-        await send_func(text, reply_markup=get_back_keyboard(language))
+        
+        # Добавляем информацию о VIP-статусе, если есть
+        if is_vip:
+            text += "\n\n" + localization.get_text(language, "vip_status_badge", default="👑 VIP-статус активен")
+        
+        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, None, is_vip))
 
 
 @router.callback_query(F.data == "change_language")
@@ -652,6 +688,39 @@ async def callback_profile(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     await show_profile(callback, language)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu_vip_access")
+async def callback_vip_access(callback: CallbackQuery):
+    """Обработчик кнопки 'VIP-доступ'"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Проверяем VIP-статус
+    is_vip = await database.is_vip_user(telegram_id)
+    
+    # Получаем текст VIP-доступа
+    text = localization.get_text(language, "vip_access_text")
+    
+    # Добавляем информацию о статусе, если пользователь VIP
+    if is_vip:
+        text += "\n\n" + localization.get_text(language, "vip_status_active", default="👑 Ваш VIP-статус активен")
+    
+    # Клавиатура с кнопками
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "contact_manager_button", default="💬 Связаться с менеджером"),
+            url="https://t.me/asc_support"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back"),
+            callback_data="menu_profile"
+        )]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -818,19 +887,25 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     base_price = tariff_data["price"]
     
     # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
-    # ПРИОРИТЕТ 1: Персональная скидка
-    personal_discount = await database.get_user_discount(telegram_id)
+    # ПРИОРИТЕТ 1: VIP-статус
+    is_vip = await database.is_vip_user(telegram_id)
     
-    if personal_discount:
-        discount_percent = personal_discount["discount_percent"]
-        amount = int(base_price * (1 - discount_percent / 100))
+    if is_vip:
+        amount = int(base_price * 0.70)  # 30% скидка
     else:
-        # ПРИОРИТЕТ 2: Скидка первой покупки
-        is_first_purchase = await database.is_user_first_purchase(telegram_id)
-        if is_first_purchase and tariff_key in ["3", "6", "12"]:
-            amount = int(base_price * 0.75)  # 25% скидка
+        # ПРИОРИТЕТ 2: Персональная скидка
+        personal_discount = await database.get_user_discount(telegram_id)
+        
+        if personal_discount:
+            discount_percent = personal_discount["discount_percent"]
+            amount = int(base_price * (1 - discount_percent / 100))
         else:
-            amount = base_price
+            # ПРИОРИТЕТ 3: Скидка первой покупки
+            is_first_purchase = await database.is_user_first_purchase(telegram_id)
+            if is_first_purchase and tariff_key in ["3", "6", "12"]:
+                amount = int(base_price * 0.75)  # 25% скидка
+            else:
+                amount = base_price
     
     # Формируем текст с реквизитами
     text = localization.get_text(
@@ -1438,9 +1513,9 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
             now = datetime.now()
             has_active = expires_at > now
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount), parse_mode="Markdown")
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="Markdown")
         else:
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"], has_discount=has_discount), parse_mode="Markdown")
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="Markdown")
         
         # Логируем просмотр информации о пользователе
         details = f"Admin searched by {search_by}: {search_value}, found user {user['telegram_id']}"
@@ -1989,6 +2064,76 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
+# ==================== ОБРАБОТЧИКИ ДЛЯ УПРАВЛЕНИЯ VIP-СТАТУСОМ ====================
+
+@router.callback_query(F.data.startswith("admin:vip_grant:"))
+async def callback_admin_vip_grant(callback: CallbackQuery):
+    """Обработчик кнопки 'Назначить VIP'"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        # Проверяем, есть ли уже VIP-статус
+        existing_vip = await database.is_vip_user(user_id)
+        if existing_vip:
+            text = "❌ У пользователя уже есть VIP-статус."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("VIP уже назначен", show_alert=True)
+            return
+        
+        # Назначаем VIP-статус
+        success = await database.grant_vip_status(
+            telegram_id=user_id,
+            granted_by=callback.from_user.id
+        )
+        
+        if success:
+            text = "✅ VIP-статус назначен пользователю"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("VIP назначен", show_alert=True)
+        else:
+            text = "❌ Ошибка при назначении VIP-статуса"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Ошибка", show_alert=True)
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_vip_grant: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:vip_revoke:"))
+async def callback_admin_vip_revoke(callback: CallbackQuery):
+    """Обработчик кнопки 'Отозвать VIP'"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        # Отзываем VIP-статус
+        success = await database.revoke_vip_status(
+            telegram_id=user_id,
+            revoked_by=callback.from_user.id
+        )
+        
+        if success:
+            text = "✅ VIP-статус отозван у пользователя"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("VIP отозван", show_alert=True)
+        else:
+            text = "❌ VIP-статус не найден или уже отозван"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("VIP не найден", show_alert=True)
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_vip_revoke: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
 @router.callback_query(F.data.startswith("admin:user_reissue:"))
 async def callback_admin_user_reissue(callback: CallbackQuery):
     """Перевыпуск ключа из админ-дашборда"""
@@ -2034,7 +2179,11 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
             text += f"VPN-ключ: `{new_vpn_key}`\n"
             text += f"\n✅ Ключ перевыпущен!\nСтарый ключ: `{old_vpn_key[:20]}...`"
             
-            await callback.message.edit_text(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id), parse_mode="Markdown")
+            # Проверяем VIP-статус и скидку
+            is_vip = await database.is_vip_user(target_user_id)
+            has_discount = await database.get_user_discount(target_user_id) is not None
+            
+            await callback.message.edit_text(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id, has_discount=has_discount, is_vip=is_vip), parse_mode="Markdown")
         
         await callback.answer("Ключ успешно перевыпущен")
         
