@@ -1569,7 +1569,9 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
     """Атомарно лишить доступа пользователя (админ)
     
     В одной транзакции:
-    - устанавливает expires_at = NOW() (если есть активная подписка)
+    - удаляет VPN-ключ из Outline (если есть outline_key_id)
+    - устанавливает expires_at = NOW()
+    - очищает outline_key_id и vpn_key
     - записывает в subscription_history (action = admin_revoke)
     - записывает событие в audit_log
     
@@ -1598,19 +1600,33 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                 
                 subscription = dict(subscription_row)
                 old_expires_at = subscription["expires_at"]
-                vpn_key = subscription["vpn_key"]
+                outline_key_id = subscription.get("outline_key_id")
+                vpn_key = subscription.get("vpn_key", "")
                 
-                # 2. Устанавливаем expires_at = NOW()
+                # 2. Удаляем VPN-ключ из Outline (если есть)
+                if outline_key_id:
+                    try:
+                        deleted = await outline_api.delete_outline_key(outline_key_id)
+                        if deleted:
+                            logger.info(f"Deleted Outline key {outline_key_id} for user {telegram_id} during admin revoke")
+                        else:
+                            logger.warning(f"Failed to delete Outline key {outline_key_id} for user {telegram_id} (may already be deleted)")
+                    except Exception as e:
+                        # Не падаем, если ключ уже удален или произошла ошибка
+                        logger.error(f"Error deleting Outline key {outline_key_id} for user {telegram_id}: {e}", exc_info=True)
+                
+                # 3. Очищаем подписку: устанавливаем expires_at = NOW(), очищаем outline_key_id и vpn_key
                 await conn.execute(
-                    "UPDATE subscriptions SET expires_at = $1 WHERE telegram_id = $2",
+                    "UPDATE subscriptions SET expires_at = $1, outline_key_id = NULL, vpn_key = NULL WHERE telegram_id = $2",
                     now, telegram_id
                 )
                 
-                # 3. Записываем в историю подписок
-                await _log_subscription_history_atomic(conn, telegram_id, vpn_key, now, now, "admin_revoke")
+                # 4. Записываем в историю подписок (используем старый vpn_key для истории, если был)
+                await _log_subscription_history_atomic(conn, telegram_id, vpn_key or "", now, now, "admin_revoke")
                 
-                # 4. Записываем событие в audit_log
-                details = f"Revoked access, Old expires_at: {old_expires_at.isoformat()}, VPN key: {vpn_key[:20]}..."
+                # 5. Записываем событие в audit_log
+                vpn_key_preview = vpn_key[:20] + "..." if vpn_key else "N/A"
+                details = f"Revoked access, Old expires_at: {old_expires_at.isoformat()}, VPN key: {vpn_key_preview}"
                 await _log_audit_event_atomic(conn, "admin_revoke", admin_telegram_id, telegram_id, details)
                 
                 logger.info(f"Admin {admin_telegram_id} revoked access for user {telegram_id}")
