@@ -1266,3 +1266,141 @@ async def get_ab_test_stats(broadcast_id: int) -> Optional[Dict[str, Any]]:
             "total_sent": total_sent,
             "total": total
         }
+
+
+async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_id: int) -> Tuple[Optional[datetime], Optional[str]]:
+    """Атомарно выдать доступ пользователю на N дней (админ)
+    
+    В одной транзакции:
+    - если есть активная подписка: продлевает expires_at на выбранный срок
+    - если подписки нет или истекла: создает новую подписку
+    - если нужно: получает новый VPN-ключ
+    - записывает в subscription_history (action = admin_grant)
+    - записывает событие в audit_log
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        days: Количество дней доступа (1, 7 или 14)
+        admin_telegram_id: Telegram ID администратора
+    
+    Returns:
+        (expires_at, vpn_key) или (None, None) при ошибке или отсутствии ключей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                now = datetime.now()
+                duration = timedelta(days=days)
+                
+                # 1. Получаем текущую подписку (если есть)
+                subscription_row = await conn.fetchrow(
+                    "SELECT * FROM subscriptions WHERE telegram_id = $1",
+                    telegram_id
+                )
+                subscription = dict(subscription_row) if subscription_row else None
+                
+                # 2. Определяем логику
+                if subscription:
+                    subscription_expires_at = subscription["expires_at"]
+                    if subscription_expires_at > now:
+                        # Активная подписка - продлеваем, используем текущий ключ
+                        final_vpn_key = subscription["vpn_key"]
+                        base_date = max(subscription_expires_at, now)
+                        expires_at = base_date + duration
+                        start_date = now  # Для истории подписок используем текущую дату
+                    else:
+                        # Подписка истекла - получаем новый ключ
+                        final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
+                        if not final_vpn_key:
+                            logger.error(f"No free VPN keys available for admin grant to user {telegram_id}")
+                            return None, None
+                        expires_at = now + duration
+                        start_date = now
+                else:
+                    # Подписки нет - получаем новый ключ
+                    final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
+                    if not final_vpn_key:
+                        logger.error(f"No free VPN keys available for admin grant to user {telegram_id}")
+                        return None, None
+                    expires_at = now + duration
+                    start_date = now
+                
+                # 3. Создаем/обновляем подписку
+                await conn.execute(
+                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent)
+                       VALUES ($1, $2, $3, FALSE)
+                       ON CONFLICT (telegram_id) 
+                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
+                    telegram_id, final_vpn_key, expires_at
+                )
+                
+                # 4. Записываем в историю подписок
+                await _log_subscription_history_atomic(conn, telegram_id, final_vpn_key, start_date, expires_at, "admin_grant")
+                
+                # 5. Записываем событие в audit_log
+                details = f"Granted {days} days access, Expires: {expires_at.isoformat()}, VPN key: {final_vpn_key[:20]}..."
+                await _log_audit_event_atomic(conn, "admin_grant", admin_telegram_id, telegram_id, details)
+                
+                logger.info(f"Admin {admin_telegram_id} granted {days} days access to user {telegram_id}")
+                return expires_at, final_vpn_key
+                
+            except Exception as e:
+                logger.exception(f"Error in admin_grant_access_atomic for user {telegram_id}, transaction rolled back")
+                raise
+
+
+async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -> bool:
+    """Атомарно лишить доступа пользователя (админ)
+    
+    В одной транзакции:
+    - устанавливает expires_at = NOW() (если есть активная подписка)
+    - записывает в subscription_history (action = admin_revoke)
+    - записывает событие в audit_log
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        admin_telegram_id: Telegram ID администратора
+    
+    Returns:
+        True если доступ был отозван, False если активной подписки не было
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                now = datetime.now()
+                
+                # 1. Проверяем, есть ли активная подписка
+                subscription_row = await conn.fetchrow(
+                    "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
+                    telegram_id, now
+                )
+                
+                if not subscription_row:
+                    logger.info(f"No active subscription to revoke for user {telegram_id}")
+                    return False
+                
+                subscription = dict(subscription_row)
+                old_expires_at = subscription["expires_at"]
+                vpn_key = subscription["vpn_key"]
+                
+                # 2. Устанавливаем expires_at = NOW()
+                await conn.execute(
+                    "UPDATE subscriptions SET expires_at = $1 WHERE telegram_id = $2",
+                    now, telegram_id
+                )
+                
+                # 3. Записываем в историю подписок
+                await _log_subscription_history_atomic(conn, telegram_id, vpn_key, now, now, "admin_revoke")
+                
+                # 4. Записываем событие в audit_log
+                details = f"Revoked access, Old expires_at: {old_expires_at.isoformat()}, VPN key: {vpn_key[:20]}..."
+                await _log_audit_event_atomic(conn, "admin_revoke", admin_telegram_id, telegram_id, details)
+                
+                logger.info(f"Admin {admin_telegram_id} revoked access for user {telegram_id}")
+                return True
+                
+            except Exception as e:
+                logger.exception(f"Error in admin_revoke_access_atomic for user {telegram_id}, transaction rolled back")
+                raise

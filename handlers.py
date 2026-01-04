@@ -42,6 +42,10 @@ class BroadcastCreate(StatesGroup):
 class IncidentEdit(StatesGroup):
     waiting_for_text = State()
 
+
+class AdminGrantAccess(StatesGroup):
+    waiting_for_days = State()
+
 router = Router()
 
 logging.basicConfig(level=logging.INFO)
@@ -460,6 +464,11 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
         buttons.append([InlineKeyboardButton(text="🔁 Перевыпустить ключ", callback_data=callback_data)])
     if user_id:
         buttons.append([InlineKeyboardButton(text="🧾 История подписок", callback_data=f"admin:user_history:{user_id}")])
+        # Кнопки выдачи и лишения доступа (всегда доступны)
+        buttons.append([
+            InlineKeyboardButton(text="🟢 Выдать доступ", callback_data=f"admin:grant:{user_id}"),
+            InlineKeyboardButton(text="🔴 Лишить доступа", callback_data=f"admin:revoke:{user_id}")
+        ])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -1420,6 +1429,190 @@ async def callback_admin_user_history(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_user_history: {e}")
         await callback.answer("Ошибка при получении истории подписок", show_alert=True)
+
+
+def get_admin_grant_days_keyboard(user_id: int):
+    """Клавиатура для выбора срока доступа (1/7/14 дней)"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1 день", callback_data=f"admin:grant_days:{user_id}:1"),
+            InlineKeyboardButton(text="7 дней", callback_data=f"admin:grant_days:{user_id}:7"),
+        ],
+        [
+            InlineKeyboardButton(text="14 дней", callback_data=f"admin:grant_days:{user_id}:14"),
+        ],
+        [
+            InlineKeyboardButton(text="🔙 Назад", callback_data="admin:user"),
+        ]
+    ])
+    return keyboard
+
+
+@router.callback_query(F.data.startswith("admin:grant:"))
+async def callback_admin_grant(callback: CallbackQuery, state: FSMContext):
+    """Обработчик кнопки 'Выдать доступ'"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        # Сохраняем user_id в состоянии
+        await state.update_data(user_id=user_id)
+        
+        # Показываем клавиатуру выбора срока
+        text = "Выберите срок доступа:"
+        await callback.message.edit_text(text, reply_markup=get_admin_grant_days_keyboard(user_id))
+        await state.set_state(AdminGrantAccess.waiting_for_days)
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_grant: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:grant_days:"))
+async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик выбора срока доступа"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        days = int(parts[3])
+        
+        # Выдаем доступ
+        expires_at, vpn_key = await database.admin_grant_access_atomic(
+            telegram_id=user_id,
+            days=days,
+            admin_telegram_id=callback.from_user.id
+        )
+        
+        if expires_at is None or vpn_key is None:
+            # Нет свободных ключей
+            text = "❌ Нет свободных VPN-ключей"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Нет свободных ключей", show_alert=True)
+        else:
+            # Успешно
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            text = f"✅ Доступ выдан на {days} дней\nПользователь уведомлён."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            
+            # Уведомляем пользователя
+            try:
+                user_lang = await database.get_user(user_id)
+                language = user_lang.get("language", "ru") if user_lang else "ru"
+                
+                user_text = localization.get_text(
+                    language,
+                    "admin_grant_user_notification",
+                    days=days,
+                    vpn_key=vpn_key,
+                    date=expires_str
+                )
+                await bot.send_message(user_id, user_text)
+            except Exception as e:
+                logging.exception(f"Error sending notification to user {user_id}: {e}")
+        
+        await state.clear()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_grant_days: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:revoke:"))
+async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
+    """Обработчик кнопки 'Лишить доступа'"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        # Лишаем доступа
+        revoked = await database.admin_revoke_access_atomic(
+            telegram_id=user_id,
+            admin_telegram_id=callback.from_user.id
+        )
+        
+        if not revoked:
+            # Нет активной подписки
+            text = "❌ У пользователя нет активной подписки"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Нет активной подписки", show_alert=True)
+        else:
+            # Успешно
+            text = "✅ Доступ отозван\nПользователь уведомлён."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            
+            # Уведомляем пользователя
+            try:
+                user_lang = await database.get_user(user_id)
+                language = user_lang.get("language", "ru") if user_lang else "ru"
+                
+                user_text = localization.get_text(language, "admin_revoke_user_notification")
+                await bot.send_message(user_id, user_text)
+            except Exception as e:
+                logging.exception(f"Error sending notification to user {user_id}: {e}")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_revoke: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:revoke:"))
+async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
+    """Обработчик кнопки 'Лишить доступа'"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        
+        # Лишаем доступа
+        revoked = await database.admin_revoke_access_atomic(
+            telegram_id=user_id,
+            admin_telegram_id=callback.from_user.id
+        )
+        
+        if not revoked:
+            # Нет активной подписки
+            text = "❌ У пользователя нет активной подписки"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Нет активной подписки", show_alert=True)
+        else:
+            # Успешно
+            text = "✅ Доступ отозван\nПользователь уведомлён."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            
+            # Уведомляем пользователя
+            try:
+                user_lang = await database.get_user(user_id)
+                language = user_lang.get("language", "ru") if user_lang else "ru"
+                
+                user_text = localization.get_text(language, "admin_revoke_user_notification")
+                await bot.send_message(user_id, user_text)
+            except Exception as e:
+                logging.exception(f"Error sending notification to user {user_id}: {e}")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_revoke: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin:user_reissue:"))

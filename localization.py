@@ -91,6 +91,23 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_payment_notification": "💰 Новая оплата\nПользователь: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} месяцев\nСтоимость: {price} ₽",
         "admin_approve": "Подтвердить",
         "admin_reject": "Отклонить",
+        "admin_grant_access": "🟢 Выдать доступ",
+        "admin_revoke_access": "🔴 Лишить доступа",
+        "admin_grant_days_prompt": "Выберите срок доступа:",
+        "admin_grant_days_1": "1 день",
+        "admin_grant_days_7": "7 дней",
+        "admin_grant_days_14": "14 дней",
+        "admin_grant_success": "✅ Доступ выдан на {days} дней
+Пользователь уведомлён.",
+        "admin_grant_fail_no_keys": "❌ Нет свободных VPN-ключей",
+        "admin_revoke_success": "✅ Доступ отозван
+Пользователь уведомлён.",
+        "admin_revoke_fail_no_sub": "❌ У пользователя нет активной подписки",
+        "admin_grant_user_notification": "✅ Вам предоставлен доступ к Atlas Secure на {days} дней.
+VPN-ключ: {vpn_key}
+Срок действия: до {date}",
+        "admin_revoke_user_notification": "⛔ Ваш доступ к Atlas Secure был отозван администратором.",
+
     },
     "en": {
         "language_select": "Select language / Выберите язык / Tilni tanlang / Забони интихоб кунед",
@@ -170,6 +187,23 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_payment_notification": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
         "admin_approve": "Approve",
         "admin_reject": "Reject",
+        "admin_grant_access": "🟢 Grant Access",
+        "admin_revoke_access": "🔴 Revoke Access",
+        "admin_grant_days_prompt": "Select access period:",
+        "admin_grant_days_1": "1 day",
+        "admin_grant_days_7": "7 days",
+        "admin_grant_days_14": "14 days",
+        "admin_grant_success": "✅ Access granted for {days} days
+User notified.",
+        "admin_grant_fail_no_keys": "❌ No free VPN keys available",
+        "admin_revoke_success": "✅ Access revoked
+User notified.",
+        "admin_revoke_fail_no_sub": "❌ User has no active subscription",
+        "admin_grant_user_notification": "✅ You have been granted access to Atlas Secure for {days} days.
+VPN key: {vpn_key}
+Expires: {date}",
+        "admin_revoke_user_notification": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
+
         "incident_banner": "⚠️ Technical work in progress",
         "incident_status_warning": "\n\n⚠️ WARNING: Incident mode active\n{incident_text}",
         "admin_incident_title": "🚨 Incident",
@@ -223,6 +257,23 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_payment_notification": "💰 Yangi to'lov\nFoydalanuvchi: @{username}\nTelegram ID: {telegram_id}\nTarif: {tariff} oy\nNarx: {price} ₽",
         "admin_approve": "Tasdiqlash",
         "admin_reject": "Rad etish",
+        "admin_grant_access": "🟢 Kirish berish",
+        "admin_revoke_access": "🔴 Kirishni bekor qilish",
+        "admin_grant_days_prompt": "Kirish muddatini tanlang:",
+        "admin_grant_days_1": "1 kun",
+        "admin_grant_days_7": "7 kun",
+        "admin_grant_days_14": "14 kun",
+        "admin_grant_success": "✅ {days} kun uchun kirish berildi
+Foydalanuvchi xabardor qilindi.",
+        "admin_grant_fail_no_keys": "❌ Bepul VPN kalitlari mavjud emas",
+        "admin_revoke_success": "✅ Kirish bekor qilindi
+Foydalanuvchi xabardor qilindi.",
+        "admin_revoke_fail_no_sub": "❌ Foydalanuvchining faol obunasi yo'q",
+        "admin_grant_user_notification": "✅ Sizga Atlas Secure ga {days} kun uchun kirish berildi.
+VPN kalit: {vpn_key}
+Muddati: {date} gacha",
+        "admin_revoke_user_notification": "⛔ Atlas Secure ga kirishingiz administrator tomonidan bekor qilindi.",
+
         "incident_banner": "⚠️ Texnik ishlar olib borilmoqda",
         "incident_status_warning": "\n\n⚠️ E'TIBOR: Inson hodisa rejimi faol\n{incident_text}",
         "admin_incident_title": "🚨 Hodisa",
@@ -285,6 +336,23 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_payment_notification": "💰 Пардохти нав\nКорбар: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} моҳ\nНарх: {price} ₽",
         "admin_approve": "Тасдиқ кардан",
         "admin_reject": "Рад кардан",
+        "admin_grant_access": "🟢 Дастраси додан",
+        "admin_revoke_access": "🔴 Дастраси бекор кардан",
+        "admin_grant_days_prompt": "Муддати дастрасиро интихоб кунед:",
+        "admin_grant_days_1": "1 рӯз",
+        "admin_grant_days_7": "7 рӯз",
+        "admin_grant_days_14": "14 рӯз",
+        "admin_grant_success": "✅ Дастрасӣ барои {days} рӯз дода шуд
+Корбар огоҳ карда шуд.",
+        "admin_grant_fail_no_keys": "❌ Калидҳои VPN-и озод нестанд",
+        "admin_revoke_success": "✅ Дастрасӣ бекор карда шуд
+Корбар огоҳ карда шуд.",
+        "admin_revoke_fail_no_sub": "❌ Корбар обунаи фаъол надорад",
+        "admin_grant_user_notification": "✅ Ба шумо ба Atlas Secure барои {days} рӯз дастрасӣ дода шуд.
+Калиди VPN: {vpn_key}
+Муддат: то {date}",
+        "admin_revoke_user_notification": "⛔ Дастрасии шумо ба Atlas Secure аз ҷониби мудир бекор карда шуд.",
+
         "incident_banner": "⚠️ Корҳои техникӣ иҷро карда мешавад",
         "incident_status_warning": "⚠️ ЭЪТИБОР: Реҷаи ҳодиса фаъол аст\n{incident_text}",
         "admin_incident_title": "🚨 Ҳодиса",
