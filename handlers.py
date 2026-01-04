@@ -128,11 +128,19 @@ def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vi
     """Клавиатура профиля с кнопкой копирования ключа и историей"""
     buttons = []
     
-    # Кнопка продления, если известен предыдущий тариф
+    # Кнопка продления (всегда показываем, если есть активная подписка)
+    # Тариф будет определен в обработчике, если не передан
     if last_tariff:
         buttons.append([InlineKeyboardButton(
             text=localization.get_text(language, "renew_subscription"),
             callback_data=f"renew_subscription:{last_tariff}"
+        )])
+    else:
+        # Если тариф не определен, показываем кнопку без тарифа
+        # Тариф будет определен в обработчике из последнего платежа
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "renew_subscription"),
+            callback_data="renew_subscription"
         )])
     
     buttons.append([InlineKeyboardButton(
@@ -711,17 +719,31 @@ async def callback_vip_access(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("renew_subscription:"))
-async def callback_renew_subscription(callback: CallbackQuery, state: FSMContext):
-    """Продление подписки на тот же период"""
+@router.callback_query(F.data.startswith("renew_subscription"))
+async def callback_renew_subscription(callback: CallbackQuery):
+    """Продление подписки на тот же период - сразу вызывает sendInvoice"""
     await callback.answer()
     
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Получаем тариф из callback_data
-    tariff_key = callback.data.split(":")[1]
+    # Определяем тариф из callback_data или из последнего платежа
+    tariff_key = None
+    if ":" in callback.data:
+        # Если тариф передан в callback_data
+        tariff_key = callback.data.split(":")[1]
+    else:
+        # Если тариф не передан, определяем из последнего утвержденного платежа
+        last_payment = await database.get_last_approved_payment(telegram_id)
+        if last_payment:
+            tariff_key = last_payment.get("tariff")
+    
+    # Если тариф не определен, показываем ошибку
+    if not tariff_key:
+        text = localization.get_text(language, "no_active_subscription")
+        await callback.message.answer(text)
+        return
     
     # Проверяем наличие pending платежа
     existing_payment = await database.get_pending_payment_by_user(telegram_id)
@@ -730,10 +752,57 @@ async def callback_renew_subscription(callback: CallbackQuery, state: FSMContext
         await callback.message.answer(text, reply_markup=get_pending_payment_keyboard(language))
         return
     
-    # Формируем текст экрана продления
-    text = localization.get_text(language, "renewal_payment_text")
+    # Проверяем наличие provider_token
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer("Платежи временно недоступны", show_alert=True)
+        return
     
-    await callback.message.edit_text(text, reply_markup=get_renewal_payment_keyboard(language, tariff_key))
+    # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
+    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    base_price = tariff_data["price"]
+    
+    # ПРИОРИТЕТ 1: VIP-статус
+    is_vip = await database.is_vip_user(telegram_id)
+    
+    if is_vip:
+        amount = int(base_price * 0.70)  # 30% скидка
+    else:
+        # ПРИОРИТЕТ 2: Персональная скидка
+        personal_discount = await database.get_user_discount(telegram_id)
+        
+        if personal_discount:
+            discount_percent = personal_discount["discount_percent"]
+            amount = int(base_price * (1 - discount_percent / 100))
+        else:
+            # ПРИОРИТЕТ 3: Приветственная скидка НЕ применяется при продлении
+            amount = base_price
+    
+    # Формируем payload (формат: renew:user_id:tariff:timestamp для уникальности)
+    payload = f"renew:{telegram_id}:{tariff_key}:{int(time.time())}"
+    
+    # Формируем описание тарифа
+    months = tariff_data["months"]
+    description = f"Atlas Secure VPN продление подписки на {months} месяц(ев)"
+    
+    # Формируем prices (цена в копейках)
+    prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
+    
+    try:
+        # Отправляем invoice сразу
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title="Atlas Secure VPN",
+            description=description,
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=prices,
+            start_parameter=payload  # Для быстрого доступа к платежу
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error sending invoice for renewal: {e}")
+        await callback.answer("Ошибка при создании счета. Попробуйте позже.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("renewal_pay:"))
@@ -986,17 +1055,42 @@ async def process_successful_payment(message: Message):
     telegram_id = message.from_user.id
     payment = message.successful_payment
     
-    # Извлекаем данные из payload (формат: user_id_tariff_timestamp)
+    # Извлекаем данные из payload
+    # Формат для обычной покупки: user_id_tariff_timestamp
+    # Формат для новой покупки (приветственная скидка): purchase:first:user_id:tariff:timestamp
+    # Формат для продления: renew:user_id:tariff:timestamp
     payload = payment.invoice_payload
     try:
-        parts = payload.split("_")
-        if len(parts) < 2:
-            logger.error(f"Invalid payload format: {payload}")
-            await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
-            return
-        
-        payload_user_id = int(parts[0])
-        tariff_key = parts[1]
+        if payload.startswith("renew:"):
+            # Продление подписки
+            parts = payload.split(":")
+            if len(parts) < 3:
+                logger.error(f"Invalid renewal payload format: {payload}")
+                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+                return
+            
+            payload_user_id = int(parts[1])
+            tariff_key = parts[2]
+        elif payload.startswith("purchase:first:"):
+            # Первая покупка (приветственная скидка)
+            parts = payload.split(":")
+            if len(parts) < 4:
+                logger.error(f"Invalid first purchase payload format: {payload}")
+                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+                return
+            
+            payload_user_id = int(parts[2])
+            tariff_key = parts[3]
+        else:
+            # Обычная покупка (старый формат)
+            parts = payload.split("_")
+            if len(parts) < 2:
+                logger.error(f"Invalid payload format: {payload}")
+                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+                return
+            
+            payload_user_id = int(parts[0])
+            tariff_key = parts[1]
         
         # Проверяем, что платеж для этого пользователя
         if payload_user_id != telegram_id:
