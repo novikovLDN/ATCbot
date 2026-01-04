@@ -209,16 +209,17 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
     buttons = []
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
-    has_promo = promo_code and promo_code.upper() == "ЭЛ50"
+    promo_data = None
+    if promo_code:
+        promo_data = await database.check_promo_code_valid(promo_code.upper())
+    
+    has_promo = promo_data is not None
     
     # ПРИОРИТЕТ 1: Проверяем VIP-статус (только если нет промокода)
     is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
     
     # ПРИОРИТЕТ 2: Проверяем персональную скидку (только если нет промокода и VIP)
     personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
-    
-    # ПРИОРИТЕТ 3: Проверяем скидку первой покупки (только если нет промокода, VIP и персональной)
-    is_first_purchase = await database.is_user_first_purchase(telegram_id) if not has_promo and not is_vip and not personal_discount else False
     
     for tariff_key, tariff_data in config.TARIFFS.items():
         base_price = tariff_data["price"]
@@ -227,10 +228,11 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
         
         # Применяем скидку в порядке приоритета
         if has_promo:
-            # Промокод 50% применяется ко всем тарифам
-            discounted_price = int(base_price * 0.50)  # 50% скидка
+            # Промокод применяется ко всем тарифам
+            discount_percent = promo_data["discount_percent"]
+            discounted_price = int(base_price * (100 - discount_percent) / 100)
             price = discounted_price
-            discount_label = localization.get_text(language, "promo_discount_label", default="🎟 Промокод")
+            discount_label = f"🎟 −{discount_percent}%"
             has_discount_for_tariff = True
         elif is_vip:
             # VIP-скидка 30% применяется ко всем тарифам
@@ -252,12 +254,6 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
                 "personal_discount_label", 
                 default="🎯 Персональная скидка"
             ).format(percent=discount_percent)
-            has_discount_for_tariff = True
-        elif is_first_purchase:
-            # Приветственная скидка 50% применяется ко всем тарифам для новых пользователей
-            discounted_price = int(base_price * 0.50)  # 50% скидка
-            price = discounted_price
-            discount_label = localization.get_text(language, "welcome_discount_label", default="🎁 Приветственная скидка")
             has_discount_for_tariff = True
         else:
             price = base_price
@@ -823,7 +819,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
             discount_percent = personal_discount["discount_percent"]
             amount = int(base_price * (1 - discount_percent / 100))
         else:
-            # ПРИОРИТЕТ 3: Приветственная скидка НЕ применяется при продлении
+            # Без скидки
             amount = base_price
     
     # Формируем payload (формат: renew:user_id:tariff:timestamp для уникальности)
@@ -1013,12 +1009,13 @@ async def process_promo_code(message: Message, state: FSMContext):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    promo_code = message.text.strip()
+    promo_code = message.text.strip().upper()
     
-    # Проверяем промокод (case-insensitive)
-    if promo_code.upper() == "ЭЛ50":
+    # Проверяем промокод через базу данных
+    promo_data = await database.check_promo_code_valid(promo_code)
+    if promo_data:
         # Промокод валиден
-        await state.update_data(promo_code="ЭЛ50")
+        await state.update_data(promo_code=promo_code)  # Сохраняем в верхнем регистре
         await state.set_state(None)  # Сбрасываем состояние
         
         text = localization.get_text(language, "promo_applied", default="✅ Промокод применён")
@@ -1026,10 +1023,10 @@ async def process_promo_code(message: Message, state: FSMContext):
         
         # Обновляем экран выбора тарифа
         tariff_text = localization.get_text(language, "select_tariff")
-        await message.answer(tariff_text, reply_markup=await get_tariff_keyboard(language, telegram_id, "ЭЛ50"))
+        await message.answer(tariff_text, reply_markup=await get_tariff_keyboard(language, telegram_id, promo_code))
     else:
         # Промокод невалиден
-        text = localization.get_text(language, "invalid_promo", default="❌ Неверный промокод")
+        text = localization.get_text(language, "invalid_promo", default="❌ Промокод недействителен")
         await message.answer(text)
 
 
@@ -1049,15 +1046,24 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
     # Получаем промокод из состояния
     state_data = await state.get_data()
     promo_code = state_data.get("promo_code")
-    has_promo = promo_code and promo_code.upper() == "ЭЛ50"
+    
+    # Проверяем промокод через базу данных
+    promo_data = None
+    if promo_code:
+        promo_data = await database.check_promo_code_valid(promo_code.upper())
+    
+    has_promo = promo_data is not None
     
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     base_price = tariff_data["price"]
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
     if has_promo:
-        amount = int(base_price * 0.50)  # 50% скидка
-        payload = f"purchase:promo:EL50:{telegram_id}:{tariff_key}:{int(time.time())}"
+        discount_percent = promo_data["discount_percent"]
+        amount = int(base_price * (100 - discount_percent) / 100)
+        payload = f"purchase:promo:{promo_code.upper()}:{telegram_id}:{tariff_key}:{int(time.time())}"
+        # Очищаем промокод из состояния после использования
+        await state.update_data(promo_code=None)
     else:
         # ПРИОРИТЕТ 1: VIP-статус
         is_vip = await database.is_vip_user(telegram_id)
@@ -1073,14 +1079,9 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
                 amount = int(base_price * (1 - discount_percent / 100))
                 payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
             else:
-                # ПРИОРИТЕТ 3: Приветственная скидка
-                is_first_purchase = await database.is_user_first_purchase(telegram_id)
-                if is_first_purchase:
-                    amount = int(base_price * 0.50)  # 50% скидка на все тарифы
-                    payload = f"purchase:first:{telegram_id}:{tariff_key}:{int(time.time())}"
-                else:
-                    amount = base_price
-                    payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
+                # Без скидки
+                amount = base_price
+                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
     
     # Формируем описание тарифа
     months = tariff_data["months"]
@@ -1146,7 +1147,7 @@ async def process_successful_payment(message: Message):
     
     # Извлекаем данные из payload
     # Формат для обычной покупки: user_id_tariff_timestamp
-    # Формат для новой покупки (приветственная скидка): purchase:first:user_id:tariff:timestamp
+    # Формат для покупки с промокодом: purchase:promo:CODE:user_id:tariff:timestamp
     # Формат для продления: renew:user_id:tariff:timestamp
     payload = payment.invoice_payload
     try:
@@ -1168,18 +1169,9 @@ async def process_successful_payment(message: Message):
                 await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
                 return
             
+            promo_code_used = parts[2]  # Код промокода
             payload_user_id = int(parts[3])
             tariff_key = parts[4]
-        elif payload.startswith("purchase:first:"):
-            # Первая покупка (приветственная скидка)
-            parts = payload.split(":")
-            if len(parts) < 4:
-                logger.error(f"Invalid first purchase payload format: {payload}")
-                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
-                return
-            
-            payload_user_id = int(parts[2])
-            tariff_key = parts[3]
         else:
             # Обычная покупка (старый формат)
             parts = payload.split("_")
@@ -1249,6 +1241,16 @@ async def process_successful_payment(message: Message):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         
+        # Если использован промокод, увеличиваем счетчик использований
+        if payload.startswith("purchase:promo:"):
+            parts = payload.split(":")
+            if len(parts) >= 3:
+                promo_code_used = parts[2]
+                try:
+                    await database.increment_promo_code_use(promo_code_used)
+                except Exception as e:
+                    logger.error(f"Error incrementing promo code use: {e}")
+        
         expires_str = expires_at.strftime("%d.%m.%Y")
         text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
         
@@ -1308,12 +1310,8 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
             discount_percent = personal_discount["discount_percent"]
             amount = int(base_price * (1 - discount_percent / 100))
         else:
-            # ПРИОРИТЕТ 3: Приветственная скидка (для новых пользователей)
-            is_first_purchase = await database.is_user_first_purchase(telegram_id)
-            if is_first_purchase:
-                amount = int(base_price * 0.50)  # 50% скидка на все тарифы
-            else:
-                amount = base_price
+            # Без скидки
+            amount = base_price
     
     # Формируем текст с реквизитами
     text = localization.get_text(

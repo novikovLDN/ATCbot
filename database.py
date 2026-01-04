@@ -208,6 +208,18 @@ async def init_db():
             )
         """)
         
+        # Таблица promo_codes (промокоды)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code TEXT UNIQUE NOT NULL PRIMARY KEY,
+                discount_percent INTEGER NOT NULL,
+                max_uses INTEGER NULL,
+                used_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Создаём одну строку, если её нет
         existing = await conn.fetchval("SELECT COUNT(*) FROM incident_settings")
         if existing == 0:
@@ -216,7 +228,22 @@ async def init_db():
                 VALUES (FALSE, NULL)
             """)
         
+        # Инициализируем промокоды, если их нет
+        await _init_promo_codes(conn)
+        
         logger.info("Database tables initialized")
+
+
+async def _init_promo_codes(conn):
+    """Инициализация промокодов в базе данных"""
+    # Добавляем промокоды (используем ON CONFLICT для безопасной инициализации)
+    await conn.execute("""
+        INSERT INTO promo_codes (code, discount_percent, max_uses, is_active)
+        VALUES 
+            ('ELVIRA046', 50, 50, TRUE),
+            ('YAbx30', 30, NULL, TRUE)
+        ON CONFLICT (code) DO NOTHING
+    """)
 
 
 async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -307,7 +334,6 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
     Автоматически применяет скидки в следующем порядке приоритета:
     1. VIP-статус (30%) - ВЫСШИЙ ПРИОРИТЕТ
     2. Персональная скидка (admin)
-    3. Скидка первой покупки (25% на тарифы 3/6/12 месяцев)
     """
     # Проверяем наличие pending платежа
     existing_payment = await get_pending_payment_by_user(telegram_id)
@@ -341,15 +367,8 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
             discount_applied = discount_percent
             discount_type = "personal"
         else:
-            # ПРИОРИТЕТ 3: Проверяем приветственную скидку (для новых пользователей)
-            is_first_purchase = await is_user_first_purchase(telegram_id)
-            if is_first_purchase:
-                discounted_price = int(base_price * 0.50)  # 50% скидка на все тарифы
-                amount = discounted_price
-                discount_applied = 50
-                discount_type = "welcome_discount"
-            else:
-                amount = base_price
+            # Без скидки - используем базовую цену
+            amount = base_price
     
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -842,6 +861,70 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
             f"UPDATE subscriptions SET {flag_name} = TRUE WHERE telegram_id = $1",
             telegram_id
         )
+
+
+async def get_promo_code(code: str) -> Optional[Dict[str, Any]]:
+    """Получить промокод по коду"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM promo_codes WHERE UPPER(code) = UPPER($1)", code
+        )
+        return dict(row) if row else None
+
+
+async def check_promo_code_valid(code: str) -> Optional[Dict[str, Any]]:
+    """Проверить, валиден ли промокод и вернуть его данные"""
+    promo = await get_promo_code(code)
+    if not promo:
+        return None
+    
+    # Проверяем, активен ли промокод
+    if not promo.get("is_active", False):
+        return None
+    
+    # Проверяем лимит использований (если задан)
+    max_uses = promo.get("max_uses")
+    if max_uses is not None:
+        used_count = promo.get("used_count", 0)
+        if used_count >= max_uses:
+            return None
+    
+    return promo
+
+
+async def increment_promo_code_use(code: str):
+    """Увеличить счетчик использований промокода"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Получаем текущее значение used_count и max_uses
+            row = await conn.fetchrow(
+                "SELECT used_count, max_uses FROM promo_codes WHERE UPPER(code) = UPPER($1) FOR UPDATE",
+                code
+            )
+            if not row:
+                return
+            
+            used_count = row["used_count"]
+            max_uses = row["max_uses"]
+            
+            # Увеличиваем счетчик
+            new_count = used_count + 1
+            
+            # Если достигли лимита, деактивируем промокод
+            if max_uses is not None and new_count >= max_uses:
+                await conn.execute("""
+                    UPDATE promo_codes 
+                    SET used_count = $1, is_active = FALSE 
+                    WHERE UPPER(code) = UPPER($2)
+                """, new_count, code)
+            else:
+                await conn.execute("""
+                    UPDATE promo_codes 
+                    SET used_count = $1 
+                    WHERE UPPER(code) = UPPER($2)
+                """, new_count, code)
 
 
 async def is_user_first_purchase(telegram_id: int) -> bool:
