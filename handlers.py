@@ -621,13 +621,10 @@ async def callback_renew_subscription(callback: CallbackQuery, state: FSMContext
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     
     # Формируем текст с реквизитами
-    account_formatted = ' '.join(config.SBP_DETAILS['account'][i:i+4] for i in range(0, len(config.SBP_DETAILS['account']), 4))
     text = localization.get_text(
         language, 
         "sbp_payment_text",
-        bank=config.SBP_DETAILS['bank'],
-        account=account_formatted,
-        price=tariff_data['price']
+        amount=tariff_data['price']
     )
     
     await callback.message.edit_text(text, reply_markup=get_sbp_payment_keyboard(language))
@@ -760,15 +757,10 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     
     # Формируем текст с реквизитами
-    # Форматируем счет с пробелами (каждые 4 цифры)
-    account_formatted = ' '.join(config.SBP_DETAILS['account'][i:i+4] for i in range(0, len(config.SBP_DETAILS['account']), 4))
     text = localization.get_text(
         language, 
         "sbp_payment_text",
-        bank=config.SBP_DETAILS['bank'],
-        account=account_formatted,
-        name=config.SBP_DETAILS['name'],
-        price=tariff_data['price']
+        amount=tariff_data['price']
     )
     
     await callback.message.edit_text(text, reply_markup=get_sbp_payment_keyboard(language))

@@ -39,7 +39,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_sbp": "СБП",
         
         # Оплата СБП
-        "sbp_payment_text": "После выполнения перевода подтвердите оплату.\n\n⸻\n\nРеквизиты для перевода\n\nБанк: Ozon\nСчёт карты: 2204 3210 7503 0551\n\nСумма к подтверждению: 799 ₽",
+        "sbp_payment_text": "После выполнения перевода подтвердите оплату.\n\n⸻\n\nРеквизиты для перевода\n\nБанк: Ozon\nСчёт карты: 2204321075030551\n\nСумма к подтверждению: {amount} ₽",
         "paid_button": "Подтвердить оплату",
         
         # Ожидание подтверждения
@@ -129,7 +129,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_sbp": "SBP",
         
         # Оплата СБП
-        "sbp_payment_text": "After making the transfer, confirm payment.\n\n⸻\n\nTransfer details\n\nBank: Ozon\nCard account: 2204 3210 7503 0551\n\nAmount to confirm: 799 ₽",
+        "sbp_payment_text": "After making the transfer, confirm payment.\n\n⸻\n\nTransfer details\n\nBank: Ozon\nCard account: 2204321075030551\n\nAmount to confirm: {amount} ₽",
         "paid_button": "Confirm payment",
         
         # Ожидание подтверждения
@@ -200,7 +200,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "select_payment": "To'lov usulini tanlang.",
         "payment_test": "Xizmat rejimi Mavjud emas",
         "payment_sbp": "SBP",
-        "sbp_payment_text": "O'tkazmadan keyin to'lovni tasdiqlang.\n\n⸻\n\nO'tkazma ma'lumotlari\n\nBank: Ozon\nKarta hisobi: 2204 3210 7503 0551\n\nTasdiqlash uchun summa: 799 ₽",
+        "sbp_payment_text": "O'tkazmadan keyin to'lovni tasdiqlang.\n\n⸻\n\nO'tkazma ma'lumotlari\n\nBank: Ozon\nKarta hisobi: 2204321075030551\n\nTasdiqlash uchun summa: {amount} ₽",
         "paid_button": "To'lovni tasdiqlash",
         "payment_pending": "Tasdiqlash jarayonda\n\nTo'lov ro'yxatga olingan.\nTekshiruv 5 minutgacha davom etadi.\nKirish faollashtirish avtomatik ravishda amalga oshiriladi.",
         "payment_approved": "✅ Kirish faollashtirildi.\n\nSizning shaxsiy VPN kalitingiz:\n{vpn_key}\n\nAmal qilish muddati:\n{date} gacha\n\nKalitni xavfsiz joyda saqlashni tavsiya etamiz.",
@@ -262,7 +262,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "select_payment": "Усули пардохтро интихоб кунед.",
         "payment_test": "Реҷаи хизматӣ Дастрас нест",
         "payment_sbp": "СБП",
-        "sbp_payment_text": "Пас аз интиқол, пардохтро тасдиқ кунед.\n\n⸻\n\nМаълумоти интиқол\n\nБонк: Ozon\nҲисоби корт: 2204 3210 7503 0551\n\nМаблағи тасдиқ: 799 ₽",
+        "sbp_payment_text": "Пас аз интиқол, пардохтро тасдиқ кунед.\n\n⸻\n\nМаълумоти интиқол\n\nБонк: Ozon\nҲисоби корт: 2204321075030551\n\nМаблағи тасдиқ: {amount} ₽",
         "paid_button": "Пардохтро тасдиқ кардан",
         "payment_pending": "Тасдиқ дар раванд аст\n\nПардохт ба қайд гирифта шуд.\nСанҷиш то 5 дақиқа давом мекунад.\nФаъолсозии дастрасӣ ба таври худкор иҷро мешавад.",
         "payment_approved": "✅ Дастрасӣ фаъол шуд.\n\nКалиди VPN-и шахсии шумо:\n{vpn_key}\n\nМуддати амал:\nто {date}\n\nТавсия медиҳем, ки калидро дар ҷойи бехатар нигоҳ доред.",
