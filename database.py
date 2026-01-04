@@ -893,6 +893,73 @@ async def get_user_extended_stats(telegram_id: int) -> Dict[str, Any]:
         }
 
 
+async def get_business_metrics() -> Dict[str, Any]:
+    """Получить бизнес-метрики сервиса
+    
+    Returns:
+        Словарь с метриками:
+        - avg_payment_approval_time_seconds: среднее время подтверждения оплаты (в секундах)
+        - avg_subscription_lifetime_days: среднее время жизни подписки (в днях)
+        - avg_renewals_per_user: среднее количество продлений на пользователя
+        - approval_rate_percent: процент подтвержденных платежей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # 1. Среднее время подтверждения оплаты
+        # Используем audit_log для получения времени подтверждения
+        # Парсим Payment ID из details поля через CTE
+        avg_approval_time = await conn.fetchval(
+            """WITH payment_approvals AS (
+                SELECT 
+                    al.created_at as approved_at,
+                    CAST(SUBSTRING(al.details FROM 'Payment ID: ([0-9]+)') AS INTEGER) as payment_id
+                FROM audit_log al
+                WHERE al.action IN ('payment_approved', 'subscription_renewed')
+                AND al.details LIKE 'Payment ID: %'
+            )
+            SELECT AVG(EXTRACT(EPOCH FROM (pa.approved_at - p.created_at))) 
+            FROM payment_approvals pa
+            JOIN payments p ON p.id = pa.payment_id
+            WHERE p.status = 'approved'"""
+        )
+        
+        # 2. Среднее время жизни подписки (из subscription_history)
+        # Используем только завершенные подписки (end_date < now)
+        avg_lifetime = await conn.fetchval(
+            """SELECT AVG(EXTRACT(EPOCH FROM (end_date - start_date)) / 86400.0)
+               FROM subscription_history
+               WHERE end_date IS NOT NULL
+               AND end_date < NOW()"""
+        )
+        
+        # 3. Среднее количество продлений на пользователя
+        total_renewals = await conn.fetchval(
+            """SELECT COUNT(*) FROM subscription_history WHERE action_type = 'renewal'"""
+        )
+        total_users_with_subscriptions = await conn.fetchval(
+            """SELECT COUNT(DISTINCT telegram_id) FROM subscription_history"""
+        )
+        avg_renewals = 0.0
+        if total_users_with_subscriptions and total_users_with_subscriptions > 0:
+            avg_renewals = (total_renewals or 0) / total_users_with_subscriptions
+        
+        # 4. Процент подтвержденных платежей
+        total_payments = await conn.fetchval("SELECT COUNT(*) FROM payments")
+        approved_payments = await conn.fetchval(
+            "SELECT COUNT(*) FROM payments WHERE status = 'approved'"
+        )
+        approval_rate = 0.0
+        if total_payments and total_payments > 0:
+            approval_rate = ((approved_payments or 0) / total_payments) * 100
+        
+        return {
+            "avg_payment_approval_time_seconds": float(avg_approval_time) if avg_approval_time else None,
+            "avg_subscription_lifetime_days": float(avg_lifetime) if avg_lifetime else None,
+            "avg_renewals_per_user": float(avg_renewals) if avg_renewals else 0.0,
+            "approval_rate_percent": float(approval_rate) if approval_rate else 0.0,
+        }
+
+
 async def get_last_audit_logs(limit: int = 10) -> list:
     """Получить последние записи из audit_log
     
