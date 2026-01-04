@@ -244,6 +244,7 @@ async def get_tariff_keyboard(language: str, telegram_id: int):
     for tariff_key, tariff_data in config.TARIFFS.items():
         base_price = tariff_data["price"]
         discount_label = ""
+        has_discount_for_tariff = False
         
         # Применяем скидку в порядке приоритета
         if is_vip:
@@ -253,8 +254,9 @@ async def get_tariff_keyboard(language: str, telegram_id: int):
             discount_label = localization.get_text(
                 language, 
                 "vip_discount_label", 
-                default="👑 VIP-скидка 30%"
+                default="👑 VIP-доступ"
             )
+            has_discount_for_tariff = True
         elif personal_discount:
             # Персональная скидка применяется ко всем тарифам
             discount_percent = personal_discount["discount_percent"]
@@ -265,30 +267,63 @@ async def get_tariff_keyboard(language: str, telegram_id: int):
                 "personal_discount_label", 
                 default="🎯 Персональная скидка"
             ).format(percent=discount_percent)
+            has_discount_for_tariff = True
         elif is_first_purchase and tariff_key in ["3", "6", "12"]:
             # Скидка первой покупки только для тарифов 3/6/12 месяцев
             discounted_price = int(base_price * 0.75)  # 25% скидка
             price = discounted_price
             discount_label = localization.get_text(language, "first_purchase_discount_label", default="🎁 Первая покупка")
+            has_discount_for_tariff = True
         else:
             price = base_price
+            has_discount_for_tariff = False
         
         # Формируем текст кнопки
         base_text = localization.get_text(language, f"tariff_button_{tariff_key}")
         
-        if discount_label:
-            # Извлекаем базовую часть текста (без цены)
-            # Формат: "3 месяца Стандартный доступ · 799 ₽"
+        if has_discount_for_tariff and discount_label:
+            # Если есть скидка - используем сокращённый формат без названия уровня доступа
+            # Извлекаем только срок (например, "3 месяца" из "3 месяца Стандартный доступ · 799 ₽")
             if "·" in base_text:
+                # Разбиваем по "·" и берём первую часть
                 parts = base_text.split("·")
-                base_part = parts[0].strip()
-                text = f"{base_part} · {discount_label} · {price} ₽"
+                full_part = parts[0].strip()
+                
+                # Извлекаем срок (первые 2-3 слова до названия уровня доступа)
+                # Для разных языков названия уровней разные, но срок всегда в начале
+                words = full_part.split()
+                
+                # Определяем, где заканчивается срок, по ключевым словам
+                # Срок обычно: "1 месяц", "3 месяца", "6 месяцев", "12 месяцев"
+                # Или на других языках: "1 month", "3 months", "3 oy", "3 моҳ"
+                period_words = []
+                skip_keywords = {
+                    "ru": ["Временный", "Стандартный", "Расширенный", "Приоритетный", "доступ"],
+                    "en": ["Temporary", "Standard", "Extended", "Priority", "Access"],
+                    "uz": ["Vaqtinchalik", "Standart", "Kengaytirilgan", "Ustuvor", "kirish"],
+                    "tj": ["муваққатӣ", "стандартӣ", "васеъ", "афзалиятнок", "Дастрасии"]
+                }
+                
+                skip_list = skip_keywords.get(language, skip_keywords["ru"])
+                
+                for word in words:
+                    # Если встретили ключевое слово уровня доступа - останавливаемся
+                    if any(skip_word.lower() in word.lower() for skip_word in skip_list):
+                        break
+                    period_words.append(word)
+                
+                # Если не удалось извлечь период (все слова были пропущены), используем первые 2 слова
+                if not period_words:
+                    period_words = words[:2] if len(words) >= 2 else words
+                
+                period_text = " ".join(period_words)
+                text = f"{period_text} {discount_label} · {price} ₽"
             else:
                 # Если формат неожиданный, просто заменяем цену и добавляем метку
                 text = base_text.replace(str(base_price), str(price))
                 text = f"{text} · {discount_label}"
         else:
-            # Используем обычные локализованные тексты кнопок
+            # Если нет скидки - используем полный формат с названием уровня доступа
             text = base_text
         
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}")])
