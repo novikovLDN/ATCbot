@@ -7,6 +7,7 @@ import database
 import handlers
 import reminders
 import healthcheck
+import outline_cleanup
 
 # Настройка логирования
 logging.basicConfig(
@@ -39,6 +40,10 @@ async def main():
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
     logger.info("Health check task started")
     
+    # Запуск фоновой задачи для очистки истекших Outline ключей
+    cleanup_task = asyncio.create_task(outline_cleanup.outline_cleanup_task())
+    logger.info("Outline cleanup task started")
+    
     # Запуск бота
     logger.info("Бот запущен")
     try:
@@ -46,12 +51,17 @@ async def main():
     finally:
         reminder_task.cancel()
         healthcheck_task.cancel()
+        cleanup_task.cancel()
         try:
             await reminder_task
         except asyncio.CancelledError:
             pass
         try:
             await healthcheck_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await cleanup_task
         except asyncio.CancelledError:
             pass
         # Закрываем пул соединений к БД

@@ -44,3 +44,6 @@ VPN_KEYS_FILE = "vpn_keys.txt"
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)
 TG_PROVIDER_TOKEN = os.getenv("TG_PROVIDER_TOKEN", "")
 
+# Outline Management API URL (получить из Outline Manager)
+OUTLINE_API_URL = os.getenv("OUTLINE_API_URL", "")
+

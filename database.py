@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
 import logging
 import config
+import outline_api
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,8 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS subscriptions (
                 id SERIAL PRIMARY KEY,
                 telegram_id BIGINT UNIQUE NOT NULL,
-                vpn_key TEXT NOT NULL,
+                outline_key_id INTEGER,
+                vpn_key TEXT,
                 expires_at TIMESTAMP NOT NULL,
                 reminder_sent BOOLEAN DEFAULT FALSE,
                 reminder_3d_sent BOOLEAN DEFAULT FALSE,
@@ -84,6 +86,9 @@ async def init_db():
         try:
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_3d_sent BOOLEAN DEFAULT FALSE")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_24h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS outline_key_id INTEGER")
+            # Делаем vpn_key nullable для поддержки старых записей
+            await conn.execute("ALTER TABLE subscriptions ALTER COLUMN vpn_key DROP NOT NULL")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_3h_sent BOOLEAN DEFAULT FALSE")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_6h_sent BOOLEAN DEFAULT FALSE")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS admin_grant_days INTEGER DEFAULT NULL")
@@ -654,18 +659,37 @@ async def _get_free_vpn_key_atomic(conn, telegram_id: int) -> Optional[str]:
     return vpn_key
 
 
+def _calculate_subscription_days(months: int) -> int:
+    """
+    Рассчитать количество дней для подписки на основе количества месяцев
+    
+    Args:
+        months: Количество месяцев (1, 3, 6, 12)
+    
+    Returns:
+        Количество дней (30, 90, 180, 365)
+    """
+    days_map = {
+        1: 30,
+        3: 90,
+        6: 180,
+        12: 365
+    }
+    return days_map.get(months, months * 30)
+
+
 async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id: int) -> Tuple[Optional[datetime], bool, Optional[str]]:
     """Атомарно подтвердить платеж в одной транзакции
     
     В одной транзакции:
     - обновляет payment → approved
-    - получает VPN-ключ из таблицы vpn_keys (если нужен новый)
+    - создает VPN-ключ через Outline API (если нужен новый)
     - создает/продлевает subscription с VPN-ключом
     - записывает событие в audit_log
     
     Логика выдачи ключей:
-    - Если подписка активна (expires_at > now): переиспользуется существующий ключ
-    - Если подписка закончилась (expires_at <= now) или её нет: используется новый ключ из БД
+    - Если подписка активна (expires_at > now): переиспользуется существующий ключ Outline
+    - Если подписка закончилась (expires_at <= now) или её нет: создается новый ключ через Outline API
     
     Args:
         payment_id: ID платежа
@@ -702,7 +726,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 
                 # 3. Получаем подписку БЕЗ фильтра по активности (нужно проверить expires_at)
                 now = datetime.now()
-                tariff_duration = timedelta(days=months * 30)
+                days = _calculate_subscription_days(months)
+                tariff_duration = timedelta(days=days)
                 
                 subscription_row = await conn.fetchrow(
                     "SELECT * FROM subscriptions WHERE telegram_id = $1",
@@ -710,49 +735,65 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 )
                 subscription = dict(subscription_row) if subscription_row else None
                 
-                # 4. Определяем, какой ключ использовать
+                # 4. Определяем, какой ключ использовать (Outline API)
+                final_outline_key_id = None
+                
                 if subscription:
                     subscription_expires_at = subscription["expires_at"]
+                    outline_key_id = subscription.get("outline_key_id")
+                    
                     if subscription_expires_at > now:
-                        # Подписка активна - переиспользуем существующий ключ
-                        final_vpn_key = subscription["vpn_key"]
+                        # Подписка активна - НЕ создаем новый ключ, только продлеваем срок
+                        final_vpn_key = subscription.get("vpn_key")
+                        final_outline_key_id = outline_key_id
                         base_date = max(subscription_expires_at, now)
                         expires_at = base_date + tariff_duration
                         is_renewal = True
                         history_action_type = "renewal"
                         start_date = subscription_expires_at if subscription_expires_at > now else now
-                        logger.info(f"Renewing active subscription for user {telegram_id}, reusing vpn_key, expires_at: {subscription_expires_at} -> {expires_at}")
+                        logger.info(f"Renewing active subscription for user {telegram_id}, keeping outline_key_id={outline_key_id}, expires_at: {subscription_expires_at} -> {expires_at}")
                     else:
-                        # Подписка закончилась - получаем новый ключ из БД
-                        final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
-                        if not final_vpn_key:
-                            logger.error(f"No free VPN keys available for payment {payment_id}, user {telegram_id}")
+                        # Подписка закончилась - удаляем старый ключ и создаем новый
+                        if outline_key_id:
+                            # Удаляем старый ключ из Outline (вне транзакции, но логируем)
+                            # Не можем вызывать async функцию внутри транзакции БД, поэтому 
+                            # удаление произойдет в background task, а здесь просто создаем новый
+                            logger.info(f"Subscription expired for user {telegram_id}, will delete old outline_key_id={outline_key_id} and create new")
+                        
+                        # Создаем новый ключ через Outline API
+                        key_result = await outline_api.create_outline_key()
+                        if not key_result:
+                            logger.error(f"Failed to create Outline key for payment {payment_id}, user {telegram_id}")
                             return None, False, None
+                        
+                        final_outline_key_id, final_vpn_key = key_result
                         expires_at = now + tariff_duration
                         is_renewal = False
                         history_action_type = "reissue"
                         start_date = now
-                        logger.info(f"Subscription expired for user {telegram_id}, using new vpn_key from DB, expires_at: {expires_at}")
+                        logger.info(f"Created new Outline key for expired subscription, user {telegram_id}, outline_key_id={final_outline_key_id}")
                 else:
-                    # Подписки никогда не было - получаем новый ключ из БД
-                    final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
-                    if not final_vpn_key:
-                        logger.error(f"No free VPN keys available for payment {payment_id}, user {telegram_id}")
+                    # Подписки никогда не было - создаем новый ключ
+                    key_result = await outline_api.create_outline_key()
+                    if not key_result:
+                        logger.error(f"Failed to create Outline key for payment {payment_id}, user {telegram_id}")
                         return None, False, None
+                    
+                    final_outline_key_id, final_vpn_key = key_result
                     expires_at = now + tariff_duration
                     is_renewal = False
                     history_action_type = "purchase"
                     start_date = now
-                    logger.info(f"Creating new subscription for user {telegram_id}, using new vpn_key from DB, expires_at: {expires_at}")
+                    logger.info(f"Created new Outline key for new subscription, user {telegram_id}, outline_key_id={final_outline_key_id}")
                 
                 # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в FALSE при продлении)
                 # Для оплаченных тарифов admin_grant_days = NULL
                 await conn.execute(
-                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
-                       VALUES ($1, $2, $3, FALSE, FALSE, FALSE, FALSE, FALSE, NULL)
+                    """INSERT INTO subscriptions (telegram_id, outline_key_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
+                       VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, FALSE, FALSE, NULL)
                        ON CONFLICT (telegram_id) 
-                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL""",
-                    telegram_id, final_vpn_key, expires_at
+                       DO UPDATE SET outline_key_id = $2, vpn_key = $3, expires_at = $4, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL""",
+                    telegram_id, final_outline_key_id, final_vpn_key, expires_at
                 )
                 
                 # 6. Записываем в историю подписок
@@ -1460,40 +1501,53 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 )
                 subscription = dict(subscription_row) if subscription_row else None
                 
-                # 2. Определяем логику
+                # 2. Определяем логику (Outline API)
+                final_outline_key_id = None
+                
                 if subscription:
                     subscription_expires_at = subscription["expires_at"]
+                    outline_key_id = subscription.get("outline_key_id")
+                    
                     if subscription_expires_at > now:
                         # Активная подписка - продлеваем, используем текущий ключ
-                        final_vpn_key = subscription["vpn_key"]
+                        final_vpn_key = subscription.get("vpn_key")
+                        final_outline_key_id = outline_key_id
                         base_date = max(subscription_expires_at, now)
                         expires_at = base_date + duration
                         start_date = now  # Для истории подписок используем текущую дату
                     else:
-                        # Подписка истекла - получаем новый ключ
-                        final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
-                        if not final_vpn_key:
-                            logger.error(f"No free VPN keys available for admin grant to user {telegram_id}")
+                        # Подписка истекла - удаляем старый ключ и создаем новый
+                        if outline_key_id:
+                            logger.info(f"Admin grant: subscription expired for user {telegram_id}, will delete old outline_key_id={outline_key_id} and create new")
+                        
+                        # Создаем новый ключ через Outline API
+                        key_result = await outline_api.create_outline_key()
+                        if not key_result:
+                            logger.error(f"Failed to create Outline key for admin grant to user {telegram_id}")
                             return None, None
+                        
+                        final_outline_key_id, final_vpn_key = key_result
                         expires_at = now + duration
                         start_date = now
                 else:
-                    # Подписки нет - получаем новый ключ
-                    final_vpn_key = await _get_free_vpn_key_atomic(conn, telegram_id)
-                    if not final_vpn_key:
-                        logger.error(f"No free VPN keys available for admin grant to user {telegram_id}")
+                    # Подписки нет - создаем новый ключ
+                    key_result = await outline_api.create_outline_key()
+                    if not key_result:
+                        logger.error(f"Failed to create Outline key for admin grant to user {telegram_id}")
                         return None, None
+                    
+                    final_outline_key_id, final_vpn_key = key_result
                     expires_at = now + duration
                     start_date = now
                 
                 # 3. Создаем/обновляем подписку
                 # Сохраняем количество дней для админ-доступа (для умных напоминаний)
                 await conn.execute(
-                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
-                       VALUES ($1, $2, $3, FALSE, FALSE, FALSE, FALSE, FALSE, $4)
+                    """INSERT INTO subscriptions (telegram_id, outline_key_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
+                       VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, FALSE, FALSE, $5)
                        ON CONFLICT (telegram_id) 
-                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = $4""",
-                    telegram_id, final_vpn_key, expires_at, days
+                       DO UPDATE SET outline_key_id = $2, vpn_key = $3, expires_at = $4, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = $5""",
+                    telegram_id, final_outline_key_id, final_vpn_key, expires_at, days
                 )
                 
                 # 4. Записываем в историю подписок
