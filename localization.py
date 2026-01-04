@@ -30,8 +30,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "select_tariff": "Выберите срок доступа\n\nAtlas Secure работает по принципу ограниченного доступа.\nКаждый период — это частная конфигурация, а не массовый тариф.\n\nКаждый уровень доступа включает:\n— индивидуальный VPN-ключ, закреплённый исключительно за вами\n— zero-logs архитектуру без хранения сессий и метаданных\n— стабильное соединение без лимитов и деградации скорости\n— приоритетную поддержку",
         "tariff_button_1": "1 месяц Временный доступ · 299 ₽",
         "tariff_button_3": "3 месяца Стандартный доступ · 799 ₽",
-        "tariff_button_6": "6 месяцев Расширенный доступ · 1 499 ₽",
-        "tariff_button_12": "12 месяцев Приоритетный доступ · 2 799 ₽",
+        "tariff_button_6": "6 месяцев Расширенный доступ · 1 199 ₽",
+        "tariff_button_12": "12 месяцев Приоритетный доступ · 1 699 ₽",
         
         # Выбор способа оплаты
         "select_payment": "Выберите способ оплаты.",
@@ -120,8 +120,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "select_tariff": "Select access period\n\nAtlas Secure operates on a limited access principle.\nEach period is a private configuration, not a mass tariff.\n\nEach access level includes:\n— individual VPN key assigned exclusively to you\n— zero-logs architecture without session and metadata storage\n— stable connection without limits and speed degradation\n— priority support",
         "tariff_button_1": "1 month Temporary Access · 299 ₽",
         "tariff_button_3": "3 months Standard Access · 799 ₽",
-        "tariff_button_6": "6 months Extended Access · 1 499 ₽",
-        "tariff_button_12": "12 months Priority Access · 2 799 ₽",
+        "tariff_button_6": "6 months Extended Access · 1 199 ₽",
+        "tariff_button_12": "12 months Priority Access · 1 699 ₽",
         
         # Выбор способа оплаты
         "select_payment": "Choose payment method.",
@@ -195,8 +195,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "select_tariff": "Kirish muddatini tanlang\n\nAtlas Secure cheklangan kirish printsipi asosida ishlaydi.\nHar bir davr — bu shaxsiy konfiguratsiya, emas ommaviy tarif.\n\nHar bir kirish darajasi quyidagilarni o'z ichiga oladi:\n— sizga xos qilingan individual VPN kalit\n— sessiya va metama'lumotlarni saqlashsiz zero-logs arxitektura\n— cheklovlar va tezlik pasayishi bo'lmagan barqaror ulanish\n— ustuvor qo'llab-quvvatlash",
         "tariff_button_1": "1 oy Vaqtinchalik kirish · 299 ₽",
         "tariff_button_3": "3 oy Standart kirish · 799 ₽",
-        "tariff_button_6": "6 oy Kengaytirilgan kirish · 1 499 ₽",
-        "tariff_button_12": "12 oy Ustuvor kirish · 2 799 ₽",
+        "tariff_button_6": "6 oy Kengaytirilgan kirish · 1 199 ₽",
+        "tariff_button_12": "12 oy Ustuvor kirish · 1 699 ₽",
         "select_payment": "To'lov usulini tanlang.",
         "payment_test": "Xizmat rejimi Mavjud emas",
         "payment_sbp": "SBP",
@@ -257,8 +257,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "select_tariff": "Муддати дастрасиро интихоб кунед\n\nAtlas Secure ба принсипи дастрасии маҳдуд кор мекунад.\nҲар як давра — ин конфигуратсияи хусусӣ аст, на тарифи оммавӣ.\n\nҲар як сатҳи дастрасӣ дорои:\n— калиди VPN-и шахсӣ, ки хусусан ба шумо закреп шудааст\n— меъмории zero-logs бе нигоҳдории сессияҳо ва метамаълумот\n— пайванди устувор бе маҳдудияту коҳиши суръат\n— дастгирии афзалиятнок",
         "tariff_button_1": "1 моҳ Дастрасии муваққатӣ · 299 ₽",
         "tariff_button_3": "3 моҳ Дастрасии стандартӣ · 799 ₽",
-        "tariff_button_6": "6 моҳ Дастрасии васеъ · 1 499 ₽",
-        "tariff_button_12": "12 моҳ Дастрасии афзалиятнок · 2 799 ₽",
+        "tariff_button_6": "6 моҳ Дастрасии васеъ · 1 199 ₽",
+        "tariff_button_12": "12 моҳ Дастрасии афзалиятнок · 1 699 ₽",
         "select_payment": "Усули пардохтро интихоб кунед.",
         "payment_test": "Реҷаи хизматӣ Дастрас нест",
         "payment_sbp": "СБП",
