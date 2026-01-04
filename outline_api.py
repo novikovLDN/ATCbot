@@ -32,8 +32,10 @@ async def create_outline_key() -> Optional[Tuple[int, str]]:
                 access_url = data.get("accessUrl")
                 
                 if key_id is not None and access_url:
-                    logger.info(f"Outline key created: key_id={key_id}")
-                    return (key_id, access_url)
+                    # Приводим key_id к int, так как БД ожидает INTEGER
+                    key_id_int = int(key_id)
+                    logger.info(f"Outline key created: key_id={key_id_int}")
+                    return (key_id_int, access_url)
                 else:
                     logger.error(f"Invalid response from Outline API: missing id or accessUrl")
                     return None
