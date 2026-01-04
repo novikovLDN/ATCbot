@@ -46,6 +46,10 @@ class AdminDiscountCreate(StatesGroup):
     waiting_for_percent = State()
     waiting_for_expires = State()
 
+
+class PromoCodeInput(StatesGroup):
+    waiting_for_promo = State()
+
 router = Router()
 
 logger = logging.getLogger(__name__)
@@ -200,18 +204,21 @@ def get_vpn_key_keyboard(language: str):
     return keyboard
 
 
-async def get_tariff_keyboard(language: str, telegram_id: int):
-    """Клавиатура выбора тарифа с учетом скидок (VIP имеет высший приоритет)"""
+async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None):
+    """Клавиатура выбора тарифа с учетом скидок (промокод имеет высший приоритет)"""
     buttons = []
     
-    # ПРИОРИТЕТ 1: Проверяем VIP-статус (высший приоритет)
-    is_vip = await database.is_vip_user(telegram_id)
+    # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
+    has_promo = promo_code and promo_code.upper() == "ЭЛ50"
     
-    # ПРИОРИТЕТ 2: Проверяем персональную скидку (только если нет VIP)
-    personal_discount = await database.get_user_discount(telegram_id) if not is_vip else None
+    # ПРИОРИТЕТ 1: Проверяем VIP-статус (только если нет промокода)
+    is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
     
-    # ПРИОРИТЕТ 3: Проверяем скидку первой покупки (только если нет VIP и персональной)
-    is_first_purchase = await database.is_user_first_purchase(telegram_id) if not is_vip and not personal_discount else False
+    # ПРИОРИТЕТ 2: Проверяем персональную скидку (только если нет промокода и VIP)
+    personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
+    
+    # ПРИОРИТЕТ 3: Проверяем скидку первой покупки (только если нет промокода, VIP и персональной)
+    is_first_purchase = await database.is_user_first_purchase(telegram_id) if not has_promo and not is_vip and not personal_discount else False
     
     for tariff_key, tariff_data in config.TARIFFS.items():
         base_price = tariff_data["price"]
@@ -219,7 +226,13 @@ async def get_tariff_keyboard(language: str, telegram_id: int):
         has_discount_for_tariff = False
         
         # Применяем скидку в порядке приоритета
-        if is_vip:
+        if has_promo:
+            # Промокод 50% применяется ко всем тарифам
+            discounted_price = int(base_price * 0.50)  # 50% скидка
+            price = discounted_price
+            discount_label = localization.get_text(language, "promo_discount_label", default="🎟 Промокод")
+            has_discount_for_tariff = True
+        elif is_vip:
             # VIP-скидка 30% применяется ко всем тарифам
             discounted_price = int(base_price * 0.70)  # 30% скидка
             price = discounted_price
@@ -299,6 +312,12 @@ async def get_tariff_keyboard(language: str, telegram_id: int):
             text = base_text
         
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}")])
+    
+    # Кнопка ввода промокода
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "enter_promo_button", default="🎟 Ввести промокод"),
+        callback_data="enter_promo"
+    )])
     
     buttons.append([InlineKeyboardButton(
         text=localization.get_text(language, "back"),
@@ -957,15 +976,61 @@ async def callback_subscription_history(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "menu_buy_vpn")
-async def callback_buy_vpn(callback: CallbackQuery):
+async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     """Купить VPN - выбор тарифа"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
+    # Очищаем промокод из состояния при входе в меню
+    await state.update_data(promo_code=None)
+    
     text = localization.get_text(language, "select_tariff")
-    await callback.message.edit_text(text, reply_markup=await get_tariff_keyboard(language, telegram_id))
+    await callback.message.edit_text(text, reply_markup=await get_tariff_keyboard(language, telegram_id, None))
     await callback.answer()
+
+
+@router.callback_query(F.data == "enter_promo")
+async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
+    """Обработчик кнопки ввода промокода"""
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Устанавливаем состояние ожидания промокода
+    await state.set_state(PromoCodeInput.waiting_for_promo)
+    
+    text = localization.get_text(language, "enter_promo_text", default="Введите промокод:")
+    await callback.message.answer(text)
+
+
+@router.message(PromoCodeInput.waiting_for_promo)
+async def process_promo_code(message: Message, state: FSMContext):
+    """Обработчик ввода промокода"""
+    telegram_id = message.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    promo_code = message.text.strip()
+    
+    # Проверяем промокод (case-insensitive)
+    if promo_code.upper() == "ЭЛ50":
+        # Промокод валиден
+        await state.update_data(promo_code="ЭЛ50")
+        await state.set_state(None)  # Сбрасываем состояние
+        
+        text = localization.get_text(language, "promo_applied", default="✅ Промокод применён")
+        await message.answer(text)
+        
+        # Обновляем экран выбора тарифа
+        tariff_text = localization.get_text(language, "select_tariff")
+        await message.answer(tariff_text, reply_markup=await get_tariff_keyboard(language, telegram_id, "ЭЛ50"))
+    else:
+        # Промокод невалиден
+        text = localization.get_text(language, "invalid_promo", default="❌ Неверный промокод")
+        await message.answer(text)
 
 
 @router.callback_query(F.data.startswith("tariff_"))
@@ -981,39 +1046,41 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Платежи временно недоступны", show_alert=True)
         return
     
-    # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
+    # Получаем промокод из состояния
+    state_data = await state.get_data()
+    promo_code = state_data.get("promo_code")
+    has_promo = promo_code and promo_code.upper() == "ЭЛ50"
+    
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     base_price = tariff_data["price"]
     
-    # ПРИОРИТЕТ 1: VIP-статус
-    is_vip = await database.is_vip_user(telegram_id)
-    is_first_purchase = False  # Инициализируем переменную
-    
-    if is_vip:
-        amount = int(base_price * 0.70)  # 30% скидка
+    # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
+    if has_promo:
+        amount = int(base_price * 0.50)  # 50% скидка
+        payload = f"purchase:promo:EL50:{telegram_id}:{tariff_key}:{int(time.time())}"
     else:
-        # ПРИОРИТЕТ 2: Персональная скидка
-        personal_discount = await database.get_user_discount(telegram_id)
+        # ПРИОРИТЕТ 1: VIP-статус
+        is_vip = await database.is_vip_user(telegram_id)
         
-        if personal_discount:
-            discount_percent = personal_discount["discount_percent"]
-            amount = int(base_price * (1 - discount_percent / 100))
+        if is_vip:
+            amount = int(base_price * 0.70)  # 30% скидка
+            payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
         else:
-            # ПРИОРИТЕТ 3: Приветственная скидка (для новых пользователей)
-            is_first_purchase = await database.is_user_first_purchase(telegram_id)
-            if is_first_purchase:
-                amount = int(base_price * 0.50)  # 50% скидка на все тарифы
+            # ПРИОРИТЕТ 2: Персональная скидка
+            personal_discount = await database.get_user_discount(telegram_id)
+            if personal_discount:
+                discount_percent = personal_discount["discount_percent"]
+                amount = int(base_price * (1 - discount_percent / 100))
+                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
             else:
-                amount = base_price
-    
-    # Формируем payload
-    import time
-    if is_first_purchase:
-        # Для новых пользователей используем формат с first
-        payload = f"purchase:first:{telegram_id}:{tariff_key}:{int(time.time())}"
-    else:
-        # Для обычных покупок - стандартный формат
-        payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
+                # ПРИОРИТЕТ 3: Приветственная скидка
+                is_first_purchase = await database.is_user_first_purchase(telegram_id)
+                if is_first_purchase:
+                    amount = int(base_price * 0.50)  # 50% скидка на все тарифы
+                    payload = f"purchase:first:{telegram_id}:{tariff_key}:{int(time.time())}"
+                else:
+                    amount = base_price
+                    payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
     
     # Формируем описание тарифа
     months = tariff_data["months"]
@@ -1086,6 +1153,16 @@ async def process_successful_payment(message: Message):
             
             payload_user_id = int(parts[1])
             tariff_key = parts[2]
+        elif payload.startswith("purchase:promo:"):
+            # Покупка с промокодом
+            parts = payload.split(":")
+            if len(parts) < 5:
+                logger.error(f"Invalid promo purchase payload format: {payload}")
+                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+                return
+            
+            payload_user_id = int(parts[3])
+            tariff_key = parts[4]
         elif payload.startswith("purchase:first:"):
             # Первая покупка (приветственная скидка)
             parts = payload.split(":")

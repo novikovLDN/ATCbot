@@ -21,10 +21,10 @@ except ValueError:
 
 # Тарифы (в месяцах и их стоимость в рублях)
 TARIFFS = {
-    "1": {"months": 1, "price": 299},
-    "3": {"months": 3, "price": 799},
-    "6": {"months": 6, "price": 1199},
-    "12": {"months": 12, "price": 1699},
+    "1": {"months": 1, "price": 149},
+    "3": {"months": 3, "price": 399},
+    "6": {"months": 6, "price": 599},
+    "12": {"months": 12, "price": 899},
 }
 
 # Реквизиты СБП (для оплаты)
