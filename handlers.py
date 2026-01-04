@@ -895,12 +895,7 @@ async def callback_support(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(
-        language,
-        "support_text",
-        email=config.SUPPORT_EMAIL,
-        telegram=config.SUPPORT_TELEGRAM
-    )
+    text = localization.get_text(language, "support_text")
     await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
     await callback.answer()
 
