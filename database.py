@@ -4,6 +4,7 @@ import sys
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
 import logging
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,25 @@ async def init_db():
                 telegram_id BIGINT UNIQUE NOT NULL,
                 vpn_key TEXT NOT NULL,
                 expires_at TIMESTAMP NOT NULL,
-                reminder_sent BOOLEAN DEFAULT FALSE
+                reminder_sent BOOLEAN DEFAULT FALSE,
+                reminder_3d_sent BOOLEAN DEFAULT FALSE,
+                reminder_24h_sent BOOLEAN DEFAULT FALSE,
+                reminder_3h_sent BOOLEAN DEFAULT FALSE,
+                reminder_6h_sent BOOLEAN DEFAULT FALSE,
+                admin_grant_days INTEGER DEFAULT NULL
             )
         """)
+        
+        # Миграция: добавляем новые поля для напоминаний, если их нет
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_3d_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_24h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_3h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_6h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS admin_grant_days INTEGER DEFAULT NULL")
+        except Exception:
+            # Колонки уже существуют
+            pass
         
         # Таблица vpn_keys
         await conn.execute("""
@@ -259,18 +276,41 @@ async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, An
 
 
 async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
-    """Создать платеж и вернуть его ID. Возвращает None, если уже есть pending платеж"""
+    """Создать платеж и вернуть его ID. Возвращает None, если уже есть pending платеж
+    
+    Автоматически применяет скидку 25% для первой покупки на тарифы 3/6/12 месяцев.
+    """
     # Проверяем наличие pending платежа
     existing_payment = await get_pending_payment_by_user(telegram_id)
     if existing_payment:
         return None  # У пользователя уже есть pending платеж
     
+    # Проверяем, является ли это первой покупкой
+    is_first_purchase = await is_user_first_purchase(telegram_id)
+    
+    # Рассчитываем цену с учетом скидки
+    tariff_data = config.TARIFFS.get(tariff, config.TARIFFS["1"])
+    base_price = tariff_data["price"]
+    
+    # Применяем скидку 25% для первой покупки на тарифы 3/6/12 месяцев
+    if is_first_purchase and tariff in ["3", "6", "12"]:
+        discounted_price = int(base_price * 0.75)  # 25% скидка
+        amount = discounted_price
+    else:
+        amount = base_price
+    
     pool = await get_pool()
     async with pool.acquire() as conn:
         payment_id = await conn.fetchval(
-            "INSERT INTO payments (telegram_id, tariff, status) VALUES ($1, $2, 'pending') RETURNING id",
-            telegram_id, tariff
+            "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
+            telegram_id, tariff, amount
         )
+        
+        # Логируем применение скидки
+        if is_first_purchase and tariff in ["3", "6", "12"]:
+            details = f"First purchase discount applied: tariff={tariff}, base_price={base_price}, discounted_price={discounted_price}"
+            await _log_audit_event_atomic(conn, "first_purchase_discount_applied", telegram_id, telegram_id, details)
+        
         return payment_id
 
 
@@ -391,10 +431,10 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tu
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent)
-               VALUES ($1, $2, $3, FALSE)
+            """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
+               VALUES ($1, $2, $3, FALSE, FALSE, FALSE, FALSE, FALSE, NULL)
                ON CONFLICT (telegram_id) 
-               DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
+               DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL""",
             telegram_id, vpn_key, expires_at
         )
         return expires_at, is_renewal
@@ -659,11 +699,12 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                     logger.info(f"Creating new subscription for user {telegram_id}, using new vpn_key from DB, expires_at: {expires_at}")
                 
                 # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в FALSE при продлении)
+                # Для оплаченных тарифов admin_grant_days = NULL
                 await conn.execute(
-                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent)
-                       VALUES ($1, $2, $3, FALSE)
+                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
+                       VALUES ($1, $2, $3, FALSE, FALSE, FALSE, FALSE, FALSE, NULL)
                        ON CONFLICT (telegram_id) 
-                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
+                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL""",
                     telegram_id, final_vpn_key, expires_at
                 )
                 
@@ -718,13 +759,85 @@ async def get_subscriptions_needing_reminder() -> list:
 
 
 async def mark_reminder_sent(telegram_id: int):
-    """Отметить, что напоминание отправлено пользователю"""
+    """Отметить, что напоминание отправлено пользователю (старая функция, для совместимости)"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE subscriptions SET reminder_sent = TRUE WHERE telegram_id = $1",
             telegram_id
         )
+
+
+async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
+    """Отметить, что конкретное напоминание отправлено пользователю
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        flag_name: Имя флага ('reminder_3d_sent', 'reminder_24h_sent', 'reminder_3h_sent', 'reminder_6h_sent')
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE subscriptions SET {flag_name} = TRUE WHERE telegram_id = $1",
+            telegram_id
+        )
+
+
+async def is_user_first_purchase(telegram_id: int) -> bool:
+    """Проверить, является ли это первой покупкой пользователя
+    
+    Пользователь считается новым, если:
+    - у него НИКОГДА не было подтверждённой оплаты (status = 'approved')
+    - у него НИКОГДА не было активной или истёкшей подписки
+    
+    Returns:
+        True если это первая покупка, False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Проверяем наличие подтверждённых платежей
+        approved_payment = await conn.fetchrow(
+            "SELECT id FROM payments WHERE telegram_id = $1 AND status = 'approved' LIMIT 1",
+            telegram_id
+        )
+        
+        if approved_payment:
+            return False
+        
+        # Проверяем наличие подписок в истории (любых, включая истёкшие)
+        subscription_history = await conn.fetchrow(
+            """SELECT id FROM subscription_history 
+               WHERE telegram_id = $1 
+               AND action_type IN ('purchase', 'renewal', 'reissue')
+               LIMIT 1""",
+            telegram_id
+        )
+        
+        if subscription_history:
+            return False
+        
+        return True
+
+
+async def get_subscriptions_for_reminders() -> list:
+    """Получить все активные подписки, которым нужно отправить напоминания
+    
+    Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        rows = await conn.fetch(
+            """SELECT s.*, 
+                      (SELECT action_type FROM subscription_history 
+                       WHERE telegram_id = s.telegram_id 
+                       ORDER BY created_at DESC LIMIT 1) as last_action_type
+               FROM subscriptions s
+               WHERE s.expires_at > $1
+               ORDER BY s.expires_at ASC""",
+            now
+        )
+        return [dict(row) for row in rows]
 
 
 async def get_admin_stats() -> Dict[str, int]:
@@ -1327,12 +1440,13 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                     start_date = now
                 
                 # 3. Создаем/обновляем подписку
+                # Сохраняем количество дней для админ-доступа (для умных напоминаний)
                 await conn.execute(
-                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent)
-                       VALUES ($1, $2, $3, FALSE)
+                    """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
+                       VALUES ($1, $2, $3, FALSE, FALSE, FALSE, FALSE, FALSE, $4)
                        ON CONFLICT (telegram_id) 
-                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE""",
-                    telegram_id, final_vpn_key, expires_at
+                       DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = $4""",
+                    telegram_id, final_vpn_key, expires_at, days
                 )
                 
                 # 4. Записываем в историю подписок

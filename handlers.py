@@ -216,15 +216,39 @@ def get_profile_keyboard(language: str):
     return keyboard
 
 
-def get_tariff_keyboard(language: str):
-    """Клавиатура выбора тарифа"""
+async def get_tariff_keyboard(language: str, telegram_id: int):
+    """Клавиатура выбора тарифа с учетом скидок для первой покупки"""
     buttons = []
+    
+    # Проверяем, является ли это первой покупкой
+    is_first_purchase = await database.is_user_first_purchase(telegram_id)
+    
     for tariff_key, tariff_data in config.TARIFFS.items():
-        price = tariff_data["price"]
+        base_price = tariff_data["price"]
         
-        # Используем локализованные тексты кнопок
-        tariff_button_key = f"tariff_button_{tariff_key}"
-        text = localization.get_text(language, tariff_button_key, price=price)
+        # Применяем скидку 25% для первой покупки на тарифы 3/6/12 месяцев
+        if is_first_purchase and tariff_key in ["3", "6", "12"]:
+            discounted_price = int(base_price * 0.75)  # 25% скидка
+            price = discounted_price
+            # Формируем текст с пометкой о скидке
+            base_text = localization.get_text(language, f"tariff_button_{tariff_key}")
+            # Извлекаем базовую часть текста (без цены)
+            # Формат: "3 месяца Стандартный доступ · 799 ₽"
+            if "·" in base_text:
+                parts = base_text.split("·")
+                base_part = parts[0].strip()
+                discount_label = localization.get_text(language, "first_purchase_discount_label", default="🎁 Первая покупка")
+                text = f"{base_part} · {discount_label} · {price} ₽"
+            else:
+                # Если формат неожиданный, просто заменяем цену
+                text = base_text.replace(str(base_price), str(price))
+                discount_label = localization.get_text(language, "first_purchase_discount_label", default="🎁 Первая покупка")
+                text = f"{text} · {discount_label}"
+        else:
+            price = base_price
+            # Используем обычные локализованные тексты кнопок
+            tariff_button_key = f"tariff_button_{tariff_key}"
+            text = localization.get_text(language, tariff_button_key)
         
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}")])
     
@@ -721,7 +745,7 @@ async def callback_buy_vpn(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "select_tariff")
-    await callback.message.edit_text(text, reply_markup=get_tariff_keyboard(language))
+    await callback.message.edit_text(text, reply_markup=await get_tariff_keyboard(language, telegram_id))
     await callback.answer()
 
 
@@ -764,12 +788,22 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tariff_key = data.get("tariff", "1")
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    base_price = tariff_data["price"]
+    
+    # Проверяем, является ли это первой покупкой, чтобы показать правильную сумму
+    is_first_purchase = await database.is_user_first_purchase(telegram_id)
+    
+    # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
+    if is_first_purchase and tariff_key in ["3", "6", "12"]:
+        amount = int(base_price * 0.75)  # 25% скидка
+    else:
+        amount = base_price
     
     # Формируем текст с реквизитами
     text = localization.get_text(
         language, 
         "sbp_payment_text",
-        amount=tariff_data['price']
+        amount=amount
     )
     
     await callback.message.edit_text(text, reply_markup=get_sbp_payment_keyboard(language))
@@ -806,20 +840,28 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return
     
+    # Получаем данные платежа, чтобы показать реальную сумму администратору
+    payment = await database.get_payment(payment_id)
+    actual_amount = payment["amount"] if payment else config.TARIFFS.get(tariff_key, config.TARIFFS["1"])["price"]
+    
     # Отправляем сообщение пользователю
     text = localization.get_text(language, "payment_pending")
     await callback.message.edit_text(text, reply_markup=get_pending_payment_keyboard(language))
     await callback.answer()
     
-    # Уведомляем администратора
+    # Уведомляем администратора с реальной суммой платежа
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     username = callback.from_user.username or "не указан"
     
-    admin_text = f"💰 Новая оплата\n"
-    admin_text += f"Пользователь: @{username}\n"
-    admin_text += f"Telegram ID: {telegram_id}\n"
-    admin_text += f"Тариф: {tariff_data['months']} месяцев\n"
-    admin_text += f"Стоимость: {tariff_data['price']} руб."
+    # Используем локализацию для админ-уведомления
+    admin_text = localization.get_text(
+        "ru",  # Админ всегда видит на русском
+        "admin_payment_notification",
+        username=username,
+        telegram_id=telegram_id,
+        tariff=tariff_data['months'],
+        price=actual_amount
+    )
     
     try:
         await callback.bot.send_message(

@@ -61,6 +61,19 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Напоминание об окончании подписки
         "subscription_expiring_reminder": "⏳ Срок доступа скоро истекает.\n\nДо окончания вашей подписки осталось 3 дня.\n\nВы можете продлить доступ в любое время —\nповторная покупка автоматически увеличит срок действия.",
         
+        # Умные напоминания - админ-доступ
+        "reminder_admin_1day_6h": "⏳ Временный доступ Atlas Secure завершается через 6 часов.\n\nРекомендуем оформить полноценную подписку,\nчтобы сохранить стабильный доступ без перерыва.",
+        "reminder_admin_7days_24h": "⏳ Временный доступ Atlas Secure завершается через 24 часа.\n\nРекомендуем оформить подписку на 1 месяц\nдля непрерывного и стабильного подключения.",
+        
+        # Умные напоминания - оплаченные тарифы
+        "reminder_paid_3d": "⏳ Срок вашего доступа Atlas Secure истекает через 3 дня.\n\nВы можете продлить подписку заранее,\nчтобы избежать перерыва в соединении.",
+        "reminder_paid_24h": "⏳ Срок вашего доступа Atlas Secure истекает через 24 часа.\n\nРекомендуем продлить подписку заранее,\nчтобы сохранить непрерывное соединение.",
+        "reminder_paid_3h": "⏳ Срок вашего доступа Atlas Secure истекает через 3 часа.\n\nПродлите подписку сейчас,\nчтобы избежать перерыва в соединении.",
+        
+        # Скидка на первую покупку
+        "first_purchase_discount_label": "🎁 Первая покупка",
+        "subscribe_1_month_button": "🔐 Подписка на 1 месяц",
+        
         # Профиль - без подписки
         "no_subscription": "❌ Активного доступа нет.\n\nAtlas Secure — приватный VPN-сервис\nс индивидуальными ключами подключения.\n\nВы можете оформить доступ в любое время.",
         
@@ -174,6 +187,19 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Напоминание об окончании подписки
         "subscription_expiring_reminder": "⏳ Access period expires soon.\n\n3 days left until your subscription expires.\n\nYou can renew access at any time —\na repeated purchase will automatically extend the period.",
         
+        # Умные напоминания - админ-доступ
+        "reminder_admin_1day_6h": "⏳ Temporary Atlas Secure access expires in 6 hours.\n\nWe recommend purchasing a full subscription\nto maintain stable access without interruption.",
+        "reminder_admin_7days_24h": "⏳ Temporary Atlas Secure access expires in 24 hours.\n\nWe recommend purchasing a 1-month subscription\nfor continuous and stable connection.",
+        
+        # Умные напоминания - оплаченные тарифы
+        "reminder_paid_3d": "⏳ Your Atlas Secure access expires in 3 days.\n\nYou can renew your subscription in advance\nto avoid connection interruption.",
+        "reminder_paid_24h": "⏳ Your Atlas Secure access expires in 24 hours.\n\nWe recommend renewing your subscription in advance\nto maintain continuous connection.",
+        "reminder_paid_3h": "⏳ Your Atlas Secure access expires in 3 hours.\n\nRenew your subscription now\nto avoid connection interruption.",
+        
+        # Скидка на первую покупку
+        "first_purchase_discount_label": "🎁 First Purchase",
+        "subscribe_1_month_button": "🔐 1 Month Subscription",
+        
         # Профиль - без подписки
         "no_subscription": "❌ No active access.\n\nAtlas Secure — private VPN service\nwith individual connection keys.\n\nYou can get access at any time.",
         
@@ -255,6 +281,19 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_renewal_hint": "\n\nHar qanday takroriy xarid obuna muddatini avtomatik ravishda uzaytiradi.",
         "profile_payment_check": "🕒 To'lov tekshiruvda.\n\nBu standart xavfsizlik protsedurasi.\nTasdiqlanganidan keyin kirish avtomatik ravishda paydo bo'ladi.",
         "subscription_expiring_reminder": "⏳ Kirish muddati yaqin orada tugaydi.\n\nObunangiz tugashiga 3 kun qoldi.\n\nSiz istalgan vaqtda kirishni uzaytirishingiz mumkin —\ntakroriy xarid avtomatik ravishda muddatni uzaytiradi.",
+        
+        # Умные напоминания - админ-доступ
+        "reminder_admin_1day_6h": "⏳ Vaqtinchalik Atlas Secure kirishi 6 soatdan keyin tugaydi.\n\nBiz to'liq obunani xarid qilishni tavsiya qilamiz,\nuzilishlarsiz barqaror kirishni saqlash uchun.",
+        "reminder_admin_7days_24h": "⏳ Vaqtinchalik Atlas Secure kirishi 24 soatdan keyin tugaydi.\n\nBiz uzluksiz va barqaror ulanish uchun\n1 oylik obunani xarid qilishni tavsiya qilamiz.",
+        
+        # Умные напоминания - оплаченные тарифы
+        "reminder_paid_3d": "⏳ Atlas Secure kirishingiz 3 kundan keyin tugaydi.\n\nSiz obunani oldindan uzaytirishingiz mumkin,\nulanish uzilishini oldini olish uchun.",
+        "reminder_paid_24h": "⏳ Atlas Secure kirishingiz 24 soatdan keyin tugaydi.\n\nBiz uzluksiz ulanishni saqlash uchun\nobunani oldindan uzaytirishni tavsiya qilamiz.",
+        "reminder_paid_3h": "⏳ Atlas Secure kirishingiz 3 soatdan keyin tugaydi.\n\nHozir obunani uzaytiring,\nulanish uzilishini oldini olish uchun.",
+        
+        # Скидка на первую покупку
+        "first_purchase_discount_label": "🎁 Birinchi xarid",
+        "subscribe_1_month_button": "🔐 1 oylik obuna",
         "no_subscription": "❌ Faol kirish yo'q.\n\nAtlas Secure — individual ulanish kalitlari bilan maxfiy VPN xizmati.\n\nSiz istalgan vaqtda kirish olishingiz mumkin.",
         "about_text": "Atlas Secure orqasida nima bor\n\n🔐 Enterprise darajasidagi kriptografiya (AES-256)\nMoliyaviy va davlat tizimlari ishlatadigan xuddi shu arxitektura.\n\n🧬 Zero-Logs falsafasi\nBiz asosiy ravishda jurnallarni, ulanishlar tarixini yoki metama'lumotlarni saqlamaymiz.\nSaqlash kerak bo'lgan narsa yo'q — himoya qilish kerak bo'lgan narsa yo'q — oshkor qilish kerak bo'lgan narsa yo'q.\n\n🕶 Sukut bo'yicha maxfiylik\nKuzatish, analitika, uchinchi tomon SDK'lari va yashirin ma'lumotlar to'plami yo'q.\n\n⚡ Cheksiz tezlik va barqarorlik\nOversell va sun'iy cheklovlarsiz optimallashtirilgan serverlar.\n\n🌍 Premium global infratuzilma\nTezlik, yurisdiktsiya va ishonchlilik mezonlari bo'yicha tanlangan\n25+ mamlakatdagi ajratilgan serverlar.\n\n📱 To'liq qurilmalar ekotizimi\niOS · Android · macOS · Windows\nBir kirish — barcha qurilmalaringiz.\n\n⸻\n\nAtlas Secure kimlar uchun\n\n• Sezgir ma'lumotlar bilan ishlaydiganlar uchun\n• Tadbirkorlar va investorlar uchun\n• Raqamli kompromisslarsiz sayohat qiladiganlar uchun\n• Maxfiylik haqida gapirmaydiganlar uchun — ular uni ta'minlaydi\n\n⸻\n\nAtlas Secure VPN emas\n\nBu shaxsiy raqamli infratuzilma.\nJimsiz. Ko'rinmas. Ishonchli.\n\nSiz ulangan siz. Qolgani — sizning ishingiz emas.",
         "privacy_policy": "Maxfiylik siyosati",
@@ -340,6 +379,20 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_renewal_hint": "\n\nҲар як хариди такрори обунаро ба таври худкор васеъ мекунад.",
         "profile_payment_check": "🕒 Пардохт дар санҷиш аст.\n\nИн процедураи стандартии амният аст.\nПас аз тасдиқ, дастрасӣ худкор пайдо мешавад.",
         "subscription_expiring_reminder": "⏳ Муддати дастрасӣ ба зудӣ анҷом мешавад.\n\nТо анҷоми обунаи шумо 3 рӯз боқӣ мондааст.\n\nШумо метавонед дар ҳар вақт дастрасиро васеъ кунед —\nхариди такрориҳо муддатро ба таври худкор васеъ мекунад.",
+        
+        # Умные напоминания - админ-доступ
+        "reminder_admin_1day_6h": "⏳ Дастрасии муваққатии Atlas Secure дар 6 соат ба анҷом мерасад.\n\nМо тавсия медиҳем, ки обунаи пурраро тартиб диҳед,\nто дастрасии устуворро бе танаффус нигоҳ доред.",
+        "reminder_admin_7days_24h": "⏳ Дастрасии муваққатии Atlas Secure дар 24 соат ба анҷом мерасад.\n\nМо тавсия медиҳем, ки обунаи 1 моҳаро тартиб диҳед\nбарои пайванди муттасил ва устувор.",
+        
+        # Умные напоминания - оплаченные тарифы
+        "reminder_paid_3d": "⏳ Дастрасии шумо ба Atlas Secure дар 3 рӯз ба анҷом мерасад.\n\nШумо метавонед обунаро пеш аз вақт васеъ кунед,\nто аз танаффуси пайванд ҷилавгирӣ кунед.",
+        "reminder_paid_24h": "⏳ Дастрасии шумо ба Atlas Secure дар 24 соат ба анҷом мерасад.\n\nМо тавсия медиҳем, ки обунаро пеш аз вақт васеъ кунед,\nто пайванди муттасилро нигоҳ доред.",
+        "reminder_paid_3h": "⏳ Дастрасии шумо ба Atlas Secure дар 3 соат ба анҷом мерасад.\n\nҲоло обунаро васеъ кунед,\nто аз танаффуси пайванд ҷилавгирӣ кунед.",
+        
+        # Скидка на первую покупку
+        "first_purchase_discount_label": "🎁 Хариди аввал",
+        "subscribe_1_month_button": "🔐 Обуна барои 1 моҳ",
+        
         "no_subscription": "❌ Дастрасии фаъол нест.\n\nAtlas Secure — хизмати махфии VPN\nбо калидҳои пайванди шахсӣ.\n\nШумо метавонед дар ҳар вақт дастрасӣ гиред.",
         "about_text": "Чӣ дар пушти Atlas Secure аст\n\n🔐 Криптографияи сатҳи enterprise (AES-256)\nХуди ҳамин меъморӣ, ки системаҳои молиявӣ ва давлатӣ истифода мебаранд.\n\n🧬 Фалсафаи Zero-Logs\nМо асосан журналҳо, таърихи пайвандҳо ё метамаълумотро нигоҳ намедорем.\nЧизе барои нигоҳ доштан нест — чизе барои ҳимоя кардан нест — чизе барои ошкор кардан нест.\n\n🕶 Махфият ба таври сукут\nБе пайгирӣ, аналитика, SDK-ҳои тарафи сеюм ва ҷамъоварии пинҳонии маълумот.\n\n⚡ Суръат ва устувории номаҳдуд\nСерверҳои оптимизатсияшуда бе oversell ва маҳдудияти сунъӣ.\n\n🌍 Инфрасохтори глобалии премиум\nСерверҳои бахшидашуда дар 25+ кишвар, ки бо меъёрҳои суръат,\nюрисдикция ва эътимоднокӣ интихоб шудаанд.\n\n📱 Экосистемаи пурраи дастгоҳҳо\niOS · Android · macOS · Windows\nЯк дастрасӣ — ҳамаи дастгоҳҳои шумо.\n\n⸻\n\nAtlas Secure барои кӣ\n\n• Барои касоне, ки бо маълумоти ҳассос кор мекунанд\n• Барои соҳибкорон ва сармоягузорон\n• Барои саёҳаткунандагони бе компромиссҳои рақамӣ\n• Барои касоне, ки дар бораи махфият суҳбат намекунанд — онҳо танҳо онро таъмин мекунанд\n\n⸻\n\nAtlas Secure VPN нест\n\nИн инфрасохтори рақамии хусусӣ аст.\nОром. Намоён нест. Эътимоднок.\n\nШумо пайванд шудед. Боқимонда — ба шумо тааллуқ надорад.",
         "privacy_policy": "Сиёсати махфият",
@@ -390,10 +443,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
 }
 
 
-def get_text(language: str, key: str, **kwargs) -> str:
+def get_text(language: str, key: str, default: str = None, **kwargs) -> str:
     """Получить переведенный текст"""
     lang = language if language in TEXTS else "ru"
-    text = TEXTS[lang].get(key, TEXTS["ru"].get(key, key))
+    text = TEXTS[lang].get(key)
+    if text is None:
+        text = TEXTS["ru"].get(key)
+    if text is None:
+        text = default if default is not None else key
     return text.format(**kwargs) if kwargs else text
 
 
