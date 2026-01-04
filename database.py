@@ -860,6 +860,39 @@ async def get_subscription_history(telegram_id: int, limit: int = 5) -> list:
         return [dict(row) for row in rows]
 
 
+async def get_user_extended_stats(telegram_id: int) -> Dict[str, Any]:
+    """Получить расширенную статистику пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        Словарь со статистикой:
+        - renewals_count: количество продлений подписки
+        - reissues_count: количество перевыпусков ключа
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Подсчитываем продления (action_type = 'renewal')
+        renewals_count = await conn.fetchval(
+            """SELECT COUNT(*) FROM subscription_history 
+               WHERE telegram_id = $1 AND action_type = 'renewal'""",
+            telegram_id
+        )
+        
+        # Подсчитываем перевыпуски ключа (action_type IN ('reissue', 'manual_reissue'))
+        reissues_count = await conn.fetchval(
+            """SELECT COUNT(*) FROM subscription_history 
+               WHERE telegram_id = $1 AND action_type IN ('reissue', 'manual_reissue')""",
+            telegram_id
+        )
+        
+        return {
+            "renewals_count": renewals_count or 0,
+            "reissues_count": reissues_count or 0
+        }
+
+
 async def get_last_audit_logs(limit: int = 10) -> list:
     """Получить последние записи из audit_log
     
