@@ -188,6 +188,27 @@ def get_profile_keyboard(language: str):
     return keyboard
 
 
+def get_vpn_key_keyboard(language: str):
+    """Клавиатура для экрана выдачи VPN-ключа после оплаты"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "profile"),
+            callback_data="go_profile"
+        )],
+        [
+            InlineKeyboardButton(
+                text=localization.get_text(language, "back"),
+                callback_data="back_to_main"
+            ),
+            InlineKeyboardButton(
+                text=localization.get_text(language, "copy_key"),
+                callback_data="copy_vpn_key"
+            )
+        ]
+    ])
+    return keyboard
+
+
 async def get_tariff_keyboard(language: str, telegram_id: int):
     """Клавиатура выбора тарифа с учетом скидок (VIP имеет высший приоритет)"""
     buttons = []
@@ -889,6 +910,52 @@ async def callback_copy_key(callback: CallbackQuery):
     await callback.message.answer(f"`{vpn_key}`", parse_mode="Markdown")
 
 
+@router.callback_query(F.data == "copy_vpn_key")
+async def callback_copy_vpn_key(callback: CallbackQuery):
+    """Скопировать VPN-ключ (для экрана выдачи ключа)"""
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    
+    # Получаем VPN-ключ из активной подписки
+    subscription = await database.get_subscription(telegram_id)
+    
+    if not subscription:
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        text = localization.get_text(language, "no_active_subscription")
+        await callback.message.answer(text)
+        return
+    
+    # Отправляем VPN-ключ отдельным сообщением (без форматирования)
+    vpn_key = subscription["vpn_key"]
+    await callback.message.answer(vpn_key)
+
+
+@router.callback_query(F.data == "go_profile")
+async def callback_go_profile(callback: CallbackQuery):
+    """Переход в профиль с экрана выдачи ключа"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    await show_profile(callback, language)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back_to_main")
+async def callback_back_to_main(callback: CallbackQuery):
+    """Возврат в главное меню с экрана выдачи ключа"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "welcome")
+    text = await format_text_with_incident(text, language)
+    await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
+    await callback.answer()
+
+
 @router.callback_query(F.data == "subscription_history")
 async def callback_subscription_history(callback: CallbackQuery):
     """История подписок"""
@@ -1154,7 +1221,7 @@ async def process_successful_payment(message: Message):
         text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
         
         # Отправляем сообщение с VPN-ключом
-        await message.answer(text, reply_markup=get_profile_keyboard(language))
+        await message.answer(text, reply_markup=get_vpn_key_keyboard(language))
         
         logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_key}, amount={payment_amount}")
         
