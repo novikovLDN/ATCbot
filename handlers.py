@@ -365,6 +365,7 @@ def get_admin_dashboard_keyboard():
     """Клавиатура главного экрана админ-дашборда"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
+        [InlineKeyboardButton(text="📈 Метрики", callback_data="admin:metrics")],
         [InlineKeyboardButton(text="📜 Аудит", callback_data="admin:audit")],
         [InlineKeyboardButton(text="🔑 VPN-ключи", callback_data="admin:keys")],
         [InlineKeyboardButton(text="👤 Пользователь", callback_data="admin:user")],
@@ -1021,6 +1022,53 @@ async def callback_admin_main(callback: CallbackQuery):
     text = "🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:"
     await callback.message.edit_text(text, reply_markup=get_admin_dashboard_keyboard())
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin:metrics")
+async def callback_admin_metrics(callback: CallbackQuery):
+    """Раздел Метрики"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        metrics = await database.get_business_metrics()
+        
+        text = "📈 Бизнес-метрики\n\n"
+        
+        # Среднее время подтверждения оплаты
+        approval_time = metrics.get('avg_payment_approval_time_seconds')
+        if approval_time:
+            minutes = int(approval_time / 60)
+            seconds = int(approval_time % 60)
+            text += f"⏱ Среднее время подтверждения оплаты: {minutes} мин {seconds} сек\n"
+        else:
+            text += "⏱ Среднее время подтверждения оплаты: нет данных\n"
+        
+        # Среднее время жизни подписки
+        lifetime = metrics.get('avg_subscription_lifetime_days')
+        if lifetime:
+            text += f"📅 Среднее время жизни подписки: {lifetime:.1f} дней\n"
+        else:
+            text += "📅 Среднее время жизни подписки: нет данных\n"
+        
+        # Количество продлений на пользователя
+        renewals = metrics.get('avg_renewals_per_user', 0.0)
+        text += f"🔄 Среднее количество продлений на пользователя: {renewals:.2f}\n"
+        
+        # Процент подтвержденных платежей
+        approval_rate = metrics.get('approval_rate_percent', 0.0)
+        text += f"✅ Процент подтвержденных платежей: {approval_rate:.1f}%\n"
+        
+        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await callback.answer()
+        
+        # Логируем действие
+        await database._log_audit_event_atomic_standalone("admin_view_metrics", callback.from_user.id, None, "Admin viewed business metrics")
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_metrics: {e}")
+        await callback.answer("Ошибка при получении метрик. Проверь логи.", show_alert=True)
 
 
 @router.callback_query(F.data == "admin:stats")
