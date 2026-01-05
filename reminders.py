@@ -56,6 +56,32 @@ def get_vip_offer_keyboard(language: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+async def _send_notification_with_anti_spam(
+    bot: Bot,
+    pool,
+    telegram_id: int,
+    text: str,
+    sent_flag_column: str,
+    notification_name: str
+):
+    """Отправить уведомление с обновлением anti-spam полей"""
+    try:
+        await bot.send_message(telegram_id, text)
+        async with pool.acquire() as update_conn:
+            await update_conn.execute(
+                f"""UPDATE subscriptions 
+                   SET {sent_flag_column} = TRUE, 
+                       last_notification_sent_at = $1 
+                   WHERE telegram_id = $2""",
+                datetime.now(), telegram_id
+            )
+        logger.info(f"Smart notification ({notification_name}) sent to user {telegram_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending notification ({notification_name}) to user {telegram_id}: {e}")
+        return False
+
+
 async def send_smart_notifications(bot: Bot):
     """Отправить умные уведомления на основе трафика и времени"""
     try:
@@ -73,7 +99,8 @@ async def send_smart_notifications(bot: Bot):
                        smart_notif_3days_before_expiry_sent,
                        smart_notif_expiry_day_sent,
                        smart_notif_expired_24h_sent,
-                       smart_notif_vip_offer_sent
+                       smart_notif_vip_offer_sent,
+                       last_notification_sent_at
                 FROM subscriptions
                 WHERE outline_key_id IS NOT NULL
                 AND expires_at > NOW()
@@ -103,6 +130,16 @@ async def send_smart_notifications(bot: Bot):
                 first_traffic_at = datetime.fromisoformat(first_traffic_at.replace('Z', '+00:00'))
             
             try:
+                # ANTI-SPAM: Проверяем, прошло ли достаточно времени с последнего уведомления
+                last_notification_sent_at = subscription.get("last_notification_sent_at")
+                if last_notification_sent_at:
+                    if isinstance(last_notification_sent_at, str):
+                        last_notification_sent_at = datetime.fromisoformat(last_notification_sent_at.replace('Z', '+00:00'))
+                    time_since_last = now - last_notification_sent_at
+                    # Минимальный интервал между уведомлениями: 60 минут
+                    if time_since_last < timedelta(minutes=60):
+                        continue  # Пропускаем этого пользователя, чтобы не спамить
+                
                 # Получаем язык пользователя
                 user = await database.get_user(telegram_id)
                 language = user.get("language", "ru") if user else "ru"
@@ -136,13 +173,10 @@ async def send_smart_notifications(bot: Bot):
                     current_bytes == 0 and 
                     not subscription.get("smart_notif_no_traffic_20m_sent", False)):
                     text = localization.get_text(language, "smart_notif_no_traffic_20m")
-                    await bot.send_message(telegram_id, text)
-                    async with pool.acquire() as update_conn:
-                        await update_conn.execute(
-                            "UPDATE subscriptions SET smart_notif_no_traffic_20m_sent = TRUE WHERE telegram_id = $1",
-                            telegram_id
-                        )
-                    logger.info(f"Smart notification (no traffic 20m) sent to user {telegram_id}")
+                    await _send_notification_with_anti_spam(
+                        bot, pool, telegram_id, text,
+                        "smart_notif_no_traffic_20m_sent", "no traffic 20m"
+                    )
                     continue  # Отправляем только одно уведомление за раз
                 
                 # 2. УВЕДОМЛЕНИЕ: НЕТ ТРАФИКА ЧЕРЕЗ 24 ЧАСА
