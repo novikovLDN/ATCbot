@@ -51,33 +51,43 @@ async def outline_cleanup_task():
                 expires_at = row["expires_at"]
                 
                 try:
-                    # Удаляем ключ из Outline
+                    # ATOMIC LOGIC: СНАЧАЛА удаляем ключ из Outline API
                     success = await outline_api.delete_outline_key(outline_key_id)
+                    
                     if success:
-                        logger.info(f"Deleted Outline key {outline_key_id} for expired subscription, user {telegram_id}, expired_at={expires_at}")
+                        # ТОЛЬКО если API ответил успехом - очищаем БД
+                        pool = await database.get_pool()
+                        async with pool.acquire() as conn:
+                            async with conn.transaction():
+                                # Проверяем, что ключ всё ещё существует (защита от race condition)
+                                check_row = await conn.fetchrow(
+                                    "SELECT outline_key_id FROM subscriptions WHERE telegram_id = $1 AND outline_key_id = $2",
+                                    telegram_id, outline_key_id
+                                )
+                                
+                                if check_row:
+                                    # Ключ всё ещё существует - очищаем
+                                    await conn.execute(
+                                        """UPDATE subscriptions 
+                                           SET outline_key_id = NULL, vpn_key = NULL 
+                                           WHERE telegram_id = $1 AND outline_key_id = $2""",
+                                        telegram_id, outline_key_id
+                                    )
+                                    
+                                    # Логируем действие
+                                    import config
+                                    await database._log_audit_event_atomic(conn, "outline_key_auto_deleted", config.ADMIN_TELEGRAM_ID, telegram_id, 
+                                        f"Auto-deleted expired Outline key {outline_key_id}, expired_at={expires_at.isoformat()}")
+                                    
+                                    logger.info(f"Deleted Outline key {outline_key_id} for expired subscription, user {telegram_id}, expired_at={expires_at}")
+                                else:
+                                    logger.warning(f"Outline key {outline_key_id} for user {telegram_id} was already cleaned up (race condition)")
                     else:
-                        logger.warning(f"Failed to delete Outline key {outline_key_id} for user {telegram_id}")
-                    
-                    # Очищаем outline_key_id и vpn_key в БД
-                    pool = await database.get_pool()
-                    async with pool.acquire() as conn:
-                        await conn.execute(
-                            """UPDATE subscriptions 
-                               SET outline_key_id = NULL, vpn_key = NULL 
-                               WHERE telegram_id = $1""",
-                            telegram_id
-                        )
-                    
-                    # Логируем действие
-                    import config
-                    await database._log_audit_event_atomic_standalone(
-                        "outline_key_auto_deleted",
-                        config.ADMIN_TELEGRAM_ID,
-                        telegram_id,
-                        f"Auto-deleted expired Outline key {outline_key_id}, expired_at={expires_at.isoformat()}"
-                    )
+                        # При ошибке удаления НЕ чистим БД - повторим в следующем цикле
+                        logger.warning(f"Failed to delete Outline key {outline_key_id} for user {telegram_id}, will retry in next cycle")
                     
                 except Exception as e:
+                    # При любой ошибке НЕ чистим БД - повторим в следующем цикле
                     logger.error(f"Error cleaning up Outline key {outline_key_id} for user {telegram_id}: {e}", exc_info=True)
             
         except asyncio.CancelledError:

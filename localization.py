@@ -636,16 +636,36 @@ TEXTS: Dict[str, Dict[str, str]] = {
 
 
 def get_text(language: str, key: str, default: str = None, **kwargs) -> str:
-    """Получить переведенный текст"""
+    """
+    Получить переведенный текст (STRICT MODE)
+    
+    STRICT-LOCALIZATION:
+    - Если ключ отсутствует в выбранном языке - логируется предупреждение
+    - Используется fallback на русский (НЕ английский)
+    - Если ключ отсутствует даже в русском - логируется критическая ошибка
+    - Используется default или сам ключ только в крайнем случае
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     lang = language if language in TEXTS else "ru"
     text = TEXTS[lang].get(key)
-    # Если ключ не найден в выбранном языке, используем русский (НЕ английский)
+    
+    # Если ключ не найден в выбранном языке - логируем предупреждение
     if text is None:
+        logger.warning(f"Localization key '{key}' not found for language '{lang}', falling back to 'ru'")
         text = TEXTS["ru"].get(key)
-    # Если ключ не найден даже в русском, используем default или сам ключ
-    if text is None:
-        text = default if default is not None else key
-    return text.format(**kwargs) if kwargs else text
+        
+        # Если ключ не найден даже в русском - критическая ошибка
+        if text is None:
+            logger.error(f"CRITICAL: Localization key '{key}' not found even in 'ru'! Missing key must be added to localization.py")
+            text = default if default is not None else key
+    
+    try:
+        return text.format(**kwargs) if kwargs else text
+    except KeyError as e:
+        logger.error(f"Localization key '{key}' format error: missing parameter {e}")
+        return text  # Возвращаем текст без форматирования
 
 
 # Кнопки для выбора языка
