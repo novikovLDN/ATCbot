@@ -254,15 +254,10 @@ async def _init_promo_codes(conn):
     await conn.execute("""
         INSERT INTO promo_codes (code, discount_percent, max_uses, is_active)
         VALUES 
-<<<<<<< HEAD
             ('ELVIRA064', 50, 50, TRUE),
             ('YAbx30', 30, NULL, TRUE),
             ('FAM50', 50, 50, TRUE),
             ('COURIER40', 40, 40, TRUE)
-=======
-            ('ELVIRA046', 50, 50, TRUE),
-            ('YAbx30', 30, NULL, TRUE)
->>>>>>> parent of dc19358 (feat: add FAM50 promo code with 50% discount and usage limit)
         ON CONFLICT (code) DO NOTHING
     """)
 
