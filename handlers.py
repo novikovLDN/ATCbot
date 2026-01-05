@@ -445,8 +445,8 @@ def get_support_keyboard(language: str):
     """Клавиатура раздела 'Поддержка'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "change_language"),
-            callback_data="change_language"
+            text="💬 Написать в поддержку",
+            url="https://t.me/asc_support"
         )],
         [InlineKeyboardButton(
             text=localization.get_text(language, "back"),
