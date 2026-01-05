@@ -719,6 +719,16 @@ async def cmd_profile(message: Message):
     await show_profile(message, language)
 
 
+async def check_subscription_expiry(telegram_id: int) -> bool:
+    """
+    Дополнительная защита: проверка и мгновенное отключение истёкшей подписки
+    
+    Вызывается в начале критичных handlers для дополнительной безопасности.
+    Возвращает True если подписка была отключена, False если активна или отсутствует.
+    """
+    return await database.check_and_disable_expired_subscription(telegram_id)
+
+
 async def show_profile(message_or_query, language: str):
     """Показать профиль пользователя"""
     if isinstance(message_or_query, Message):
@@ -727,6 +737,9 @@ async def show_profile(message_or_query, language: str):
     else:
         telegram_id = message_or_query.from_user.id
         send_func = message_or_query.message.edit_text
+    
+    # Дополнительная защита: проверка истечения подписки
+    await check_subscription_expiry(telegram_id)
     
     subscription = await database.get_subscription(telegram_id)
     
@@ -852,6 +865,9 @@ async def callback_renew_same_period(callback: CallbackQuery):
     
     telegram_id = callback.from_user.id
     
+    # Дополнительная защита: проверка истечения подписки
+    await check_subscription_expiry(telegram_id)
+    
     # Проверяем наличие активной подписки
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
@@ -969,6 +985,9 @@ async def callback_copy_key(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
+    # Дополнительная защита: проверка истечения подписки
+    await check_subscription_expiry(telegram_id)
+    
     # Проверяем, что у пользователя есть активная подписка
     subscription = await database.get_subscription(telegram_id)
     
@@ -988,6 +1007,9 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     await callback.answer()
     
     telegram_id = callback.from_user.id
+    
+    # Дополнительная защита: проверка истечения подписки
+    await check_subscription_expiry(telegram_id)
     
     # Получаем VPN-ключ из активной подписки
     subscription = await database.get_subscription(telegram_id)

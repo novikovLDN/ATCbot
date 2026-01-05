@@ -8,6 +8,7 @@ import handlers
 import reminders
 import healthcheck
 import outline_cleanup
+import fast_expiry_cleanup
 
 # Настройка логирования
 logging.basicConfig(
@@ -40,9 +41,13 @@ async def main():
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
     logger.info("Health check task started")
     
-    # Запуск фоновой задачи для очистки истекших Outline ключей
+    # Запуск фоновой задачи для очистки истекших Outline ключей (основной cleanup, интервал 10 минут)
     cleanup_task = asyncio.create_task(outline_cleanup.outline_cleanup_task())
     logger.info("Outline cleanup task started")
+    
+    # Запуск фоновой задачи для быстрой очистки истёкших подписок (fast cleanup, интервал 60 секунд)
+    fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+    logger.info("Fast expiry cleanup task started")
     
     # Запуск бота
     logger.info("Бот запущен")
@@ -52,6 +57,7 @@ async def main():
         reminder_task.cancel()
         healthcheck_task.cancel()
         cleanup_task.cancel()
+        fast_cleanup_task.cancel()
         try:
             await reminder_task
         except asyncio.CancelledError:
@@ -62,6 +68,10 @@ async def main():
             pass
         try:
             await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await fast_cleanup_task
         except asyncio.CancelledError:
             pass
         # Закрываем пул соединений к БД
