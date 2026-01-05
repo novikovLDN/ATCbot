@@ -263,46 +263,81 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
         base_text = localization.get_text(language, f"tariff_button_{tariff_key}")
         
         if has_discount_for_tariff and discount_label:
-            # Если есть скидка - используем сокращённый формат без названия уровня доступа
-            # Извлекаем только срок (например, "3 месяца" из "3 месяца Стандартный доступ · 799 ₽")
-            if "·" in base_text:
-                # Разбиваем по "·" и берём первую часть
-                parts = base_text.split("·")
-                full_part = parts[0].strip()
-                
-                # Извлекаем срок (первые 2-3 слова до названия уровня доступа)
-                # Для разных языков названия уровней разные, но срок всегда в начале
-                words = full_part.split()
-                
-                # Определяем, где заканчивается срок, по ключевым словам
-                # Срок обычно: "1 месяц", "3 месяца", "6 месяцев", "12 месяцев"
-                # Или на других языках: "1 month", "3 months", "3 oy", "3 моҳ"
-                period_words = []
-                skip_keywords = {
-                    "ru": ["Временный", "Стандартный", "Расширенный", "Приоритетный", "доступ"],
-                    "en": ["Temporary", "Standard", "Extended", "Priority", "Access"],
-                    "uz": ["Vaqtinchalik", "Standart", "Kengaytirilgan", "Ustuvor", "kirish"],
-                    "tj": ["муваққатӣ", "стандартӣ", "васеъ", "афзалиятнок", "Дастрасии"]
+            # Если есть скидка (промокод) - используем новый формат с описаниями
+            if has_promo:
+                # Для промокода используем специальные описания
+                promo_descriptions = {
+                    "1": "Для знакомства",
+                    "3": "Оптимальный выбор",
+                    "6": "Реже продлевать",
+                    "12": "Не думать о доступе"
                 }
                 
-                skip_list = skip_keywords.get(language, skip_keywords["ru"])
+                # Извлекаем срок из base_text (первые 2-3 слова)
+                if "·" in base_text:
+                    parts = base_text.split("·")
+                    full_part = parts[0].strip()
+                    words = full_part.split()
+                    
+                    # Извлекаем срок (первые 2 слова обычно: "1 месяц", "3 месяца", и т.д.)
+                    period_words = []
+                    skip_keywords = {
+                        "ru": ["Для", "знакомства", "Чаще", "всего", "выбирают", "Реже", "продлевать", "Не", "думать", "о", "доступе"],
+                        "en": ["For", "Temporary", "Standard", "Extended", "Priority", "Access"],
+                        "uz": ["Vaqtinchalik", "Standart", "Kengaytirilgan", "Ustuvor", "kirish"],
+                        "tj": ["муваққатӣ", "стандартӣ", "васеъ", "афзалиятнок", "Дастрасии"]
+                    }
+                    
+                    skip_list = skip_keywords.get(language, skip_keywords["ru"])
+                    
+                    for word in words:
+                        if any(skip_word.lower() in word.lower() for skip_word in skip_list):
+                            break
+                        period_words.append(word)
+                    
+                    if not period_words:
+                        period_words = words[:2] if len(words) >= 2 else words
+                    
+                    period_text = " ".join(period_words)
+                else:
+                    # Если формат неожиданный, используем первые 2 слова
+                    words = base_text.split()
+                    period_text = " ".join(words[:2]) if len(words) >= 2 else base_text
                 
-                for word in words:
-                    # Если встретили ключевое слово уровня доступа - останавливаемся
-                    if any(skip_word.lower() in word.lower() for skip_word in skip_list):
-                        break
-                    period_words.append(word)
-                
-                # Если не удалось извлечь период (все слова были пропущены), используем первые 2 слова
-                if not period_words:
-                    period_words = words[:2] if len(words) >= 2 else words
-                
-                period_text = " ".join(period_words)
-                text = f"{period_text} {discount_label} · {price} ₽"
+                # Формируем текст с описанием
+                description = promo_descriptions.get(tariff_key, "")
+                star = " ⭐" if tariff_key == "3" else ""
+                text = f"{period_text} · {description} · {price} ₽{star}"
             else:
-                # Если формат неожиданный, просто заменяем цену и добавляем метку
-                text = base_text.replace(str(base_price), str(price))
-                text = f"{text} · {discount_label}"
+                # Для других скидок (VIP, персональная) используем старый формат
+                if "·" in base_text:
+                    parts = base_text.split("·")
+                    full_part = parts[0].strip()
+                    words = full_part.split()
+                    
+                    period_words = []
+                    skip_keywords = {
+                        "ru": ["Для", "знакомства", "Чаще", "всего", "выбирают", "Реже", "продлевать", "Не", "думать", "о", "доступе"],
+                        "en": ["Temporary", "Standard", "Extended", "Priority", "Access"],
+                        "uz": ["Vaqtinchalik", "Standart", "Kengaytirilgan", "Ustuvor", "kirish"],
+                        "tj": ["муваққатӣ", "стандартӣ", "васеъ", "афзалиятнок", "Дастрасии"]
+                    }
+                    
+                    skip_list = skip_keywords.get(language, skip_keywords["ru"])
+                    
+                    for word in words:
+                        if any(skip_word.lower() in word.lower() for skip_word in skip_list):
+                            break
+                        period_words.append(word)
+                    
+                    if not period_words:
+                        period_words = words[:2] if len(words) >= 2 else words
+                    
+                    period_text = " ".join(period_words)
+                    text = f"{period_text} {discount_label} · {price} ₽"
+                else:
+                    text = base_text.replace(str(base_price), str(price))
+                    text = f"{text} · {discount_label}"
         else:
             # Если нет скидки - используем полный формат с названием уровня доступа
             text = base_text
