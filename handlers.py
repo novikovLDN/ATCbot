@@ -128,30 +128,37 @@ def get_back_keyboard(language: str):
     ])
 
 
-def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False):
+def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False, has_subscription: bool = True):
     """Клавиатура профиля с кнопкой копирования ключа и историей"""
     buttons = []
     
-    # Кнопка продления (всегда показываем, если есть активная подписка)
-    buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "renew_subscription"),
-        callback_data="renew_same_period"
-    )])
-    
-    buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "copy_key"),
-        callback_data="copy_key"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "subscription_history"),
-        callback_data="subscription_history"
-    )])
-    
-    # Кнопка VIP-доступ (доступна всем)
-    buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "vip_access_button"),
-        callback_data="menu_vip_access"
-    )])
+    if has_subscription:
+        # Кнопка продления (всегда показываем, если есть активная подписка)
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "renew_subscription"),
+            callback_data="renew_same_period"
+        )])
+        
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "copy_key"),
+            callback_data="copy_key"
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "subscription_history"),
+            callback_data="subscription_history"
+        )])
+        
+        # Кнопка VIP-доступ (доступна всем)
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "vip_access_button"),
+            callback_data="menu_vip_access"
+        )])
+    else:
+        # Кнопка для оформления доступа (если нет подписки)
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "get_access_button", default="🔐 Оформить доступ"),
+            callback_data="menu_buy_vpn"
+        )])
     
     buttons.append([InlineKeyboardButton(
         text=localization.get_text(language, "back"),
@@ -187,19 +194,17 @@ def get_vpn_key_keyboard(language: str):
     """Клавиатура для экрана выдачи VPN-ключа после оплаты"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
+            text="🔌 Перейти к подключению",
+            callback_data="menu_instruction"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "copy_key"),
+            callback_data="copy_vpn_key"
+        )],
+        [InlineKeyboardButton(
             text=localization.get_text(language, "profile"),
             callback_data="go_profile"
         )],
-        [
-            InlineKeyboardButton(
-                text=localization.get_text(language, "back"),
-                callback_data="back_to_main"
-            ),
-            InlineKeyboardButton(
-                text=localization.get_text(language, "copy_key"),
-                callback_data="copy_vpn_key"
-            )
-        ]
     ])
     return keyboard
 
@@ -754,7 +759,7 @@ async def show_profile(message_or_query, language: str):
         if is_vip:
             text += "\n\n" + localization.get_text(language, "vip_status_badge", default="👑 VIP-статус активен")
         
-        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, None, is_vip))
+        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, None, is_vip, has_subscription=False))
 
 
 @router.callback_query(F.data == "change_language")
@@ -1629,7 +1634,7 @@ async def approve_payment(callback: CallbackQuery):
             await callback.bot.send_message(
                 telegram_id, 
                 text, 
-                reply_markup=get_profile_keyboard(language)
+                reply_markup=get_vpn_key_keyboard(language)
             )
             logging.info(f"Approval message sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
