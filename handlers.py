@@ -194,7 +194,7 @@ def get_vpn_key_keyboard(language: str):
     """Клавиатура для экрана выдачи VPN-ключа после оплаты"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🔌 Перейти к подключению",
+            text=localization.get_text(language, "go_to_connection", default="🔌 Перейти к подключению"),
             callback_data="menu_instruction"
         )],
         [InlineKeyboardButton(
@@ -686,7 +686,9 @@ async def cmd_promo_stats(message: Message):
     
     # Проверяем, что пользователь - администратор
     if telegram_id != config.ADMIN_TELEGRAM_ID:
-        await message.answer("Доступ запрещён.")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_access_denied"))
         return
     
     try:
@@ -708,7 +710,9 @@ async def cmd_profile(message: Message):
     user = await database.get_user(telegram_id)
     
     if not user:
-        await message.answer("Пожалуйста, начните с команды /start")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_start_command"))
         return
     
     language = user.get("language", "ru")
@@ -851,18 +855,24 @@ async def callback_renew_same_period(callback: CallbackQuery):
     # Проверяем наличие активной подписки
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
-        await callback.message.answer("Активная подписка не найдена")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.message.answer(localization.get_text(language, "error_no_active_subscription"))
         return
     
     # Получаем тариф из последнего утвержденного платежа
     last_payment = await database.get_last_approved_payment(telegram_id)
     if not last_payment:
-        await callback.message.answer("Активная подписка не найдена")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.message.answer(localization.get_text(language, "error_no_active_subscription"))
         return
     
     tariff_key = last_payment.get("tariff")
     if not tariff_key:
-        await callback.message.answer("Ошибка тарифа")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.message.answer(localization.get_text(language, "error_tariff"))
         return
     
     # Получаем цену тарифа
@@ -894,7 +904,9 @@ async def callback_renewal_pay(callback: CallbackQuery):
     
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
-        await callback.answer("Платежи временно недоступны", show_alert=True)
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
         return
     
     # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
@@ -943,7 +955,9 @@ async def callback_renewal_pay(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice for renewal: {e}")
-        await callback.answer("Ошибка при создании счета. Попробуйте позже.", show_alert=True)
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
 
 
 @router.callback_query(F.data == "copy_key")
@@ -1135,7 +1149,9 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
     
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
-        await callback.answer("Платежи временно недоступны", show_alert=True)
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
         return
     
     # Получаем промокод из состояния
@@ -1207,7 +1223,9 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice: {e}")
-        await callback.answer("Ошибка при создании счета. Попробуйте позже.", show_alert=True)
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
 
 
 @router.pre_checkout_query()
@@ -1252,7 +1270,9 @@ async def process_successful_payment(message: Message):
             parts = payload.split(":")
             if len(parts) < 3:
                 logger.error(f"Invalid renewal payload format: {payload}")
-                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
                 return
             
             payload_user_id = int(parts[1])
@@ -1262,7 +1282,9 @@ async def process_successful_payment(message: Message):
             parts = payload.split(":")
             if len(parts) < 5:
                 logger.error(f"Invalid promo purchase payload format: {payload}")
-                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
                 return
             
             promo_code_used = parts[2]  # Код промокода
@@ -1273,7 +1295,9 @@ async def process_successful_payment(message: Message):
             parts = payload.split("_")
             if len(parts) < 2:
                 logger.error(f"Invalid payload format: {payload}")
-                await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
                 return
             
             payload_user_id = int(parts[0])
@@ -1282,12 +1306,16 @@ async def process_successful_payment(message: Message):
         # Проверяем, что платеж для этого пользователя
         if payload_user_id != telegram_id:
             logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
-            await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+            user = await database.get_user(telegram_id)
+            language = user.get("language", "ru") if user else "ru"
+            await message.answer(localization.get_text(language, "error_payment_processing"))
             return
         
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing payload {payload}: {e}")
-        await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_payment_processing"))
         return
     
     payment_amount = payment.total_amount // 100  # Конвертируем из копеек
@@ -1318,7 +1346,9 @@ async def process_successful_payment(message: Message):
             )
         if not payment_id:
             logger.error(f"Failed to create payment record for user {telegram_id}, tariff {tariff_key}")
-            await message.answer("Ошибка обработки платежа. Обратитесь в поддержку.")
+            user = await database.get_user(telegram_id)
+            language = user.get("language", "ru") if user else "ru"
+            await message.answer(localization.get_text(language, "error_payment_processing"))
             return
     
     # Получаем тариф
@@ -1381,7 +1411,9 @@ async def process_successful_payment(message: Message):
         )
     else:
         logger.error(f"Failed to activate subscription for payment {payment_id}")
-        await message.answer("Ошибка активации подписки. Обратитесь в поддержку.")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_subscription_activation"))
 
 
 @router.callback_query(F.data == "payment_test")

@@ -18,6 +18,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "back": "← Назад",
         "copy_key": "📋 Скопировать ключ",
+        "go_to_connection": "🔌 Перейти к подключению",
         "renew_subscription": "🔁 Продлить доступ",
         "no_active_subscription": "Активная подписка не найдена.",
         "subscription_history": "📄 История подписок",
@@ -154,6 +155,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "Срок действия: до {date}"
         ),
         "admin_revoke_user_notification": "⛔ Ваш доступ к Atlas Secure был отозван администратором.",
+        
+        # Ошибки (для пользователей)
+        "error_payment_processing": "Ошибка обработки платежа. Обратитесь в поддержку.",
+        "error_subscription_activation": "Ошибка активации подписки. Обратитесь в поддержку.",
+        "error_tariff": "Ошибка тарифа",
+        "error_no_active_subscription": "Активная подписка не найдена",
+        "error_payment_create": "Ошибка при создании счета. Попробуйте позже.",
+        "error_payments_unavailable": "Платежи временно недоступны",
+        "error_access_denied": "Доступ запрещён.",
+        "error_start_command": "Пожалуйста, начните с команды /start",
 
     },
     "en": {
@@ -172,6 +183,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "back": "← Back",
         "copy_key": "📋 Copy Key",
+        "go_to_connection": "🔌 Go to Connection",
         "renew_subscription": "🔁 Renew Access",
         "no_active_subscription": "Active subscription not found.",
         "subscription_history": "📄 Subscription History",
@@ -299,6 +311,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "Expires: {date}"
         ),
         "admin_revoke_user_notification": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
+        
+        # Ошибки (для пользователей)
+        "error_payment_processing": "Payment processing error. Please contact support.",
+        "error_subscription_activation": "Subscription activation error. Please contact support.",
+        "error_tariff": "Tariff error",
+        "error_no_active_subscription": "Active subscription not found",
+        "error_payment_create": "Error creating invoice. Please try again later.",
+        "error_payments_unavailable": "Payments temporarily unavailable",
+        "error_access_denied": "Access denied.",
+        "error_start_command": "Please start with /start command",
 
         "incident_banner": "⚠️ Technical work in progress",
         "incident_status_warning": "\n\n⚠️ WARNING: Incident mode active\n{incident_text}",
@@ -324,6 +346,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "back": "← Orqaga",
         "copy_key": "📋 Kalitni nusxalash",
+        "go_to_connection": "🔌 Ulanishga o'tish",
         "renew_subscription": "🔁 Kirishni uzaytirish",
         "no_active_subscription": "Faol obuna topilmadi.",
         "subscription_history": "📄 Obuna tarixi",
@@ -425,6 +448,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "Muddati: {date} gacha"
         ),
         "admin_revoke_user_notification": "⛔ Atlas Secure ga kirishingiz administrator tomonidan bekor qilindi.",
+        
+        # Ошибки (для пользователей)
+        "error_payment_processing": "To'lovni qayta ishlash xatosi. Iltimos, qo'llab-quvvatlashga murojaat qiling.",
+        "error_subscription_activation": "Obunani faollashtirish xatosi. Iltimos, qo'llab-quvvatlashga murojaat qiling.",
+        "error_tariff": "Tarif xatosi",
+        "error_no_active_subscription": "Faol obuna topilmadi",
+        "error_payment_create": "Hisobni yaratish xatosi. Iltimos, keyinroq qayta urinib ko'ring.",
+        "error_payments_unavailable": "To'lovlar vaqtincha mavjud emas",
+        "error_access_denied": "Kirish rad etildi.",
+        "error_start_command": "Iltimos, /start buyrug'i bilan boshlang",
 
         "incident_banner": "⚠️ Texnik ishlar olib borilmoqda",
         "incident_status_warning": "\n\n⚠️ E'TIBOR: Inson hodisa rejimi faol\n{incident_text}",
@@ -450,6 +483,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "back": "← Бозгашт",
         "copy_key": "📋 Калидро нусхабардорӣ кардан",
+        "go_to_connection": "🔌 Ба пайвандшавӣ гузаштан",
         "renew_subscription": "🔁 Дастрасиро васеъ кардан",
         "no_active_subscription": "Обунаи фаъол ёфт нашуд.",
         "subscription_history": "📄 Таърихи обунаҳо",
@@ -553,6 +587,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "Муддат: то {date}"
         ),
         "admin_revoke_user_notification": "⛔ Дастрасии шумо ба Atlas Secure аз ҷониби мудир бекор карда шуд.",
+        
+        # Ошибки (для пользователей)
+        "error_payment_processing": "Хатогии коркарди пардохт. Лутфан, ба дастгирӣ муроҷиат кунед.",
+        "error_subscription_activation": "Хатогии фаъолсозии обуна. Лутфан, ба дастгирӣ муроҷиат кунед.",
+        "error_tariff": "Хатогии тариф",
+        "error_no_active_subscription": "Обунаи фаъол ёфт нашуд",
+        "error_payment_create": "Хатогии эҷоди ҳисоб. Лутфан, баъдтар такрор кунед.",
+        "error_payments_unavailable": "Пардохтҳо барои муддати муайян дастрас нестанд",
+        "error_access_denied": "Дастрасӣ рад карда шуд.",
+        "error_start_command": "Лутфан, бо фармони /start оғоз кунед",
 
         "incident_banner": "⚠️ Корҳои техникӣ иҷро карда мешавад",
         "incident_status_warning": "⚠️ ЭЪТИБОР: Реҷаи ҳодиса фаъол аст\n{incident_text}",
@@ -571,8 +615,10 @@ def get_text(language: str, key: str, default: str = None, **kwargs) -> str:
     """Получить переведенный текст"""
     lang = language if language in TEXTS else "ru"
     text = TEXTS[lang].get(key)
+    # Если ключ не найден в выбранном языке, используем русский (НЕ английский)
     if text is None:
         text = TEXTS["ru"].get(key)
+    # Если ключ не найден даже в русском, используем default или сам ключ
     if text is None:
         text = default if default is not None else key
     return text.format(**kwargs) if kwargs else text
