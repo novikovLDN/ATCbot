@@ -139,6 +139,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_grant_days_1": "1 день",
         "admin_grant_days_7": "7 дней",
         "admin_grant_days_14": "14 дней",
+        "admin_grant_minutes_10": "⏱ Доступ на 10 минут",
         "admin_grant_success": (
             "✅ Доступ выдан на {days} дней.\n\n"
             "Доступ активирован администратором."
@@ -153,6 +154,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "✅ Вам предоставлен доступ к Atlas Secure на {days} дней.\n"
             "VPN-ключ: {vpn_key}\n"
             "Срок действия: до {date}"
+        ),
+        "admin_grant_user_notification_10m": (
+            "⏱ Доступ активирован на 10 минут.\n\n"
+            "Вы можете подключиться сразу.\n"
+            "По окончании доступ будет приостановлен автоматически."
         ),
         "admin_revoke_user_notification": "⛔ Ваш доступ к Atlas Secure был отозван администратором.",
         
@@ -295,6 +301,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_grant_days_1": "1 day",
         "admin_grant_days_7": "7 days",
         "admin_grant_days_14": "14 days",
+        "admin_grant_minutes_10": "⏱ Access for 10 minutes",
         "admin_grant_success": (
             "✅ Access granted for {days} days.\n\n"
             "Access activated by administrator."
@@ -309,6 +316,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "✅ You have been granted access to Atlas Secure for {days} days.\n"
             "VPN key: {vpn_key}\n"
             "Expires: {date}"
+        ),
+        "admin_grant_user_notification_10m": (
+            "⏱ Access activated for 10 minutes.\n\n"
+            "You can connect immediately.\n"
+            "Access will be suspended automatically when it expires."
         ),
         "admin_revoke_user_notification": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
         
@@ -432,6 +444,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_grant_days_1": "1 kun",
         "admin_grant_days_7": "7 kun",
         "admin_grant_days_14": "14 kun",
+        "admin_grant_minutes_10": "⏱ 10 daqiqa uchun kirish",
         "admin_grant_success": (
             "✅ {days} kun uchun kirish berildi.\n\n"
             "Kirish administrator tomonidan faollashtirildi."
@@ -446,6 +459,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "✅ Sizga Atlas Secure ga {days} kun uchun kirish berildi.\n"
             "VPN kalit: {vpn_key}\n"
             "Muddati: {date} gacha"
+        ),
+        "admin_grant_user_notification_10m": (
+            "⏱ 10 daqiqa uchun kirish faollashtirildi.\n\n"
+            "Siz darhol ulanishingiz mumkin.\n"
+            "Muddati tugagach, kirish avtomatik ravishda to'xtatiladi."
         ),
         "admin_revoke_user_notification": "⛔ Atlas Secure ga kirishingiz administrator tomonidan bekor qilindi.",
         
@@ -571,6 +589,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "admin_grant_days_1": "1 рӯз",
         "admin_grant_days_7": "7 рӯз",
         "admin_grant_days_14": "14 рӯз",
+        "admin_grant_minutes_10": "⏱ Дастрасӣ барои 10 дақиқа",
         "admin_grant_success": (
             "✅ Дастрасӣ барои {days} рӯз дода шуд.\n\n"
             "Дастрасӣ аз ҷониби мудир фаъол карда шуд."
@@ -585,6 +604,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "✅ Ба шумо ба Atlas Secure барои {days} рӯз дастрасӣ дода шуд.\n"
             "Калиди VPN: {vpn_key}\n"
             "Муддат: то {date}"
+        ),
+        "admin_grant_user_notification_10m": (
+            "⏱ Дастрасӣ барои 10 дақиқа фаъол карда шуд.\n\n"
+            "Шумо метавонед фавран пайванд шавед.\n"
+            "Пас аз анҷом, дастрасӣ ба таври худкор боздошта мешавад."
         ),
         "admin_revoke_user_notification": "⛔ Дастрасии шумо ба Atlas Secure аз ҷониби мудир бекор карда шуд.",
         

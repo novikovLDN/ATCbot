@@ -2160,7 +2160,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
 
 
 def get_admin_grant_days_keyboard(user_id: int):
-    """Клавиатура для выбора срока доступа (1/7/14 дней)"""
+    """Клавиатура для выбора срока доступа (1/7/14 дней или 10 минут)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="1 день", callback_data=f"admin:grant_days:{user_id}:1"),
@@ -2168,6 +2168,9 @@ def get_admin_grant_days_keyboard(user_id: int):
         ],
         [
             InlineKeyboardButton(text="14 дней", callback_data=f"admin:grant_days:{user_id}:14"),
+        ],
+        [
+            InlineKeyboardButton(text="⏱ Доступ на 10 минут", callback_data=f"admin:grant_minutes:{user_id}:10"),
         ],
         [
             InlineKeyboardButton(text="🔙 Назад", callback_data="admin:user"),
@@ -2253,6 +2256,69 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_grant_days: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:grant_minutes:"))
+async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик выдачи доступа на N минут"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        minutes = int(parts[3])
+        
+        # Выдаем доступ на минуты
+        expires_at, vpn_key = await database.admin_grant_access_minutes_atomic(
+            telegram_id=user_id,
+            minutes=minutes,
+            admin_telegram_id=callback.from_user.id
+        )
+        
+        if expires_at is None or vpn_key is None:
+            # Ошибка создания ключа
+            text = "❌ Ошибка создания VPN-ключа"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Ошибка создания ключа", show_alert=True)
+        else:
+            # Успешно
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            text = f"✅ Доступ выдан на {minutes} минут\nПользователь уведомлён."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            
+            # Уведомляем пользователя
+            try:
+                user_lang = await database.get_user(user_id)
+                language = user_lang.get("language", "ru") if user_lang else "ru"
+                
+                # Используем специальное уведомление для 10 минут
+                user_text = localization.get_text(
+                    language,
+                    "admin_grant_user_notification_10m"
+                )
+                
+                # Добавляем кнопку "Перейти к подключению"
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=localization.get_text(language, "go_to_connection"),
+                        callback_data="menu_instruction"
+                    )]
+                ])
+                
+                await bot.send_message(user_id, user_text, reply_markup=keyboard)
+            except Exception as e:
+                logging.exception(f"Error sending notification to user {user_id}: {e}")
+        
+        await state.clear()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_grant_minutes: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
         await state.clear()
 
