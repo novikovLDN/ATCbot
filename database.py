@@ -92,6 +92,18 @@ async def init_db():
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_3h_sent BOOLEAN DEFAULT FALSE")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_6h_sent BOOLEAN DEFAULT FALSE")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS admin_grant_days INTEGER DEFAULT NULL")
+            # Поля для умных уведомлений
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_bytes BIGINT DEFAULT 0")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS first_traffic_at TIMESTAMP")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_no_traffic_20m_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_no_traffic_24h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_first_connection_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_3days_usage_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_7days_before_expiry_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_expiry_day_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_expired_24h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS smart_notif_vip_offer_sent BOOLEAN DEFAULT FALSE")
         except Exception:
             # Колонки уже существуют
             pass
@@ -796,13 +808,25 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 
                 # 5. Создаем/обновляем подписку (reminder_sent сбрасывается в FALSE при продлении)
                 # Для оплаченных тарифов admin_grant_days = NULL
-                await conn.execute(
-                    """INSERT INTO subscriptions (telegram_id, outline_key_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
-                       VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, FALSE, FALSE, NULL)
-                       ON CONFLICT (telegram_id) 
-                       DO UPDATE SET outline_key_id = $2, vpn_key = $3, expires_at = $4, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL""",
-                    telegram_id, final_outline_key_id, final_vpn_key, expires_at
-                )
+                # activated_at устанавливается только для новых подписок (не продлений)
+                if is_renewal:
+                    # При продлении activated_at не меняется
+                    await conn.execute(
+                        """INSERT INTO subscriptions (telegram_id, outline_key_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
+                           VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, FALSE, FALSE, NULL)
+                           ON CONFLICT (telegram_id) 
+                           DO UPDATE SET outline_key_id = $2, vpn_key = $3, expires_at = $4, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL""",
+                        telegram_id, final_outline_key_id, final_vpn_key, expires_at
+                    )
+                else:
+                    # Для новой подписки устанавливаем activated_at
+                    await conn.execute(
+                        """INSERT INTO subscriptions (telegram_id, outline_key_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days, activated_at, last_bytes)
+                           VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, FALSE, FALSE, NULL, $5, 0)
+                           ON CONFLICT (telegram_id) 
+                           DO UPDATE SET outline_key_id = $2, vpn_key = $3, expires_at = $4, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL, activated_at = COALESCE(subscriptions.activated_at, $5), last_bytes = 0""",
+                        telegram_id, final_outline_key_id, final_vpn_key, expires_at, now
+                    )
                 
                 # 6. Записываем в историю подписок
                 await _log_subscription_history_atomic(conn, telegram_id, final_vpn_key, start_date, expires_at, history_action_type)
@@ -1631,12 +1655,13 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 
                 # 3. Создаем/обновляем подписку
                 # Сохраняем количество дней для админ-доступа (для умных напоминаний)
+                # Для admin_grant также устанавливаем activated_at если это новая подписка
                 await conn.execute(
-                    """INSERT INTO subscriptions (telegram_id, outline_key_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
-                       VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, FALSE, FALSE, $5)
+                    """INSERT INTO subscriptions (telegram_id, outline_key_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days, activated_at, last_bytes)
+                       VALUES ($1, $2, $3, $4, FALSE, FALSE, FALSE, FALSE, FALSE, $5, $6, 0)
                        ON CONFLICT (telegram_id) 
-                       DO UPDATE SET outline_key_id = $2, vpn_key = $3, expires_at = $4, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = $5""",
-                    telegram_id, final_outline_key_id, final_vpn_key, expires_at, days
+                       DO UPDATE SET outline_key_id = $2, vpn_key = $3, expires_at = $4, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = $5, activated_at = COALESCE(subscriptions.activated_at, $6), last_bytes = 0""",
+                    telegram_id, final_outline_key_id, final_vpn_key, expires_at, days, now
                 )
                 
                 # 4. Записываем в историю подписок
