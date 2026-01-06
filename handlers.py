@@ -1142,6 +1142,11 @@ async def process_promo_code(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
+
+    # ⛔ Защита от non-text апдейтов (callback / invoice / system)
+    if not message.text:
+    await message.answer("Пожалуйста, введите промокод текстом.")
+    return
     
     promo_code = message.text.strip().upper()
     
