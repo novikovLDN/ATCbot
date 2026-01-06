@@ -536,7 +536,7 @@ def get_reissue_notification_text(vpn_key: str) -> str:
         "— удалите старый ключ из приложения Outline\n"
         "— добавьте новый ключ доступа\n\n"
         "Ключ:\n\n"
-        f"{vpn_key}\n\n"
+        f"<code>{vpn_key}</code>\n\n"
         "Обновление необходимо для сохранения\n"
         "стабильности и производительности соединения."
     )
@@ -778,7 +778,9 @@ async def show_profile(message_or_query, language: str):
         if isinstance(expires_at, str):
             expires_at = datetime.fromisoformat(expires_at)
         expires_str = expires_at.strftime("%d.%m.%Y")
-        text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=subscription["vpn_key"])
+        # Обертываем ключ в HTML тег для копирования
+        vpn_key_html = f"<code>{subscription['vpn_key']}</code>"
+        text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=vpn_key_html)
         text += localization.get_text(language, "profile_renewal_hint")
         
         # Добавляем информацию о VIP-статусе, если есть
@@ -789,7 +791,7 @@ async def show_profile(message_or_query, language: str):
         last_payment = await database.get_last_approved_payment(telegram_id)
         last_tariff = last_payment.get("tariff") if last_payment else None
         
-        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, last_tariff, is_vip))
+        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, last_tariff, is_vip), parse_mode="HTML")
     else:
         # Проверяем, есть ли pending платеж
         pending_payment = await database.get_pending_payment_by_user(telegram_id)
@@ -1049,9 +1051,12 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
         await callback.message.answer(text)
         return
     
-    # Отправляем VPN-ключ отдельным сообщением (без форматирования, для простого копирования)
+    # Отправляем VPN-ключ отдельным сообщением в формате HTML для копирования
     vpn_key = subscription["vpn_key"]
-    await callback.message.answer(vpn_key)
+    await callback.message.answer(
+        f"<code>{vpn_key}</code>",
+        parse_mode="HTML"
+    )
 
 
 @router.callback_query(F.data == "go_profile")
@@ -1451,10 +1456,12 @@ async def process_successful_payment(message: Message):
                 logger.error(f"Error processing promo code usage: {e}")
         
         expires_str = expires_at.strftime("%d.%m.%Y")
-        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
+        # Обертываем ключ в HTML тег для копирования
+        vpn_key_html = f"<code>{vpn_key}</code>"
+        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key_html, date=expires_str)
         
         # Отправляем сообщение с VPN-ключом
-        await message.answer(text, reply_markup=get_vpn_key_keyboard(language))
+        await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
         
         logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_key}, amount={payment_amount}")
         
@@ -1716,13 +1723,16 @@ async def approve_payment(callback: CallbackQuery):
         language = user.get("language", "ru") if user else "ru"
         
         expires_str = expires_at.strftime("%d.%m.%Y")
-        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key, date=expires_str)
+        # Обертываем ключ в HTML тег для копирования
+        vpn_key_html = f"<code>{vpn_key}</code>"
+        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key_html, date=expires_str)
         
         try:
             await callback.bot.send_message(
                 telegram_id, 
                 text, 
-                reply_markup=get_vpn_key_keyboard(language)
+                reply_markup=get_vpn_key_keyboard(language),
+                parse_mode="HTML"
             )
             logging.info(f"Approval message sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
@@ -2300,14 +2310,16 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
                 user_lang = await database.get_user(user_id)
                 language = user_lang.get("language", "ru") if user_lang else "ru"
                 
+                # Обертываем ключ в HTML тег для копирования
+                vpn_key_html = f"<code>{vpn_key}</code>"
                 user_text = localization.get_text(
                     language,
                     "admin_grant_user_notification",
                     days=days,
-                    vpn_key=vpn_key,
+                    vpn_key=vpn_key_html,
                     date=expires_str
                 )
-                await bot.send_message(user_id, user_text)
+                await bot.send_message(user_id, user_text, parse_mode="HTML")
             except Exception as e:
                 logging.exception(f"Error sending notification to user {user_id}: {e}")
         
@@ -2421,13 +2433,15 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
                 user_lang = await database.get_user(user_id)
                 language = user_lang.get("language", "ru") if user_lang else "ru"
                 
+                # Обертываем ключ в HTML тег для копирования
+                vpn_key_html = f"<code>{vpn_key}</code>"
                 user_text = localization.get_text(
                     language,
                     "admin_grant_user_notification_1_year",
-                    vpn_key=vpn_key,
+                    vpn_key=vpn_key_html,
                     date=expires_str
                 )
-                await bot.send_message(user_id, user_text)
+                await bot.send_message(user_id, user_text, parse_mode="HTML")
             except Exception as e:
                 logging.exception(f"Error sending notification to user {user_id}: {e}")
         
@@ -3025,7 +3039,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
             
             text += "Статус подписки: ✅ Активна\n"
             text += f"Срок действия: до {expires_str}\n"
-            text += f"VPN-ключ: `{new_vpn_key}\n"
+            text += f"VPN-ключ: <code>{new_vpn_key}</code>\n"
             text += f"\n✅ Ключ перевыпущен!\nСтарый ключ: {old_vpn_key[:20]}..."
             
             # Проверяем VIP-статус и скидку
@@ -3040,7 +3054,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         try:
             user_text = get_reissue_notification_text(new_vpn_key)
             keyboard = get_reissue_notification_keyboard()
-            await callback.bot.send_message(target_user_id, user_text, reply_markup=keyboard)
+            await callback.bot.send_message(target_user_id, user_text, reply_markup=keyboard, parse_mode="HTML")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_user_id}: {e}")
         
@@ -3892,14 +3906,19 @@ async def cmd_reissue_key(message: Message):
         try:
             user_text = get_reissue_notification_text(new_vpn_key)
             keyboard = get_reissue_notification_keyboard()
-            await message.bot.send_message(target_telegram_id, user_text, reply_markup=keyboard)
+            await message.bot.send_message(target_telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
             logging.info(f"Reissue notification sent to user {target_telegram_id}")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_telegram_id}: {e}")
             await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}")
             return
         
-        await message.answer(f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\nСтарый ключ: {old_vpn_key[:20]}...\nНовый ключ: {new_vpn_key}", parse_mode="HTML")
+        await message.answer(
+            f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\n"
+            f"Старый ключ: <code>{old_vpn_key[:20]}...</code>\n"
+            f"Новый ключ: <code>{new_vpn_key}</code>",
+            parse_mode="HTML"
+        )
         logging.info(f"VPN key reissued for user {target_telegram_id} by admin {admin_telegram_id}")
         
     except Exception as e:
