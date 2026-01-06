@@ -2068,7 +2068,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 text += "Статус подписки: ⛔ Истекла\n"
             
             text += f"Срок действия: до {expires_str}\n"
-            text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
+            text += f"VPN-ключ: {subscription['vpn_key']}\n"
         else:
             text += "Статус подписки: ❌ Нет подписки\n"
             text += "VPN-ключ: —\n"
@@ -2838,7 +2838,7 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
             text += "Статус подписки: ⛔ Истекла\n"
         
         text += f"Срок действия: до {expires_str}\n"
-        text += f"VPN-ключ: `{subscription['vpn_key']}`\n"
+        text += f"VPN-ключ: {subscription['vpn_key']}\n"
     else:
         text += "Статус подписки: ❌ Нет подписки\n"
         text += "VPN-ключ: —\n"
@@ -2999,8 +2999,8 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
             
             text += "Статус подписки: ✅ Активна\n"
             text += f"Срок действия: до {expires_str}\n"
-            text += f"VPN-ключ: `{new_vpn_key}`\n"
-            text += f"\n✅ Ключ перевыпущен!\nСтарый ключ: `{old_vpn_key[:20]}...`"
+            text += f"VPN-ключ: `{new_vpn_key}\n"
+            text += f"\n✅ Ключ перевыпущен!\nСтарый ключ: {old_vpn_key[:20]}..."
             
             # Проверяем VIP-статус и скидку
             is_vip = await database.is_vip_user(target_user_id)
@@ -3012,7 +3012,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         
         # Уведомляем пользователя
         try:
-            user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: `{new_vpn_key}`\nРекомендуем сохранить новый ключ в надёжном месте."
+            user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: {new_vpn_key}\nРекомендуем сохранить новый ключ в надёжном месте."
             await callback.bot.send_message(target_user_id, user_text, parse_mode="HTML")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_user_id}: {e}")
@@ -3869,7 +3869,7 @@ async def cmd_reissue_key(message: Message):
         subscription = await database.get_subscription(target_telegram_id)
         expires_str = subscription["expires_at"].strftime("%d.%m.%Y") if subscription else "неизвестно"
         
-        user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: `{new_vpn_key}`\nСрок действия подписки: до {expires_str}\n\nРекомендуем сохранить новый ключ в надёжном месте."
+        user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: {new_vpn_key}\nСрок действия подписки: до {expires_str}\n\nРекомендуем сохранить новый ключ в надёжном месте."
         
         try:
             await message.bot.send_message(target_telegram_id, user_text, parse_mode="HTML")
@@ -3879,7 +3879,7 @@ async def cmd_reissue_key(message: Message):
             await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}")
             return
         
-        await message.answer(f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\nСтарый ключ: `{old_vpn_key[:20]}...`\nНовый ключ: `{new_vpn_key}`", parse_mode="HTML")
+        await message.answer(f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\nСтарый ключ: {old_vpn_key[:20]}...\nНовый ключ: {new_vpn_key}", parse_mode="HTML")
         logging.info(f"VPN key reissued for user {target_telegram_id} by admin {admin_telegram_id}")
         
     except Exception as e:
