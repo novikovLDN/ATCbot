@@ -998,7 +998,7 @@ async def callback_copy_key(callback: CallbackQuery):
     
     # Отправляем VPN-ключ отдельным сообщением
     vpn_key = subscription["vpn_key"]
-    await callback.message.answer(f"`{vpn_key}`", parse_mode="Markdown")
+    await callback.message.answer(f"`{vpn_key}`", parse_mode="HTML")
 
 
 @router.callback_query(F.data == "copy_vpn_key")
@@ -2098,9 +2098,9 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
             now = datetime.now()
             has_active = expires_at > now
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="Markdown")
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="HTML")
         else:
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="Markdown")
+            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="HTML")
         
         # Логируем просмотр информации о пользователе
         details = f"Admin searched by {search_by}: {search_value}, found user {user['telegram_id']}"
@@ -2816,9 +2816,9 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
     keyboard = get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip)
     
     if hasattr(message_or_callback, 'edit_text'):
-        await message_or_callback.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+        await message_or_callback.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     else:
-        await message_or_callback.answer(text, reply_markup=keyboard, parse_mode="Markdown")
+        await message_or_callback.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("admin:vip_grant:"))
@@ -2938,14 +2938,14 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
             is_vip = await database.is_vip_user(target_user_id)
             has_discount = await database.get_user_discount(target_user_id) is not None
             
-            await callback.message.edit_text(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id, has_discount=has_discount, is_vip=is_vip), parse_mode="Markdown")
+            await callback.message.edit_text(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id, has_discount=has_discount, is_vip=is_vip), parse_mode="HTML")
         
         await callback.answer("Ключ успешно перевыпущен")
         
         # Уведомляем пользователя
         try:
             user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: `{new_vpn_key}`\nРекомендуем сохранить новый ключ в надёжном месте."
-            await callback.bot.send_message(target_user_id, user_text, parse_mode="Markdown")
+            await callback.bot.send_message(target_user_id, user_text, parse_mode="HTML")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_user_id}: {e}")
         
@@ -3804,14 +3804,14 @@ async def cmd_reissue_key(message: Message):
         user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: `{new_vpn_key}`\nСрок действия подписки: до {expires_str}\n\nРекомендуем сохранить новый ключ в надёжном месте."
         
         try:
-            await message.bot.send_message(target_telegram_id, user_text, parse_mode="Markdown")
+            await message.bot.send_message(target_telegram_id, user_text, parse_mode="HTML")
             logging.info(f"Reissue notification sent to user {target_telegram_id}")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_telegram_id}: {e}")
             await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}")
             return
         
-        await message.answer(f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\nСтарый ключ: `{old_vpn_key[:20]}...`\nНовый ключ: `{new_vpn_key}`", parse_mode="Markdown")
+        await message.answer(f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\nСтарый ключ: `{old_vpn_key[:20]}...`\nНовый ключ: `{new_vpn_key}`", parse_mode="HTML")
         logging.info(f"VPN key reissued for user {target_telegram_id} by admin {admin_telegram_id}")
         
     except Exception as e:
