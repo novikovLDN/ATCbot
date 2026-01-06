@@ -2365,11 +2365,9 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
     
     await callback.answer()
     
-   try:
-    user_id = int(callback.data.split(":")[1])
-except (IndexError, ValueError):
-    await callback.answer("Ошибка данных кнопки", show_alert=True)
-    return
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[3])
         
         # Выдаем доступ на 1 год (365 дней)
         expires_at, vpn_key = await database.admin_grant_access_atomic(
