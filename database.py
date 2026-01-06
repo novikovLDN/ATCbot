@@ -264,14 +264,24 @@ async def init_db():
 
 async def _init_promo_codes(conn):
     """Инициализация промокодов в базе данных"""
+    async def _init_promo_codes(conn):
+    """Инициализация промокодов в базе данных"""
+
+    # 1. Деактивируем устаревший промокод
+    await conn.execute("""
+        UPDATE promo_codes
+        SET is_active = FALSE
+        WHERE code = 'COURIER40'
+    """)
     # Добавляем промокоды (используем ON CONFLICT для безопасной инициализации)
+     # 2. Добавляем актуальные промокоды
     await conn.execute("""
         INSERT INTO promo_codes (code, discount_percent, max_uses, is_active)
-        VALUES 
+        VALUES
             ('ELVIRA064', 50, 50, TRUE),
             ('YAbx30', 30, NULL, TRUE),
             ('FAM50', 50, 50, TRUE),
-            ('COURIER40', 40, 40, TRUE)
+            ('COURIER30', 30, 40, TRUE)
         ON CONFLICT (code) DO NOTHING
     """)
 
