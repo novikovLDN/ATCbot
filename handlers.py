@@ -1003,7 +1003,6 @@ async def callback_copy_key(callback: CallbackQuery):
     parse_mode="HTML"
 )
 
-
 @router.callback_query(F.data == "copy_vpn_key")
 async def callback_copy_vpn_key(callback: CallbackQuery):
     """Скопировать VPN-ключ (для экрана выдачи ключа)"""
@@ -1143,6 +1142,12 @@ async def process_promo_code(message: Message, state: FSMContext):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
+    
+    # ⛔ Защита от non-text апдейтов (callback / invoice / system)
+    if not message.text:
+        await message.answer("Пожалуйста, введите промокод текстом.")
+        return
+
     promo_code = message.text.strip().upper()
     
     # Проверяем промокод через базу данных
@@ -2185,7 +2190,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
 
 
 def get_admin_grant_days_keyboard(user_id: int):
-    """Клавиатура для выбора срока доступа (1/7/14 дней или 10 минут)"""
+    """Клавиатура для выбора срока доступа (1/7/14 дней, 1 год или 10 минут)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="1 день", callback_data=f"admin:grant_days:{user_id}:1"),
@@ -2193,6 +2198,9 @@ def get_admin_grant_days_keyboard(user_id: int):
         ],
         [
             InlineKeyboardButton(text="14 дней", callback_data=f"admin:grant_days:{user_id}:14"),
+        ],
+        [
+            InlineKeyboardButton(text="🗓 Выдать доступ на 1 год", callback_data=f"admin:grant_1_year:{user_id}"),
         ],
         [
             InlineKeyboardButton(text="⏱ Доступ на 10 минут", callback_data=f"admin:grant_minutes:{user_id}:10"),
@@ -2344,6 +2352,63 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_grant_minutes: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:grant_1_year:"))
+async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработчик выдачи доступа на 1 год"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[3])
+        
+        # Выдаем доступ на 1 год (365 дней)
+        expires_at, vpn_key = await database.admin_grant_access_atomic(
+            telegram_id=user_id,
+            days=365,
+            admin_telegram_id=callback.from_user.id
+        )
+        
+        if expires_at is None or vpn_key is None:
+            # Ошибка создания ключа
+            text = "❌ Ошибка создания VPN-ключа"
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Ошибка создания ключа", show_alert=True)
+        else:
+            # Успешно
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            text = f"✅ Доступ на 1 год выдан\n\nПользователь: {user_id}\nСрок действия обновлён."
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            
+            # Логируем действие
+            logging.info(f"Admin {callback.from_user.id} granted 1 year access to user {user_id}")
+            
+            # Уведомляем пользователя
+            try:
+                user_lang = await database.get_user(user_id)
+                language = user_lang.get("language", "ru") if user_lang else "ru"
+                
+                user_text = localization.get_text(
+                    language,
+                    "admin_grant_user_notification_1_year",
+                    vpn_key=vpn_key,
+                    date=expires_str
+                )
+                await bot.send_message(user_id, user_text)
+            except Exception as e:
+                logging.exception(f"Error sending notification to user {user_id}: {e}")
+        
+        await state.clear()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_grant_1_year: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
         await state.clear()
 
