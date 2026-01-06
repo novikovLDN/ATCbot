@@ -998,7 +998,10 @@ async def callback_copy_key(callback: CallbackQuery):
     
     # Отправляем VPN-ключ отдельным сообщением
     vpn_key = subscription["vpn_key"]
-    await callback.message.answer(f"`{vpn_key}`", parse_mode="HTML")
+    await callback.message.answer(
+    f"<code>{vpn_key}</code>",
+    parse_mode="HTML"
+)
 
 
 @router.callback_query(F.data == "copy_vpn_key")
