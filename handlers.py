@@ -516,6 +516,32 @@ def get_admin_back_keyboard():
     return keyboard
 
 
+def get_reissue_notification_keyboard():
+    """Клавиатура для уведомления о перевыпуске VPN-ключа"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔌 Перейти к инструкции", callback_data="menu_instruction")],
+        [InlineKeyboardButton(text="📋 Скопировать ключ", callback_data="copy_vpn_key")],
+        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
+    ])
+    return keyboard
+
+
+def get_reissue_notification_text(vpn_key: str) -> str:
+    """Текст уведомления о перевыпуске VPN-ключа"""
+    return (
+        "🔐 Обновление VPN-ключа\n\n"
+        "Ваш VPN-ключ обновлён\n"
+        "и переведён на новую версию сервера.\n\n"
+        "Для корректной работы:\n"
+        "— удалите старый ключ из приложения Outline\n"
+        "— добавьте новый ключ доступа\n\n"
+        "Ключ:\n\n"
+        f"{vpn_key}\n\n"
+        "Обновление необходимо для сохранения\n"
+        "стабильности и производительности соединения."
+    )
+
+
 def get_broadcast_test_type_keyboard():
     """Клавиатура выбора типа тестирования"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1005,7 +1031,7 @@ async def callback_copy_key(callback: CallbackQuery):
 
 @router.callback_query(F.data == "copy_vpn_key")
 async def callback_copy_vpn_key(callback: CallbackQuery):
-    """Скопировать VPN-ключ (для экрана выдачи ключа)"""
+    """Скопировать VPN-ключ (для экрана выдачи ключа или перевыпуска)"""
     await callback.answer()
     
     telegram_id = callback.from_user.id
@@ -1023,7 +1049,7 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
         await callback.message.answer(text)
         return
     
-    # Отправляем VPN-ключ отдельным сообщением (без форматирования)
+    # Отправляем VPN-ключ отдельным сообщением (без форматирования, для простого копирования)
     vpn_key = subscription["vpn_key"]
     await callback.message.answer(vpn_key)
 
@@ -3012,8 +3038,9 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         
         # Уведомляем пользователя
         try:
-            user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: {new_vpn_key}\nРекомендуем сохранить новый ключ в надёжном месте."
-            await callback.bot.send_message(target_user_id, user_text, parse_mode="HTML")
+            user_text = get_reissue_notification_text(new_vpn_key)
+            keyboard = get_reissue_notification_keyboard()
+            await callback.bot.send_message(target_user_id, user_text, reply_markup=keyboard)
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_user_id}: {e}")
         
@@ -3862,17 +3889,10 @@ async def cmd_reissue_key(message: Message):
             return
         
         # Уведомляем пользователя
-        user = await database.get_user(target_telegram_id)
-        language = user.get("language", "ru") if user else "ru"
-        
-        # Получаем информацию о подписке для уведомления
-        subscription = await database.get_subscription(target_telegram_id)
-        expires_str = subscription["expires_at"].strftime("%d.%m.%Y") if subscription else "неизвестно"
-        
-        user_text = f"🔐 Ваш VPN-ключ был перевыпущен администратором.\n\nНовый ключ: {new_vpn_key}\nСрок действия подписки: до {expires_str}\n\nРекомендуем сохранить новый ключ в надёжном месте."
-        
         try:
-            await message.bot.send_message(target_telegram_id, user_text, parse_mode="HTML")
+            user_text = get_reissue_notification_text(new_vpn_key)
+            keyboard = get_reissue_notification_keyboard()
+            await message.bot.send_message(target_telegram_id, user_text, reply_markup=keyboard)
             logging.info(f"Reissue notification sent to user {target_telegram_id}")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_telegram_id}: {e}")
