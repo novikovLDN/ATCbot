@@ -702,18 +702,22 @@ async def cmd_start(message: Message):
             referrer = await database.find_user_by_referral_code(referral_code)
             
             if referrer:
-                referrer_id = referrer["telegram_id"]
+                referrer_user_id = referrer["telegram_id"]
                 
                 # Проверяем условия:
-                # 1. Это не тот же пользователь
-                # 2. У текущего пользователя referred_by IS NULL
-                if referrer_id != telegram_id:
+                # 1. Это не тот же пользователь (self-referral запрещен)
+                # 2. У текущего пользователя referred_by IS NULL (еще не был приглашен)
+                if referrer_user_id != telegram_id:
                     user = await database.get_user(telegram_id)
                     if user and not user.get("referred_by"):
                         # Регистрируем реферала
-                        await database.register_referral(referrer_id, telegram_id)
-                        # Логируем событие
-                        logging.info(f"Referral registered: referrer_id={referrer_id}, referred_id={telegram_id}, code={referral_code}")
+                        success = await database.register_referral(referrer_user_id, telegram_id)
+                        if success:
+                            logger.info(f"Referral registered: referrer_id={referrer_user_id}, referred_id={telegram_id}, code={referral_code}")
+                        else:
+                            logger.debug(f"Referral registration failed (may already exist): referrer_id={referrer_user_id}, referred_id={telegram_id}")
+                else:
+                    logger.warning(f"Self-referral attempt blocked: user_id={telegram_id}")
     
     text = localization.get_text("ru", "language_select")
     await message.answer(text, reply_markup=get_language_keyboard())
@@ -1927,6 +1931,14 @@ async def process_successful_payment(message: Message):
         await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
         
         logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_key}, amount={payment_amount}")
+        
+        # Начисляем реферальный кешбэк после первой успешной оплаты
+        try:
+            await database.process_referral_reward_cashback(telegram_id, payment_amount)
+            logger.info(f"Referral cashback processed for user {telegram_id}")
+        except Exception as e:
+            logger.exception(f"Error processing referral cashback for user {telegram_id}: {e}")
+            # Не прерываем основной flow при ошибке начисления кешбэка
         
         # Логируем событие
         await database._log_audit_event_atomic_standalone(

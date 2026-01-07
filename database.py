@@ -155,13 +155,32 @@ async def init_db():
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS referrals (
                 id SERIAL PRIMARY KEY,
-                referrer_id BIGINT NOT NULL,
-                referred_id BIGINT NOT NULL,
+                referrer_user_id BIGINT NOT NULL,
+                referred_user_id BIGINT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                rewarded BOOLEAN DEFAULT FALSE,
-                UNIQUE (referred_id)
+                is_rewarded BOOLEAN DEFAULT FALSE,
+                reward_amount INTEGER DEFAULT 0,
+                UNIQUE (referred_user_id)
             )
         """)
+        
+        # Миграция: переименовываем колонки, если они еще старые
+        try:
+            await conn.execute("ALTER TABLE referrals RENAME COLUMN referrer_id TO referrer_user_id")
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE referrals RENAME COLUMN referred_id TO referred_user_id")
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE referrals RENAME COLUMN rewarded TO is_rewarded")
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS reward_amount INTEGER DEFAULT 0")
+        except Exception:
+            pass
         
         # Таблица vpn_keys
         await conn.execute("""
@@ -687,44 +706,50 @@ async def find_user_by_referral_code(referral_code: str) -> Optional[Dict[str, A
         return dict(row) if row else None
 
 
-async def register_referral(referrer_id: int, referred_id: int) -> bool:
+async def register_referral(referrer_user_id: int, referred_user_id: int) -> bool:
     """
     Зарегистрировать реферала
     
     Args:
-        referrer_id: Telegram ID реферера
-        referred_id: Telegram ID приглашенного пользователя
+        referrer_user_id: Telegram ID реферера
+        referred_user_id: Telegram ID приглашенного пользователя
     
     Returns:
         True если регистрация успешна, False если уже зарегистрирован или ошибка
     """
+    # Запрет self-referral
+    if referrer_user_id == referred_user_id:
+        logger.warning(f"Self-referral attempt blocked: user_id={referrer_user_id}")
+        return False
+    
     pool = await get_pool()
     async with pool.acquire() as conn:
         try:
             # Проверяем, что пользователь еще не был приглашен
             existing = await conn.fetchrow(
-                "SELECT * FROM referrals WHERE referred_id = $1", referred_id
+                "SELECT * FROM referrals WHERE referred_user_id = $1", referred_user_id
             )
             if existing:
                 return False
             
             # Создаем запись о реферале
             await conn.execute(
-                """INSERT INTO referrals (referrer_id, referred_id, rewarded)
-                   VALUES ($1, $2, FALSE)
-                   ON CONFLICT (referred_id) DO NOTHING""",
-                referrer_id, referred_id
+                """INSERT INTO referrals (referrer_user_id, referred_user_id, is_rewarded, reward_amount)
+                   VALUES ($1, $2, FALSE, 0)
+                   ON CONFLICT (referred_user_id) DO NOTHING""",
+                referrer_user_id, referred_user_id
             )
             
             # Обновляем referred_by у пользователя
             await conn.execute(
-                "UPDATE users SET referred_by = $1 WHERE telegram_id = $2",
-                referrer_id, referred_id
+                "UPDATE users SET referred_by = $1 WHERE telegram_id = $2 AND referred_by IS NULL",
+                referrer_user_id, referred_user_id
             )
             
+            logger.info(f"Referral registered: referrer={referrer_user_id}, referred={referred_user_id}")
             return True
         except Exception as e:
-            logger.exception(f"Error registering referral: referrer_id={referrer_id}, referred_id={referred_id}")
+            logger.exception(f"Error registering referral: referrer_id={referrer_user_id}, referred_id={referred_user_id}")
             return False
 
 
@@ -738,10 +763,10 @@ async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         total_referred = await conn.fetchval(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", telegram_id
+            "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1", telegram_id
         )
         total_rewarded = await conn.fetchval(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1 AND rewarded = TRUE", telegram_id
+            "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND is_rewarded = TRUE", telegram_id
         )
         
         return {
@@ -750,67 +775,76 @@ async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
         }
 
 
-async def process_referral_reward(referred_id: int) -> bool:
+async def process_referral_reward_cashback(referred_user_id: int, payment_amount_rubles: float) -> bool:
     """
-    Обработать начисление реферального бонуса после первой оплаты
+    Начислить кешбэк рефереру после первой оплаты приглашенного пользователя
     
     Args:
-        referred_id: Telegram ID приглашенного пользователя, который совершил первую оплату
+        referred_user_id: Telegram ID приглашенного пользователя, который совершил первую оплату
+        payment_amount_rubles: Сумма оплаты в рублях
     
     Returns:
-        True если бонус начислен, False если уже начислен или ошибка
+        True если кешбэк начислен, False если уже начислен или ошибка
     """
+    # Процент кешбэка (15% от суммы оплаты)
+    CASHBACK_PERCENT = 15
+    
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
                 # Получаем запись о реферале
                 referral_row = await conn.fetchrow(
-                    "SELECT * FROM referrals WHERE referred_id = $1 AND rewarded = FALSE", referred_id
+                    "SELECT * FROM referrals WHERE referred_user_id = $1 AND is_rewarded = FALSE", referred_user_id
                 )
                 
                 if not referral_row:
-                    # Бонус уже начислен или реферал не найден
+                    # Кешбэк уже начислен или реферал не найден
+                    logger.debug(f"No unrewarded referral found for user {referred_user_id}")
                     return False
                 
                 referral = dict(referral_row)
-                referrer_id = referral["referrer_id"]
+                referrer_user_id = referral["referrer_user_id"]
                 
-                # Начисляем бонус рефереру: +7 дней доступа
-                bonus_duration = timedelta(days=7)
-                expires_at, vpn_key, is_renewal = await grant_access(
-                    telegram_id=referrer_id,
-                    duration=bonus_duration,
-                    source="referral",
-                    admin_telegram_id=None,
-                    admin_grant_days=None,
-                    conn=conn
+                # Рассчитываем кешбэк (15% от суммы оплаты, в копейках)
+                cashback_rubles = payment_amount_rubles * (CASHBACK_PERCENT / 100.0)
+                cashback_kopecks = int(cashback_rubles * 100)
+                
+                # Начисляем кешбэк на баланс реферера
+                await conn.execute(
+                    "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                    cashback_kopecks, referrer_user_id
                 )
                 
-                if expires_at is None:
-                    logger.error(f"Failed to grant referral bonus to referrer {referrer_id}")
-                    return False
-                
-                # Помечаем бонус как начисленный
+                # Записываем транзакцию баланса
                 await conn.execute(
-                    "UPDATE referrals SET rewarded = TRUE WHERE referred_id = $1",
-                    referred_id
+                    """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                       VALUES ($1, $2, $3, $4, $5)""",
+                    referrer_user_id, cashback_kopecks, "referral_reward", "referral",
+                    f"Реферальный кешбэк за первую оплату пользователя {referred_user_id}"
+                )
+                
+                # Обновляем запись о реферале: помечаем как награжден и сохраняем сумму
+                await conn.execute(
+                    "UPDATE referrals SET is_rewarded = TRUE, reward_amount = $1 WHERE referred_user_id = $2",
+                    cashback_kopecks, referred_user_id
                 )
                 
                 # Логируем событие
+                details = f"Referral cashback awarded: referrer={referrer_user_id}, referred={referred_user_id}, amount={cashback_rubles:.2f} RUB ({cashback_kopecks} kopecks)"
                 await _log_audit_event_atomic(
                     conn,
-                    "referral_reward",
-                    referrer_id,
-                    referred_id,
-                    f"Referral bonus granted: +7 days, expires_at={expires_at.isoformat()}"
+                    "referral_cashback",
+                    referrer_user_id,
+                    referred_user_id,
+                    details
                 )
                 
-                logger.info(f"Referral bonus granted: referrer_id={referrer_id}, referred_id={referred_id}")
+                logger.info(f"Referral cashback awarded: referrer={referrer_user_id}, referred={referred_user_id}, amount={cashback_rubles:.2f} RUB")
                 return True
                 
             except Exception as e:
-                logger.exception(f"Error processing referral reward for referred_id={referred_id}")
+                logger.exception(f"Error processing referral cashback: referred_user_id={referred_user_id}")
                 return False
 
 
