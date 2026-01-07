@@ -44,6 +44,10 @@ VPN_KEYS_FILE = "vpn_keys.txt"
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)
 TG_PROVIDER_TOKEN = os.getenv("TG_PROVIDER_TOKEN", "")
 
-# Outline Management API URL (получить из Outline Manager)
+# Xray Core API Configuration
+XRAY_API_URL = os.getenv("XRAY_API_URL", "")
+XRAY_API_KEY = os.getenv("XRAY_API_KEY", "")
+
+# Outline Management API URL (deprecated, kept for backward compatibility)
 OUTLINE_API_URL = os.getenv("OUTLINE_API_URL", "")
 
