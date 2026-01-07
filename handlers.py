@@ -2397,12 +2397,12 @@ async def callback_referral(callback: CallbackQuery):
     else:
         referral_code = user["referral_code"]
     
-    # Получаем статистику
-    stats = await database.get_referral_stats(telegram_id)
-    total_referred = stats["total_referred"]
-    
-    # Определяем текущий уровень кешбэка (прогрессивная шкала)
-    cashback_percent = await database.get_referral_cashback_percent(telegram_id)
+    # Получаем информацию об уровне и прогрессе (используем единую функцию, без дублирования)
+    level_info = await database.get_referral_level_info(telegram_id)
+    current_percent = level_info["current_level"]
+    referrals_count = level_info["referrals_count"]
+    next_level = level_info["next_level"]
+    referrals_to_next = level_info["referrals_to_next"]
     
     # Получаем общую сумму заработанного кешбэка
     total_cashback = await database.get_total_cashback_earned(telegram_id)
@@ -2411,32 +2411,47 @@ async def callback_referral(callback: CallbackQuery):
     bot_username = (await callback.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
     
-    # Формируем текст с актуальными данными
+    # Формируем текст с актуальными данными (без технических терминов)
     try:
+        # Пробуем использовать локализацию
         text = localization.get_text(
             language,
             "referral_program_text",
             referral_link=referral_link,
-            total_referred=total_referred,
-            cashback_percent=cashback_percent,
+            total_referred=referrals_count,
+            cashback_percent=current_percent,
             total_cashback=total_cashback
         )
+        
+        # Добавляем информацию о прогрессе до следующего уровня
+        if next_level and referrals_to_next:
+            progress_text = f"\n\n🎯 До уровня {next_level}% осталось пригласить: {referrals_to_next} друзей"
+            text += progress_text
     except KeyError:
         # Fallback если локализация не поддерживает все параметры
         text = (
             f"🤝 Пригласить друга\n\n"
             f"Приглашайте друзей и получайте кешбэк\n"
             f"на баланс за их оплаты.\n\n"
-            f"📊 Статистика:\n"
-            f"Приглашено: {total_referred}\n"
-            f"Текущий уровень: {cashback_percent}%\n"
-            f"Заработано кешбэка: {total_cashback:.2f} ₽\n\n"
-            f"🔗 Ваша реферальная ссылка:\n"
+            f"📊 Ваша статистика:\n"
+            f"Приглашено друзей: {referrals_count}\n"
+            f"Ваш кешбэк: {current_percent}%\n"
+            f"Заработано: {total_cashback:.2f} ₽\n"
+        )
+        
+        # Добавляем информацию о прогрессе
+        if next_level and referrals_to_next:
+            text += f"\n🎯 До уровня {next_level}% осталось: {referrals_to_next} друзей\n"
+        elif next_level is None:
+            text += f"\n🎉 Вы достигли максимального уровня!\n"
+        
+        text += (
+            f"\n🔗 Ваша ссылка:\n"
             f"{referral_link}\n\n"
-            f"💡 Уровни кешбэка:\n"
-            f"• 0-24 приглашённых → 10%\n"
-            f"• 25-49 приглашённых → 25%\n"
-            f"• 50+ приглашённых → 45%"
+            f"💡 Как это работает:\n"
+            f"• 0-24 друга → 10% кешбэк\n"
+            f"• 25-49 друзей → 25% кешбэк\n"
+            f"• 50+ друзей → 45% кешбэк"
         )
     
     # Клавиатура

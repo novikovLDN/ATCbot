@@ -842,7 +842,7 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
     """
     Определить процент кешбэка на основе количества приглашённых рефералов
     
-    Прогрессивная шкала:
+    Прогрессивная шкала (вычисляется динамически):
     - 0-24 приглашённых → 10%
     - 25-49 приглашённых → 25%
     - 50+ приглашённых → 45%
@@ -855,19 +855,63 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Считаем количество приглашённых пользователей
-        total_referred = await conn.fetchval(
+        # Считаем количество приглашённых пользователей (динамически, без хранения в БД)
+        referrals_count = await conn.fetchval(
             "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
             partner_id
         ) or 0
         
         # Определяем процент по прогрессивной шкале
-        if total_referred >= 50:
+        if referrals_count >= 50:
             return 45
-        elif total_referred >= 25:
+        elif referrals_count >= 25:
             return 25
         else:
             return 10
+
+
+async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
+    """
+    Получить информацию об уровне реферала и прогрессе до следующего уровня
+    
+    Args:
+        partner_id: Telegram ID партнёра
+    
+    Returns:
+        Словарь с ключами:
+        - current_level: текущий процент (10, 25 или 45)
+        - referrals_count: текущее количество приглашённых
+        - next_level: следующий процент (25, 45 или None)
+        - referrals_to_next: сколько нужно пригласить до следующего уровня (или None)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Считаем количество приглашённых пользователей
+        referrals_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
+            partner_id
+        ) or 0
+        
+        # Определяем текущий уровень и следующий
+        if referrals_count >= 50:
+            current_level = 45
+            next_level = None
+            referrals_to_next = None
+        elif referrals_count >= 25:
+            current_level = 25
+            next_level = 45
+            referrals_to_next = 50 - referrals_count
+        else:
+            current_level = 10
+            next_level = 25
+            referrals_to_next = 25 - referrals_count
+        
+        return {
+            "current_level": current_level,
+            "referrals_count": referrals_count,
+            "next_level": next_level,
+            "referrals_to_next": referrals_to_next
+        }
 
 
 async def get_total_cashback_earned(partner_id: int) -> float:
@@ -882,11 +926,11 @@ async def get_total_cashback_earned(partner_id: int) -> float:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Суммируем все транзакции типа 'referral_reward' для партнёра
+        # Суммируем все транзакции типа 'cashback' для партнёра
         total_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(amount), 0) 
                FROM balance_transactions 
-               WHERE user_id = $1 AND type = 'referral_reward'""",
+               WHERE user_id = $1 AND type = 'cashback'""",
             partner_id
         ) or 0
         
@@ -930,7 +974,7 @@ async def process_referral_reward_cashback(referred_user_id: int, payment_amount
                     logger.warning(f"Self-referral detected: user {referred_user_id}")
                     return False
                 
-                # Определяем процент кешбэка на основе текущего количества рефералов
+                # Определяем процент кешбэка динамически (без хардкода в handlers)
                 cashback_percent = await get_referral_cashback_percent(partner_id)
                 
                 # Рассчитываем кешбэк (в копейках)
