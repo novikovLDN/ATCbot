@@ -13,7 +13,8 @@ import config
 logger = logging.getLogger(__name__)
 
 # HTTP клиент с таймаутами для API запросов
-HTTP_TIMEOUT = 30.0  # секунды
+HTTP_TIMEOUT = 5.0  # секунды (строгий таймаут для быстрой реакции)
+MAX_RETRIES = 1  # Количество повторных попыток при ошибке
 
 
 def generate_vless_url(uuid: str) -> str:
@@ -102,73 +103,109 @@ async def add_vless_user() -> Dict[str, str]:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    url = f"{config.XRAY_API_URL.rstrip('/')}/add-user"
+    # Проверяем что URL правильный (должен быть http://127.0.0.1:8000 или https://...)
+    api_url = config.XRAY_API_URL.rstrip('/')
+    if not api_url.startswith('http://') and not api_url.startswith('https://'):
+        error_msg = f"Invalid XRAY_API_URL format: {api_url}. Must start with http:// or https://"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    url = f"{api_url}/add-user"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
     }
     
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            logger.debug(f"Creating new VLESS user via {url}")
-            response = await client.post(url, headers=headers)
+    # Логируем URL (без ключа)
+    logger.info(f"XRAY API: Creating VLESS user via {url}")
+    
+    last_exception = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES + 1}: POST {url}")
+                response = await client.post(url, headers=headers)
+                
+                # Логируем статус ответа
+                logger.info(f"XRAY API response: status={response.status_code}, attempt={attempt + 1}")
+                
+                # Проверяем статус ответа
+                response.raise_for_status()
+                
+                # Парсим JSON ответ (API возвращает uuid и vless_link)
+                data = response.json()
+                
+                # Валидируем структуру ответа
+                uuid = data.get("uuid")
+                vless_link = data.get("vless_link")
+                
+                if not uuid:
+                    error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
+                    logger.error(f"XRAY API error: {error_msg}")
+                    raise ValueError(error_msg)
+                
+                # Используем vless_link из ответа API, если есть, иначе генерируем локально
+                if vless_link:
+                    vless_url = vless_link
+                else:
+                    # Генерируем VLESS URL локально на основе UUID + серверных констант (fallback)
+                    vless_url = generate_vless_url(str(uuid))
+                
+                # Безопасное логирование UUID (только первые 8 символов)
+                uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+                logger.info(f"XRAY API: VLESS user created successfully: uuid={uuid_preview}, attempt={attempt + 1}")
+                
+                return {
+                    "uuid": str(uuid),
+                    "vless_url": vless_url
+                }
+                
+        except httpx.TimeoutException as e:
+            last_exception = e
+            error_msg = f"Timeout while creating VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"XRAY API timeout: {error_msg}")
+            if attempt < MAX_RETRIES:
+                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
+                continue
+            raise httpx.HTTPError(error_msg) from e
             
-            # Проверяем статус ответа
-            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            last_exception = e
+            error_msg = (
+                f"Xray API error creating user (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
+                f"status={e.response.status_code}, "
+                f"response_body={e.response.text[:200]}"
+            )
+            logger.error(f"XRAY API HTTP error: {error_msg}")
+            # Для HTTP ошибок не делаем retry (4xx/5xx не исправятся)
+            raise
             
-            # Парсим JSON ответ (API возвращает uuid и vless_link)
-            data = response.json()
+        except httpx.HTTPError as e:
+            last_exception = e
+            error_msg = f"Network error creating VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"XRAY API network error: {error_msg}")
+            if attempt < MAX_RETRIES:
+                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
+                continue
+            raise
             
-            # Валидируем структуру ответа
-            uuid = data.get("uuid")
-            vless_link = data.get("vless_link")
+        except ValueError:
+            # Re-raise ValueError (validation errors) - не retry
+            raise
             
-            if not uuid:
-                error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-            
-            # Используем vless_link из ответа API, если есть, иначе генерируем локально
-            if vless_link:
-                vless_url = vless_link
-            else:
-                # Генерируем VLESS URL локально на основе UUID + серверных констант (fallback)
-                vless_url = generate_vless_url(str(uuid))
-            
-            logger.info(f"VLESS user created successfully: uuid={uuid}, vless_url generated locally")
-            
-            return {
-                "uuid": str(uuid),
-                "vless_url": vless_url
-            }
-            
-    except httpx.TimeoutException as e:
-        error_msg = f"Timeout while creating VLESS user: {e}"
-        logger.error(error_msg)
-        raise httpx.HTTPError(error_msg) from e
-        
-    except httpx.HTTPStatusError as e:
-        error_msg = (
-            f"Xray API error creating user: "
-            f"status={e.response.status_code}, "
-            f"response={e.response.text}"
-        )
-        logger.error(error_msg)
-        raise
-        
-    except httpx.HTTPError as e:
-        error_msg = f"Network error creating VLESS user: {e}"
-        logger.error(error_msg, exc_info=True)
-        raise
-        
-    except ValueError:
-        # Re-raise ValueError (validation errors)
-        raise
-        
-    except Exception as e:
-        error_msg = f"Unexpected error creating VLESS user: {e}"
-        logger.error(error_msg, exc_info=True)
-        raise Exception(error_msg) from e
+        except Exception as e:
+            last_exception = e
+            error_msg = f"Unexpected error creating VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"XRAY API unexpected error: {error_msg}", exc_info=True)
+            if attempt < MAX_RETRIES:
+                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
+                continue
+            raise Exception(error_msg) from e
+    
+    # Если дошли сюда - все попытки исчерпаны
+    if last_exception:
+        raise last_exception
+    raise Exception("Failed to create VLESS user: all retries exhausted")
 
 
 async def remove_vless_user(uuid: str) -> None:
@@ -214,7 +251,14 @@ async def remove_vless_user(uuid: str) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    url = f"{config.XRAY_API_URL.rstrip('/')}/remove-user"
+    # Проверяем что URL правильный
+    api_url = config.XRAY_API_URL.rstrip('/')
+    if not api_url.startswith('http://') and not api_url.startswith('https://'):
+        error_msg = f"Invalid XRAY_API_URL format: {api_url}. Must start with http:// or https://"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    url = f"{api_url}/remove-user"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
@@ -223,45 +267,72 @@ async def remove_vless_user(uuid: str) -> None:
         "uuid": uuid.strip()
     }
     
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-            logger.debug(f"Removing VLESS user uuid={uuid} via {url}")
-            response = await client.post(url, headers=headers, json=payload)
+    # Безопасное логирование UUID
+    uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+    logger.info(f"XRAY API: Removing VLESS user uuid={uuid_preview} via {url}")
+    
+    last_exception = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES + 1}: POST {url}, uuid={uuid_preview}")
+                response = await client.post(url, headers=headers, json=payload)
+                
+                # Логируем статус ответа
+                logger.info(f"XRAY API response: status={response.status_code}, attempt={attempt + 1}, uuid={uuid_preview}")
+                
+                # Проверяем статус ответа
+                response.raise_for_status()
+                
+                logger.info(f"XRAY API: VLESS user removed successfully: uuid={uuid_preview}, attempt={attempt + 1}")
+                return
+                
+        except httpx.TimeoutException as e:
+            last_exception = e
+            error_msg = f"Timeout while removing VLESS user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"XRAY API timeout: {error_msg}")
+            if attempt < MAX_RETRIES:
+                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
+                continue
+            raise httpx.HTTPError(error_msg) from e
             
-            # Проверяем статус ответа
-            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            last_exception = e
+            error_msg = (
+                f"Xray API error removing user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
+                f"status={e.response.status_code}, "
+                f"response_body={e.response.text[:200]}"
+            )
+            logger.error(f"XRAY API HTTP error: {error_msg}")
+            # Для HTTP ошибок не делаем retry (4xx/5xx не исправятся)
+            raise
             
-            # Безопасное логирование UUID
-            uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
-            logger.info(f"VLESS user removed successfully: uuid={uuid_preview}")
+        except httpx.HTTPError as e:
+            last_exception = e
+            error_msg = f"Network error removing VLESS user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"XRAY API network error: {error_msg}")
+            if attempt < MAX_RETRIES:
+                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
+                continue
+            raise
             
-    except httpx.TimeoutException as e:
-        error_msg = f"Timeout while removing VLESS user uuid={uuid}: {e}"
-        logger.error(error_msg)
-        raise httpx.HTTPError(error_msg) from e
-        
-    except httpx.HTTPStatusError as e:
-        error_msg = (
-            f"Xray API error removing user uuid={uuid}: "
-            f"status={e.response.status_code}, "
-            f"response={e.response.text}"
-        )
-        logger.error(error_msg)
-        raise
-        
-    except httpx.HTTPError as e:
-        error_msg = f"Network error removing VLESS user uuid={uuid}: {e}"
-        logger.error(error_msg, exc_info=True)
-        raise
-        
-    except ValueError:
-        # Re-raise ValueError (validation errors)
-        raise
-        
-    except Exception as e:
-        error_msg = f"Unexpected error removing VLESS user uuid={uuid}: {e}"
-        logger.error(error_msg, exc_info=True)
-        raise Exception(error_msg) from e
+        except ValueError:
+            # Re-raise ValueError (validation errors) - не retry
+            raise
+            
+        except Exception as e:
+            last_exception = e
+            error_msg = f"Unexpected error removing VLESS user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"XRAY API unexpected error: {error_msg}", exc_info=True)
+            if attempt < MAX_RETRIES:
+                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
+                continue
+            raise Exception(error_msg) from e
+    
+    # Если дошли сюда - все попытки исчерпаны
+    if last_exception:
+        raise last_exception
+    raise Exception(f"Failed to remove VLESS user uuid={uuid_preview}: all retries exhausted")
 
 
 # ============================================================================
