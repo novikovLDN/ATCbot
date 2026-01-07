@@ -562,7 +562,7 @@ def get_reissue_notification_text(vpn_key: str) -> str:
         "Ваш VPN-ключ обновлён\n"
         "и переведён на новую версию сервера.\n\n"
         "Для корректной работы:\n"
-        "— удалите старый ключ из приложения Outline\n"
+        "— удалите старый ключ из VPN-приложения\n"
         "— добавьте новый ключ доступа\n\n"
         "Ключ:\n\n"
         f"<code>{vpn_key}</code>\n\n"
@@ -876,8 +876,8 @@ async def show_profile(message_or_query, language: str):
         # Получаем баланс
         balance_rubles = await database.get_user_balance(telegram_id)
         
-        # Получаем информацию о подписке
-        subscription = await database.get_subscription(telegram_id)
+        # Получаем информацию о подписке (активной или истекшей)
+        subscription = await database.get_subscription_any(telegram_id)
         
         # Формируем текст профиля с безопасной обработкой локализации
         try:
@@ -888,7 +888,9 @@ async def show_profile(message_or_query, language: str):
         
         # Определяем статус подписки
         has_active_subscription = False
+        has_any_subscription = False
         if subscription:
+            has_any_subscription = True
             expires_at = subscription["expires_at"]
             if isinstance(expires_at, str):
                 expires_at = datetime.fromisoformat(expires_at)
@@ -904,7 +906,7 @@ async def show_profile(message_or_query, language: str):
                 except (KeyError, TypeError):
                     text += f"\n\nПодписка:\n— 🟢 Активна до {expires_at.strftime('%d.%m.%Y')}"
             else:
-                # Подписка неактивна
+                # Подписка неактивна (истекла)
                 try:
                     text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
                 except (KeyError, TypeError):
@@ -916,15 +918,15 @@ async def show_profile(message_or_query, language: str):
             except (KeyError, TypeError):
                 text += "\n\nПодписка:\n— 🔴 Неактивна"
         
-        # Добавляем подсказку о продлении (только для активных подписок)
-        if has_active_subscription:
+        # Добавляем подсказку о продлении (для активных и истекших подписок - по требованиям)
+        if has_any_subscription:
             try:
                 text += "\n\n" + localization.get_text(language, "profile_renewal_hint_new")
             except (KeyError, TypeError):
                 text += "\n\nПри продлении выбранный срок добавляется к текущему автоматически."
         
         # Добавляем подсказку о покупке, если подписки нет
-        if not has_active_subscription:
+        if not has_any_subscription:
             try:
                 text += "\n\n" + localization.get_text(language, "profile_buy_hint")
             except (KeyError, TypeError):
@@ -936,7 +938,8 @@ async def show_profile(message_or_query, language: str):
         if subscription:
             auto_renew = subscription.get("auto_renew", False)
         
-        keyboard = get_profile_keyboard(language, has_active_subscription, auto_renew)
+        # Показываем кнопку "Продлить доступ" если есть подписка (активная или истекшая) - по требованиям
+        keyboard = get_profile_keyboard(language, has_any_subscription, auto_renew)
         
         # Отправляем сообщение
         await send_func(text, reply_markup=keyboard)
@@ -1119,13 +1122,13 @@ async def callback_renew_same_period(callback: CallbackQuery):
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
     
-    # Проверяем наличие активной подписки (независимо от источника: payment, admin, test)
-    subscription = await database.get_subscription(telegram_id)
+    # Проверяем наличие подписки (активной или истекшей) - по требованиям продление работает для status=active ИЛИ status=expired
+    subscription = await database.get_subscription_any(telegram_id)
     if not subscription:
         try:
-            error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
+            error_text = localization.get_text(language, "no_active_subscription", default="Подписка не найдена.")
         except (KeyError, TypeError):
-            error_text = "Активная подписка не найдена."
+            error_text = "Подписка не найдена."
         await callback.message.answer(error_text)
         return
     

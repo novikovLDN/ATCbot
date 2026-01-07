@@ -1728,7 +1728,7 @@ async def grant_access(
                    reminder_3h_sent = FALSE,
                    reminder_6h_sent = FALSE,
                    admin_grant_days = $6,
-                   activated_at = COALESCE(subscriptions.activated_at, $7),
+                   activated_at = $7,
                    last_bytes = 0""",
             telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start
         )
