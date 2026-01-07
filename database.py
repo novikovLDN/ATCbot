@@ -1601,7 +1601,8 @@ async def grant_access(
             else:
                 # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
                 subscription_end = max(expires_at, now) + duration
-                start_date = subscription.get("activated_at") or expires_at or now
+                # subscription_start сохраняется (activated_at не меняется при продлении)
+                subscription_start = subscription.get("activated_at") or expires_at or now
                 
                 # Обновляем БД
                 await conn.execute(
@@ -1627,7 +1628,7 @@ async def grant_access(
                 
                 # Записываем в историю подписок
                 vpn_key = subscription.get("vpn_key") or subscription.get("uuid", "")
-                await _log_subscription_history_atomic(conn, telegram_id, vpn_key, start_date, subscription_end, history_action_type)
+                await _log_subscription_history_atomic(conn, telegram_id, vpn_key, subscription_start, subscription_end, history_action_type)
                 
                 # Audit log
                 if admin_telegram_id:
