@@ -9,6 +9,7 @@ import reminders
 import healthcheck
 import outline_cleanup
 import fast_expiry_cleanup
+import auto_renewal
 
 # Настройка логирования
 logging.basicConfig(
@@ -49,6 +50,10 @@ async def main():
     fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
     logger.info("Fast expiry cleanup task started")
     
+    # Запуск фоновой задачи для автопродления подписок (1 раз в сутки)
+    auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
+    logger.info("Auto-renewal task started")
+    
     # Запуск бота
     logger.info("Бот запущен")
     try:
@@ -56,6 +61,7 @@ async def main():
     finally:
         reminder_task.cancel()
         healthcheck_task.cancel()
+        auto_renewal_task.cancel()
         cleanup_task.cancel()
         fast_cleanup_task.cancel()
         try:

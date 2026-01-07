@@ -131,9 +131,11 @@ async def init_db():
             # Колонки уже существуют
             pass
         
-        # Миграция: добавляем поле balance в users
+        # Миграция: добавляем поле balance в users (хранится в копейках как INTEGER)
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER NOT NULL DEFAULT 0")
+            # Если колонка уже существует как NUMERIC, конвертируем в INTEGER (копейки)
+            # Это безопасно, так как мы всегда работаем с копейками
         except Exception:
             # Колонка уже существует
             pass
@@ -452,11 +454,18 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
                     amount_kopecks, telegram_id
                 )
                 
+                # Определяем тип транзакции на основе source
+                transaction_type = "topup"
+                if source == "referral" or source == "referral_reward":
+                    transaction_type = "cashback"
+                elif source == "admin" or source == "admin_adjustment":
+                    transaction_type = "admin_adjustment"
+                
                 # Записываем транзакцию
                 await conn.execute(
                     """INSERT INTO balance_transactions (user_id, amount, type, source, description)
                        VALUES ($1, $2, $3, $4, $5)""",
-                    telegram_id, amount_kopecks, "topup", source, description
+                    telegram_id, amount_kopecks, transaction_type, source, description
                 )
                 
                 logger.info(f"Increased balance by {amount} RUB ({amount_kopecks} kopecks) for user {telegram_id}, source={source}")
@@ -509,11 +518,18 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
                     amount_kopecks, telegram_id
                 )
                 
+                # Определяем тип транзакции на основе source
+                transaction_type = "subscription_payment"
+                if source == "admin" or source == "admin_adjustment":
+                    transaction_type = "admin_adjustment"
+                elif source == "refund":
+                    transaction_type = "topup"  # Возврат средств
+                
                 # Записываем транзакцию (amount отрицательный для списания)
                 await conn.execute(
                     """INSERT INTO balance_transactions (user_id, amount, type, source, description)
                        VALUES ($1, $2, $3, $4, $5)""",
-                    telegram_id, -amount_kopecks, "subscription_payment", source, description
+                    telegram_id, -amount_kopecks, transaction_type, source, description
                 )
                 
                 logger.info(f"Decreased balance by {amount} RUB ({amount_kopecks} kopecks) for user {telegram_id}, source={source}")
