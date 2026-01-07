@@ -136,23 +136,23 @@ def get_profile_keyboard(language: str, has_subscription: bool = True):
     """Клавиатура профиля (обновленная версия)"""
     buttons = []
     
+    # Кнопка покупки подписки (всегда показываем)
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "buy_vpn"),
+        callback_data="menu_buy_vpn"
+    )])
+    
+    # Кнопка пополнения баланса (всегда показываем)
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "topup_balance"),
+        callback_data="topup_balance"
+    )])
+    
     if has_subscription:
-        # Кнопка продления (если есть активная подписка)
-        buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "renew_subscription"),
-            callback_data="renew_same_period"
-        )])
-        
-        # Кнопка копирования ключа
+        # Кнопка копирования ключа (если есть активная подписка)
         buttons.append([InlineKeyboardButton(
             text=localization.get_text(language, "copy_key"),
             callback_data="copy_key"
-        )])
-    else:
-        # Кнопка для оформления доступа (если нет подписки)
-        buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "buy_vpn"),
-            callback_data="menu_buy_vpn"
         )])
     
     # Кнопка "Назад"
@@ -809,14 +809,13 @@ async def show_profile(message_or_query, language: str):
         username = f"ID: {telegram_id}"
     
     # Получаем баланс
-    balance_kopecks = await database.get_user_balance(telegram_id)
-    balance_rubles = balance_kopecks / 100.0
+    balance_rubles = await database.get_user_balance(telegram_id)
     
     # Получаем информацию о подписке
     subscription = await database.get_subscription(telegram_id)
     
     # Формируем текст профиля
-    text = localization.get_text(language, "profile_welcome", username=username, balance=balance_rubles)
+    text = localization.get_text(language, "profile_welcome", username=username, balance=round(balance_rubles, 2))
     
     if subscription:
         # Проверяем, активна ли подписка
@@ -1058,6 +1057,103 @@ async def callback_renewal_pay(callback: CallbackQuery):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
+
+
+@router.callback_query(F.data == "topup_balance")
+async def callback_topup_balance(callback: CallbackQuery):
+    """Пополнить баланс"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Показываем экран выбора суммы
+    text = localization.get_text(language, "topup_balance_select_amount", default="Выберите сумму пополнения:")
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="500 ₽",
+            callback_data="topup_amount:500"
+        )],
+        [InlineKeyboardButton(
+            text="1000 ₽",
+            callback_data="topup_amount:1000"
+        )],
+        [InlineKeyboardButton(
+            text="2000 ₽",
+            callback_data="topup_amount:2000"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "topup_custom_amount", default="Другая сумма"),
+            callback_data="topup_custom"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back"),
+            callback_data="menu_profile"
+        )],
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("topup_amount:"))
+async def callback_topup_amount(callback: CallbackQuery):
+    """Обработка выбора суммы пополнения"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Извлекаем сумму из callback_data
+    amount_str = callback.data.split(":")[1]
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await callback.answer(localization.get_text(language, "error_invalid_amount", default="Неверная сумма"), show_alert=True)
+        return
+    
+    if amount <= 0 or amount > 100000:
+        await callback.answer(localization.get_text(language, "error_invalid_amount", default="Неверная сумма"), show_alert=True)
+        return
+    
+    # Создаем invoice через Telegram Payments
+    import time
+    timestamp = int(time.time())
+    payload = f"balance_topup_{telegram_id}_{amount}_{timestamp}"
+    
+    # Конвертируем рубли в копейки для Telegram Payments
+    amount_kopecks = amount * 100
+    
+    try:
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title=localization.get_text(language, "topup_invoice_title", default="Пополнение баланса Atlas Secure"),
+            description=localization.get_text(language, "topup_invoice_description", amount=amount, default=f"Пополнение баланса на {amount} ₽"),
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label=localization.get_text(language, "topup_invoice_label", default="Пополнение баланса"), amount=amount_kopecks)],
+            start_parameter=f"balance_topup_{amount}",
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error sending invoice for balance topup: {e}")
+        await callback.answer(
+            localization.get_text(language, "error_payment_create", default="Ошибка создания платежа. Попробуйте позже."),
+            show_alert=True
+        )
+
+
+@router.callback_query(F.data == "topup_custom")
+async def callback_topup_custom(callback: CallbackQuery):
+    """Ввод произвольной суммы (пока не реализовано, возвращаем в профиль)"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    await callback.answer(
+        localization.get_text(language, "topup_custom_not_available", default="Ввод произвольной суммы временно недоступен. Выберите одну из предложенных сумм."),
+        show_alert=True
+    )
 
 
 @router.callback_query(F.data == "copy_key")
@@ -1389,12 +1485,84 @@ async def process_successful_payment(message: Message):
     """Обработчик successful_payment - успешная оплата"""
     telegram_id = message.from_user.id
     payment = message.successful_payment
+    payload = payment.invoice_payload
     
+    # Проверяем, является ли это пополнением баланса
+    if payload.startswith("balance_topup_"):
+        # Пополнение баланса
+        try:
+            parts = payload.split("_")
+            if len(parts) < 4:
+                logger.error(f"Invalid balance topup payload format: {payload}")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
+                return
+            
+            payload_user_id = int(parts[2])
+            amount = int(parts[3])
+            
+            # Проверяем, что платеж для этого пользователя
+            if payload_user_id != telegram_id:
+                logger.warning(f"Balance topup payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
+                return
+            
+            # Получаем фактическую сумму из платежа (в рублях)
+            payment_amount_rubles = payment.total_amount / 100.0
+            
+            # Проверяем, что сумма совпадает (с небольшой погрешностью)
+            if abs(payment_amount_rubles - amount) > 1.0:
+                logger.warning(f"Balance topup amount mismatch: expected={amount}, actual={payment_amount_rubles}")
+                # Используем фактическую сумму из платежа
+            
+            # Пополняем баланс
+            success = await database.increase_balance(
+                telegram_id=telegram_id,
+                amount=payment_amount_rubles,
+                source="telegram_payment",
+                description=f"Пополнение баланса через Telegram Payments"
+            )
+            
+            if success:
+                # Получаем новый баланс
+                new_balance = await database.get_user_balance(telegram_id)
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                
+                # Отправляем сообщение об успешном пополнении
+                text = localization.get_text(
+                    language,
+                    "topup_balance_success",
+                    balance=new_balance,
+                    default=f"✅ Баланс пополнен\n\nНа счёте: {new_balance:.2f} ₽"
+                )
+                await message.answer(text)
+                
+                # Логируем событие
+                logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
+            else:
+                logger.error(f"Failed to increase balance for user {telegram_id}, amount={payment_amount_rubles}")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
+            
+            return
+            
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error parsing balance topup payload {payload}: {e}")
+            user = await database.get_user(telegram_id)
+            language = user.get("language", "ru") if user else "ru"
+            await message.answer(localization.get_text(language, "error_payment_processing"))
+            return
+    
+    # Обработка платежей за подписку (существующая логика)
     # Извлекаем данные из payload
     # Формат для обычной покупки: user_id_tariff_timestamp
     # Формат для покупки с промокодом: purchase:promo:CODE:user_id:tariff:timestamp
     # Формат для продления: renew:user_id:tariff:timestamp
-    payload = payment.invoice_payload
     promo_code_used = None  # Инициализируем переменную для промокода
     try:
         if payload.startswith("renew:"):

@@ -85,6 +85,17 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_buy_hint": "Нажмите «Купить подписку» в меню, чтобы получить доступ.",
         "access_key_label": "Ключ доступа:",
         
+        # Пополнение баланса
+        "topup_balance": "➕ Пополнить баланс",
+        "topup_balance_select_amount": "Выберите сумму пополнения:",
+        "topup_custom_amount": "Другая сумма",
+        "topup_custom_not_available": "Ввод произвольной суммы временно недоступен. Выберите одну из предложенных сумм.",
+        "topup_invoice_title": "Пополнение баланса Atlas Secure",
+        "topup_invoice_description": "Пополнение баланса на {amount} ₽",
+        "topup_invoice_label": "Пополнение баланса",
+        "topup_balance_success": "✅ Баланс пополнен\n\nНа счёте: {balance:.2f} ₽",
+        "error_invalid_amount": "Неверная сумма",
+        
         # Профиль - активная подписка (старая версия, для совместимости)
         "profile_active": "👤 Профиль доступа\n\nСтатус доступа: Активен\nДоступ оплачен до {date}\n\nВы подключены. Доступ работает стабильно.\n\nПерсональный ключ доступа\nИспользуется для подключения в приложении Outline.\nПодключение сохраняется, пока действует доступ.\n\n{vpn_key}\n\nПри продлении выбранный срок\nдобавляется к текущему доступу автоматически.\n\nДо окончания срока вы можете\nне возвращаться к настройкам и оплате.",
         "profile_renewal_hint": "",
@@ -279,6 +290,17 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_buy_hint": "Click «Buy Subscription» in the menu to get access.",
         "access_key_label": "Access Key:",
         
+        # Пополнение баланса
+        "topup_balance": "➕ Top Up Balance",
+        "topup_balance_select_amount": "Select top-up amount:",
+        "topup_custom_amount": "Custom amount",
+        "topup_custom_not_available": "Custom amount input is temporarily unavailable. Please select one of the suggested amounts.",
+        "topup_invoice_title": "Atlas Secure Balance Top-Up",
+        "topup_invoice_description": "Balance top-up for {amount} ₽",
+        "topup_invoice_label": "Balance Top-Up",
+        "topup_balance_success": "✅ Balance topped up\n\nBalance: {balance:.2f} ₽",
+        "error_invalid_amount": "Invalid amount",
+        
         # Профиль - активная подписка (старая версия, для совместимости)
         "profile_active": "👤 Access Profile\n\nAccess status: Active\nAccess paid until {date}\n\nYou are connected. Access works stably.\n\nPersonal access key\nUsed for connection in Outline app.\nConnection persists while access is active.\n\n{vpn_key}\n\nWhen renewing, the selected period\nis automatically added to current access.\n\nUntil the period ends, you can\nnot return to settings and payment.",
         "profile_renewal_hint": "",
@@ -429,6 +451,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_renewal_hint_new": "Uzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.",
         "profile_buy_hint": "Kirish olish uchun menyudan «Kirishni sotib olish»ni bosing.",
         "access_key_label": "Kirish kaliti:",
+        # Пополнение баланса
+        "topup_balance": "➕ Balansni to'ldirish",
+        "topup_balance_select_amount": "To'ldirish summasini tanlang:",
+        "topup_custom_amount": "Boshqa summa",
+        "topup_custom_not_available": "Ixtiyoriy summa kiritish vaqtincha mavjud emas. Taklif etilgan summalardan birini tanlang.",
+        "topup_invoice_title": "Atlas Secure balansini to'ldirish",
+        "topup_invoice_description": "Balansni {amount} ₽ ga to'ldirish",
+        "topup_invoice_label": "Balansni to'ldirish",
+        "topup_balance_success": "✅ Balans to'ldirildi\n\nHisobda: {balance:.2f} ₽",
+        "error_invalid_amount": "Noto'g'ri summa",
         "subscription_history": "📄 Obuna tarixi",
         "subscription_history_empty": "Obuna tarixi bo'sh",
         "subscription_history_action_purchase": "Xarid",
@@ -594,6 +626,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_renewal_hint_new": "Ҳангоми васеъ кардан муддати интихобшуда\nба дастрасии ҷорӣ ба таври худкор илова карда мешавад.",
         "profile_buy_hint": "Барои дастрасӣ гирифтан дар меню «Хариди обуна»-ро пахш кунед.",
         "access_key_label": "Калиди дастрасӣ:",
+        # Пополнение баланса
+        "topup_balance": "➕ Баллансро пур кардан",
+        "topup_balance_select_amount": "Маблағи пуркуниро интихоб кунед:",
+        "topup_custom_amount": "Маблағи дигар",
+        "topup_custom_not_available": "Маблағи ихтиёриро ворид кардан вақтан муваққатан дастрас нест. Лутфан, яке аз маблағҳои пешниҳодшударо интихоб кунед.",
+        "topup_invoice_title": "Пур кардани балланси Atlas Secure",
+        "topup_invoice_description": "Пур кардани балланс ба {amount} ₽",
+        "topup_invoice_label": "Пур кардани балланс",
+        "topup_balance_success": "✅ Балланс пур карда шуд\n\nДар ҳисоб: {balance:.2f} ₽",
+        "error_invalid_amount": "Маблағи нодуруст",
         "subscription_history": "📄 Таърихи обунаҳо",
         "subscription_history_empty": "Таърихи обунаҳо холӣ аст",
         "subscription_history_action_purchase": "Харид",
