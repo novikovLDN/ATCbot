@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import database
 import localization
 import config
-import outline_api
+# import outline_api  # DISABLED - мигрировали на Xray Core (VLESS)
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +87,9 @@ async def send_smart_notifications(bot: Bot):
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            # Получаем все активные подписки с outline_key_id
+            # Получаем все активные подписки с UUID (Xray VLESS)
             rows = await conn.fetch("""
-                SELECT telegram_id, outline_key_id, activated_at, expires_at, last_bytes,
+                SELECT telegram_id, uuid, activated_at, expires_at, last_bytes,
                        first_traffic_at,
                        smart_notif_no_traffic_20m_sent,
                        smart_notif_no_traffic_24h_sent,
@@ -102,7 +102,8 @@ async def send_smart_notifications(bot: Bot):
                        smart_notif_vip_offer_sent,
                        last_notification_sent_at
                 FROM subscriptions
-                WHERE outline_key_id IS NOT NULL
+                WHERE status = 'active'
+                AND uuid IS NOT NULL
                 AND expires_at > NOW()
             """)
         
@@ -116,7 +117,7 @@ async def send_smart_notifications(bot: Bot):
         for row in rows:
             subscription = dict(row)
             telegram_id = subscription["telegram_id"]
-            outline_key_id = subscription["outline_key_id"]
+            uuid = subscription.get("uuid")  # Xray VLESS UUID
             activated_at = subscription.get("activated_at")
             expires_at = subscription["expires_at"]
             last_bytes = subscription.get("last_bytes", 0) or 0
@@ -144,18 +145,14 @@ async def send_smart_notifications(bot: Bot):
                 user = await database.get_user(telegram_id)
                 language = user.get("language", "ru") if user else "ru"
                 
-                # Получаем текущий трафик из Outline API
-                current_bytes = await outline_api.get_outline_key_traffic(outline_key_id)
+                # XRAY CORE: Получение трафика через API не поддерживается
+                # Используем last_bytes из БД (обновляется другим механизмом при необходимости)
+                current_bytes = last_bytes  # Используем сохраненное значение трафика
                 if current_bytes is None:
-                    # Если не удалось получить трафик, пропускаем этого пользователя
-                    continue
+                    current_bytes = 0
                 
-                # Обновляем last_bytes в БД
-                async with pool.acquire() as update_conn:
-                    await update_conn.execute(
-                        "UPDATE subscriptions SET last_bytes = $1 WHERE telegram_id = $2",
-                        current_bytes, telegram_id
-                    )
+                # Не обновляем last_bytes в БД, так как Xray API не предоставляет статистику трафика
+                # Используем сохраненное значение из БД для проверок
                 
                 # Проверяем, появился ли трафик впервые
                 if current_bytes > 0 and last_bytes == 0 and not first_traffic_at:

@@ -44,10 +44,20 @@ VPN_KEYS_FILE = "vpn_keys.txt"
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)
 TG_PROVIDER_TOKEN = os.getenv("TG_PROVIDER_TOKEN", "")
 
-# Xray Core API Configuration
-XRAY_API_URL = os.getenv("XRAY_API_URL", "")
-XRAY_API_KEY = os.getenv("XRAY_API_KEY", "")
+# Xray Core API Configuration (REQUIRED)
+XRAY_API_URL = os.getenv("XRAY_API_URL")
+if not XRAY_API_URL:
+    print("ERROR: XRAY_API_URL environment variable is not set!", file=sys.stderr)
+    print("XRAY_API_URL is required for VPN operations (VLESS + REALITY)", file=sys.stderr)
+    sys.exit(1)
 
-# Outline Management API URL (deprecated, kept for backward compatibility)
+XRAY_API_KEY = os.getenv("XRAY_API_KEY")
+if not XRAY_API_KEY:
+    print("ERROR: XRAY_API_KEY environment variable is not set!", file=sys.stderr)
+    print("XRAY_API_KEY is required for Xray API authentication", file=sys.stderr)
+    sys.exit(1)
+
+# Outline Management API URL (DEPRECATED - не используется)
+# Оставлено для обратной совместимости, но не используется в коде
 OUTLINE_API_URL = os.getenv("OUTLINE_API_URL", "")
 

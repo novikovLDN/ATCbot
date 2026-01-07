@@ -7,7 +7,7 @@ import database
 import handlers
 import reminders
 import healthcheck
-import outline_cleanup
+# import outline_cleanup  # DISABLED - мигрировали на Xray Core
 import fast_expiry_cleanup
 import auto_renewal
 
@@ -42,9 +42,12 @@ async def main():
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
     logger.info("Health check task started")
     
-    # Запуск фоновой задачи для очистки истекших Outline ключей (основной cleanup, интервал 10 минут)
-    cleanup_task = asyncio.create_task(outline_cleanup.outline_cleanup_task())
-    logger.info("Outline cleanup task started")
+    # Outline cleanup task DISABLED - мигрировали на Xray Core (VLESS)
+    # Старая задача outline_cleanup больше не используется
+    # cleanup_task = asyncio.create_task(outline_cleanup.outline_cleanup_task())
+    # logger.info("Outline cleanup task started")
+    cleanup_task = None
+    logger.info("Outline cleanup task disabled (using Xray Core now)")
     
     # Запуск фоновой задачи для быстрой очистки истёкших подписок (fast cleanup, интервал 60 секунд)
     fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
@@ -72,10 +75,12 @@ async def main():
             await healthcheck_task
         except asyncio.CancelledError:
             pass
-        try:
-            await cleanup_task
-        except asyncio.CancelledError:
-            pass
+        if cleanup_task:
+            try:
+                cleanup_task.cancel()
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
         try:
             await fast_cleanup_task
         except asyncio.CancelledError:

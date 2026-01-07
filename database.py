@@ -1374,9 +1374,9 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
     
     Перевыпуск возможен ТОЛЬКО если у пользователя есть активная подписка.
     В одной транзакции:
-    - удаляет старый ключ из Outline
-    - создает новый ключ через Outline API
-    - обновляет subscriptions (outline_key_id, vpn_key)
+    - удаляет старый UUID из Xray API
+    - создает новый UUID через Xray API (VLESS)
+    - обновляет subscriptions (uuid, vpn_key)
     - expires_at НЕ меняется
     - записывает событие в audit_log
     
@@ -1403,30 +1403,31 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                     return None, None
                 
                 subscription = dict(subscription_row)
-                old_outline_key_id = subscription.get("outline_key_id")
+                old_uuid = subscription.get("uuid")
                 old_vpn_key = subscription.get("vpn_key", "")
                 
-                # 2. Удаляем старый ключ из Outline (если есть)
-                if old_outline_key_id:
+                # 2. Удаляем старый UUID из Xray API (если есть)
+                if old_uuid:
                     try:
-                        await outline_api.delete_outline_key(old_outline_key_id)
-                        logger.info(f"Deleted old Outline key {old_outline_key_id} for user {telegram_id} during reissue")
+                        await vpn_utils.remove_vless_user(old_uuid)
+                        logger.info(f"Deleted old UUID {old_uuid} for user {telegram_id} during reissue")
                     except Exception as e:
-                        logger.warning(f"Failed to delete old Outline key {old_outline_key_id} for user {telegram_id}: {e}")
-                        # Продолжаем, даже если не удалось удалить старый ключ
+                        logger.warning(f"Failed to delete old UUID {old_uuid} for user {telegram_id}: {e}")
+                        # Продолжаем, даже если не удалось удалить старый UUID
                 
-                # 3. Создаем новый ключ через Outline API
-                key_result = await outline_api.create_outline_key()
-                if not key_result:
-                    logger.error(f"Failed to create Outline key for reissue for user {telegram_id}")
+                # 3. Создаем новый UUID через Xray API (VLESS)
+                try:
+                    vless_result = await vpn_utils.add_vless_user()
+                    new_uuid = vless_result["uuid"]
+                    new_vpn_key = vless_result["vless_url"]
+                except Exception as e:
+                    logger.error(f"Failed to create VLESS user for reissue for user {telegram_id}: {e}")
                     return None, None
-                
-                new_outline_key_id, new_vpn_key = key_result
                 
                 # 4. Обновляем подписку (expires_at НЕ меняется)
                 await conn.execute(
-                    "UPDATE subscriptions SET outline_key_id = $1, vpn_key = $2 WHERE telegram_id = $3",
-                    new_outline_key_id, new_vpn_key, telegram_id
+                    "UPDATE subscriptions SET uuid = $1, vpn_key = $2 WHERE telegram_id = $3",
+                    new_uuid, new_vpn_key, telegram_id
                 )
                 
                 # 5. Записываем в историю подписок
@@ -2662,9 +2663,9 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
     """Атомарно лишить доступа пользователя (админ)
     
     В одной транзакции:
-    - удаляет VPN-ключ из Outline (если есть outline_key_id)
-    - устанавливает expires_at = NOW()
-    - очищает outline_key_id и vpn_key
+    - удаляет UUID из Xray API (если есть uuid)
+    - устанавливает status = 'expired', expires_at = NOW()
+    - очищает uuid и vpn_key
     - записывает в subscription_history (action = admin_revoke)
     - записывает событие в audit_log
     
@@ -2693,24 +2694,21 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                 
                 subscription = dict(subscription_row)
                 old_expires_at = subscription["expires_at"]
-                outline_key_id = subscription.get("outline_key_id")
+                uuid = subscription.get("uuid")
                 vpn_key = subscription.get("vpn_key", "")
                 
-                # 2. Удаляем VPN-ключ из Outline (если есть)
-                if outline_key_id:
+                # 2. Удаляем UUID из Xray API (если есть)
+                if uuid:
                     try:
-                        deleted = await outline_api.delete_outline_key(outline_key_id)
-                        if deleted:
-                            logger.info(f"Deleted Outline key {outline_key_id} for user {telegram_id} during admin revoke")
-                        else:
-                            logger.warning(f"Failed to delete Outline key {outline_key_id} for user {telegram_id} (may already be deleted)")
+                        await vpn_utils.remove_vless_user(uuid)
+                        logger.info(f"Deleted UUID {uuid} for user {telegram_id} during admin revoke")
                     except Exception as e:
-                        # Не падаем, если ключ уже удален или произошла ошибка
-                        logger.error(f"Error deleting Outline key {outline_key_id} for user {telegram_id}: {e}", exc_info=True)
+                        # Не падаем, если UUID уже удален или произошла ошибка
+                        logger.error(f"Error deleting UUID {uuid} for user {telegram_id}: {e}", exc_info=True)
                 
                 # 3. Очищаем подписку: устанавливаем expires_at = NOW(), очищаем outline_key_id и vpn_key
                 await conn.execute(
-                    "UPDATE subscriptions SET expires_at = $1, outline_key_id = NULL, vpn_key = NULL WHERE telegram_id = $2",
+                    "UPDATE subscriptions SET expires_at = $1, status = 'expired', uuid = NULL, vpn_key = NULL WHERE telegram_id = $2",
                     now, telegram_id
                 )
                 

@@ -9,7 +9,7 @@ import config
 logger = logging.getLogger(__name__)
 
 # Минимальное количество свободных VPN-ключей больше не используется
-# VPN-ключи создаются динамически через Outline API
+# VPN-ключи создаются динамически через Xray API (VLESS + REALITY)
 
 
 async def check_database_connection() -> Tuple[bool, str]:
@@ -52,15 +52,22 @@ async def check_connection_pool() -> Tuple[bool, str]:
 
 
 async def check_vpn_keys() -> Tuple[bool, str]:
-    """Проверить доступность Outline API
+    """Проверить доступность Xray API
     
     Returns:
         Кортеж (is_ok, message) - статус проверки и сообщение
     """
     try:
-        # VPN-ключи создаются динамически через Outline API
+        import config
+        import vpn_utils
+        
+        # Проверяем, что XRAY_API_URL настроен
+        if not config.XRAY_API_URL:
+            return False, "VPN API: XRAY_API_URL не настроен"
+        
+        # VPN-ключи создаются динамически через Xray API (VLESS + REALITY)
         # Проверка пула ключей больше не актуальна
-        return True, "VPN-ключи: Создаются через Outline API (без лимита)"
+        return True, "VPN-ключи: Создаются через Xray API (VLESS + REALITY, без лимита)"
     except Exception as e:
         return False, f"VPN-ключи: Ошибка проверки ({str(e)})"
 

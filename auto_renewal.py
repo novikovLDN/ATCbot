@@ -118,7 +118,7 @@ async def process_auto_renewals(bot: Bot):
                             continue
                         
                         # Продлеваем подписку через единую функцию grant_access
-                        expires_at, vpn_key, is_renewal = await database.grant_access(
+                        result = await database.grant_access(
                             telegram_id=telegram_id,
                             duration=duration,
                             source="payment",
@@ -126,6 +126,10 @@ async def process_auto_renewals(bot: Bot):
                             admin_grant_days=None,
                             conn=conn  # Используем существующее соединение для атомарности
                         )
+                        
+                        expires_at = result["subscription_end"]
+                        vpn_key = result.get("vless_url") or result["uuid"]
+                        is_renewal = result.get("vless_url") is None  # Если vless_url is None, значит это продление
                         
                         if expires_at is None or vpn_key is None:
                             logger.error(f"Failed to grant access for auto-renewal: user={telegram_id}")
