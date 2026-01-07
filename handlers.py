@@ -803,6 +803,9 @@ async def check_subscription_expiry(telegram_id: int) -> bool:
 
 async def show_profile(message_or_query, language: str):
     """Показать профиль пользователя (обновленная версия с балансом)"""
+    telegram_id = None
+    send_func = None
+    
     try:
         if isinstance(message_or_query, Message):
             telegram_id = message_or_query.from_user.id
@@ -814,77 +817,95 @@ async def show_profile(message_or_query, language: str):
         logger.error(f"Invalid message_or_query type in show_profile: {type(message_or_query)}, error: {e}")
         raise
     
-    # Дополнительная защита: проверка истечения подписки
-    await check_subscription_expiry(telegram_id)
-    
-    # Получаем данные пользователя
-    user = await database.get_user(telegram_id)
-    username = user.get("username") if user else None
-    if not username:
-        username = f"ID: {telegram_id}"
-    
-    # Получаем баланс
-    balance_rubles = await database.get_user_balance(telegram_id)
-    
-    # Получаем информацию о подписке
-    subscription = await database.get_subscription(telegram_id)
-    
-    # Формируем текст профиля
-    text = localization.get_text(language, "profile_welcome", username=username, balance=round(balance_rubles, 2))
-    
-    if subscription:
-        # Проверяем, активна ли подписка
-        expires_at = subscription["expires_at"]
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at)
-        
-        now = datetime.now()
-        if expires_at > now:
-            # Подписка активна
-            expires_str = expires_at.strftime("%d.%m.%Y")
-            text += "\n\n" + localization.get_text(language, "profile_subscription_active", date=expires_str)
-        else:
-            # Подписка неактивна
-            text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
-    else:
-        # Подписки нет
-        text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
-    
-    # Добавляем подсказку о продлении
-    if subscription:
-        expires_at = subscription["expires_at"]
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at)
-        now = datetime.now()
-        if expires_at > now:
-            text += "\n\n" + localization.get_text(language, "profile_renewal_hint_new")
-    
-    # Добавляем подсказку о покупке, если подписки нет
-    has_active_subscription = False
-    if subscription:
-        expires_at = subscription["expires_at"]
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at)
-        now = datetime.now()
-        has_active_subscription = expires_at > now
-    
-    if not has_active_subscription:
-        text += "\n\n" + localization.get_text(language, "profile_buy_hint")
-    
-    # Получаем клавиатуру
-    keyboard = get_profile_keyboard(language, has_active_subscription)
-    
     try:
-        await send_func(text, reply_markup=keyboard)
-    except Exception as e:
-        logger.exception(f"Error sending profile message for user {telegram_id}: {e}")
-        # Если не удалось отредактировать сообщение (например, оно было удалено), отправляем новое
-        if hasattr(message_or_query, 'message') and hasattr(message_or_query.message, 'answer'):
+        # Дополнительная защита: проверка истечения подписки
+        await check_subscription_expiry(telegram_id)
+        
+        # Получаем данные пользователя
+        user = await database.get_user(telegram_id)
+        if not user:
+            logger.warning(f"User not found: {telegram_id}")
             try:
-                await message_or_query.message.answer(text, reply_markup=keyboard)
-            except Exception:
-                pass
-        raise
+                error_text = localization.get_text(language, "error_profile_load")
+            except KeyError:
+                error_text = "Ошибка загрузки профиля. Попробуйте позже."
+            await send_func(error_text)
+            return
+        
+        username = user.get("username") if user else None
+        if not username:
+            username = f"ID: {telegram_id}"
+        
+        # Получаем баланс
+        balance_rubles = await database.get_user_balance(telegram_id)
+        
+        # Получаем информацию о подписке
+        subscription = await database.get_subscription(telegram_id)
+        
+        # Формируем текст профиля
+        text = localization.get_text(language, "profile_welcome", username=username, balance=round(balance_rubles, 2))
+        
+        if subscription:
+            # Проверяем, активна ли подписка
+            expires_at = subscription["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            
+            now = datetime.now()
+            if expires_at > now:
+                # Подписка активна
+                expires_str = expires_at.strftime("%d.%m.%Y")
+                text += "\n\n" + localization.get_text(language, "profile_subscription_active", date=expires_str)
+            else:
+                # Подписка неактивна
+                text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
+        else:
+            # Подписки нет
+            text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
+        
+        # Добавляем подсказку о продлении
+        if subscription:
+            expires_at = subscription["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            now = datetime.now()
+            if expires_at > now:
+                text += "\n\n" + localization.get_text(language, "profile_renewal_hint_new")
+        
+        # Добавляем подсказку о покупке, если подписки нет
+        has_active_subscription = False
+        if subscription:
+            expires_at = subscription["expires_at"]
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            now = datetime.now()
+            has_active_subscription = expires_at > now
+        
+        if not has_active_subscription:
+            text += "\n\n" + localization.get_text(language, "profile_buy_hint")
+        
+        # Получаем клавиатуру
+        keyboard = get_profile_keyboard(language, has_active_subscription)
+        
+        # Отправляем сообщение
+        await send_func(text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logger.exception(f"Error in show_profile for user {telegram_id}: {e}")
+        # Пытаемся отправить сообщение об ошибке
+        try:
+            try:
+                error_text = localization.get_text(language, "error_profile_load")
+            except KeyError:
+                error_text = "Ошибка загрузки профиля. Попробуйте позже."
+            
+            # Если не удалось отредактировать сообщение, отправляем новое
+            if hasattr(message_or_query, 'message') and hasattr(message_or_query.message, 'answer'):
+                await message_or_query.message.answer(error_text)
+            elif isinstance(message_or_query, Message):
+                await message_or_query.answer(error_text)
+        except Exception as e2:
+            logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
 @router.callback_query(F.data == "change_language")
@@ -1052,7 +1073,7 @@ async def callback_renew_same_period(callback: CallbackQuery):
     description = f"Atlas Secure VPN продление подписки на {months} месяц(ев)"
     
     try:
-        # Отправляем invoice
+        # Отправляем invoice (start_parameter НЕ используется, только payload)
         await callback.bot.send_invoice(
             chat_id=telegram_id,
             title="Atlas Secure VPN",
@@ -1060,8 +1081,7 @@ async def callback_renew_same_period(callback: CallbackQuery):
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label="Продление подписки", amount=amount * 100)],
-            start_parameter=payload
+            prices=[LabeledPrice(label="Продление подписки", amount=amount * 100)]
         )
         logger.info(f"Sent renewal invoice: user={telegram_id}, tariff={tariff_key}, amount={amount} RUB")
     except Exception as e:
@@ -1124,8 +1144,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=prices,
-            start_parameter=payload  # Для быстрого доступа к платежу
+            prices=prices
         )
         await callback.answer()
     except Exception as e:
@@ -1207,8 +1226,7 @@ async def callback_topup_amount(callback: CallbackQuery):
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label=localization.get_text(language, "topup_invoice_label", default="Пополнение баланса"), amount=amount_kopecks)],
-            start_parameter=f"balance_topup_{amount}",
+            prices=[LabeledPrice(label=localization.get_text(language, "topup_invoice_label", default="Пополнение баланса"), amount=amount_kopecks)]
         )
         await callback.answer()
     except Exception as e:
@@ -1236,7 +1254,7 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
         text = localization.get_text(language, "topup_enter_amount")
     except KeyError:
         logger.error(f"Missing localization key 'topup_enter_amount' for language '{language}'")
-        text = "Введите сумму пополнения (минимум 100 ₽):"
+        text = "Введите свою сумму от 100 ₽"
     
     await callback.message.answer(text)
 
@@ -1317,8 +1335,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label=label, amount=amount_kopecks)],
-            start_parameter=f"balance_topup_{amount}",
+            prices=[LabeledPrice(label=label, amount=amount_kopecks)]
         )
         logger.info(f"Sent invoice for custom topup: user={telegram_id}, amount={amount} RUB")
     except Exception as e:
