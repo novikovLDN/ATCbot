@@ -57,7 +57,13 @@ if not XRAY_API_KEY:
     print("XRAY_API_KEY is required for Xray API authentication", file=sys.stderr)
     sys.exit(1)
 
-# Outline Management API URL (DEPRECATED - не используется)
-# Оставлено для обратной совместимости, но не используется в коде
-OUTLINE_API_URL = os.getenv("OUTLINE_API_URL", "")
+# Xray VLESS REALITY Server Constants (REQUIRED)
+# Эти параметры используются для генерации VLESS ссылок
+XRAY_SERVER_IP = os.getenv("XRAY_SERVER_IP", "172.86.67.9")
+XRAY_PORT = int(os.getenv("XRAY_PORT", "443"))
+XRAY_SNI = os.getenv("XRAY_SNI", "www.cloudflare.com")
+XRAY_PUBLIC_KEY = os.getenv("XRAY_PUBLIC_KEY", "fDixPEehAKSEsRGm5Q9HY-BNs9uMmN5NIzEDKngDOk8")
+XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
+XRAY_FLOW = os.getenv("XRAY_FLOW", "xtls-rprx-vision")
+XRAY_FP = os.getenv("XRAY_FP", "chrome")
 

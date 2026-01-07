@@ -7,6 +7,7 @@
 import httpx
 import logging
 from typing import Dict, Optional
+from urllib.parse import quote
 import config
 
 logger = logging.getLogger(__name__)
@@ -15,16 +16,65 @@ logger = logging.getLogger(__name__)
 HTTP_TIMEOUT = 30.0  # секунды
 
 
+def generate_vless_url(uuid: str) -> str:
+    """
+    Генерирует VLESS URL для подключения к Xray Core серверу.
+    
+    Формат:
+    vless://UUID@SERVER_IP:PORT
+    ?encryption=none
+    &flow=xtls-rprx-vision
+    &security=reality
+    &sni=www.cloudflare.com
+    &fp=chrome
+    &pbk=PUBLIC_KEY
+    &sid=SHORT_ID
+    &type=tcp
+    #AtlasSecure
+    
+    Args:
+        uuid: UUID пользователя
+    
+    Returns:
+        VLESS URL строка
+    """
+    # Кодируем параметры для URL
+    server_address = f"{uuid}@{config.XRAY_SERVER_IP}:{config.XRAY_PORT}"
+    
+    # Параметры запроса
+    params = {
+        "encryption": "none",
+        "flow": config.XRAY_FLOW,
+        "security": "reality",
+        "sni": config.XRAY_SNI,
+        "fp": config.XRAY_FP,
+        "pbk": config.XRAY_PUBLIC_KEY,
+        "sid": config.XRAY_SHORT_ID,
+        "type": "tcp"
+    }
+    
+    # Формируем query string
+    query_parts = [f"{key}={quote(str(value))}" for key, value in params.items()]
+    query_string = "&".join(query_parts)
+    
+    # Формируем полный URL
+    fragment = "AtlasSecure"
+    vless_url = f"vless://{server_address}?{query_string}#{quote(fragment)}"
+    
+    return vless_url
+
+
 async def add_vless_user() -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
     
-    Вызывает POST /add-user на Xray API сервере и возвращает данные пользователя.
+    Вызывает POST /add-user на локальном FastAPI VPN API сервере.
+    API возвращает только UUID, а VLESS URL генерируется локально.
     
     Returns:
         Словарь с ключами:
         - "uuid": UUID пользователя (str)
-        - "vless_url": VLESS URL для подключения (str)
+        - "vless_url": VLESS URL для подключения (str, сгенерирован локально)
     
     Raises:
         ValueError: Если XRAY_API_URL или XRAY_API_KEY не настроены
@@ -56,23 +106,25 @@ async def add_vless_user() -> Dict[str, str]:
             # Проверяем статус ответа
             response.raise_for_status()
             
-            # Парсим JSON ответ
+            # Парсим JSON ответ (API возвращает только UUID)
             data = response.json()
             
             # Валидируем структуру ответа
             uuid = data.get("uuid")
-            vless_url = data.get("vless_url")
             
-            if not uuid or not vless_url:
-                error_msg = f"Invalid response from Xray API: missing 'uuid' or 'vless_url'. Response: {data}"
+            if not uuid:
+                error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            logger.info(f"VLESS user created successfully: uuid={uuid}")
+            # Генерируем VLESS URL локально на основе UUID + серверных констант
+            vless_url = generate_vless_url(str(uuid))
+            
+            logger.info(f"VLESS user created successfully: uuid={uuid}, vless_url generated locally")
             
             return {
                 "uuid": str(uuid),
-                "vless_url": str(vless_url)
+                "vless_url": vless_url
             }
             
     except httpx.TimeoutException as e:
