@@ -112,6 +112,25 @@ async def init_db():
             # Колонки уже существуют
             pass
         
+        # Миграция: добавляем поле balance в users
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            # Колонка уже существует
+            pass
+        
+        # Таблица balance_transactions
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS balance_transactions (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                amount INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Миграция: добавляем поля для реферальной программы
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
@@ -316,6 +335,119 @@ async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
             "SELECT * FROM users WHERE telegram_id = $1", telegram_id
         )
         return dict(row) if row else None
+
+
+async def get_user_balance(telegram_id: int) -> int:
+    """
+    Получить баланс пользователя в копейках
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        Баланс в копейках (0 если пользователь не найден)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        balance = await conn.fetchval(
+            "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+        )
+        return balance if balance is not None else 0
+
+
+async def add_balance(telegram_id: int, amount: int, transaction_type: str, description: Optional[str] = None) -> bool:
+    """
+    Добавить средства на баланс пользователя (атомарно)
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        amount: Сумма в копейках (положительное число)
+        transaction_type: Тип транзакции ('topup', 'bonus', 'refund')
+        description: Описание транзакции
+    
+    Returns:
+        True если успешно, False при ошибке
+    """
+    if amount <= 0:
+        logger.error(f"Invalid amount for add_balance: {amount}")
+        return False
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # Обновляем баланс
+                await conn.execute(
+                    "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                    amount, telegram_id
+                )
+                
+                # Записываем транзакцию
+                await conn.execute(
+                    """INSERT INTO balance_transactions (user_id, amount, type, description)
+                       VALUES ($1, $2, $3, $4)""",
+                    telegram_id, amount, transaction_type, description
+                )
+                
+                logger.info(f"Added {amount} kopecks to balance for user {telegram_id}, type={transaction_type}")
+                return True
+            except Exception as e:
+                logger.exception(f"Error adding balance for user {telegram_id}")
+                return False
+
+
+async def subtract_balance(telegram_id: int, amount: int, transaction_type: str, description: Optional[str] = None) -> bool:
+    """
+    Списать средства с баланса пользователя (атомарно)
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        amount: Сумма в копейках (положительное число)
+        transaction_type: Тип транзакции ('spend')
+        description: Описание транзакции
+    
+    Returns:
+        True если успешно, False при ошибке или недостатке средств
+    """
+    if amount <= 0:
+        logger.error(f"Invalid amount for subtract_balance: {amount}")
+        return False
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # Проверяем баланс
+                current_balance = await conn.fetchval(
+                    "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+                )
+                
+                if current_balance is None:
+                    logger.error(f"User {telegram_id} not found")
+                    return False
+                
+                if current_balance < amount:
+                    logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount}")
+                    return False
+                
+                # Обновляем баланс
+                await conn.execute(
+                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
+                    amount, telegram_id
+                )
+                
+                # Записываем транзакцию (amount отрицательный для списания)
+                await conn.execute(
+                    """INSERT INTO balance_transactions (user_id, amount, type, description)
+                       VALUES ($1, $2, $3, $4)""",
+                    telegram_id, -amount, transaction_type, description
+                )
+                
+                logger.info(f"Subtracted {amount} kopecks from balance for user {telegram_id}, type={transaction_type}")
+                return True
+            except Exception as e:
+                logger.exception(f"Error subtracting balance for user {telegram_id}")
+                return False
 
 
 async def find_user_by_id_or_username(telegram_id: Optional[int] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:

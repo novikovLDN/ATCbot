@@ -77,7 +77,15 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Отклонение
         "payment_rejected": "❌ Платёж не подтверждён.\n\nЕсли вы уверены, что оплатили —\nобратитесь в поддержку.",
         
-        # Профиль - активная подписка
+        # Профиль - новый формат
+        "profile_welcome": "Добро пожаловать в Atlas Secure!\n\n👤 {username}\n\n💰 Баланс: {balance:.2f} ₽",
+        "profile_subscription_active": "Подписка:\n— 🟢 Активна до {date}",
+        "profile_subscription_inactive": "Подписка:\n— 🔴 Неактивна",
+        "profile_renewal_hint_new": "При продлении выбранный срок\nдобавляется к текущему автоматически.",
+        "profile_buy_hint": "Нажмите «Купить подписку» в меню, чтобы получить доступ.",
+        "access_key_label": "Ключ доступа:",
+        
+        # Профиль - активная подписка (старая версия, для совместимости)
         "profile_active": "👤 Профиль доступа\n\nСтатус доступа: Активен\nДоступ оплачен до {date}\n\nВы подключены. Доступ работает стабильно.\n\nПерсональный ключ доступа\nИспользуется для подключения в приложении Outline.\nПодключение сохраняется, пока действует доступ.\n\n{vpn_key}\n\nПри продлении выбранный срок\nдобавляется к текущему доступу автоматически.\n\nДо окончания срока вы можете\nне возвращаться к настройкам и оплате.",
         "profile_renewal_hint": "",
         
@@ -263,7 +271,15 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Отклонение
         "payment_rejected": "❌ Payment not confirmed.\n\nIf you are sure you paid —\ncontact support.",
         
-        # Профиль - активная подписка
+        # Профиль - новый формат
+        "profile_welcome": "Welcome to Atlas Secure!\n\n👤 {username}\n\n💰 Balance: {balance:.2f} ₽",
+        "profile_subscription_active": "Subscription:\n— 🟢 Active until {date}",
+        "profile_subscription_inactive": "Subscription:\n— 🔴 Inactive",
+        "profile_renewal_hint_new": "When renewing, the selected period\nis automatically added to current access.",
+        "profile_buy_hint": "Click «Buy Subscription» in the menu to get access.",
+        "access_key_label": "Access Key:",
+        
+        # Профиль - активная подписка (старая версия, для совместимости)
         "profile_active": "👤 Access Profile\n\nAccess status: Active\nAccess paid until {date}\n\nYou are connected. Access works stably.\n\nPersonal access key\nUsed for connection in Outline app.\nConnection persists while access is active.\n\n{vpn_key}\n\nWhen renewing, the selected period\nis automatically added to current access.\n\nUntil the period ends, you can\nnot return to settings and payment.",
         "profile_renewal_hint": "",
         
@@ -406,6 +422,13 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "go_to_connection": "🔌 Ulanishga o'tish",
         "renew_subscription": "🔁 Kirishni uzaytirish",
         "no_active_subscription": "Faol obuna topilmadi.",
+        # Профиль - новый формат
+        "profile_welcome": "Atlas Secure-ga xush kelibsiz!\n\n👤 {username}\n\n💰 Balans: {balance:.2f} ₽",
+        "profile_subscription_active": "Obuna:\n— 🟢 {date} gacha faol",
+        "profile_subscription_inactive": "Obuna:\n— 🔴 Faol emas",
+        "profile_renewal_hint_new": "Uzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.",
+        "profile_buy_hint": "Kirish olish uchun menyudan «Kirishni sotib olish»ni bosing.",
+        "access_key_label": "Kirish kaliti:",
         "subscription_history": "📄 Obuna tarixi",
         "subscription_history_empty": "Obuna tarixi bo'sh",
         "subscription_history_action_purchase": "Xarid",
@@ -564,6 +587,13 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "go_to_connection": "🔌 Ба пайвандшавӣ гузаштан",
         "renew_subscription": "🔁 Дастрасиро васеъ кардан",
         "no_active_subscription": "Обунаи фаъол ёфт нашуд.",
+        # Профиль - новый формат
+        "profile_welcome": "Хуш омадед ба Atlas Secure!\n\n👤 {username}\n\n💰 Балланс: {balance:.2f} ₽",
+        "profile_subscription_active": "Обуна:\n— 🟢 То {date} фаъол аст",
+        "profile_subscription_inactive": "Обуна:\n— 🔴 Фаъол нест",
+        "profile_renewal_hint_new": "Ҳангоми васеъ кардан муддати интихобшуда\nба дастрасии ҷорӣ ба таври худкор илова карда мешавад.",
+        "profile_buy_hint": "Барои дастрасӣ гирифтан дар меню «Хариди обуна»-ро пахш кунед.",
+        "access_key_label": "Калиди дастрасӣ:",
         "subscription_history": "📄 Таърихи обунаҳо",
         "subscription_history_empty": "Таърихи обунаҳо холӣ аст",
         "subscription_history_action_purchase": "Харид",

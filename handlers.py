@@ -132,38 +132,30 @@ def get_back_keyboard(language: str):
     ])
 
 
-def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False, has_subscription: bool = True):
-    """Клавиатура профиля с кнопкой копирования ключа и историей"""
+def get_profile_keyboard(language: str, has_subscription: bool = True):
+    """Клавиатура профиля (обновленная версия)"""
     buttons = []
     
     if has_subscription:
-        # Кнопка продления (всегда показываем, если есть активная подписка)
+        # Кнопка продления (если есть активная подписка)
         buttons.append([InlineKeyboardButton(
             text=localization.get_text(language, "renew_subscription"),
             callback_data="renew_same_period"
         )])
         
+        # Кнопка копирования ключа
         buttons.append([InlineKeyboardButton(
             text=localization.get_text(language, "copy_key"),
             callback_data="copy_key"
         )])
-        buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "subscription_history"),
-            callback_data="subscription_history"
-        )])
-        
-        # Кнопка VIP-доступ (доступна всем)
-        buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "vip_access_button"),
-            callback_data="menu_vip_access"
-        )])
     else:
         # Кнопка для оформления доступа (если нет подписки)
         buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "get_access_button", default="🔐 Оформить доступ"),
+            text=localization.get_text(language, "buy_vpn"),
             callback_data="menu_buy_vpn"
         )])
     
+    # Кнопка "Назад"
     buttons.append([InlineKeyboardButton(
         text=localization.get_text(language, "back"),
         callback_data="menu_main"
@@ -171,6 +163,11 @@ def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vi
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
+
+
+def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False, has_subscription: bool = True):
+    """Клавиатура профиля с кнопкой копирования ключа и историей (старая версия, для совместимости)"""
+    return get_profile_keyboard(language, has_subscription)
 
 
 def get_profile_keyboard(language: str):
@@ -794,7 +791,7 @@ async def check_subscription_expiry(telegram_id: int) -> bool:
 
 
 async def show_profile(message_or_query, language: str):
-    """Показать профиль пользователя"""
+    """Показать профиль пользователя (обновленная версия с балансом)"""
     if isinstance(message_or_query, Message):
         telegram_id = message_or_query.from_user.id
         send_func = message_or_query.answer
@@ -805,44 +802,65 @@ async def show_profile(message_or_query, language: str):
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
     
+    # Получаем данные пользователя
+    user = await database.get_user(telegram_id)
+    username = user.get("username") if user else None
+    if not username:
+        username = f"ID: {telegram_id}"
+    
+    # Получаем баланс
+    balance_kopecks = await database.get_user_balance(telegram_id)
+    balance_rubles = balance_kopecks / 100.0
+    
+    # Получаем информацию о подписке
     subscription = await database.get_subscription(telegram_id)
     
-    # Проверяем VIP-статус
-    is_vip = await database.is_vip_user(telegram_id)
+    # Формируем текст профиля
+    text = localization.get_text(language, "profile_welcome", username=username, balance=balance_rubles)
     
     if subscription:
-        # asyncpg возвращает datetime объекты напрямую, не строки
+        # Проверяем, активна ли подписка
         expires_at = subscription["expires_at"]
         if isinstance(expires_at, str):
             expires_at = datetime.fromisoformat(expires_at)
-        expires_str = expires_at.strftime("%d.%m.%Y")
-        # Обертываем ключ в HTML тег для копирования
-        vpn_key_html = f"<code>{subscription['vpn_key']}</code>"
-        text = localization.get_text(language, "profile_active", date=expires_str, vpn_key=vpn_key_html)
-        text += localization.get_text(language, "profile_renewal_hint")
         
-        # Добавляем информацию о VIP-статусе, если есть
-        if is_vip:
-            text += "\n\n" + localization.get_text(language, "vip_status_badge", default="👑 VIP-статус активен")
-        
-        # Получаем последний утверждённый платёж для определения тарифа
-        last_payment = await database.get_last_approved_payment(telegram_id)
-        last_tariff = last_payment.get("tariff") if last_payment else None
-        
-        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, last_tariff, is_vip), parse_mode="HTML")
-    else:
-        # Проверяем, есть ли pending платеж
-        pending_payment = await database.get_pending_payment_by_user(telegram_id)
-        if pending_payment:
-            text = localization.get_text(language, "profile_payment_check")
+        now = datetime.now()
+        if expires_at > now:
+            # Подписка активна
+            expires_str = expires_at.strftime("%d.%m.%Y")
+            text += "\n\n" + localization.get_text(language, "profile_subscription_active", date=expires_str)
         else:
-            text = localization.get_text(language, "no_subscription")
-        
-        # Добавляем информацию о VIP-статусе, если есть
-        if is_vip:
-            text += "\n\n" + localization.get_text(language, "vip_status_badge", default="👑 VIP-статус активен")
-        
-        await send_func(text, reply_markup=get_profile_keyboard_with_copy(language, None, is_vip, has_subscription=False))
+            # Подписка неактивна
+            text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
+    else:
+        # Подписки нет
+        text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
+    
+    # Добавляем подсказку о продлении
+    if subscription:
+        expires_at = subscription["expires_at"]
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        now = datetime.now()
+        if expires_at > now:
+            text += "\n\n" + localization.get_text(language, "profile_renewal_hint_new")
+    
+    # Добавляем подсказку о покупке, если подписки нет
+    has_active_subscription = False
+    if subscription:
+        expires_at = subscription["expires_at"]
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        now = datetime.now()
+        has_active_subscription = expires_at > now
+    
+    if not has_active_subscription:
+        text += "\n\n" + localization.get_text(language, "profile_buy_hint")
+    
+    # Получаем клавиатуру
+    keyboard = get_profile_keyboard(language, has_active_subscription)
+    
+    await send_func(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "change_language")
@@ -1044,7 +1062,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
 
 @router.callback_query(F.data == "copy_key")
 async def callback_copy_key(callback: CallbackQuery):
-    """Копировать VPN-ключ"""
+    """Копировать VPN-ключ (обновленная версия)"""
     await callback.answer()
     
     telegram_id = callback.from_user.id
@@ -1053,6 +1071,21 @@ async def callback_copy_key(callback: CallbackQuery):
     
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
+    
+    # Получаем подписку
+    subscription = await database.get_subscription(telegram_id)
+    
+    if not subscription or not subscription.get("vpn_key"):
+        await callback.message.answer(
+            localization.get_text(language, "error_no_active_subscription", default="Активная подписка не найдена.")
+        )
+        return
+    
+    # Отправляем ключ отдельным сообщением в простом формате
+    vpn_key = subscription["vpn_key"]
+    key_text = localization.get_text(language, "access_key_label", default="Ключ доступа:") + f"\n\n<code>{vpn_key}</code>"
+    
+    await callback.message.answer(key_text, parse_mode="HTML")
     
     # Проверяем, что у пользователя есть активная подписка
     subscription = await database.get_subscription(telegram_id)
