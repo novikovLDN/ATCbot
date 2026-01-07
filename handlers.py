@@ -101,6 +101,10 @@ def get_main_menu_keyboard(language: str):
             callback_data="menu_instruction"
         )],
         [InlineKeyboardButton(
+            text=localization.get_text(language, "referral_program"),
+            callback_data="menu_referral"
+        )],
+        [InlineKeyboardButton(
             text=localization.get_text(language, "service_status"),
             callback_data="menu_service_status"
         )],
@@ -668,6 +672,40 @@ async def cmd_start(message: Message):
     else:
         # Обновляем username если изменился
         await database.update_username(telegram_id, username)
+        # Убеждаемся, что у пользователя есть referral_code
+        if not user.get("referral_code"):
+            # Генерируем код для существующего пользователя
+            referral_code = database.generate_referral_code(telegram_id)
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
+                    referral_code, telegram_id
+                )
+    
+    # Обработка реферальной ссылки
+    command_args = message.text.split(" ", 1) if message.text else []
+    if len(command_args) > 1:
+        arg = command_args[1]
+        if arg.startswith("ref_"):
+            referral_code = arg[4:]  # Убираем префикс "ref_"
+            
+            # Находим реферера по коду
+            referrer = await database.find_user_by_referral_code(referral_code)
+            
+            if referrer:
+                referrer_id = referrer["telegram_id"]
+                
+                # Проверяем условия:
+                # 1. Это не тот же пользователь
+                # 2. У текущего пользователя referred_by IS NULL
+                if referrer_id != telegram_id:
+                    user = await database.get_user(telegram_id)
+                    if user and not user.get("referred_by"):
+                        # Регистрируем реферала
+                        await database.register_referral(referrer_id, telegram_id)
+                        # Логируем событие
+                        logging.info(f"Referral registered: referrer_id={referrer_id}, referred_id={telegram_id}, code={referral_code}")
     
     text = localization.get_text("ru", "language_select")
     await message.answer(text, reply_markup=get_language_keyboard())
@@ -1651,6 +1689,90 @@ async def callback_instruction(callback: CallbackQuery):
     text = localization.get_text(language, "instruction_text")
     await callback.message.edit_text(text, reply_markup=get_instruction_keyboard(language))
     await callback.answer()
+
+
+@router.callback_query(F.data == "menu_referral")
+async def callback_referral(callback: CallbackQuery):
+    """Реферальная программа"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Получаем referral_code пользователя
+    if not user.get("referral_code"):
+        # Генерируем код если его нет
+        referral_code = database.generate_referral_code(telegram_id)
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
+                referral_code, telegram_id
+            )
+    else:
+        referral_code = user["referral_code"]
+    
+    # Получаем статистику
+    stats = await database.get_referral_stats(telegram_id)
+    
+    # Получаем username бота для ссылки
+    bot_username = (await callback.bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
+    
+    # Формируем текст
+    text = localization.get_text(
+        language,
+        "referral_program_text",
+        referral_link=referral_link,
+        total_referred=stats["total_referred"],
+        total_rewarded=stats["total_rewarded"]
+    )
+    
+    # Клавиатура
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "copy_referral_link"),
+            callback_data="copy_referral_link"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back"),
+            callback_data="menu_main"
+        )],
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "copy_referral_link")
+async def callback_copy_referral_link(callback: CallbackQuery):
+    """Копировать реферальную ссылку"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Получаем referral_code
+    if not user.get("referral_code"):
+        referral_code = database.generate_referral_code(telegram_id)
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
+                referral_code, telegram_id
+            )
+    else:
+        referral_code = user["referral_code"]
+    
+    # Получаем username бота для ссылки
+    bot_username = (await callback.bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
+    
+    # Отправляем ссылку отдельным сообщением для копирования
+    await callback.message.answer(
+        referral_link,
+        parse_mode="HTML"
+    )
+    
+    await callback.answer(localization.get_text(language, "referral_link_copied", default="Ссылка отправлена"))
 
 
 @router.callback_query(F.data == "menu_support")

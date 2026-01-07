@@ -1,6 +1,8 @@
 import asyncpg
 import os
 import sys
+import hashlib
+import base64
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
 import logging
@@ -109,6 +111,28 @@ async def init_db():
         except Exception:
             # Колонки уже существуют
             pass
+        
+        # Миграция: добавляем поля для реферальной программы
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT")
+            # Создаем индекс для быстрого поиска по referral_code
+            await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code) WHERE referral_code IS NOT NULL")
+        except Exception:
+            # Колонки уже существуют
+            pass
+        
+        # Таблица referrals
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                id SERIAL PRIMARY KEY,
+                referrer_id BIGINT NOT NULL,
+                referred_id BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                rewarded BOOLEAN DEFAULT FALSE,
+                UNIQUE (referred_id)
+            )
+        """)
         
         # Таблица vpn_keys
         await conn.execute("""
@@ -325,14 +349,188 @@ async def find_user_by_id_or_username(telegram_id: Optional[int] = None, usernam
             return None
 
 
+def generate_referral_code(telegram_id: int) -> str:
+    """
+    Генерирует детерминированный referral_code для пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        Строка из 6-8 символов (A-Z, 0-9)
+    """
+    # Используем хеш для детерминированности
+    hash_obj = hashlib.sha256(str(telegram_id).encode())
+    hash_bytes = hash_obj.digest()
+    
+    # Используем base32 для получения только букв и цифр
+    # Убираем padding и берем первые 6 символов
+    encoded = base64.b32encode(hash_bytes).decode('ascii').rstrip('=')
+    
+    # Берем первые 6 символов и приводим к верхнему регистру
+    code = encoded[:6].upper()
+    
+    return code
+
+
 async def create_user(telegram_id: int, username: Optional[str] = None, language: str = "ru"):
-    """Создать нового пользователя"""
+    """Создать нового пользователя с автоматической генерацией referral_code"""
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Генерируем referral_code если его нет
+        referral_code = generate_referral_code(telegram_id)
+        
         await conn.execute(
-            "INSERT INTO users (telegram_id, username, language) VALUES ($1, $2, $3) ON CONFLICT (telegram_id) DO NOTHING",
-            telegram_id, username, language
+            """INSERT INTO users (telegram_id, username, language, referral_code) 
+               VALUES ($1, $2, $3, $4) 
+               ON CONFLICT (telegram_id) DO NOTHING""",
+            telegram_id, username, language, referral_code
         )
+        
+        # Если пользователь уже существовал, обновляем referral_code если его нет
+        user = await get_user(telegram_id)
+        if user and not user.get("referral_code"):
+            await conn.execute(
+                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
+                referral_code, telegram_id
+            )
+
+
+async def find_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
+    """Найти пользователя по referral_code"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM users WHERE referral_code = $1", referral_code
+        )
+        return dict(row) if row else None
+
+
+async def register_referral(referrer_id: int, referred_id: int) -> bool:
+    """
+    Зарегистрировать реферала
+    
+    Args:
+        referrer_id: Telegram ID реферера
+        referred_id: Telegram ID приглашенного пользователя
+    
+    Returns:
+        True если регистрация успешна, False если уже зарегистрирован или ошибка
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            # Проверяем, что пользователь еще не был приглашен
+            existing = await conn.fetchrow(
+                "SELECT * FROM referrals WHERE referred_id = $1", referred_id
+            )
+            if existing:
+                return False
+            
+            # Создаем запись о реферале
+            await conn.execute(
+                """INSERT INTO referrals (referrer_id, referred_id, rewarded)
+                   VALUES ($1, $2, FALSE)
+                   ON CONFLICT (referred_id) DO NOTHING""",
+                referrer_id, referred_id
+            )
+            
+            # Обновляем referred_by у пользователя
+            await conn.execute(
+                "UPDATE users SET referred_by = $1 WHERE telegram_id = $2",
+                referrer_id, referred_id
+            )
+            
+            return True
+        except Exception as e:
+            logger.exception(f"Error registering referral: referrer_id={referrer_id}, referred_id={referred_id}")
+            return False
+
+
+async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
+    """
+    Получить статистику рефералов для пользователя
+    
+    Returns:
+        Словарь с ключами: total_referred, total_rewarded
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total_referred = await conn.fetchval(
+            "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1", telegram_id
+        )
+        total_rewarded = await conn.fetchval(
+            "SELECT COUNT(*) FROM referrals WHERE referrer_id = $1 AND rewarded = TRUE", telegram_id
+        )
+        
+        return {
+            "total_referred": total_referred or 0,
+            "total_rewarded": total_rewarded or 0
+        }
+
+
+async def process_referral_reward(referred_id: int) -> bool:
+    """
+    Обработать начисление реферального бонуса после первой оплаты
+    
+    Args:
+        referred_id: Telegram ID приглашенного пользователя, который совершил первую оплату
+    
+    Returns:
+        True если бонус начислен, False если уже начислен или ошибка
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # Получаем запись о реферале
+                referral_row = await conn.fetchrow(
+                    "SELECT * FROM referrals WHERE referred_id = $1 AND rewarded = FALSE", referred_id
+                )
+                
+                if not referral_row:
+                    # Бонус уже начислен или реферал не найден
+                    return False
+                
+                referral = dict(referral_row)
+                referrer_id = referral["referrer_id"]
+                
+                # Начисляем бонус рефереру: +7 дней доступа
+                bonus_duration = timedelta(days=7)
+                expires_at, vpn_key, is_renewal = await grant_access(
+                    telegram_id=referrer_id,
+                    duration=bonus_duration,
+                    source="referral",
+                    admin_telegram_id=None,
+                    admin_grant_days=None,
+                    conn=conn
+                )
+                
+                if expires_at is None:
+                    logger.error(f"Failed to grant referral bonus to referrer {referrer_id}")
+                    return False
+                
+                # Помечаем бонус как начисленный
+                await conn.execute(
+                    "UPDATE referrals SET rewarded = TRUE WHERE referred_id = $1",
+                    referred_id
+                )
+                
+                # Логируем событие
+                await _log_audit_event_atomic(
+                    conn,
+                    "referral_reward",
+                    referrer_id,
+                    referred_id,
+                    f"Referral bonus granted: +7 days, expires_at={expires_at.isoformat()}"
+                )
+                
+                logger.info(f"Referral bonus granted: referrer_id={referrer_id}, referred_id={referred_id}")
+                return True
+                
+            except Exception as e:
+                logger.exception(f"Error processing referral reward for referred_id={referred_id}")
+                return False
 
 
 async def update_user_language(telegram_id: int, language: str):
@@ -992,6 +1190,55 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 audit_action_type = "subscription_renewed" if is_renewal else "payment_approved"
                 details = f"Payment ID: {payment_id}, Tariff: {months} months, Expires: {expires_at.isoformat()}, VPN key: {final_vpn_key[:20]}..."
                 await _log_audit_event_atomic(conn, audit_action_type, admin_telegram_id, telegram_id, details)
+                
+                # 8. Обрабатываем реферальный бонус (только при первой оплате, не при продлении)
+                if not is_renewal:
+                    # Проверяем, есть ли у пользователя реферер
+                    user_row = await conn.fetchrow(
+                        "SELECT referred_by FROM users WHERE telegram_id = $1", telegram_id
+                    )
+                    if user_row and user_row["referred_by"]:
+                        # Начисляем бонус рефереру (используем то же соединение)
+                        try:
+                            # Получаем запись о реферале
+                            referral_row = await conn.fetchrow(
+                                "SELECT * FROM referrals WHERE referred_id = $1 AND rewarded = FALSE", telegram_id
+                            )
+                            
+                            if referral_row:
+                                referral = dict(referral_row)
+                                referrer_id = referral["referrer_id"]
+                                
+                                # Начисляем бонус рефереру: +7 дней доступа
+                                bonus_duration = timedelta(days=7)
+                                expires_at_bonus, vpn_key_bonus, is_renewal_bonus = await grant_access(
+                                    telegram_id=referrer_id,
+                                    duration=bonus_duration,
+                                    source="referral",
+                                    admin_telegram_id=None,
+                                    admin_grant_days=None,
+                                    conn=conn
+                                )
+                                
+                                if expires_at_bonus:
+                                    # Помечаем бонус как начисленный
+                                    await conn.execute(
+                                        "UPDATE referrals SET rewarded = TRUE WHERE referred_id = $1",
+                                        telegram_id
+                                    )
+                                    
+                                    # Логируем событие
+                                    await _log_audit_event_atomic(
+                                        conn,
+                                        "referral_reward",
+                                        referrer_id,
+                                        telegram_id,
+                                        f"Referral bonus granted: +7 days, expires_at={expires_at_bonus.isoformat()}"
+                                    )
+                                    
+                                    logger.info(f"Referral bonus granted: referrer_id={referrer_id}, referred_id={telegram_id}")
+                        except Exception as e:
+                            logger.exception(f"Error processing referral reward for referred_id={telegram_id}")
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
                 return expires_at, is_renewal, final_vpn_key
