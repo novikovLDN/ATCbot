@@ -50,6 +50,10 @@ class AdminDiscountCreate(StatesGroup):
 class PromoCodeInput(StatesGroup):
     waiting_for_promo = State()
 
+
+class TopUpStates(StatesGroup):
+    waiting_for_amount = State()
+
 router = Router()
 
 logger = logging.getLogger(__name__)
@@ -1197,16 +1201,115 @@ async def callback_topup_amount(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "topup_custom")
-async def callback_topup_custom(callback: CallbackQuery):
-    """Ввод произвольной суммы (пока не реализовано, возвращаем в профиль)"""
+async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
+    """Ввод произвольной суммы пополнения баланса"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    await callback.answer(
-        localization.get_text(language, "topup_custom_not_available", default="Ввод произвольной суммы временно недоступен. Выберите одну из предложенных сумм."),
-        show_alert=True
-    )
+    await callback.answer()
+    
+    # Переводим пользователя в состояние ввода суммы
+    await state.set_state(TopUpStates.waiting_for_amount)
+    
+    # Отправляем сообщение с инструкцией
+    try:
+        text = localization.get_text(language, "topup_enter_amount")
+    except KeyError:
+        logger.error(f"Missing localization key 'topup_enter_amount' for language '{language}'")
+        text = "Введите сумму пополнения (минимум 100 ₽):"
+    
+    await callback.message.answer(text)
+
+
+@router.message(TopUpStates.waiting_for_amount)
+async def process_topup_amount(message: Message, state: FSMContext):
+    """Обработка введенной суммы пополнения"""
+    telegram_id = message.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Проверяем, что сообщение содержит число
+    try:
+        amount = int(message.text.strip())
+    except (ValueError, AttributeError):
+        try:
+            error_text = localization.get_text(language, "topup_amount_invalid")
+        except KeyError:
+            logger.error(f"Missing localization key 'topup_amount_invalid' for language '{language}'")
+            error_text = "Пожалуйста, введите число."
+        await message.answer(error_text)
+        return
+    
+    # Проверяем минимальную сумму
+    if amount < 100:
+        try:
+            error_text = localization.get_text(language, "topup_amount_too_low")
+        except KeyError:
+            logger.error(f"Missing localization key 'topup_amount_too_low' for language '{language}'")
+            error_text = "Минимальная сумма пополнения: 100 ₽. Пожалуйста, введите сумму не менее 100 ₽."
+        await message.answer(error_text)
+        return
+    
+    # Проверяем максимальную сумму (технический лимит)
+    if amount > 100000:
+        try:
+            error_text = localization.get_text(language, "topup_amount_too_high")
+        except KeyError:
+            logger.error(f"Missing localization key 'topup_amount_too_high' for language '{language}'")
+            error_text = "Максимальная сумма пополнения: 100 000 ₽. Пожалуйста, введите меньшую сумму."
+        await message.answer(error_text)
+        return
+    
+    # Очищаем FSM состояние
+    await state.clear()
+    
+    # Создаем invoice через Telegram Payments
+    import time
+    timestamp = int(time.time())
+    payload = f"balance_topup_{telegram_id}_{amount}_{timestamp}"
+    
+    # Конвертируем рубли в копейки для Telegram Payments
+    amount_kopecks = amount * 100
+    
+    try:
+        title = localization.get_text(language, "topup_invoice_title")
+    except KeyError:
+        logger.error(f"Missing localization key 'topup_invoice_title' for language '{language}'")
+        title = "Пополнение баланса Atlas Secure"
+    
+    try:
+        description = localization.get_text(language, "topup_invoice_description", amount=amount)
+    except KeyError:
+        logger.error(f"Missing localization key 'topup_invoice_description' for language '{language}'")
+        description = f"Пополнение баланса на {amount} ₽"
+    
+    try:
+        label = localization.get_text(language, "topup_invoice_label")
+    except KeyError:
+        logger.error(f"Missing localization key 'topup_invoice_label' for language '{language}'")
+        label = "Пополнение баланса"
+    
+    try:
+        await message.bot.send_invoice(
+            chat_id=telegram_id,
+            title=title,
+            description=description,
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label=label, amount=amount_kopecks)],
+            start_parameter=f"balance_topup_{amount}",
+        )
+        logger.info(f"Sent invoice for custom topup: user={telegram_id}, amount={amount} RUB")
+    except Exception as e:
+        logger.exception(f"Error sending invoice for custom balance topup: {e}")
+        try:
+            error_text = localization.get_text(language, "error_payment_create")
+        except KeyError:
+            logger.error(f"Missing localization key 'error_payment_create' for language '{language}'")
+            error_text = "Ошибка создания платежа. Попробуйте позже."
+        await message.answer(error_text)
 
 
 @router.callback_query(F.data == "copy_key")
