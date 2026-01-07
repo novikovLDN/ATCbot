@@ -508,6 +508,7 @@ def get_admin_dashboard_keyboard():
     """Клавиатура главного экрана админ-дашборда"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
+        [InlineKeyboardButton(text="💰 Аналитика", callback_data="admin:analytics")],
         [InlineKeyboardButton(text="📈 Метрики", callback_data="admin:metrics")],
         [InlineKeyboardButton(text="📜 Аудит", callback_data="admin:audit")],
         [InlineKeyboardButton(text="🔑 VPN-ключи", callback_data="admin:keys")],
@@ -889,7 +890,12 @@ async def show_profile(message_or_query, language: str):
             text += "\n\n" + localization.get_text(language, "profile_buy_hint")
         
         # Получаем клавиатуру
-        keyboard = get_profile_keyboard(language, has_active_subscription)
+        # Получаем статус автопродления
+        auto_renew = False
+        if subscription:
+            auto_renew = subscription.get("auto_renew", False)
+        
+        keyboard = get_profile_keyboard(language, has_active_subscription, auto_renew)
         
         # Отправляем сообщение
         await send_func(text, reply_markup=keyboard)
@@ -910,6 +916,34 @@ async def show_profile(message_or_query, language: str):
                 await message_or_query.answer(error_text)
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
+
+
+@router.callback_query(F.data.startswith("toggle_auto_renew:"))
+async def callback_toggle_auto_renew(callback: CallbackQuery):
+    """Включить/выключить автопродление"""
+    telegram_id = callback.from_user.id
+    action = callback.data.split(":")[1]
+    
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        auto_renew = (action == "on")
+        await conn.execute(
+            "UPDATE subscriptions SET auto_renew = $1 WHERE telegram_id = $2",
+            auto_renew, telegram_id
+        )
+    
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    if auto_renew:
+        text = localization.get_text(language, "auto_renew_enabled", default="✅ Автопродление включено")
+    else:
+        text = localization.get_text(language, "auto_renew_disabled", default="⏸ Автопродление отключено")
+    
+    await callback.answer(text, show_alert=True)
+    
+    # Обновляем экран профиля
+    await show_profile(callback, language)
 
 
 @router.callback_query(F.data == "change_language")
@@ -1561,6 +1595,81 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(text)
 
 
+@router.callback_query(F.data.startswith("pay_tariff_card:"))
+async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
+    """Оплата тарифа картой (когда баланса не хватает)"""
+    tariff_key = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Проверяем наличие provider_token
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
+        return
+    
+    # Получаем промокод из состояния
+    state_data = await state.get_data()
+    promo_code = state_data.get("promo_code")
+    
+    # Проверяем промокод через базу данных
+    promo_data = None
+    if promo_code:
+        promo_data = await database.check_promo_code_valid(promo_code.upper())
+    
+    has_promo = promo_data is not None
+    
+    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    base_price = tariff_data["price"]
+    
+    # Рассчитываем цену с учетом скидок
+    if has_promo:
+        discount_percent = promo_data["discount_percent"]
+        amount = int(base_price * (100 - discount_percent) / 100)
+        payload = f"purchase:promo:{promo_code.upper()}:{telegram_id}:{tariff_key}:{int(time.time())}"
+        await state.update_data(promo_code=None)
+    else:
+        is_vip = await database.is_vip_user(telegram_id)
+        if is_vip:
+            amount = int(base_price * 0.70)
+            payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
+        else:
+            personal_discount = await database.get_user_discount(telegram_id)
+            if personal_discount:
+                discount_percent = personal_discount["discount_percent"]
+                amount = int(base_price * (1 - discount_percent / 100))
+                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
+            else:
+                amount = base_price
+                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
+    
+    # Формируем описание тарифа
+    months = tariff_data["months"]
+    if has_promo:
+        description = f"Atlas Secure VPN подписка на {months} месяц(ев) (промокод)"
+    else:
+        description = f"Atlas Secure VPN подписка на {months} месяц(ев)"
+    
+    # Формируем prices (цена в копейках)
+    prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
+    
+    try:
+        # Отправляем invoice
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title="Atlas Secure VPN",
+            description=description,
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=prices
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error sending invoice: {e}")
+        await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
+
+
 @router.message(PromoCodeInput.waiting_for_promo)
 async def process_promo_code(message: Message, state: FSMContext):
     """Обработчик ввода промокода"""
@@ -1662,26 +1771,104 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ошибка расчета цены", show_alert=True)
         return
     
-    # Формируем prices (цена в копейках)
-    prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
+    # Получаем баланс пользователя
+    balance_rubles = await database.get_user_balance(telegram_id)
+    amount_rubles = float(amount)
     
-    try:
-        # Отправляем invoice
-        await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title="Atlas Secure VPN",
-            description=description,
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=prices
-        )
+    # Проверяем, хватает ли баланса
+    if balance_rubles >= amount_rubles:
+        # Баланса хватает - списываем и активируем подписку
         await callback.answer()
-    except Exception as e:
-        logger.exception(f"Error sending invoice: {e}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
-        await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
+        
+        # Списываем баланс
+        success = await database.decrease_balance(
+            telegram_id=telegram_id,
+            amount=amount_rubles,
+            source="subscription_payment",
+            description=f"Оплата подписки {tariff_key} месяца(ев)"
+        )
+        
+        if not success:
+            logger.error(f"Failed to decrease balance for subscription payment: user={telegram_id}, amount={amount_rubles}")
+            await callback.message.answer(localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Обратитесь в поддержку."))
+            return
+        
+        # Активируем подписку через grant_access
+        months = tariff_data["months"]
+        duration = timedelta(days=months * 30)
+        
+        expires_at, vpn_key, is_renewal = await database.grant_access(
+            telegram_id=telegram_id,
+            duration=duration,
+            source="payment",
+            admin_telegram_id=None,
+            admin_grant_days=None
+        )
+        
+        if expires_at is None or vpn_key is None:
+            logger.error(f"Failed to grant access after balance payment: user={telegram_id}")
+            # Возвращаем деньги на баланс
+            await database.increase_balance(
+                telegram_id=telegram_id,
+                amount=amount_rubles,
+                source="refund",
+                description=f"Возврат средств за неудачную активацию подписки"
+            )
+            await callback.message.answer(localization.get_text(language, "error_subscription_activation", default="Ошибка активации подписки. Средства возвращены на баланс."))
+            return
+        
+        # Создаем запись о платеже для аналитики
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved')",
+                telegram_id, tariff_key, amount
+            )
+        
+        # Очищаем промокод из состояния после использования
+        if has_promo:
+            await state.update_data(promo_code=None)
+        
+        # Отправляем сообщение об успешной активации
+        expires_str = expires_at.strftime("%d.%m.%Y")
+        vpn_key_html = f"<code>{vpn_key}</code>"
+        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key_html, date=expires_str)
+        await callback.message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
+        
+        logger.info(f"Subscription activated from balance: user={telegram_id}, tariff={tariff_key}, amount={amount_rubles} RUB, balance_after={balance_rubles - amount_rubles:.2f} RUB")
+        
+    else:
+        # Баланса не хватает - показываем экран с опциями
+        await callback.answer()
+        
+        shortage = amount_rubles - balance_rubles
+        try:
+            text = localization.get_text(
+                language,
+                "insufficient_balance_for_subscription",
+                amount=amount_rubles,
+                balance=balance_rubles,
+                shortage=shortage
+            )
+        except KeyError:
+            text = f"Недостаточно средств на балансе.\n\nСтоимость: {amount_rubles:.2f} ₽\nНа балансе: {balance_rubles:.2f} ₽\nНе хватает: {shortage:.2f} ₽"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "topup_balance", default="➕ Пополнить баланс"),
+                callback_data="topup_balance"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
+                callback_data=f"pay_tariff_card:{tariff_key}"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="← Назад"),
+                callback_data="menu_buy_vpn"
+            )],
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
 
 
 @router.pre_checkout_query()
@@ -2151,18 +2338,34 @@ async def callback_referral(callback: CallbackQuery):
     # Получаем статистику
     stats = await database.get_referral_stats(telegram_id)
     
+    # Определяем уровень реферала
+    referral_level = await database.update_referral_level(telegram_id)
+    level_text = "VIP (20%)" if referral_level == "vip" else "Base (10%)"
+    
     # Получаем username бота для ссылки
     bot_username = (await callback.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
     
     # Формируем текст
-    text = localization.get_text(
-        language,
-        "referral_program_text",
-        referral_link=referral_link,
-        total_referred=stats["total_referred"],
-        total_rewarded=stats["total_rewarded"]
-    )
+    try:
+        text = localization.get_text(
+            language,
+            "referral_program_text",
+            referral_link=referral_link,
+            total_referred=stats["total_referred"],
+            total_rewarded=stats["total_rewarded"],
+            referral_level=level_text
+        )
+    except KeyError:
+        # Fallback если нет параметра referral_level
+        text = localization.get_text(
+            language,
+            "referral_program_text",
+            referral_link=referral_link,
+            total_referred=stats["total_referred"],
+            total_rewarded=stats["total_rewarded"]
+        )
+        text += f"\n\nВаш уровень: {level_text}"
     
     # Клавиатура
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -2426,6 +2629,80 @@ async def callback_admin_stats(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_stats: {e}")
         await callback.answer("Ошибка при получении статистики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:analytics")
+async def callback_admin_analytics(callback: CallbackQuery):
+    """Финансовая аналитика (LTV / ARPU / CAC)"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            # LTV: Общая сумма платежей пользователя (средний LTV)
+            ltv_data = await conn.fetch(
+                """SELECT telegram_id, COALESCE(SUM(amount), 0) as total_payments
+                   FROM payments
+                   WHERE status = 'approved'
+                   GROUP BY telegram_id"""
+            )
+            
+            total_ltv = sum(row["total_payments"] for row in ltv_data)
+            avg_ltv = total_ltv / len(ltv_data) if ltv_data else 0
+            avg_ltv_rubles = avg_ltv / 100.0  # из копеек в рубли
+            
+            # ARPU: Общий доход / число платящих пользователей
+            total_revenue = await conn.fetchval(
+                """SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved'"""
+            ) or 0
+            total_revenue_rubles = total_revenue / 100.0
+            
+            paying_users_count = await conn.fetchval(
+                """SELECT COUNT(DISTINCT telegram_id) FROM payments WHERE status = 'approved'"""
+            ) or 0
+            
+            arpu = total_revenue_rubles / paying_users_count if paying_users_count > 0 else 0
+            
+            # CAC (упрощенный): Реферальные выплаты / число привлеченных
+            referral_payouts = await conn.fetchval(
+                """SELECT COALESCE(SUM(amount), 0) FROM balance_transactions 
+                   WHERE type = 'referral_reward'"""
+            ) or 0
+            referral_payouts_rubles = referral_payouts / 100.0
+            
+            referred_users_count = await conn.fetchval(
+                """SELECT COUNT(*) FROM referrals WHERE is_rewarded = TRUE"""
+            ) or 0
+            
+            cac = referral_payouts_rubles / referred_users_count if referred_users_count > 0 else 0
+            
+            # Формируем отчет
+            text = (
+                f"📊 Финансовая аналитика\n\n"
+                f"💰 LTV (Lifetime Value):\n"
+                f"   Средний LTV: {avg_ltv_rubles:.2f} ₽\n"
+                f"   Всего платящих: {len(ltv_data)}\n\n"
+                f"📈 ARPU (Average Revenue Per User):\n"
+                f"   ARPU: {arpu:.2f} ₽\n"
+                f"   Общий доход: {total_revenue_rubles:.2f} ₽\n"
+                f"   Платящих пользователей: {paying_users_count}\n\n"
+                f"🎯 CAC (Customer Acquisition Cost):\n"
+                f"   CAC: {cac:.2f} ₽\n"
+                f"   Реферальные выплаты: {referral_payouts_rubles:.2f} ₽\n"
+                f"   Привлечено через рефералов: {referred_users_count}\n\n"
+                f"📊 Дополнительно:\n"
+                f"   Всего пользователей: {await conn.fetchval('SELECT COUNT(*) FROM users')}\n"
+                f"   Активных подписок: {await conn.fetchval('SELECT COUNT(*) FROM subscriptions WHERE expires_at > NOW()')}\n"
+            )
+            
+            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await callback.answer()
+            
+    except Exception as e:
+        logger.exception(f"Error in admin analytics: {e}")
+        await callback.answer("Ошибка при расчете аналитики", show_alert=True)
 
 
 @router.callback_query(F.data == "admin:audit")

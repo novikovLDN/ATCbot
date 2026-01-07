@@ -55,6 +55,12 @@ async def init_db():
             )
         """)
         
+        # Миграция: добавляем referral_level, если его нет
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_level TEXT DEFAULT 'base' CHECK (referral_level IN ('base', 'vip'))")
+        except Exception:
+            pass
+        
         # Таблица payments
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS payments (
@@ -80,9 +86,22 @@ async def init_db():
                 reminder_24h_sent BOOLEAN DEFAULT FALSE,
                 reminder_3h_sent BOOLEAN DEFAULT FALSE,
                 reminder_6h_sent BOOLEAN DEFAULT FALSE,
-                admin_grant_days INTEGER DEFAULT NULL
+                admin_grant_days INTEGER DEFAULT NULL,
+                auto_renew BOOLEAN DEFAULT FALSE
             )
         """)
+        
+        # Миграция: добавляем auto_renew, если его нет
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS auto_renew BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+        
+        # Миграция: добавляем last_notification_sent_at для автопродления
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_notification_sent_at TIMESTAMP")
+        except Exception:
+            pass
         
         # Миграция: добавляем новые поля для напоминаний, если их нет
         try:
@@ -775,6 +794,68 @@ async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
         }
 
 
+async def get_referral_level(telegram_id: int) -> str:
+    """
+    Определить уровень реферала (base или vip)
+    
+    VIP условия:
+    - активная подписка ≥ 3 месяцев
+    - или total_payments ≥ 1000 ₽
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        'base' или 'vip'
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Проверяем активную подписку
+        subscription = await conn.fetchrow(
+            "SELECT expires_at FROM subscriptions WHERE telegram_id = $1 AND expires_at > NOW()",
+            telegram_id
+        )
+        
+        if subscription:
+            # Проверяем, что подписка активна ≥ 3 месяцев
+            created_at = await conn.fetchval(
+                "SELECT MIN(created_at) FROM subscription_history WHERE telegram_id = $1",
+                telegram_id
+            )
+            if created_at:
+                months_active = (datetime.now() - created_at).days / 30.0
+                if months_active >= 3.0:
+                    return "vip"
+        
+        # Проверяем общую сумму платежей
+        total_payments = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE telegram_id = $1 AND status = 'approved'",
+            telegram_id
+        )
+        
+        if total_payments and total_payments >= 100000:  # 1000 ₽ в копейках
+            return "vip"
+        
+        return "base"
+
+
+async def update_referral_level(telegram_id: int) -> str:
+    """
+    Обновить и сохранить уровень реферала в БД
+    
+    Returns:
+        'base' или 'vip'
+    """
+    level = await get_referral_level(telegram_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET referral_level = $1 WHERE telegram_id = $2",
+            level, telegram_id
+        )
+    return level
+
+
 async def process_referral_reward_cashback(referred_user_id: int, payment_amount_rubles: float) -> bool:
     """
     Начислить кешбэк рефереру после первой оплаты приглашенного пользователя
@@ -786,8 +867,6 @@ async def process_referral_reward_cashback(referred_user_id: int, payment_amount
     Returns:
         True если кешбэк начислен, False если уже начислен или ошибка
     """
-    # Процент кешбэка (15% от суммы оплаты)
-    CASHBACK_PERCENT = 15
     
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -806,8 +885,15 @@ async def process_referral_reward_cashback(referred_user_id: int, payment_amount
                 referral = dict(referral_row)
                 referrer_user_id = referral["referrer_user_id"]
                 
-                # Рассчитываем кешбэк (15% от суммы оплаты, в копейках)
-                cashback_rubles = payment_amount_rubles * (CASHBACK_PERCENT / 100.0)
+                # Определяем уровень реферала и процент кешбэка
+                referral_level = await update_referral_level(referrer_user_id)
+                if referral_level == "vip":
+                    cashback_percent = 20  # VIP: 20%
+                else:
+                    cashback_percent = 10  # Base: 10%
+                
+                # Рассчитываем кешбэк (в копейках)
+                cashback_rubles = payment_amount_rubles * (cashback_percent / 100.0)
                 cashback_kopecks = int(cashback_rubles * 100)
                 
                 # Начисляем кешбэк на баланс реферера
@@ -831,7 +917,7 @@ async def process_referral_reward_cashback(referred_user_id: int, payment_amount
                 )
                 
                 # Логируем событие
-                details = f"Referral cashback awarded: referrer={referrer_user_id}, referred={referred_user_id}, amount={cashback_rubles:.2f} RUB ({cashback_kopecks} kopecks)"
+                details = f"Referral cashback awarded: referrer={referrer_user_id} (level={referral_level}, {cashback_percent}%), referred={referred_user_id}, amount={cashback_rubles:.2f} RUB ({cashback_kopecks} kopecks)"
                 await _log_audit_event_atomic(
                     conn,
                     "referral_cashback",
