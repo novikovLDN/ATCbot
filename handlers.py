@@ -1840,20 +1840,35 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
         months = tariff_data["months"]
         duration = timedelta(days=months * 30)
         
-        result = await database.grant_access(
-            telegram_id=telegram_id,
-            duration=duration,
-            source="payment",
-            admin_telegram_id=None,
-            admin_grant_days=None
-        )
-        
-        expires_at = result["subscription_end"]
-        vpn_key = result.get("vless_url") or result["uuid"]
-        is_renewal = result.get("vless_url") is None  # Если vless_url is None, значит это продление
-        
-        if expires_at is None or vpn_key is None:
-            logger.error(f"Failed to grant access after balance payment: user={telegram_id}")
+        try:
+            result = await database.grant_access(
+                telegram_id=telegram_id,
+                duration=duration,
+                source="payment",
+                admin_telegram_id=None,
+                admin_grant_days=None
+            )
+            
+            expires_at = result["subscription_end"]
+            # Если vless_url есть - это новый UUID, используем его
+            # Если vless_url нет - это продление, получаем vpn_key из подписки
+            if result.get("vless_url"):
+                vpn_key = result["vless_url"]
+                is_renewal = False
+            else:
+                # Продление - получаем vpn_key из существующей подписки
+                subscription = await database.get_subscription(telegram_id)
+                if subscription and subscription.get("vpn_key"):
+                    vpn_key = subscription["vpn_key"]
+                else:
+                    # Fallback: используем UUID
+                    vpn_key = result.get("uuid", "")
+                is_renewal = True
+            
+            if not expires_at or not vpn_key:
+                raise Exception(f"grant_access returned invalid result: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
+        except Exception as e:
+            logger.exception(f"CRITICAL: Failed to grant access after balance payment for user {telegram_id}: {e}")
             # Возвращаем деньги на баланс
             await database.increase_balance(
                 telegram_id=telegram_id,
@@ -2126,12 +2141,27 @@ async def process_successful_payment(message: Message):
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     months = tariff_data["months"]
     
-    # Активируем подписку
-    expires_at, is_renewal, vpn_key = await database.approve_payment_atomic(
-        payment_id,
-        months,
-        admin_telegram_id=config.ADMIN_TELEGRAM_ID  # Используем системного админа
-    )
+    # Активируем подписку через grant_access
+    try:
+        expires_at, is_renewal, vpn_key = await database.approve_payment_atomic(
+            payment_id,
+            months,
+            admin_telegram_id=config.ADMIN_TELEGRAM_ID  # Используем системного админа
+        )
+        
+        if not expires_at or not vpn_key:
+            raise Exception(f"approve_payment_atomic returned None: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
+    except Exception as e:
+        logger.exception(f"CRITICAL: Failed to grant access after payment for user {telegram_id}, payment_id={payment_id}: {e}")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        error_text = localization.get_text(
+            language, 
+            "error_subscription_activation",
+            default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
+        )
+        await message.answer(error_text)
+        return
     
     if expires_at and vpn_key:
         # Успешно активирована подписка
@@ -3251,18 +3281,23 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
         user_id = int(parts[2])
         days = int(parts[3])
         
-        # Выдаем доступ
-        expires_at, vpn_key = await database.admin_grant_access_atomic(
-            telegram_id=user_id,
-            days=days,
-            admin_telegram_id=callback.from_user.id
-        )
-        
-        if expires_at is None or vpn_key is None:
-            # Ошибка создания ключа
-            text = "❌ Ошибка создания VPN-ключа"
+        # Выдаем доступ через grant_access
+        try:
+            expires_at, vpn_key = await database.admin_grant_access_atomic(
+                telegram_id=user_id,
+                days=days,
+                admin_telegram_id=callback.from_user.id
+            )
+            
+            if not expires_at or not vpn_key:
+                raise Exception(f"admin_grant_access_atomic returned None: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
+        except Exception as e:
+            logger.exception(f"CRITICAL: Failed to grant admin access for user {user_id}, days={days}, admin={callback.from_user.id}: {e}")
+            text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
             await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка создания ключа", show_alert=True)
+            await state.clear()
+            return
         else:
             # Успешно
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
@@ -3309,18 +3344,23 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         user_id = int(parts[2])
         minutes = int(parts[3])
         
-        # Выдаем доступ на минуты
-        expires_at, vpn_key = await database.admin_grant_access_minutes_atomic(
-            telegram_id=user_id,
-            minutes=minutes,
-            admin_telegram_id=callback.from_user.id
-        )
-        
-        if expires_at is None or vpn_key is None:
-            # Ошибка создания ключа
-            text = "❌ Ошибка создания VPN-ключа"
+        # Выдаем доступ на минуты через grant_access
+        try:
+            expires_at, vpn_key = await database.admin_grant_access_minutes_atomic(
+                telegram_id=user_id,
+                minutes=minutes,
+                admin_telegram_id=callback.from_user.id
+            )
+            
+            if not expires_at or not vpn_key:
+                raise Exception(f"admin_grant_access_minutes_atomic returned None: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
+        except Exception as e:
+            logger.exception(f"CRITICAL: Failed to grant admin access (minutes) for user {user_id}, minutes={minutes}, admin={callback.from_user.id}: {e}")
+            text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
             await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка создания ключа", show_alert=True)
+            await state.clear()
+            return
         else:
             # Успешно
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
@@ -3371,18 +3411,23 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
         parts = callback.data.split(":")
         user_id = int(parts[3])
         
-        # Выдаем доступ на 1 год (365 дней)
-        expires_at, vpn_key = await database.admin_grant_access_atomic(
-            telegram_id=user_id,
-            days=365,
-            admin_telegram_id=callback.from_user.id
-        )
-        
-        if expires_at is None or vpn_key is None:
-            # Ошибка создания ключа
-            text = "❌ Ошибка создания VPN-ключа"
+        # Выдаем доступ на 1 год (365 дней) через grant_access
+        try:
+            expires_at, vpn_key = await database.admin_grant_access_atomic(
+                telegram_id=user_id,
+                days=365,
+                admin_telegram_id=callback.from_user.id
+            )
+            
+            if not expires_at or not vpn_key:
+                raise Exception(f"admin_grant_access_atomic returned None: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
+        except Exception as e:
+            logger.exception(f"CRITICAL: Failed to grant admin access (1 year) for user {user_id}, admin={callback.from_user.id}: {e}")
+            text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
             await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка создания ключа", show_alert=True)
+            await state.clear()
+            return
         else:
             # Успешно
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")

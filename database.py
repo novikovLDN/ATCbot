@@ -1795,13 +1795,14 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
     
     В одной транзакции:
     - обновляет payment → approved
-    - создает VPN-ключ через Outline API (если нужен новый)
+    - создает VPN-ключ через Xray API (если нужен новый)
     - создает/продлевает subscription с VPN-ключом
     - записывает событие в audit_log
     
     Логика выдачи ключей:
-    - Если подписка активна (expires_at > now): переиспользуется существующий ключ Outline
-    - Если подписка закончилась (expires_at <= now) или её нет: создается новый ключ через Outline API
+    - Использует единую функцию grant_access()
+    - Если подписка активна (status='active' AND expires_at > now): продлевает, UUID не меняется
+    - Если подписка закончилась или её нет: создается новый UUID через Xray API
     
     Args:
         payment_id: ID платежа
@@ -1858,8 +1859,23 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 )
                 
                 expires_at = result["subscription_end"]
-                final_vpn_key = result.get("vless_url") or result["uuid"]
-                is_renewal = result.get("vless_url") is None  # Если vless_url is None, значит это продление
+                # Если vless_url есть - это новый UUID, используем его
+                # Если vless_url нет - это продление, получаем vpn_key из подписки
+                if result.get("vless_url"):
+                    final_vpn_key = result["vless_url"]
+                    is_renewal = False
+                else:
+                    # Продление - получаем vpn_key из существующей подписки
+                    subscription_after = await conn.fetchrow(
+                        "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                        telegram_id
+                    )
+                    if subscription_after and subscription_after.get("vpn_key"):
+                        final_vpn_key = subscription_after["vpn_key"]
+                    else:
+                        # Fallback: используем UUID (не должно быть, но на всякий случай)
+                        final_vpn_key = result.get("uuid", "")
+                    is_renewal = True
                 
                 # 7. Записываем событие в audit_log
                 audit_action_type = "subscription_renewed" if is_renewal else "payment_approved"
