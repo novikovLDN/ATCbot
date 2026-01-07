@@ -1,8 +1,8 @@
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, LabeledPrice, PreCheckoutQuery
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.state import State, StatesGroup, default_state
 from datetime import datetime, timedelta
 import logging
 import database
@@ -792,12 +792,16 @@ async def check_subscription_expiry(telegram_id: int) -> bool:
 
 async def show_profile(message_or_query, language: str):
     """Показать профиль пользователя (обновленная версия с балансом)"""
-    if isinstance(message_or_query, Message):
-        telegram_id = message_or_query.from_user.id
-        send_func = message_or_query.answer
-    else:
-        telegram_id = message_or_query.from_user.id
-        send_func = message_or_query.message.edit_text
+    try:
+        if isinstance(message_or_query, Message):
+            telegram_id = message_or_query.from_user.id
+            send_func = message_or_query.answer
+        else:
+            telegram_id = message_or_query.from_user.id
+            send_func = message_or_query.message.edit_text
+    except AttributeError as e:
+        logger.error(f"Invalid message_or_query type in show_profile: {type(message_or_query)}, error: {e}")
+        raise
     
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
@@ -859,7 +863,17 @@ async def show_profile(message_or_query, language: str):
     # Получаем клавиатуру
     keyboard = get_profile_keyboard(language, has_active_subscription)
     
-    await send_func(text, reply_markup=keyboard)
+    try:
+        await send_func(text, reply_markup=keyboard)
+    except Exception as e:
+        logger.exception(f"Error sending profile message for user {telegram_id}: {e}")
+        # Если не удалось отредактировать сообщение (например, оно было удалено), отправляем новое
+        if hasattr(message_or_query, 'message') and hasattr(message_or_query.message, 'answer'):
+            try:
+                await message_or_query.message.answer(text, reply_markup=keyboard)
+            except Exception:
+                pass
+        raise
 
 
 @router.callback_query(F.data == "change_language")
@@ -897,15 +911,43 @@ async def callback_main_menu(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "menu_profile", StateFilter(default_state))
 @router.callback_query(F.data == "menu_profile")
-async def callback_profile(callback: CallbackQuery):
-    """Мой профиль"""
+async def callback_profile(callback: CallbackQuery, state: FSMContext):
+    """Мой профиль - работает независимо от FSM состояния"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
     
-    await show_profile(callback, language)
+    # Немедленная обратная связь пользователю
     await callback.answer()
+    
+    # Очищаем FSM состояние, если пользователь был в каком-то процессе
+    try:
+        current_state = await state.get_state()
+        if current_state is not None:
+            await state.clear()
+            logger.debug(f"Cleared FSM state for user {telegram_id}, was: {current_state}")
+    except Exception as e:
+        logger.debug(f"FSM state clear failed (may be already clear): {e}")
+    
+    try:
+        logger.info(f"Opening profile for user {telegram_id}")
+        
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        
+        await show_profile(callback, language)
+        
+        logger.info(f"Profile opened successfully for user {telegram_id}")
+    except Exception as e:
+        logger.exception(f"Error opening profile for user {telegram_id}: {e}")
+        # Пытаемся отправить сообщение об ошибке
+        try:
+            user = await database.get_user(telegram_id)
+            language = user.get("language", "ru") if user else "ru"
+            error_text = localization.get_text(language, "error_profile_load", default="Ошибка загрузки профиля. Попробуйте позже.")
+            await callback.message.answer(error_text)
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data == "menu_vip_access")
@@ -1226,15 +1268,43 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     )
 
 
+@router.callback_query(F.data == "go_profile", StateFilter(default_state))
 @router.callback_query(F.data == "go_profile")
-async def callback_go_profile(callback: CallbackQuery):
-    """Переход в профиль с экрана выдачи ключа"""
+async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
+    """Переход в профиль с экрана выдачи ключа - работает независимо от FSM состояния"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
     
-    await show_profile(callback, language)
+    # Немедленная обратная связь пользователю
     await callback.answer()
+    
+    # Очищаем FSM состояние, если пользователь был в каком-то процессе
+    try:
+        current_state = await state.get_state()
+        if current_state is not None:
+            await state.clear()
+            logger.debug(f"Cleared FSM state for user {telegram_id}, was: {current_state}")
+    except Exception as e:
+        logger.debug(f"FSM state clear failed (may be already clear): {e}")
+    
+    try:
+        logger.info(f"Opening profile via go_profile for user {telegram_id}")
+        
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        
+        await show_profile(callback, language)
+        
+        logger.info(f"Profile opened successfully via go_profile for user {telegram_id}")
+    except Exception as e:
+        logger.exception(f"Error opening profile via go_profile for user {telegram_id}: {e}")
+        # Пытаемся отправить сообщение об ошибке
+        try:
+            user = await database.get_user(telegram_id)
+            language = user.get("language", "ru") if user else "ru"
+            error_text = localization.get_text(language, "error_profile_load", default="Ошибка загрузки профиля. Попробуйте позже.")
+            await callback.message.answer(error_text)
+        except Exception:
+            pass
 
 
 @router.callback_query(F.data == "back_to_main")
