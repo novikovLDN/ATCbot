@@ -6,6 +6,7 @@
 """
 import httpx
 import logging
+import asyncio
 from typing import Dict, Optional
 from urllib.parse import quote
 import config
@@ -13,8 +14,29 @@ import config
 logger = logging.getLogger(__name__)
 
 # HTTP клиент с таймаутами для API запросов
-HTTP_TIMEOUT = 5.0  # секунды (строгий таймаут для быстрой реакции)
-MAX_RETRIES = 1  # Количество повторных попыток при ошибке
+HTTP_TIMEOUT = 10.0  # секунды (≥ 10 секунд по требованию)
+MAX_RETRIES = 2  # Количество повторных попыток при ошибке (2 retry = 3 попытки всего)
+RETRY_DELAY = 1.0  # Задержка между попытками в секундах (backoff будет: 1s, 2s)
+
+
+class VPNAPIError(Exception):
+    """Базовый класс для ошибок VPN API"""
+    pass
+
+
+class TimeoutError(VPNAPIError):
+    """Таймаут при обращении к VPN API"""
+    pass
+
+
+class AuthError(VPNAPIError):
+    """Ошибка аутентификации (401, 403)"""
+    pass
+
+
+class InvalidResponseError(VPNAPIError):
+    """Некорректный ответ от VPN API"""
+    pass
 
 
 def generate_vless_url(uuid: str) -> str:
@@ -116,24 +138,40 @@ async def add_vless_user() -> Dict[str, str]:
         "Content-Type": "application/json"
     }
     
-    # Логируем URL (без ключа)
-    logger.info(f"XRAY API: Creating VLESS user via {url}")
+    # Логируем начало операции
+    logger.info(f"vpn_api add_user: START [url={url}]")
     
     last_exception = None
     for attempt in range(MAX_RETRIES + 1):
+        # Backoff: увеличиваем задержку с каждой попыткой
+        if attempt > 0:
+            delay = RETRY_DELAY * attempt
+            logger.info(f"vpn_api add_user: RETRY [attempt={attempt + 1}/{MAX_RETRIES + 1}, delay={delay}s]")
+            await asyncio.sleep(delay)
+        
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-                logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES + 1}: POST {url}")
+                logger.debug(f"vpn_api add_user: ATTEMPT [attempt={attempt + 1}/{MAX_RETRIES + 1}]")
                 response = await client.post(url, headers=headers)
                 
                 # Логируем статус ответа
-                logger.info(f"XRAY API response: status={response.status_code}, attempt={attempt + 1}")
+                logger.info(f"vpn_api add_user: RESPONSE [status={response.status_code}, attempt={attempt + 1}]")
                 
                 # Проверяем статус ответа
+                if response.status_code == 401 or response.status_code == 403:
+                    error_msg = f"Authentication error: status={response.status_code}, response={response.text[:200]}"
+                    logger.error(f"vpn_api add_user: AUTH_ERROR [{error_msg}]")
+                    raise AuthError(error_msg)
+                
                 response.raise_for_status()
                 
                 # Парсим JSON ответ (API возвращает uuid и vless_link)
-                data = response.json()
+                try:
+                    data = response.json()
+                except Exception as e:
+                    error_msg = f"Invalid JSON response: {response.text[:200]}"
+                    logger.error(f"vpn_api add_user: INVALID_JSON [{error_msg}]")
+                    raise InvalidResponseError(error_msg) from e
                 
                 # Валидируем структуру ответа
                 uuid = data.get("uuid")
@@ -141,8 +179,8 @@ async def add_vless_user() -> Dict[str, str]:
                 
                 if not uuid:
                     error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
-                    logger.error(f"XRAY API error: {error_msg}")
-                    raise ValueError(error_msg)
+                    logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
+                    raise InvalidResponseError(error_msg)
                 
                 # Используем vless_link из ответа API, если есть, иначе генерируем локально
                 if vless_link:
@@ -153,7 +191,7 @@ async def add_vless_user() -> Dict[str, str]:
                 
                 # Безопасное логирование UUID (только первые 8 символов)
                 uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
-                logger.info(f"XRAY API: VLESS user created successfully: uuid={uuid_preview}, attempt={attempt + 1}")
+                logger.info(f"vpn_api add_user: SUCCESS [uuid={uuid_preview}, attempt={attempt + 1}]")
                 
                 return {
                     "uuid": str(uuid),
@@ -162,50 +200,57 @@ async def add_vless_user() -> Dict[str, str]:
                 
         except httpx.TimeoutException as e:
             last_exception = e
-            error_msg = f"Timeout while creating VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
-            logger.error(f"XRAY API timeout: {error_msg}")
+            error_msg = f"Timeout while creating VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1})"
+            logger.error(f"vpn_api add_user: TIMEOUT [{error_msg}]")
             if attempt < MAX_RETRIES:
-                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
                 continue
-            raise httpx.HTTPError(error_msg) from e
+            raise TimeoutError(error_msg) from e
+            
+        except AuthError:
+            # AuthError не retry
+            raise
+            
+        except InvalidResponseError:
+            # InvalidResponseError не retry
+            raise
             
         except httpx.HTTPStatusError as e:
             last_exception = e
             error_msg = (
-                f"Xray API error creating user (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
+                f"HTTP error creating user (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
                 f"status={e.response.status_code}, "
                 f"response_body={e.response.text[:200]}"
             )
-            logger.error(f"XRAY API HTTP error: {error_msg}")
+            logger.error(f"vpn_api add_user: HTTP_ERROR [{error_msg}]")
             # Для HTTP ошибок не делаем retry (4xx/5xx не исправятся)
-            raise
+            raise VPNAPIError(error_msg) from e
             
         except httpx.HTTPError as e:
             last_exception = e
             error_msg = f"Network error creating VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
-            logger.error(f"XRAY API network error: {error_msg}")
+            logger.error(f"vpn_api add_user: NETWORK_ERROR [{error_msg}]")
             if attempt < MAX_RETRIES:
-                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
                 continue
-            raise
+            raise VPNAPIError(error_msg) from e
             
-        except ValueError:
-            # Re-raise ValueError (validation errors) - не retry
+        except (ValueError, AuthError, InvalidResponseError, TimeoutError):
+            # Re-raise специальные исключения - не retry
             raise
             
         except Exception as e:
             last_exception = e
             error_msg = f"Unexpected error creating VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
-            logger.error(f"XRAY API unexpected error: {error_msg}", exc_info=True)
+            logger.error(f"vpn_api add_user: UNEXPECTED_ERROR [{error_msg}]", exc_info=True)
             if attempt < MAX_RETRIES:
-                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
                 continue
-            raise Exception(error_msg) from e
+            raise VPNAPIError(error_msg) from e
     
     # Если дошли сюда - все попытки исчерпаны
     if last_exception:
-        raise last_exception
-    raise Exception("Failed to create VLESS user: all retries exhausted")
+        if isinstance(last_exception, httpx.TimeoutException):
+            raise TimeoutError(f"Timeout after {MAX_RETRIES + 1} attempts") from last_exception
+        raise VPNAPIError(f"Failed after {MAX_RETRIES + 1} attempts: {last_exception}") from last_exception
+    raise VPNAPIError("Failed to create VLESS user: all retries exhausted")
 
 
 async def remove_vless_user(uuid: str) -> None:
@@ -269,70 +314,84 @@ async def remove_vless_user(uuid: str) -> None:
     
     # Безопасное логирование UUID
     uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
-    logger.info(f"XRAY API: Removing VLESS user uuid={uuid_preview} via {url}")
+    logger.info(f"vpn_api remove_user: START [uuid={uuid_preview}, url={url}]")
     
     last_exception = None
     for attempt in range(MAX_RETRIES + 1):
+        # Backoff: увеличиваем задержку с каждой попыткой
+        if attempt > 0:
+            delay = RETRY_DELAY * attempt
+            logger.info(f"vpn_api remove_user: RETRY [uuid={uuid_preview}, attempt={attempt + 1}/{MAX_RETRIES + 1}, delay={delay}s]")
+            await asyncio.sleep(delay)
+        
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-                logger.debug(f"Attempt {attempt + 1}/{MAX_RETRIES + 1}: POST {url}, uuid={uuid_preview}")
+                logger.debug(f"vpn_api remove_user: ATTEMPT [uuid={uuid_preview}, attempt={attempt + 1}/{MAX_RETRIES + 1}]")
                 response = await client.post(url, headers=headers, json=payload)
                 
                 # Логируем статус ответа
-                logger.info(f"XRAY API response: status={response.status_code}, attempt={attempt + 1}, uuid={uuid_preview}")
+                logger.info(f"vpn_api remove_user: RESPONSE [uuid={uuid_preview}, status={response.status_code}, attempt={attempt + 1}]")
                 
                 # Проверяем статус ответа
+                if response.status_code == 401 or response.status_code == 403:
+                    error_msg = f"Authentication error: status={response.status_code}, response={response.text[:200]}"
+                    logger.error(f"vpn_api remove_user: AUTH_ERROR [uuid={uuid_preview}, {error_msg}]")
+                    raise AuthError(error_msg)
+                
                 response.raise_for_status()
                 
-                logger.info(f"XRAY API: VLESS user removed successfully: uuid={uuid_preview}, attempt={attempt + 1}")
+                logger.info(f"vpn_api remove_user: SUCCESS [uuid={uuid_preview}, attempt={attempt + 1}]")
                 return
                 
         except httpx.TimeoutException as e:
             last_exception = e
-            error_msg = f"Timeout while removing VLESS user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
-            logger.error(f"XRAY API timeout: {error_msg}")
+            error_msg = f"Timeout while removing VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1})"
+            logger.error(f"vpn_api remove_user: TIMEOUT [uuid={uuid_preview}, {error_msg}]")
             if attempt < MAX_RETRIES:
-                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
                 continue
-            raise httpx.HTTPError(error_msg) from e
+            raise TimeoutError(error_msg) from e
+            
+        except AuthError:
+            # AuthError не retry
+            raise
             
         except httpx.HTTPStatusError as e:
             last_exception = e
             error_msg = (
-                f"Xray API error removing user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
+                f"HTTP error removing user (attempt {attempt + 1}/{MAX_RETRIES + 1}): "
                 f"status={e.response.status_code}, "
                 f"response_body={e.response.text[:200]}"
             )
-            logger.error(f"XRAY API HTTP error: {error_msg}")
+            logger.error(f"vpn_api remove_user: HTTP_ERROR [uuid={uuid_preview}, {error_msg}]")
             # Для HTTP ошибок не делаем retry (4xx/5xx не исправятся)
-            raise
+            raise VPNAPIError(error_msg) from e
             
         except httpx.HTTPError as e:
             last_exception = e
-            error_msg = f"Network error removing VLESS user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
-            logger.error(f"XRAY API network error: {error_msg}")
+            error_msg = f"Network error removing VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"vpn_api remove_user: NETWORK_ERROR [uuid={uuid_preview}, {error_msg}]")
             if attempt < MAX_RETRIES:
-                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
                 continue
-            raise
+            raise VPNAPIError(error_msg) from e
             
-        except ValueError:
-            # Re-raise ValueError (validation errors) - не retry
+        except (ValueError, AuthError, TimeoutError):
+            # Re-raise специальные исключения - не retry
             raise
             
         except Exception as e:
             last_exception = e
-            error_msg = f"Unexpected error removing VLESS user uuid={uuid_preview} (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
-            logger.error(f"XRAY API unexpected error: {error_msg}", exc_info=True)
+            error_msg = f"Unexpected error removing VLESS user (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}"
+            logger.error(f"vpn_api remove_user: UNEXPECTED_ERROR [uuid={uuid_preview}, {error_msg}]", exc_info=True)
             if attempt < MAX_RETRIES:
-                logger.info(f"Retrying... (attempt {attempt + 2}/{MAX_RETRIES + 1})")
                 continue
-            raise Exception(error_msg) from e
+            raise VPNAPIError(error_msg) from e
     
     # Если дошли сюда - все попытки исчерпаны
     if last_exception:
-        raise last_exception
-    raise Exception(f"Failed to remove VLESS user uuid={uuid_preview}: all retries exhausted")
+        if isinstance(last_exception, httpx.TimeoutException):
+            raise TimeoutError(f"Timeout after {MAX_RETRIES + 1} attempts") from last_exception
+        raise VPNAPIError(f"Failed after {MAX_RETRIES + 1} attempts: {last_exception}") from last_exception
+    raise VPNAPIError(f"Failed to remove VLESS user uuid={uuid_preview}: all retries exhausted")
 
 
 # ============================================================================

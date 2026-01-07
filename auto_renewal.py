@@ -129,8 +129,23 @@ async def process_auto_renewals(bot: Bot):
                         )
                         
                         expires_at = result["subscription_end"]
-                        vpn_key = result.get("vless_url") or result["uuid"]
-                        is_renewal = result.get("vless_url") is None  # Если vless_url is None, значит это продление
+                        # Если vless_url есть - это новый UUID, используем его
+                        # Если vless_url нет - это продление, получаем vpn_key из подписки
+                        if result.get("vless_url"):
+                            vpn_key = result["vless_url"]
+                            is_renewal = False
+                        else:
+                            # Продление - получаем vpn_key из существующей подписки
+                            subscription_row = await conn.fetchrow(
+                                "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                                telegram_id
+                            )
+                            if subscription_row and subscription_row.get("vpn_key"):
+                                vpn_key = subscription_row["vpn_key"]
+                            else:
+                                # Fallback: используем UUID
+                                vpn_key = result.get("uuid", "")
+                            is_renewal = True
                         
                         if expires_at is None or vpn_key is None:
                             logger.error(f"Failed to grant access for auto-renewal: user={telegram_id}")

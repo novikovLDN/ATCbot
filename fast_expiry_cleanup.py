@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 import database
 import vpn_utils
+from vpn_utils import VPNAPIError, TimeoutError, AuthError
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ async def fast_expiry_cleanup_task():
             if not rows:
                 continue
             
-            logger.info(f"Fast cleanup: Found {len(rows)} expired subscriptions with active UUIDs")
+            if len(rows) > 0:
+                logger.info(f"cleanup: FOUND_EXPIRED [count={len(rows)}]")
             
             for row in rows:
                 telegram_id = row["telegram_id"]
@@ -72,11 +74,11 @@ async def fast_expiry_cleanup_task():
                     # Безопасное логирование UUID
                     uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                     logger.info(
-                        f"Fast cleanup: REMOVING_UUID [action=expire, user={telegram_id}, uuid={uuid_preview}, "
-                        f"expires_at={expires_at.isoformat()}]"
+                        f"cleanup: REMOVING_UUID [user={telegram_id}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]"
                     )
                     
                     await vpn_utils.remove_vless_user(uuid)
+                    logger.info(f"cleanup: VPN_API_REMOVED [user={telegram_id}, uuid={uuid_preview}]")
                     
                     # ТОЛЬКО если API ответил успехом - очищаем БД
                     pool = await database.get_pool()
@@ -105,6 +107,7 @@ async def fast_expiry_cleanup_task():
                                        WHERE telegram_id = $1 AND uuid = $2""",
                                     telegram_id, uuid
                                 )
+                                logger.info(f"cleanup: SUBSCRIPTION_EXPIRED [user={telegram_id}, uuid={uuid_preview}]")
                                 
                                 # Логируем действие
                                 import config
@@ -114,8 +117,7 @@ async def fast_expiry_cleanup_task():
                                 # Безопасное логирование UUID
                                 uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                                 logger.info(
-                                    f"Fast cleanup: EXPIRED_SUBSCRIPTION [action=expire_success, user={telegram_id}, "
-                                    f"uuid={uuid_preview}, expired_at={expires_at.isoformat()}]"
+                                    f"cleanup: SUCCESS [user={telegram_id}, uuid={uuid_preview}, expired_at={expires_at.isoformat()}]"
                                 )
                             else:
                                 logger.debug(
@@ -123,22 +125,24 @@ async def fast_expiry_cleanup_task():
                                     f"uuid={uuid}] - race condition"
                                 )
                     
-                except ValueError as e:
-                    # VPN API не настроен - логируем и пропускаем
-                    if "VPN API is not configured" in str(e):
+                except (ValueError, vpn_utils.VPNAPIError, vpn_utils.TimeoutError) as e:
+                    # VPN API ошибки - логируем и пропускаем (не чистим БД)
+                    uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+                    if "VPN API is not configured" in str(e) or isinstance(e, ValueError):
                         logger.warning(
-                            f"Fast cleanup: VPN_API_DISABLED [action=expire_skipped, user={telegram_id}, "
-                            f"uuid={uuid}] - VPN API not configured, cannot remove UUID"
+                            f"cleanup: VPN_API_DISABLED [user={telegram_id}, uuid={uuid_preview}] - skipping"
                         )
                     else:
-                        logger.error(f"Fast cleanup: Error cleaning up UUID {uuid} for user {telegram_id}: {e}", exc_info=True)
+                        logger.error(
+                            f"cleanup: VPN_API_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}] - will retry"
+                        )
                 except Exception as e:
                     # При любой ошибке НЕ чистим БД - повторим в следующем цикле
+                    uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                     logger.error(
-                        f"Fast cleanup: ERROR_REMOVING_UUID [action=expire_failed, user={telegram_id}, "
-                        f"uuid={uuid}, error={str(e)}]"
+                        f"cleanup: ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}] - will retry"
                     )
-                    logger.warning(f"Fast cleanup: Will retry UUID {uuid} for user {telegram_id} in next cycle")
+                    logger.warning(f"cleanup: Will retry UUID {uuid_preview} for user {telegram_id} in next cycle")
             
         except asyncio.CancelledError:
             logger.info("Fast expiry cleanup task cancelled")
