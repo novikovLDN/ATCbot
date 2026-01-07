@@ -723,16 +723,28 @@ async def cmd_start(message: Message):
                 
                 # Проверяем условия:
                 # 1. Это не тот же пользователь (self-referral запрещен)
-                # 2. У текущего пользователя referred_by IS NULL (еще не был приглашен)
+                # 2. У текущего пользователя referrer_id IS NULL (еще не был приглашен)
+                # 3. Защита от циклов: проверяем, что реферер не является рефералом текущего пользователя
                 if referrer_user_id != telegram_id:
                     user = await database.get_user(telegram_id)
-                    if user and not user.get("referred_by"):
-                        # Регистрируем реферала
-                        success = await database.register_referral(referrer_user_id, telegram_id)
-                        if success:
-                            logger.info(f"Referral registered: referrer_id={referrer_user_id}, referred_id={telegram_id}, code={referral_code}")
+                    if user:
+                        # Проверяем, что пользователь еще не был приглашен
+                        if not user.get("referrer_id") and not user.get("referred_by"):
+                            # Проверяем защиту от циклов: реферер не должен быть рефералом текущего пользователя
+                            referrer_user = await database.get_user(referrer_user_id)
+                            if referrer_user:
+                                referrer_referrer = referrer_user.get("referrer_id") or referrer_user.get("referred_by")
+                                if referrer_referrer == telegram_id:
+                                    logger.warning(f"Referral loop detected: user {telegram_id} -> {referrer_user_id} -> {telegram_id}")
+                                else:
+                                    # Регистрируем реферала
+                                    success = await database.register_referral(referrer_user_id, telegram_id)
+                                    if success:
+                                        logger.info(f"Referral registered: referrer_id={referrer_user_id}, referred_id={telegram_id}, code={referral_code}")
+                                    else:
+                                        logger.debug(f"Referral registration failed (may already exist): referrer_id={referrer_user_id}, referred_id={telegram_id}")
                         else:
-                            logger.debug(f"Referral registration failed (may already exist): referrer_id={referrer_user_id}, referred_id={telegram_id}")
+                            logger.debug(f"User {telegram_id} already has a referrer")
                 else:
                     logger.warning(f"Self-referral attempt blocked: user_id={telegram_id}")
     
@@ -1861,6 +1873,15 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
                 telegram_id, tariff_key, amount
             )
         
+        # Начисляем реферальный кешбэк при оплате с баланса
+        # Кешбэк начисляется при КАЖДОЙ оплате подписки (включая оплату с баланса)
+        try:
+            await database.process_referral_reward_cashback(telegram_id, amount_rubles)
+            logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={amount_rubles} RUB")
+        except Exception as e:
+            logger.exception(f"Error processing referral cashback for balance payment: user={telegram_id}: {e}")
+            # Не прерываем основной flow при ошибке начисления кешбэка
+        
         # Очищаем промокод из состояния после использования
         if has_promo:
             await state.update_data(promo_code=None)
@@ -2684,76 +2705,143 @@ async def callback_admin_stats(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin:analytics")
 async def callback_admin_analytics(callback: CallbackQuery):
-    """Финансовая аналитика (LTV / ARPU / CAC)"""
+    """Финансовая аналитика (LTV / ARPU / Реферальная аналитика)"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
     
     try:
+        # Получаем метрики
+        avg_ltv = await database.get_average_ltv()
+        arpu_data = await database.get_arpu()
+        referral_analytics = await database.get_referral_analytics()
+        daily_summary = await database.get_daily_summary()
+        
+        # Получаем общую статистику
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            # LTV: Общая сумма платежей пользователя (средний LTV)
-            ltv_data = await conn.fetch(
-                """SELECT telegram_id, COALESCE(SUM(amount), 0) as total_payments
-                   FROM payments
-                   WHERE status = 'approved'
-                   GROUP BY telegram_id"""
-            )
-            
-            total_ltv = sum(row["total_payments"] for row in ltv_data)
-            avg_ltv = total_ltv / len(ltv_data) if ltv_data else 0
-            avg_ltv_rubles = avg_ltv / 100.0  # из копеек в рубли
-            
-            # ARPU: Общий доход / число платящих пользователей
-            total_revenue = await conn.fetchval(
-                """SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved'"""
+            total_users = await conn.fetchval("SELECT COUNT(*) FROM users") or 0
+            active_subscriptions = await conn.fetchval(
+                "SELECT COUNT(*) FROM subscriptions WHERE expires_at > NOW()"
             ) or 0
-            total_revenue_rubles = total_revenue / 100.0
-            
-            paying_users_count = await conn.fetchval(
-                """SELECT COUNT(DISTINCT telegram_id) FROM payments WHERE status = 'approved'"""
+            paying_users = await conn.fetchval(
+                "SELECT COUNT(DISTINCT telegram_id) FROM payments WHERE status = 'approved'"
             ) or 0
-            
-            arpu = total_revenue_rubles / paying_users_count if paying_users_count > 0 else 0
-            
-            # CAC (упрощенный): Реферальные выплаты / число привлеченных
-            referral_payouts = await conn.fetchval(
-                """SELECT COALESCE(SUM(amount), 0) FROM balance_transactions 
-                   WHERE type = 'referral_reward'"""
-            ) or 0
-            referral_payouts_rubles = referral_payouts / 100.0
-            
-            referred_users_count = await conn.fetchval(
-                """SELECT COUNT(*) FROM referrals WHERE is_rewarded = TRUE"""
-            ) or 0
-            
-            cac = referral_payouts_rubles / referred_users_count if referred_users_count > 0 else 0
-            
-            # Формируем отчет
-            text = (
-                f"📊 Финансовая аналитика\n\n"
-                f"💰 LTV (Lifetime Value):\n"
-                f"   Средний LTV: {avg_ltv_rubles:.2f} ₽\n"
-                f"   Всего платящих: {len(ltv_data)}\n\n"
-                f"📈 ARPU (Average Revenue Per User):\n"
-                f"   ARPU: {arpu:.2f} ₽\n"
-                f"   Общий доход: {total_revenue_rubles:.2f} ₽\n"
-                f"   Платящих пользователей: {paying_users_count}\n\n"
-                f"🎯 CAC (Customer Acquisition Cost):\n"
-                f"   CAC: {cac:.2f} ₽\n"
-                f"   Реферальные выплаты: {referral_payouts_rubles:.2f} ₽\n"
-                f"   Привлечено через рефералов: {referred_users_count}\n\n"
-                f"📊 Дополнительно:\n"
-                f"   Всего пользователей: {await conn.fetchval('SELECT COUNT(*) FROM users')}\n"
-                f"   Активных подписок: {await conn.fetchval('SELECT COUNT(*) FROM subscriptions WHERE expires_at > NOW()')}\n"
-            )
-            
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
-            await callback.answer()
-            
+        
+        # Формируем отчет
+        text = (
+            f"📊 Финансовая аналитика\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 LTV (Lifetime Value)\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   Средний LTV: {avg_ltv:.2f} ₽\n"
+            f"   Платящих пользователей: {paying_users}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 ARPU (Average Revenue Per User)\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   ARPU: {arpu_data['arpu']:.2f} ₽\n"
+            f"   Общий доход: {arpu_data['total_revenue']:.2f} ₽\n"
+            f"   Активных пользователей: {arpu_data['active_users_count']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🤝 Реферальная аналитика\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   Доход от рефералов: {referral_analytics['referral_revenue']:.2f} ₽\n"
+            f"   Выплачено кешбэка: {referral_analytics['cashback_paid']:.2f} ₽\n"
+            f"   Чистая прибыль: {referral_analytics['net_profit']:.2f} ₽\n"
+            f"   Приглашено пользователей: {referral_analytics['referred_users_count']}\n"
+            f"   Активных рефералов: {referral_analytics['active_referrals']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 Сегодня ({daily_summary['date']})\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   Доход: {daily_summary['revenue']:.2f} ₽\n"
+            f"   Платежей: {daily_summary['payments_count']}\n"
+            f"   Новых пользователей: {daily_summary['new_users']}\n"
+            f"   Новых подписок: {daily_summary['new_subscriptions']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Общая статистика\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   Всего пользователей: {total_users}\n"
+            f"   Активных подписок: {active_subscriptions}\n"
+        )
+        
+        # Клавиатура с опциями
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 Ежемесячная сводка", callback_data="admin:analytics:monthly")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+        
+        # Логируем действие
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_analytics",
+            callback.from_user.id,
+            None,
+            "Admin viewed financial analytics"
+        )
+        
     except Exception as e:
         logger.exception(f"Error in admin analytics: {e}")
         await callback.answer("Ошибка при расчете аналитики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:analytics:monthly")
+async def callback_admin_analytics_monthly(callback: CallbackQuery):
+    """Ежемесячная сводка"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        now = datetime.now()
+        current_month = await database.get_monthly_summary(now.year, now.month)
+        
+        # Предыдущий месяц
+        if now.month == 1:
+            prev_month = await database.get_monthly_summary(now.year - 1, 12)
+        else:
+            prev_month = await database.get_monthly_summary(now.year, now.month - 1)
+        
+        text = (
+            f"📅 Ежемесячная сводка\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Текущий месяц ({current_month['year']}-{current_month['month']:02d})\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   Доход: {current_month['revenue']:.2f} ₽\n"
+            f"   Платежей: {current_month['payments_count']}\n"
+            f"   Новых пользователей: {current_month['new_users']}\n"
+            f"   Новых подписок: {current_month['new_subscriptions']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Предыдущий месяц ({prev_month['year']}-{prev_month['month']:02d})\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   Доход: {prev_month['revenue']:.2f} ₽\n"
+            f"   Платежей: {prev_month['payments_count']}\n"
+            f"   Новых пользователей: {prev_month['new_users']}\n"
+            f"   Новых подписок: {prev_month['new_subscriptions']}\n\n"
+        )
+        
+        # Сравнение
+        revenue_change = current_month['revenue'] - prev_month['revenue']
+        revenue_change_percent = (revenue_change / prev_month['revenue'] * 100) if prev_month['revenue'] > 0 else 0
+        
+        text += (
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 Изменение дохода\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   Изменение: {revenue_change:+.2f} ₽ ({revenue_change_percent:+.1f}%)\n"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к аналитике", callback_data="admin:analytics")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+        
+    except Exception as e:
+        logger.exception(f"Error in monthly analytics: {e}")
+        await callback.answer("Ошибка при получении ежемесячной сводки", show_alert=True)
 
 
 @router.callback_query(F.data == "admin:audit")

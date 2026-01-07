@@ -172,9 +172,18 @@ async def init_db():
         # Миграция: добавляем поля для реферальной программы
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT")
-            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT")
+            # Добавляем referrer_id (или referred_by для обратной совместимости)
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referrer_id BIGINT")
+            # Если есть referred_by, но нет referrer_id - копируем данные
+            await conn.execute("""
+                UPDATE users 
+                SET referrer_id = referred_by 
+                WHERE referrer_id IS NULL AND referred_by IS NOT NULL
+            """)
             # Создаем индекс для быстрого поиска по referral_code
             await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code) WHERE referral_code IS NOT NULL")
+            # Создаем индекс для быстрого поиска по referrer_id
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_referrer_id ON users(referrer_id) WHERE referrer_id IS NOT NULL")
         except Exception:
             # Колонки уже существуют
             pass
@@ -788,9 +797,14 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
                 referrer_user_id, referred_user_id
             )
             
-            # Обновляем referred_by у пользователя
+            # Обновляем referrer_id у пользователя (устанавливается только один раз)
+            # Также обновляем referred_by для обратной совместимости
             await conn.execute(
-                "UPDATE users SET referred_by = $1 WHERE telegram_id = $2 AND referred_by IS NULL",
+                """UPDATE users 
+                   SET referrer_id = $1, referred_by = $1 
+                   WHERE telegram_id = $2 
+                   AND referrer_id IS NULL 
+                   AND referred_by IS NULL""",
                 referrer_user_id, referred_user_id
             )
             
@@ -896,15 +910,20 @@ async def process_referral_reward_cashback(referred_user_id: int, payment_amount
             try:
                 # Получаем партнёра (реферера) для этого пользователя
                 user = await conn.fetchrow(
-                    "SELECT referred_by FROM users WHERE telegram_id = $1", referred_user_id
+                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1", referred_user_id
                 )
                 
-                if not user or not user.get("referred_by"):
+                if not user:
+                    logger.debug(f"User {referred_user_id} not found")
+                    return False
+                
+                # Используем referrer_id, если есть, иначе referred_by (для обратной совместимости)
+                partner_id = user.get("referrer_id") or user.get("referred_by")
+                
+                if not partner_id:
                     # Пользователь не был приглашён через реферальную программу
                     logger.debug(f"User {referred_user_id} has no referrer")
                     return False
-                
-                partner_id = user["referred_by"]
                 
                 # Проверяем, что партнёр не приглашает сам себя
                 if partner_id == referred_user_id:
@@ -929,10 +948,11 @@ async def process_referral_reward_cashback(referred_user_id: int, payment_amount
                 )
                 
                 # Записываем транзакцию баланса с указанием связанного пользователя
+                # Тип транзакции: cashback (для реферального кешбэка)
                 await conn.execute(
                     """INSERT INTO balance_transactions (user_id, amount, type, source, description, related_user_id)
                        VALUES ($1, $2, $3, $4, $5, $6)""",
-                    partner_id, cashback_kopecks, "referral_reward", "referral",
+                    partner_id, cashback_kopecks, "cashback", "referral",
                     f"Реферальный кешбэк {cashback_percent}% за оплату пользователя {referred_user_id}",
                     referred_user_id
                 )
@@ -2739,3 +2759,282 @@ async def revoke_vip_status(telegram_id: int, revoked_by: int) -> bool:
         except Exception as e:
             logger.exception(f"Error revoking VIP status: {e}")
             return False
+
+
+# ============================================================================
+# ФИНАНСОВАЯ АНАЛИТИКА
+# ============================================================================
+
+async def get_user_ltv(telegram_id: int) -> float:
+    """
+    Получить LTV (Lifetime Value) пользователя
+    
+    LTV = общая сумма платежей за подписки (исключая кешбэк)
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        LTV в рублях
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Суммируем все утвержденные платежи за подписки
+        total_kopecks = await conn.fetchval(
+            """SELECT COALESCE(SUM(amount), 0) 
+               FROM payments 
+               WHERE telegram_id = $1 AND status = 'approved'""",
+            telegram_id
+        ) or 0
+        
+        return total_kopecks / 100.0  # Конвертируем из копеек в рубли
+
+
+async def get_average_ltv() -> float:
+    """
+    Получить средний LTV по всем пользователям
+    
+    Returns:
+        Средний LTV в рублях
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Получаем LTV для каждого пользователя
+        ltv_data = await conn.fetch(
+            """SELECT telegram_id, COALESCE(SUM(amount), 0) as total_payments
+               FROM payments
+               WHERE status = 'approved'
+               GROUP BY telegram_id"""
+        )
+        
+        if not ltv_data:
+            return 0.0
+        
+        total_ltv = sum(row["total_payments"] for row in ltv_data)
+        avg_ltv = total_ltv / len(ltv_data)
+        
+        return avg_ltv / 100.0  # Конвертируем из копеек в рубли
+
+
+async def get_arpu() -> Dict[str, Any]:
+    """
+    Получить ARPU (Average Revenue Per User)
+    
+    ARPU = общий доход / количество активных пользователей
+    
+    Returns:
+        Словарь с ключами: arpu, total_revenue, active_users_count
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Общий доход (только утвержденные платежи за подписки)
+        total_revenue_kopecks = await conn.fetchval(
+            """SELECT COALESCE(SUM(amount), 0) 
+               FROM payments 
+               WHERE status = 'approved'"""
+        ) or 0
+        
+        total_revenue = total_revenue_kopecks / 100.0
+        
+        # Количество активных пользователей (с активной подпиской)
+        active_users_count = await conn.fetchval(
+            """SELECT COUNT(DISTINCT telegram_id) 
+               FROM subscriptions 
+               WHERE expires_at > NOW()"""
+        ) or 0
+        
+        # ARPU = общий доход / активные пользователи
+        arpu = total_revenue / active_users_count if active_users_count > 0 else 0.0
+        
+        return {
+            "arpu": arpu,
+            "total_revenue": total_revenue,
+            "active_users_count": active_users_count
+        }
+
+
+async def get_referral_analytics() -> Dict[str, Any]:
+    """
+    Получить реферальную аналитику
+    
+    Returns:
+        Словарь с ключами:
+        - referral_revenue: доход от рефералов (сумма платежей приглашенных пользователей)
+        - cashback_paid: выплаченный кешбэк
+        - net_profit: чистая прибыль (referral_revenue - cashback_paid)
+        - referred_users_count: количество приглашенных пользователей
+        - active_referrals: количество активных рефералов
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Доход от рефералов: сумма всех платежей пользователей, у которых есть referrer_id
+        referral_revenue_kopecks = await conn.fetchval(
+            """SELECT COALESCE(SUM(p.amount), 0)
+               FROM payments p
+               JOIN users u ON p.telegram_id = u.telegram_id
+               WHERE p.status = 'approved' 
+               AND (u.referrer_id IS NOT NULL OR u.referred_by IS NOT NULL)"""
+        ) or 0
+        
+        referral_revenue = referral_revenue_kopecks / 100.0
+        
+        # Выплаченный кешбэк (сумма всех транзакций типа cashback)
+        cashback_paid_kopecks = await conn.fetchval(
+            """SELECT COALESCE(SUM(amount), 0) 
+               FROM balance_transactions 
+               WHERE type = 'cashback'"""
+        ) or 0
+        
+        cashback_paid = cashback_paid_kopecks / 100.0
+        
+        # Чистая прибыль
+        net_profit = referral_revenue - cashback_paid
+        
+        # Количество приглашенных пользователей
+        referred_users_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM referrals"
+        ) or 0
+        
+        # Количество активных рефералов (с активной подпиской)
+        active_referrals = await conn.fetchval(
+            """SELECT COUNT(DISTINCT r.referred_user_id)
+               FROM referrals r
+               JOIN subscriptions s ON r.referred_user_id = s.telegram_id
+               WHERE s.expires_at > NOW()"""
+        ) or 0
+        
+        return {
+            "referral_revenue": referral_revenue,
+            "cashback_paid": cashback_paid,
+            "net_profit": net_profit,
+            "referred_users_count": referred_users_count,
+            "active_referrals": active_referrals
+        }
+
+
+async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    Получить ежедневную сводку
+    
+    Args:
+        date: Дата для сводки (если None, используется сегодня)
+    
+    Returns:
+        Словарь с ключами: revenue, payments_count, new_users, new_subscriptions
+    """
+    if date is None:
+        date = datetime.now()
+    
+    start_date = date.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = start_date + timedelta(days=1)
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Доход за день (утвержденные платежи)
+        revenue_kopecks = await conn.fetchval(
+            """SELECT COALESCE(SUM(amount), 0) 
+               FROM payments 
+               WHERE status = 'approved' 
+               AND created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        revenue = revenue_kopecks / 100.0
+        
+        # Количество платежей
+        payments_count = await conn.fetchval(
+            """SELECT COUNT(*) 
+               FROM payments 
+               WHERE status = 'approved' 
+               AND created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        # Новые пользователи
+        new_users = await conn.fetchval(
+            """SELECT COUNT(*) 
+               FROM users 
+               WHERE created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        # Новые подписки
+        new_subscriptions = await conn.fetchval(
+            """SELECT COUNT(*) 
+               FROM subscriptions 
+               WHERE created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        return {
+            "date": start_date.strftime("%Y-%m-%d"),
+            "revenue": revenue,
+            "payments_count": payments_count,
+            "new_users": new_users,
+            "new_subscriptions": new_subscriptions
+        }
+
+
+async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
+    """
+    Получить ежемесячную сводку
+    
+    Args:
+        year: Год
+        month: Месяц (1-12)
+    
+    Returns:
+        Словарь с ключами: revenue, payments_count, new_users, new_subscriptions
+    """
+    start_date = datetime(year, month, 1)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1)
+    else:
+        end_date = datetime(year, month + 1, 1)
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Доход за месяц (утвержденные платежи)
+        revenue_kopecks = await conn.fetchval(
+            """SELECT COALESCE(SUM(amount), 0) 
+               FROM payments 
+               WHERE status = 'approved' 
+               AND created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        revenue = revenue_kopecks / 100.0
+        
+        # Количество платежей
+        payments_count = await conn.fetchval(
+            """SELECT COUNT(*) 
+               FROM payments 
+               WHERE status = 'approved' 
+               AND created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        # Новые пользователи
+        new_users = await conn.fetchval(
+            """SELECT COUNT(*) 
+               FROM users 
+               WHERE created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        # Новые подписки
+        new_subscriptions = await conn.fetchval(
+            """SELECT COUNT(*) 
+               FROM subscriptions 
+               WHERE created_at >= $1 AND created_at < $2""",
+            start_date, end_date
+        ) or 0
+        
+        return {
+            "year": year,
+            "month": month,
+            "revenue": revenue,
+            "payments_count": payments_count,
+            "new_users": new_users,
+            "new_subscriptions": new_subscriptions
+        }
