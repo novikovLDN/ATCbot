@@ -18,16 +18,19 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "referral_program": "🤝 Пригласить друга",
         "referral_program_text": (
-            "🤝 Пригласите друзей\n\n"
-            "Вы получаете бонусы за друзей,\n"
-            "которые оформляют подписку.\n\n"
-            "🎁 За каждого друга:\n"
-            "+7 дней доступа\n\n"
-            "🔗 Ваша реферальная ссылка:\n"
-            "{referral_link}\n\n"
+            "🤝 Пригласить друга\n\n"
+            "Приглашайте друзей и получайте кешбэк\n"
+            "на баланс за их оплаты.\n\n"
             "📊 Статистика:\n"
             "Приглашено: {total_referred}\n"
-            "Бонусов начислено: {total_rewarded}"
+            "Текущий уровень: {cashback_percent}%\n"
+            "Заработано кешбэка: {total_cashback:.2f} ₽\n\n"
+            "🔗 Ваша реферальная ссылка:\n"
+            "{referral_link}\n\n"
+            "💡 Уровни кешбэка:\n"
+            "• 0-24 приглашённых → 10%\n"
+            "• 25-49 приглашённых → 25%\n"
+            "• 50+ приглашённых → 45%"
         ),
         "copy_referral_link": "📋 Скопировать ссылку",
         "referral_link_copied": "Ссылка отправлена",
@@ -89,12 +92,24 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "topup_balance": "➕ Пополнить баланс",
         "topup_balance_select_amount": "Выберите сумму пополнения:",
         "topup_custom_amount": "Другая сумма",
-        "topup_custom_not_available": "Ввод произвольной суммы временно недоступен. Выберите одну из предложенных сумм.",
+        "topup_enter_amount": "Введите свою сумму от 100 ₽",
+        "topup_amount_invalid": "Пожалуйста, введите число.",
+        "topup_amount_too_low": "Минимальная сумма пополнения: 100 ₽. Пожалуйста, введите сумму не менее 100 ₽.",
+        "topup_amount_too_high": "Максимальная сумма пополнения: 100 000 ₽. Пожалуйста, введите меньшую сумму.",
         "topup_invoice_title": "Пополнение баланса Atlas Secure",
         "topup_invoice_description": "Пополнение баланса на {amount} ₽",
         "topup_invoice_label": "Пополнение баланса",
         "topup_balance_success": "✅ Баланс пополнен\n\nНа счёте: {balance:.2f} ₽",
         "error_invalid_amount": "Неверная сумма",
+        "error_profile_load": "Ошибка загрузки профиля. Попробуйте позже.",
+        "insufficient_balance_for_subscription": "Недостаточно средств на балансе.\n\nСтоимость: {amount:.2f} ₽\nНа балансе: {balance:.2f} ₽\nНе хватает: {shortage:.2f} ₽",
+        "pay_with_card": "💳 Оплатить картой",
+        "auto_renewal_success": "✅ Подписка автоматически продлена до {expires_str}\n\nС баланса списано: {amount:.2f} ₽",
+        "auto_renewal_insufficient_balance": "⚠️ Недостаточно средств для автопродления подписки.\n\nТребуется: {amount:.2f} ₽\nНа балансе: {balance:.2f} ₽\nНе хватает: {shortage:.2f} ₽\n\nПополните баланс для автоматического продления.",
+        "auto_renew_enable": "🔄 Включить автопродление",
+        "auto_renew_disable": "⏸ Отключить автопродление",
+        "auto_renew_enabled": "✅ Автопродление включено",
+        "auto_renew_disabled": "⏸ Автопродление отключено",
         
         # Профиль - активная подписка (старая версия, для совместимости)
         "profile_active": "👤 Профиль доступа\n\nСтатус доступа: Активен\nДоступ оплачен до {date}\n\nВы подключены. Доступ работает стабильно.\n\nПерсональный ключ доступа\nИспользуется для подключения в приложении Outline.\nПодключение сохраняется, пока действует доступ.\n\n{vpn_key}\n\nПри продлении выбранный срок\nдобавляется к текущему доступу автоматически.\n\nДо окончания срока вы можете\nне возвращаться к настройкам и оплате.",
@@ -223,16 +238,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "referral_program": "🤝 Invite Friend",
         "referral_program_text": (
-            "🤝 Invite Friends\n\n"
-            "You get bonuses for friends\n"
-            "who subscribe.\n\n"
-            "🎁 For each friend:\n"
-            "+7 days of access\n\n"
-            "🔗 Your referral link:\n"
+            "👥 Referral Program\n\n"
+            "Invite friends and get bonuses\n"
+            "to your balance for their first payment.\n\n"
+            "Your bonus:\n"
+            "— credited after first payment\n"
+            "— can be used for renewal\n"
+            "— no withdrawal required\n\n"
+            "🔗 Your link:\n"
             "{referral_link}\n\n"
             "📊 Statistics:\n"
             "Invited: {total_referred}\n"
-            "Bonuses granted: {total_rewarded}"
+            "Bonuses awarded: {total_rewarded}"
         ),
         "copy_referral_link": "📋 Copy Link",
         "referral_link_copied": "Link sent",
@@ -294,12 +311,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "topup_balance": "➕ Top Up Balance",
         "topup_balance_select_amount": "Select top-up amount:",
         "topup_custom_amount": "Custom amount",
-        "topup_custom_not_available": "Custom amount input is temporarily unavailable. Please select one of the suggested amounts.",
+        "topup_enter_amount": "Enter your amount from 100 ₽",
+        "topup_amount_invalid": "Please enter a number.",
+        "topup_amount_too_low": "Minimum top-up amount: 100 ₽. Please enter an amount of at least 100 ₽.",
+        "topup_amount_too_high": "Maximum top-up amount: 100,000 ₽. Please enter a smaller amount.",
         "topup_invoice_title": "Atlas Secure Balance Top-Up",
         "topup_invoice_description": "Balance top-up for {amount} ₽",
         "topup_invoice_label": "Balance Top-Up",
         "topup_balance_success": "✅ Balance topped up\n\nBalance: {balance:.2f} ₽",
         "error_invalid_amount": "Invalid amount",
+        "error_profile_load": "Error loading profile. Please try again later.",
+        "insufficient_balance_for_subscription": "Insufficient balance.\n\nPrice: {amount:.2f} ₽\nBalance: {balance:.2f} ₽\nShortage: {shortage:.2f} ₽",
+        "pay_with_card": "💳 Pay with card",
         
         # Профиль - активная подписка (старая версия, для совместимости)
         "profile_active": "👤 Access Profile\n\nAccess status: Active\nAccess paid until {date}\n\nYou are connected. Access works stably.\n\nPersonal access key\nUsed for connection in Outline app.\nConnection persists while access is active.\n\n{vpn_key}\n\nWhen renewing, the selected period\nis automatically added to current access.\n\nUntil the period ends, you can\nnot return to settings and payment.",
@@ -426,12 +449,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "referral_program": "🤝 Do'stni taklif qilish",
         "referral_program_text": (
-            "🤝 Do'stlaringizni taklif qiling\n\n"
-            "Siz do'stlaringiz uchun bonuslar olasiz,\n"
-            "ular obuna bo'lganda.\n\n"
-            "🎁 Har bir do'st uchun:\n"
-            "+7 kun kirish\n\n"
-            "🔗 Sizning taklif havolangiz:\n"
+            "👥 Taklif dasturi\n\n"
+            "Do'stlaringizni taklif qiling va ularning\n"
+            "birinchi to'lovi uchun balansingizga bonus oling.\n\n"
+            "Sizning bonusingiz:\n"
+            "— birinchi to'lovdan keyin hisobga olinadi\n"
+            "— uzaytirish uchun ishlatilishi mumkin\n"
+            "— yechib olish talab qilinmaydi\n\n"
+            "🔗 Sizning havolangiz:\n"
             "{referral_link}\n\n"
             "📊 Statistika:\n"
             "Taklif qilingan: {total_referred}\n"
@@ -455,12 +480,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "topup_balance": "➕ Balansni to'ldirish",
         "topup_balance_select_amount": "To'ldirish summasini tanlang:",
         "topup_custom_amount": "Boshqa summa",
-        "topup_custom_not_available": "Ixtiyoriy summa kiritish vaqtincha mavjud emas. Taklif etilgan summalardan birini tanlang.",
+        "topup_enter_amount": "O'z summangizni kiriting (100 ₽ dan)",
+        "topup_amount_invalid": "Iltimos, raqam kiriting.",
+        "topup_amount_too_low": "Minimal to'ldirish summasi: 100 ₽. Iltimos, kamida 100 ₽ miqdorida summa kiriting.",
+        "topup_amount_too_high": "Maksimal to'ldirish summasi: 100 000 ₽. Iltimos, kichikroq summa kiriting.",
         "topup_invoice_title": "Atlas Secure balansini to'ldirish",
         "topup_invoice_description": "Balansni {amount} ₽ ga to'ldirish",
         "topup_invoice_label": "Balansni to'ldirish",
         "topup_balance_success": "✅ Balans to'ldirildi\n\nHisobda: {balance:.2f} ₽",
         "error_invalid_amount": "Noto'g'ri summa",
+        "error_profile_load": "Profilni yuklashda xatolik. Keyinroq urinib ko'ring.",
+        "insufficient_balance_for_subscription": "Balansda mablag' yetarli emas.\n\nNarx: {amount:.2f} ₽\nBalansda: {balance:.2f} ₽\nYetishmaydi: {shortage:.2f} ₽",
+        "pay_with_card": "💳 Kartadan to'lash",
         "subscription_history": "📄 Obuna tarixi",
         "subscription_history_empty": "Obuna tarixi bo'sh",
         "subscription_history_action_purchase": "Xarid",
@@ -601,16 +632,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_desktop": "💻 Windows / macOS",
         "referral_program": "🤝 Дӯстро даъват кардан",
         "referral_program_text": (
-            "🤝 Дӯстони худро даъват кунед\n\n"
-            "Шумо барои дӯстоне, ки обуна мегиранд,\n"
-            "бонусҳо мегиред.\n\n"
-            "🎁 Барои ҳар як дӯст:\n"
-            "+7 рӯз дастрасӣ\n\n"
-            "🔗 Пайванди даъвати шумо:\n"
+            "👥 Барномаи таклифӣ\n\n"
+            "Дӯстронро даъват кунед ва барои\n"
+            "аввалин пардохти онҳо ба балланси худ бонус гиред.\n\n"
+            "Бонуси шумо:\n"
+            "— пас аз аввалин пардохт ҳисоб карда мешавад\n"
+            "— барои васеъ кардан истифода бурда мешавад\n"
+            "— баровардан талаб намешавад\n\n"
+            "🔗 Ҳаволаи шумо:\n"
             "{referral_link}\n\n"
             "📊 Омори:\n"
-            "Даъват карда шуд: {total_referred}\n"
-            "Бонусҳои дода шуда: {total_rewarded}"
+            "Даъватшуда: {total_referred}\n"
+            "Бонусҳои додашуда: {total_rewarded}"
         ),
         "copy_referral_link": "📋 Пайвандро нусхабардорӣ кардан",
         "referral_link_copied": "Пайванд фиристода шуд",
@@ -630,12 +663,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "topup_balance": "➕ Баллансро пур кардан",
         "topup_balance_select_amount": "Маблағи пуркуниро интихоб кунед:",
         "topup_custom_amount": "Маблағи дигар",
-        "topup_custom_not_available": "Маблағи ихтиёриро ворид кардан вақтан муваққатан дастрас нест. Лутфан, яке аз маблағҳои пешниҳодшударо интихоб кунед.",
+        "topup_enter_amount": "Маблағи худро ворид кунед (аз 100 ₽)",
+        "topup_amount_invalid": "Лутфан, рақам ворид кунед.",
+        "topup_amount_too_low": "Маблағи минималии пуркунӣ: 100 ₽. Лутфан, маблағи на камтар аз 100 ₽ ворид кунед.",
+        "topup_amount_too_high": "Маблағи максималии пуркунӣ: 100 000 ₽. Лутфан, маблағи хурдтар ворид кунед.",
         "topup_invoice_title": "Пур кардани балланси Atlas Secure",
         "topup_invoice_description": "Пур кардани балланс ба {amount} ₽",
         "topup_invoice_label": "Пур кардани балланс",
         "topup_balance_success": "✅ Балланс пур карда шуд\n\nДар ҳисоб: {balance:.2f} ₽",
         "error_invalid_amount": "Маблағи нодуруст",
+        "error_profile_load": "Хатогии бор кардани профил. Лутфан, дертар кӯшиш кунед.",
+        "insufficient_balance_for_subscription": "Дар балланс маблағ кофӣ нест.\n\nНарх: {amount:.2f} ₽\nДар балланс: {balance:.2f} ₽\nКам: {shortage:.2f} ₽",
+        "pay_with_card": "💳 Бо корт пардохт кардан",
         "subscription_history": "📄 Таърихи обунаҳо",
         "subscription_history_empty": "Таърихи обунаҳо холӣ аст",
         "subscription_history_action_purchase": "Харид",
