@@ -60,7 +60,20 @@ async def fast_expiry_cleanup_task():
                 expires_at = row["expires_at"]
                 
                 try:
+                    # ЗАЩИТА: Проверяем что подписка действительно истекла
+                    if expires_at >= datetime.now():
+                        logger.warning(
+                            f"Fast cleanup: Subscription for user {telegram_id} with UUID {uuid} "
+                            f"has expires_at={expires_at.isoformat()} >= now, skipping"
+                        )
+                        continue
+                    
                     # ATOMIC LOGIC: СНАЧАЛА удаляем UUID из Xray API
+                    logger.info(
+                        f"Fast cleanup: REMOVING_UUID [action=expire, user={telegram_id}, uuid={uuid}, "
+                        f"expires_at={expires_at.isoformat()}]"
+                    )
+                    
                     await vpn_utils.remove_vless_user(uuid)
                     
                     # ТОЛЬКО если API ответил успехом - очищаем БД
@@ -69,12 +82,21 @@ async def fast_expiry_cleanup_task():
                         async with conn.transaction():
                             # Проверяем, что UUID всё ещё существует (защита от race condition)
                             check_row = await conn.fetchrow(
-                                "SELECT uuid FROM subscriptions WHERE telegram_id = $1 AND uuid = $2 AND status = 'active'",
+                                "SELECT uuid, expires_at FROM subscriptions WHERE telegram_id = $1 AND uuid = $2 AND status = 'active'",
                                 telegram_id, uuid
                             )
                             
                             if check_row:
-                                # UUID всё ещё существует - помечаем как expired
+                                # Дополнительная проверка: убеждаемся что подписка действительно истекла
+                                check_expires_at = check_row["expires_at"]
+                                if check_expires_at >= datetime.now():
+                                    logger.warning(
+                                        f"Fast cleanup: Subscription for user {telegram_id} was renewed, "
+                                        f"expires_at={check_expires_at.isoformat()}, skipping cleanup"
+                                    )
+                                    continue
+                                
+                                # UUID всё ещё существует и подписка истекла - помечаем как expired
                                 await conn.execute(
                                     """UPDATE subscriptions 
                                        SET status = 'expired', uuid = NULL, vpn_key = NULL 
@@ -87,13 +109,31 @@ async def fast_expiry_cleanup_task():
                                 await database._log_audit_event_atomic(conn, "uuid_fast_deleted", config.ADMIN_TELEGRAM_ID, telegram_id, 
                                     f"Fast-deleted expired UUID {uuid}, expired_at={expires_at.isoformat()}")
                                 
-                                logger.info(f"Fast cleanup: Deleted UUID {uuid} for expired subscription, user {telegram_id}, expired_at={expires_at}")
+                                logger.info(
+                                    f"Fast cleanup: EXPIRED_SUBSCRIPTION [action=expire_success, user={telegram_id}, "
+                                    f"uuid={uuid}, expired_at={expires_at.isoformat()}]"
+                                )
                             else:
-                                logger.debug(f"Fast cleanup: UUID {uuid} for user {telegram_id} was already cleaned up (race condition)")
+                                logger.debug(
+                                    f"Fast cleanup: UUID_ALREADY_CLEANED [action=expire_race, user={telegram_id}, "
+                                    f"uuid={uuid}] - race condition"
+                                )
                     
+                except ValueError as e:
+                    # VPN API не настроен - логируем и пропускаем
+                    if "VPN API is not configured" in str(e):
+                        logger.warning(
+                            f"Fast cleanup: VPN_API_DISABLED [action=expire_skipped, user={telegram_id}, "
+                            f"uuid={uuid}] - VPN API not configured, cannot remove UUID"
+                        )
+                    else:
+                        logger.error(f"Fast cleanup: Error cleaning up UUID {uuid} for user {telegram_id}: {e}", exc_info=True)
                 except Exception as e:
                     # При любой ошибке НЕ чистим БД - повторим в следующем цикле
-                    logger.error(f"Fast cleanup: Error cleaning up UUID {uuid} for user {telegram_id}: {e}", exc_info=True)
+                    logger.error(
+                        f"Fast cleanup: ERROR_REMOVING_UUID [action=expire_failed, user={telegram_id}, "
+                        f"uuid={uuid}, error={str(e)}]"
+                    )
                     logger.warning(f"Fast cleanup: Will retry UUID {uuid} for user {telegram_id} in next cycle")
             
         except asyncio.CancelledError:

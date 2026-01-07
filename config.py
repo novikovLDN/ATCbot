@@ -44,18 +44,19 @@ VPN_KEYS_FILE = "vpn_keys.txt"
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)
 TG_PROVIDER_TOKEN = os.getenv("TG_PROVIDER_TOKEN", "")
 
-# Xray Core API Configuration (REQUIRED)
-XRAY_API_URL = os.getenv("XRAY_API_URL")
-if not XRAY_API_URL:
-    print("ERROR: XRAY_API_URL environment variable is not set!", file=sys.stderr)
-    print("XRAY_API_URL is required for VPN operations (VLESS + REALITY)", file=sys.stderr)
-    sys.exit(1)
+# Xray Core API Configuration (OPTIONAL - бот работает без VPN API, но VPN-операции блокируются)
+XRAY_API_URL = os.getenv("XRAY_API_URL", "")
+XRAY_API_KEY = os.getenv("XRAY_API_KEY", "")
 
-XRAY_API_KEY = os.getenv("XRAY_API_KEY")
-if not XRAY_API_KEY:
-    print("ERROR: XRAY_API_KEY environment variable is not set!", file=sys.stderr)
-    print("XRAY_API_KEY is required for Xray API authentication", file=sys.stderr)
-    sys.exit(1)
+# Флаг доступности VPN API
+VPN_ENABLED = bool(XRAY_API_URL and XRAY_API_KEY)
+
+if not VPN_ENABLED:
+    print("WARNING: XRAY_API_URL or XRAY_API_KEY is not set!", file=sys.stderr)
+    print("WARNING: VPN operations will be BLOCKED until XRAY_API_URL and XRAY_API_KEY are configured", file=sys.stderr)
+    print("WARNING: Bot will continue running, but subscriptions cannot be activated", file=sys.stderr)
+else:
+    print("INFO: VPN API configured successfully (VLESS + REALITY)", file=sys.stderr)
 
 # Xray VLESS REALITY Server Constants (REQUIRED)
 # Эти параметры используются для генерации VLESS ссылок

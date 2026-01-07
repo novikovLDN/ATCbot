@@ -1219,9 +1219,30 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     # Удаляем UUID из Xray API
                     try:
                         await vpn_utils.remove_vless_user(uuid)
-                        logger.info(f"Instantly disabled expired subscription for user {telegram_id}, deleted UUID={uuid}")
+                        logger.info(
+                            f"check_and_disable: REMOVED_UUID [action=expire_realtime, user={telegram_id}, "
+                            f"uuid={uuid}]"
+                        )
+                    except ValueError as e:
+                        # VPN API не настроен - логируем и помечаем как expired в БД (UUID уже неактивен)
+                        if "VPN API is not configured" in str(e):
+                            logger.warning(
+                                f"check_and_disable: VPN_API_DISABLED [action=expire_realtime_skip_remove, "
+                                f"user={telegram_id}, uuid={uuid}] - marking as expired in DB only"
+                            )
+                            # Помечаем как expired в БД, даже если не удалось удалить из VPN API
+                        else:
+                            logger.error(
+                                f"check_and_disable: ERROR_REMOVING_UUID [action=expire_realtime_failed, "
+                                f"user={telegram_id}, uuid={uuid}, error={str(e)}]"
+                            )
+                            # Не помечаем как expired если не удалось удалить - повторим в cleanup
+                            return False
                     except Exception as e:
-                        logger.error(f"Error deleting UUID {uuid} for expired subscription, user {telegram_id}: {e}")
+                        logger.error(
+                            f"check_and_disable: ERROR_REMOVING_UUID [action=expire_realtime_failed, "
+                            f"user={telegram_id}, uuid={uuid}, error={str(e)}]"
+                        )
                         # Не помечаем как expired если не удалось удалить - повторим в cleanup
                         return False
                 
@@ -1555,61 +1576,85 @@ async def grant_access(
         # STEP 2: Активная подписка - продлеваем
         # =====================================================================
         if subscription and status == "active" and uuid:
-            # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
-            subscription_end = max(expires_at, now) + duration
-            start_date = subscription.get("activated_at") or expires_at or now
-            
-            # Обновляем БД
-            await conn.execute(
-                """UPDATE subscriptions 
-                   SET expires_at = $1, 
-                       status = 'active',
-                       reminder_sent = FALSE,
-                       reminder_3d_sent = FALSE,
-                       reminder_24h_sent = FALSE,
-                       reminder_3h_sent = FALSE,
-                       reminder_6h_sent = FALSE
-                   WHERE telegram_id = $2""",
-                subscription_end, telegram_id
-            )
-            
-            # Определяем action_type для истории
-            if source == "payment":
-                history_action_type = "renewal"
-            elif source == "admin":
-                history_action_type = "admin_grant"
+            # ЗАЩИТА: Не продлеваем если UUID отсутствует (не должно быть, но на всякий случай)
+            if not uuid:
+                logger.warning(f"grant_access: Active subscription without UUID for user {telegram_id}, will create new UUID")
+                # Переходим к созданию нового UUID
             else:
-                history_action_type = source
-            
-            # Записываем в историю подписок
-            vpn_key = subscription.get("vpn_key") or subscription.get("uuid", "")
-            await _log_subscription_history_atomic(conn, telegram_id, vpn_key, start_date, subscription_end, history_action_type)
-            
-            # Audit log
-            if admin_telegram_id:
-                duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
-                details = f"Renewed access: {duration_str} via {source}, Expires: {subscription_end.isoformat()}, UUID: {uuid}"
-                await _log_audit_event_atomic(conn, "subscription_renewed", admin_telegram_id, telegram_id, details)
-            
-            logger.info(f"grant_access: RENEWED active subscription for user {telegram_id}, uuid={uuid}, source={source}, expires_at={subscription_end}")
-            
-            return {
-                "uuid": uuid,
-                "vless_url": None,  # Не новый UUID, URL не нужен
-                "subscription_end": subscription_end
-            }
+                # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
+                subscription_end = max(expires_at, now) + duration
+                start_date = subscription.get("activated_at") or expires_at or now
+                
+                # Обновляем БД
+                await conn.execute(
+                    """UPDATE subscriptions 
+                       SET expires_at = $1, 
+                           status = 'active',
+                           reminder_sent = FALSE,
+                           reminder_3d_sent = FALSE,
+                           reminder_24h_sent = FALSE,
+                           reminder_3h_sent = FALSE,
+                           reminder_6h_sent = FALSE
+                       WHERE telegram_id = $2""",
+                    subscription_end, telegram_id
+                )
+                
+                # Определяем action_type для истории
+                if source == "payment":
+                    history_action_type = "renewal"
+                elif source == "admin":
+                    history_action_type = "admin_grant"
+                else:
+                    history_action_type = source
+                
+                # Записываем в историю подписок
+                vpn_key = subscription.get("vpn_key") or subscription.get("uuid", "")
+                await _log_subscription_history_atomic(conn, telegram_id, vpn_key, start_date, subscription_end, history_action_type)
+                
+                # Audit log
+                if admin_telegram_id:
+                    duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
+                    details = f"Renewed access: {duration_str} via {source}, Expires: {subscription_end.isoformat()}, UUID: {uuid}"
+                    await _log_audit_event_atomic(conn, "subscription_renewed", admin_telegram_id, telegram_id, details)
+                
+                logger.info(
+                    f"grant_access: RENEWED [action=renew, user={telegram_id}, uuid={uuid}, "
+                    f"subscription_end={subscription_end.isoformat()}, source={source}]"
+                )
+                
+                return {
+                    "uuid": uuid,
+                    "vless_url": None,  # Не новый UUID, URL не нужен
+                    "subscription_end": subscription_end
+                }
         
         # =====================================================================
         # STEP 3: Нет подписки или истекла - создаем новый UUID
         # =====================================================================
         
+        # ЗАЩИТА: Проверяем доступность VPN API перед созданием UUID
+        import config
+        if not config.VPN_ENABLED:
+            error_msg = (
+                f"Cannot create VPN access for user {telegram_id}: VPN API is not configured. "
+                "Please set XRAY_API_URL and XRAY_API_KEY environment variables."
+            )
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        
         # Если был старый UUID и он ещё существует - удаляем его из VPN API
         if uuid:
             try:
                 await vpn_utils.remove_vless_user(uuid)
-                logger.info(f"grant_access: Removed old UUID {uuid} for user {telegram_id} before creating new one")
+                logger.info(
+                    f"grant_access: REMOVED_OLD_UUID [action=remove_old, user={telegram_id}, "
+                    f"old_uuid={uuid}, reason=creating_new_subscription]"
+                )
             except Exception as e:
-                logger.warning(f"grant_access: Failed to remove old UUID {uuid} for user {telegram_id}: {e}")
+                logger.warning(
+                    f"grant_access: Failed to remove old UUID {uuid} for user {telegram_id}: {e}. "
+                    "Continuing with new UUID creation."
+                )
         
         # Создаем новый UUID через Xray API
         try:
@@ -1617,9 +1662,15 @@ async def grant_access(
             new_uuid = vless_result["uuid"]
             vless_url = vless_result["vless_url"]
             
-            logger.info(f"grant_access: Created new UUID {new_uuid} for user {telegram_id}, source={source}")
+            logger.info(
+                f"grant_access: CREATED_UUID [action=create, user={telegram_id}, uuid={new_uuid}, "
+                f"source={source}, vless_url_length={len(vless_url)}]"
+            )
         except Exception as e:
-            logger.error(f"grant_access: Failed to create VLESS user for {telegram_id}, source={source}: {e}")
+            logger.error(
+                f"grant_access: FAILED_CREATE_UUID [action=create_failed, user={telegram_id}, "
+                f"source={source}, error={str(e)}]"
+            )
             raise Exception(f"Failed to create VPN access: {e}") from e
         
         # Вычисляем даты
@@ -1670,7 +1721,11 @@ async def grant_access(
             details = f"Granted {duration_str} access via {source}, Expires: {subscription_end.isoformat()}, UUID: {new_uuid}"
             await _log_audit_event_atomic(conn, "subscription_created", admin_telegram_id, telegram_id, details)
         
-        logger.info(f"grant_access: CREATED new subscription for user {telegram_id}, uuid={new_uuid}, source={source}, expires_at={subscription_end}")
+        logger.info(
+            f"grant_access: CREATED_SUBSCRIPTION [action=create, user={telegram_id}, uuid={new_uuid}, "
+            f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
+            f"source={source}, duration_days={duration.days}]"
+        )
         
         return {
             "uuid": new_uuid,
