@@ -2817,6 +2817,43 @@ async def revoke_vip_status(telegram_id: int, revoked_by: int) -> bool:
 # ФИНАНСОВАЯ АНАЛИТИКА
 # ============================================================================
 
+async def get_total_revenue() -> float:
+    """
+    Получить общий доход от всех успешных платежей
+    
+    Returns:
+        Общий доход в рублях (только утвержденные платежи)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Суммируем все утвержденные платежи
+        total_kopecks = await conn.fetchval(
+            """SELECT COALESCE(SUM(amount), 0) 
+               FROM payments 
+               WHERE status = 'approved'"""
+        ) or 0
+        
+        return total_kopecks / 100.0  # Конвертируем из копеек в рубли
+
+
+async def get_paying_users_count() -> int:
+    """
+    Получить количество платящих пользователей
+    
+    Returns:
+        Количество уникальных пользователей с хотя бы одним утвержденным платежом
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            """SELECT COUNT(DISTINCT telegram_id) 
+               FROM payments 
+               WHERE status = 'approved'"""
+        ) or 0
+        
+        return count
+
+
 async def get_user_ltv(telegram_id: int) -> float:
     """
     Получить LTV (Lifetime Value) пользователя
@@ -2868,18 +2905,18 @@ async def get_average_ltv() -> float:
         return avg_ltv / 100.0  # Конвертируем из копеек в рубли
 
 
-async def get_arpu() -> Dict[str, Any]:
+async def get_arpu() -> float:
     """
     Получить ARPU (Average Revenue Per User)
     
-    ARPU = общий доход / количество активных пользователей
+    ARPU = общий доход / количество платящих пользователей
     
     Returns:
-        Словарь с ключами: arpu, total_revenue, active_users_count
+        ARPU в рублях
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Общий доход (только утвержденные платежи за подписки)
+        # Общий доход (только утвержденные платежи)
         total_revenue_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(amount), 0) 
                FROM payments 
@@ -2888,21 +2925,42 @@ async def get_arpu() -> Dict[str, Any]:
         
         total_revenue = total_revenue_kopecks / 100.0
         
-        # Количество активных пользователей (с активной подпиской)
-        active_users_count = await conn.fetchval(
+        # Количество платящих пользователей
+        paying_users_count = await conn.fetchval(
             """SELECT COUNT(DISTINCT telegram_id) 
-               FROM subscriptions 
-               WHERE expires_at > NOW()"""
+               FROM payments 
+               WHERE status = 'approved'"""
         ) or 0
         
-        # ARPU = общий доход / активные пользователи
-        arpu = total_revenue / active_users_count if active_users_count > 0 else 0.0
+        # ARPU = общий доход / платящие пользователи
+        arpu = total_revenue / paying_users_count if paying_users_count > 0 else 0.0
         
-        return {
-            "arpu": arpu,
-            "total_revenue": total_revenue,
-            "active_users_count": active_users_count
-        }
+        return arpu
+
+
+async def get_ltv() -> float:
+    """
+    Получить средний LTV (Lifetime Value) по всем платящим пользователям
+    
+    LTV = средняя сумма всех платежей пользователя за подписки
+    
+    Returns:
+        Средний LTV в рублях
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Получаем средний LTV через агрегацию (оптимизированный запрос)
+        avg_ltv_kopecks = await conn.fetchval(
+            """SELECT COALESCE(AVG(user_total), 0)
+               FROM (
+                   SELECT telegram_id, SUM(amount) as user_total
+                   FROM payments
+                   WHERE status = 'approved'
+                   GROUP BY telegram_id
+               ) as user_ltvs"""
+        ) or 0
+        
+        return avg_ltv_kopecks / 100.0  # Конвертируем из копеек в рубли
 
 
 async def get_referral_analytics() -> Dict[str, Any]:

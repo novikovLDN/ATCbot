@@ -2720,68 +2720,42 @@ async def callback_admin_stats(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin:analytics")
 async def callback_admin_analytics(callback: CallbackQuery):
-    """Финансовая аналитика (LTV / ARPU / Реферальная аналитика)"""
+    """📊 Финансовая аналитика - базовые метрики"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
     
     try:
-        # Получаем метрики
-        avg_ltv = await database.get_average_ltv()
-        arpu_data = await database.get_arpu()
-        referral_analytics = await database.get_referral_analytics()
-        daily_summary = await database.get_daily_summary()
+        # Получаем базовые метрики (оптимизированные запросы)
+        total_revenue = await database.get_total_revenue()
+        paying_users_count = await database.get_paying_users_count()
+        arpu = await database.get_arpu()
+        avg_ltv = await database.get_ltv()
         
-        # Получаем общую статистику
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            total_users = await conn.fetchval("SELECT COUNT(*) FROM users") or 0
-            active_subscriptions = await conn.fetchval(
-                "SELECT COUNT(*) FROM subscriptions WHERE expires_at > NOW()"
-            ) or 0
-            paying_users = await conn.fetchval(
-                "SELECT COUNT(DISTINCT telegram_id) FROM payments WHERE status = 'approved'"
-            ) or 0
-        
-        # Формируем отчет
+        # Формируем отчет (краткий и понятный)
         text = (
             f"📊 Финансовая аналитика\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"💰 LTV (Lifetime Value)\n"
+            f"💰 Общий доход\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"   Средний LTV: {avg_ltv:.2f} ₽\n"
-            f"   Платящих пользователей: {paying_users}\n\n"
+            f"   {total_revenue:,.2f} ₽\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👥 Платящие пользователи\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"   {paying_users_count} чел.\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📈 ARPU (Average Revenue Per User)\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"   ARPU: {arpu_data['arpu']:.2f} ₽\n"
-            f"   Общий доход: {arpu_data['total_revenue']:.2f} ₽\n"
-            f"   Активных пользователей: {arpu_data['active_users_count']}\n\n"
+            f"   {arpu:,.2f} ₽\n\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🤝 Реферальная аналитика\n"
+            f"💎 Средний LTV (Lifetime Value)\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"   Доход от рефералов: {referral_analytics['referral_revenue']:.2f} ₽\n"
-            f"   Выплачено кешбэка: {referral_analytics['cashback_paid']:.2f} ₽\n"
-            f"   Чистая прибыль: {referral_analytics['net_profit']:.2f} ₽\n"
-            f"   Приглашено пользователей: {referral_analytics['referred_users_count']}\n"
-            f"   Активных рефералов: {referral_analytics['active_referrals']}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 Сегодня ({daily_summary['date']})\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"   Доход: {daily_summary['revenue']:.2f} ₽\n"
-            f"   Платежей: {daily_summary['payments_count']}\n"
-            f"   Новых пользователей: {daily_summary['new_users']}\n"
-            f"   Новых подписок: {daily_summary['new_subscriptions']}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📊 Общая статистика\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"   Всего пользователей: {total_users}\n"
-            f"   Активных подписок: {active_subscriptions}\n"
+            f"   {avg_ltv:,.2f} ₽\n"
         )
         
-        # Клавиатура с опциями
+        # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📅 Ежемесячная сводка", callback_data="admin:analytics:monthly")],
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:analytics")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
         ])
         
@@ -2798,6 +2772,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
         
     except Exception as e:
         logger.exception(f"Error in admin analytics: {e}")
+        await callback.answer("Ошибка загрузки аналитики", show_alert=True)
         await callback.answer("Ошибка при расчете аналитики", show_alert=True)
 
 
