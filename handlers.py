@@ -850,6 +850,10 @@ async def show_profile(message_or_query, language: str):
         logger.error(f"Invalid message_or_query type in show_profile: {type(message_or_query)}, error: {e}")
         raise
     
+    # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
+    if telegram_id:
+        await database.check_and_disable_expired_subscription(telegram_id)
+    
     try:
         # Дополнительная защита: проверка истечения подписки
         await check_subscription_expiry(telegram_id)
@@ -1029,6 +1033,8 @@ async def callback_main_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "menu_profile")
 async def callback_profile(callback: CallbackQuery, state: FSMContext):
     """Мой профиль - работает независимо от FSM состояния"""
+    # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
+    await database.check_and_disable_expired_subscription(callback.from_user.id)
     telegram_id = callback.from_user.id
     
     # Немедленная обратная связь пользователю
@@ -1845,13 +1851,17 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
         months = tariff_data["months"]
         duration = timedelta(days=months * 30)
         
-        expires_at, vpn_key, is_renewal = await database.grant_access(
+        result = await database.grant_access(
             telegram_id=telegram_id,
             duration=duration,
             source="payment",
             admin_telegram_id=None,
             admin_grant_days=None
         )
+        
+        expires_at = result["subscription_end"]
+        vpn_key = result.get("vless_url") or result["uuid"]
+        is_renewal = result.get("vless_url") is None  # Если vless_url is None, значит это продление
         
         if expires_at is None or vpn_key is None:
             logger.error(f"Failed to grant access after balance payment: user={telegram_id}")
