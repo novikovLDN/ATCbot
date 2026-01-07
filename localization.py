@@ -16,6 +16,21 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
+        "referral_program": "🤝 Пригласить друга",
+        "referral_program_text": (
+            "🤝 Пригласите друзей\n\n"
+            "Вы получаете бонусы за друзей,\n"
+            "которые оформляют подписку.\n\n"
+            "🎁 За каждого друга:\n"
+            "+7 дней доступа\n\n"
+            "🔗 Ваша реферальная ссылка:\n"
+            "{referral_link}\n\n"
+            "📊 Статистика:\n"
+            "Приглашено: {total_referred}\n"
+            "Бонусов начислено: {total_rewarded}"
+        ),
+        "copy_referral_link": "📋 Скопировать ссылку",
+        "referral_link_copied": "Ссылка отправлена",
         "back": "← Назад",
         "copy_key": "📋 Скопировать ключ",
         "go_to_connection": "🔌 Перейти к подключению",
@@ -187,6 +202,21 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
+        "referral_program": "🤝 Invite Friend",
+        "referral_program_text": (
+            "🤝 Invite Friends\n\n"
+            "You get bonuses for friends\n"
+            "who subscribe.\n\n"
+            "🎁 For each friend:\n"
+            "+7 days of access\n\n"
+            "🔗 Your referral link:\n"
+            "{referral_link}\n\n"
+            "📊 Statistics:\n"
+            "Invited: {total_referred}\n"
+            "Bonuses granted: {total_rewarded}"
+        ),
+        "copy_referral_link": "📋 Copy Link",
+        "referral_link_copied": "Link sent",
         "back": "← Back",
         "copy_key": "📋 Copy Key",
         "go_to_connection": "🔌 Go to Connection",
@@ -356,6 +386,21 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
+        "referral_program": "🤝 Do'stni taklif qilish",
+        "referral_program_text": (
+            "🤝 Do'stlaringizni taklif qiling\n\n"
+            "Siz do'stlaringiz uchun bonuslar olasiz,\n"
+            "ular obuna bo'lganda.\n\n"
+            "🎁 Har bir do'st uchun:\n"
+            "+7 kun kirish\n\n"
+            "🔗 Sizning taklif havolangiz:\n"
+            "{referral_link}\n\n"
+            "📊 Statistika:\n"
+            "Taklif qilingan: {total_referred}\n"
+            "Berilgan bonuslar: {total_rewarded}"
+        ),
+        "copy_referral_link": "📋 Havolani nusxalash",
+        "referral_link_copied": "Havola yuborildi",
         "back": "← Orqaga",
         "copy_key": "📋 Kalitni nusxalash",
         "go_to_connection": "🔌 Ulanishga o'tish",
@@ -499,6 +544,21 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
+        "referral_program": "🤝 Дӯстро даъват кардан",
+        "referral_program_text": (
+            "🤝 Дӯстони худро даъват кунед\n\n"
+            "Шумо барои дӯстоне, ки обуна мегиранд,\n"
+            "бонусҳо мегиред.\n\n"
+            "🎁 Барои ҳар як дӯст:\n"
+            "+7 рӯз дастрасӣ\n\n"
+            "🔗 Пайванди даъвати шумо:\n"
+            "{referral_link}\n\n"
+            "📊 Омори:\n"
+            "Даъват карда шуд: {total_referred}\n"
+            "Бонусҳои дода шуда: {total_rewarded}"
+        ),
+        "copy_referral_link": "📋 Пайвандро нусхабардорӣ кардан",
+        "referral_link_copied": "Пайванд фиристода шуд",
         "back": "← Бозгашт",
         "copy_key": "📋 Калидро нусхабардорӣ кардан",
         "go_to_connection": "🔌 Ба пайвандшавӣ гузаштан",
