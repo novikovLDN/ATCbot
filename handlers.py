@@ -132,15 +132,23 @@ def get_back_keyboard(language: str):
     ])
 
 
-def get_profile_keyboard(language: str, has_subscription: bool = True):
+def get_profile_keyboard(language: str, has_active_subscription: bool = False):
     """Клавиатура профиля (обновленная версия)"""
     buttons = []
     
-    # Кнопка покупки подписки (всегда показываем)
-    buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "buy_vpn"),
-        callback_data="menu_buy_vpn"
-    )])
+    # Кнопка продления или покупки подписки
+    if has_active_subscription:
+        # Если есть активная подписка - показываем кнопку продления
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "renew_subscription"),
+            callback_data="renew_same_period"
+        )])
+    else:
+        # Если нет активной подписки - показываем кнопку покупки
+        buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "buy_vpn"),
+            callback_data="menu_buy_vpn"
+        )])
     
     # Кнопка пополнения баланса (всегда показываем)
     buttons.append([InlineKeyboardButton(
@@ -148,12 +156,11 @@ def get_profile_keyboard(language: str, has_subscription: bool = True):
         callback_data="topup_balance"
     )])
     
-    if has_subscription:
-        # Кнопка копирования ключа (если есть активная подписка)
-        buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "copy_key"),
-            callback_data="copy_key"
-        )])
+    # Кнопка копирования ключа (всегда показываем)
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "copy_key"),
+        callback_data="copy_key"
+    )])
     
     # Кнопка "Назад"
     buttons.append([InlineKeyboardButton(
@@ -170,8 +177,8 @@ def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vi
     return get_profile_keyboard(language, has_subscription)
 
 
-def get_profile_keyboard(language: str):
-    """Клавиатура с кнопками профиля и инструкции (после активации)"""
+def get_profile_keyboard_old(language: str):
+    """Клавиатура с кнопками профиля и инструкции (после активации) - старая версия, переименована"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -944,10 +951,14 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
         try:
             user = await database.get_user(telegram_id)
             language = user.get("language", "ru") if user else "ru"
-            error_text = localization.get_text(language, "error_profile_load", default="Ошибка загрузки профиля. Попробуйте позже.")
+            try:
+                error_text = localization.get_text(language, "error_profile_load")
+            except KeyError:
+                logger.error(f"Missing localization key 'error_profile_load' for language '{language}'")
+                error_text = "Ошибка загрузки профиля. Попробуйте позже."
             await callback.message.answer(error_text)
-        except Exception:
-            pass
+        except Exception as e2:
+            logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
 @router.callback_query(F.data == "menu_vip_access")
@@ -1301,10 +1312,14 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
         try:
             user = await database.get_user(telegram_id)
             language = user.get("language", "ru") if user else "ru"
-            error_text = localization.get_text(language, "error_profile_load", default="Ошибка загрузки профиля. Попробуйте позже.")
+            try:
+                error_text = localization.get_text(language, "error_profile_load")
+            except KeyError:
+                logger.error(f"Missing localization key 'error_profile_load' for language '{language}'")
+                error_text = "Ошибка загрузки профиля. Попробуйте позже."
             await callback.message.answer(error_text)
-        except Exception:
-            pass
+        except Exception as e2:
+            logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
 @router.callback_query(F.data == "back_to_main")
