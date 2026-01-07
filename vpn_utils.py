@@ -82,6 +82,16 @@ async def add_vless_user() -> Dict[str, str]:
         httpx.HTTPStatusError: При ошибках HTTP (4xx, 5xx)
         Exception: При других ошибках
     """
+    # Проверяем доступность VPN API
+    if not config.VPN_ENABLED:
+        error_msg = (
+            "VPN API is not configured. "
+            "Please set XRAY_API_URL and XRAY_API_KEY environment variables. "
+            "VPN operations are blocked until configuration is complete."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
     if not config.XRAY_API_URL:
         error_msg = "XRAY_API_URL environment variable is not set"
         logger.error(error_msg)
@@ -175,6 +185,15 @@ async def remove_vless_user(uuid: str) -> None:
         Функция НЕ игнорирует ошибки. Если удаление не удалось,
         будет выброшено исключение.
     """
+    # Проверяем доступность VPN API
+    if not config.VPN_ENABLED:
+        error_msg = (
+            f"VPN API is not configured. Cannot remove UUID {uuid}. "
+            "Please set XRAY_API_URL and XRAY_API_KEY environment variables."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
     if not config.XRAY_API_URL:
         error_msg = "XRAY_API_URL environment variable is not set"
         logger.error(error_msg)
