@@ -97,6 +97,12 @@ async def init_db():
         except Exception:
             pass
         
+        # Миграция: добавляем поле для защиты от повторного автопродления
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_auto_renewal_at TIMESTAMP")
+        except Exception:
+            pass
+        
         # Миграция: добавляем last_notification_sent_at для автопродления
         try:
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_notification_sent_at TIMESTAMP")
@@ -531,6 +537,8 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
                 transaction_type = "subscription_payment"
                 if source == "admin" or source == "admin_adjustment":
                     transaction_type = "admin_adjustment"
+                elif source == "auto_renew":
+                    transaction_type = "subscription_payment"  # Автопродление - это тоже оплата подписки
                 elif source == "refund":
                     transaction_type = "topup"  # Возврат средств
                 
