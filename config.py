@@ -38,7 +38,7 @@ SBP_DETAILS = {
 SUPPORT_EMAIL = "support@example.com"
 SUPPORT_TELEGRAM = "@support"
 
-# Файл с VPN-ключами
+# Файл с VPN-ключами (DEPRECATED - больше не используется, ключи создаются через Xray API)
 VPN_KEYS_FILE = "vpn_keys.txt"
 
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)

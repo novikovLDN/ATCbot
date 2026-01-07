@@ -1266,7 +1266,11 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить активную подписку пользователя
     
-    Активной считается подписка, у которой expires_at > текущего времени.
+    Активной считается подписка, у которой:
+    - status = 'active'
+    - expires_at > текущего времени
+    
+    НЕ фильтрует по source (payment/admin/test) - все подписки равны.
     
     Перед возвратом проверяет и отключает истёкшие подписки.
     """
@@ -1277,7 +1281,7 @@ async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     async with pool.acquire() as conn:
         now = datetime.now()
         row = await conn.fetchrow(
-            "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
+            "SELECT * FROM subscriptions WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2",
             telegram_id, now
         )
         return dict(row) if row else None

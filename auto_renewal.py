@@ -30,7 +30,8 @@ async def process_auto_renewals(bot: Bot):
             """SELECT s.*, u.language, u.balance
                FROM subscriptions s
                JOIN users u ON s.telegram_id = u.telegram_id
-               WHERE s.expires_at <= $1 
+               WHERE s.status = 'active'
+               AND s.expires_at <= $1 
                AND s.expires_at > $2
                AND s.auto_renew = TRUE
                AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '1 day')""",

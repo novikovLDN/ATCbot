@@ -104,7 +104,7 @@ async def add_vless_user() -> Dict[str, str]:
     
     url = f"{config.XRAY_API_URL.rstrip('/')}/add-user"
     headers = {
-        "Authorization": f"Bearer {config.XRAY_API_KEY}",
+        "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
     }
     
@@ -116,19 +116,24 @@ async def add_vless_user() -> Dict[str, str]:
             # Проверяем статус ответа
             response.raise_for_status()
             
-            # Парсим JSON ответ (API возвращает только UUID)
+            # Парсим JSON ответ (API возвращает uuid и vless_link)
             data = response.json()
             
             # Валидируем структуру ответа
             uuid = data.get("uuid")
+            vless_link = data.get("vless_link")
             
             if not uuid:
                 error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            # Генерируем VLESS URL локально на основе UUID + серверных констант
-            vless_url = generate_vless_url(str(uuid))
+            # Используем vless_link из ответа API, если есть, иначе генерируем локально
+            if vless_link:
+                vless_url = vless_link
+            else:
+                # Генерируем VLESS URL локально на основе UUID + серверных констант (fallback)
+                vless_url = generate_vless_url(str(uuid))
             
             logger.info(f"VLESS user created successfully: uuid={uuid}, vless_url generated locally")
             
@@ -211,7 +216,7 @@ async def remove_vless_user(uuid: str) -> None:
     
     url = f"{config.XRAY_API_URL.rstrip('/')}/remove-user"
     headers = {
-        "Authorization": f"Bearer {config.XRAY_API_KEY}",
+        "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
     }
     payload = {

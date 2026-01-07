@@ -1122,13 +1122,14 @@ async def callback_renew_same_period(callback: CallbackQuery):
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
     
-    # Проверяем наличие подписки (активной или истекшей) - по требованиям продление работает для status=active ИЛИ status=expired
-    subscription = await database.get_subscription_any(telegram_id)
+    # Проверяем наличие АКТИВНОЙ подписки (status=active AND expires_at>now)
+    # Продление работает для ЛЮБОЙ активной подписки независимо от source (payment/admin/test)
+    subscription = await database.get_subscription(telegram_id)
     if not subscription:
         try:
-            error_text = localization.get_text(language, "no_active_subscription", default="Подписка не найдена.")
+            error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
         except (KeyError, TypeError):
-            error_text = "Подписка не найдена."
+            error_text = "Активная подписка не найдена."
         await callback.message.answer(error_text)
         return
     
