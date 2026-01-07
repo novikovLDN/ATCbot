@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 
 # Функция send_vpn_keys_alert удалена - больше не используется
-# VPN-ключи теперь создаются динамически через Outline API, лимита нет
+# VPN-ключи теперь создаются динамически через Xray API, лимита нет
 
 def get_language_keyboard():
     """Клавиатура для выбора языка"""
@@ -1456,35 +1456,19 @@ async def callback_copy_key(callback: CallbackQuery):
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
     
-    # Получаем подписку
+    # Получаем активную подписку (проверка через subscriptions)
     subscription = await database.get_subscription(telegram_id)
     
     if not subscription or not subscription.get("vpn_key"):
-        await callback.message.answer(
-            localization.get_text(language, "error_no_active_subscription", default="Активная подписка не найдена.")
-        )
-        return
-    
-    # Отправляем ключ отдельным сообщением в простом формате
-    vpn_key = subscription["vpn_key"]
-    key_text = localization.get_text(language, "access_key_label", default="Ключ доступа:") + f"\n\n<code>{vpn_key}</code>"
-    
-    await callback.message.answer(key_text, parse_mode="HTML")
-    
-    # Проверяем, что у пользователя есть активная подписка
-    subscription = await database.get_subscription(telegram_id)
-    
-    if not subscription:
-        text = localization.get_text(language, "no_active_subscription")
-        await callback.message.answer(text)
+        error_text = localization.get_text(language, "error_no_active_subscription", default="Активная подписка не найдена.")
+        logger.warning(f"copy_key: No active subscription or vpn_key for user {telegram_id}")
+        await callback.message.answer(error_text)
         return
     
     # Отправляем VPN-ключ отдельным сообщением
     vpn_key = subscription["vpn_key"]
-    await callback.message.answer(
-    f"<code>{vpn_key}</code>",
-    parse_mode="HTML"
-)
+    key_text = localization.get_text(language, "access_key_label", default="Ключ доступа:") + f"\n\n<code>{vpn_key}</code>"
+    await callback.message.answer(key_text, parse_mode="HTML")
 
 @router.callback_query(F.data == "copy_vpn_key")
 async def callback_copy_vpn_key(callback: CallbackQuery):
@@ -1496,14 +1480,15 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
     
-    # Получаем VPN-ключ из активной подписки
+    # Получаем VPN-ключ из активной подписки (проверка через subscriptions)
     subscription = await database.get_subscription(telegram_id)
     
-    if not subscription:
+    if not subscription or not subscription.get("vpn_key"):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
-        text = localization.get_text(language, "no_active_subscription")
-        await callback.message.answer(text)
+        error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
+        logger.warning(f"copy_vpn_key: No active subscription or vpn_key for user {telegram_id}")
+        await callback.message.answer(error_text)
         return
     
     # Отправляем VPN-ключ отдельным сообщением в формате HTML для копирования
@@ -2565,7 +2550,7 @@ async def approve_payment(callback: CallbackQuery):
         tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
         
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
-        # VPN-ключ создается через Outline API
+        # VPN-ключ создается через Xray API
         admin_telegram_id = callback.from_user.id
         result = await database.approve_payment_atomic(payment_id, tariff_data["months"], admin_telegram_id)
         expires_at, is_renewal, vpn_key = result
