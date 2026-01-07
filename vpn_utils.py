@@ -303,17 +303,16 @@ async def remove_vless_user(uuid: str) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    url = f"{api_url}/remove-user"
+    # Используем формат /remove-user/{uuid} (UUID в пути, не в body)
+    uuid_clean = uuid.strip()
+    url = f"{api_url}/remove-user/{uuid_clean}"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
     }
-    payload = {
-        "uuid": uuid.strip()
-    }
     
     # Безопасное логирование UUID
-    uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+    uuid_preview = f"{uuid_clean[:8]}..." if uuid_clean and len(uuid_clean) > 8 else (uuid_clean or "N/A")
     logger.info(f"vpn_api remove_user: START [uuid={uuid_preview}, url={url}]")
     
     last_exception = None
@@ -327,7 +326,7 @@ async def remove_vless_user(uuid: str) -> None:
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
                 logger.debug(f"vpn_api remove_user: ATTEMPT [uuid={uuid_preview}, attempt={attempt + 1}/{MAX_RETRIES + 1}]")
-                response = await client.post(url, headers=headers, json=payload)
+                response = await client.post(url, headers=headers)
                 
                 # Логируем статус ответа
                 logger.info(f"vpn_api remove_user: RESPONSE [uuid={uuid_preview}, status={response.status_code}, attempt={attempt + 1}]")
