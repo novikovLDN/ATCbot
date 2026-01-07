@@ -2119,10 +2119,15 @@ async def process_successful_payment(message: Message):
         
         logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_key}, amount={payment_amount}")
         
-        # Начисляем реферальный кешбэк после первой успешной оплаты
+        # Начисляем реферальный кешбэк при КАЖДОЙ успешной оплате подписки
+        # Кешбэк начисляется ТОЛЬКО с реальных платежей через Telegram Payments
+        # НЕ начисляется с:
+        #   - пополнения баланса (payload.startswith("balance_topup_"))
+        #   - оплаты с баланса (проходит через callback_tariff, не через successful_payment)
+        #   - тестовых/админских доступов (source != "payment")
         try:
             await database.process_referral_reward_cashback(telegram_id, payment_amount)
-            logger.info(f"Referral cashback processed for user {telegram_id}")
+            logger.info(f"Referral cashback processed for user {telegram_id}, payment_amount={payment_amount} RUB")
         except Exception as e:
             logger.exception(f"Error processing referral cashback for user {telegram_id}: {e}")
             # Не прерываем основной flow при ошибке начисления кешбэка
@@ -2317,14 +2322,13 @@ async def callback_instruction(callback: CallbackQuery):
 
 @router.callback_query(F.data == "menu_referral")
 async def callback_referral(callback: CallbackQuery):
-    """Реферальная программа"""
+    """Партнёрская программа - экран «Пригласить друга»"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Получаем referral_code пользователя
+    # Генерируем referral_code при первом открытии экрана, если его нет
     if not user.get("referral_code"):
-        # Генерируем код если его нет
         referral_code = database.generate_referral_code(telegram_id)
         pool = await database.get_pool()
         async with pool.acquire() as conn:
@@ -2332,49 +2336,60 @@ async def callback_referral(callback: CallbackQuery):
                 "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
                 referral_code, telegram_id
             )
+        logger.info(f"Generated referral_code for user {telegram_id}: {referral_code}")
     else:
         referral_code = user["referral_code"]
     
     # Получаем статистику
     stats = await database.get_referral_stats(telegram_id)
+    total_referred = stats["total_referred"]
     
-    # Определяем уровень реферала
-    referral_level = await database.update_referral_level(telegram_id)
-    level_text = "VIP (20%)" if referral_level == "vip" else "Base (10%)"
+    # Определяем текущий уровень кешбэка (прогрессивная шкала)
+    cashback_percent = await database.get_referral_cashback_percent(telegram_id)
+    
+    # Получаем общую сумму заработанного кешбэка
+    total_cashback = await database.get_total_cashback_earned(telegram_id)
     
     # Получаем username бота для ссылки
     bot_username = (await callback.bot.get_me()).username
     referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
     
-    # Формируем текст
+    # Формируем текст с актуальными данными
     try:
         text = localization.get_text(
             language,
             "referral_program_text",
             referral_link=referral_link,
-            total_referred=stats["total_referred"],
-            total_rewarded=stats["total_rewarded"],
-            referral_level=level_text
+            total_referred=total_referred,
+            cashback_percent=cashback_percent,
+            total_cashback=total_cashback
         )
     except KeyError:
-        # Fallback если нет параметра referral_level
-        text = localization.get_text(
-            language,
-            "referral_program_text",
-            referral_link=referral_link,
-            total_referred=stats["total_referred"],
-            total_rewarded=stats["total_rewarded"]
+        # Fallback если локализация не поддерживает все параметры
+        text = (
+            f"🤝 Пригласить друга\n\n"
+            f"Приглашайте друзей и получайте кешбэк\n"
+            f"на баланс за их оплаты.\n\n"
+            f"📊 Статистика:\n"
+            f"Приглашено: {total_referred}\n"
+            f"Текущий уровень: {cashback_percent}%\n"
+            f"Заработано кешбэка: {total_cashback:.2f} ₽\n\n"
+            f"🔗 Ваша реферальная ссылка:\n"
+            f"{referral_link}\n\n"
+            f"💡 Уровни кешбэка:\n"
+            f"• 0-24 приглашённых → 10%\n"
+            f"• 25-49 приглашённых → 25%\n"
+            f"• 50+ приглашённых → 45%"
         )
-        text += f"\n\nВаш уровень: {level_text}"
     
     # Клавиатура
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "copy_referral_link"),
+            text=localization.get_text(language, "copy_referral_link", default="📋 Скопировать ссылку"),
             callback_data="copy_referral_link"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=localization.get_text(language, "back", default="← Назад"),
             callback_data="menu_main"
         )],
     ])
