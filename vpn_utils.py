@@ -125,12 +125,30 @@ async def add_vless_user() -> Dict[str, str]:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    # Проверяем что URL правильный (должен быть http://127.0.0.1:8000 или https://...)
+    # Проверяем что URL правильный и не является private IP
     api_url = config.XRAY_API_URL.rstrip('/')
     if not api_url.startswith('http://') and not api_url.startswith('https://'):
         error_msg = f"Invalid XRAY_API_URL format: {api_url}. Must start with http:// or https://"
         logger.error(error_msg)
         raise ValueError(error_msg)
+    
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: Запрещаем использование private IP адресов
+    # FastAPI работает только на 127.0.0.1:8000, доступ через Cloudflare Tunnel
+    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+    api_url_lower = api_url.lower()
+    for pattern in forbidden_patterns:
+        if pattern in api_url_lower:
+            error_msg = (
+                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                f"not private IP. Got: {api_url}. "
+                f"Expected format: https://api.myvpncloud.net"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+    
+    # Должен быть HTTPS для безопасности
+    if not api_url.startswith('https://'):
+        logger.warning(f"XRAY_API_URL uses HTTP instead of HTTPS: {api_url}. Consider using HTTPS for security.")
     
     url = f"{api_url}/add-user"
     headers = {
@@ -154,8 +172,12 @@ async def add_vless_user() -> Dict[str, str]:
                 logger.debug(f"vpn_api add_user: ATTEMPT [attempt={attempt + 1}/{MAX_RETRIES + 1}]")
                 response = await client.post(url, headers=headers)
                 
-                # Логируем статус ответа
-                logger.info(f"vpn_api add_user: RESPONSE [status={response.status_code}, attempt={attempt + 1}]")
+                # Логируем статус ответа и тело (для диагностики)
+                response_text_preview = response.text[:200] if response.text else "empty"
+                logger.info(
+                    f"vpn_api add_user: RESPONSE [status={response.status_code}, attempt={attempt + 1}, "
+                    f"response_preview={response_text_preview}]"
+                )
                 
                 # Проверяем статус ответа
                 if response.status_code == 401 or response.status_code == 403:
@@ -296,12 +318,25 @@ async def remove_vless_user(uuid: str) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    # Проверяем что URL правильный
+    # Проверяем что URL правильный и не является private IP
     api_url = config.XRAY_API_URL.rstrip('/')
     if not api_url.startswith('http://') and not api_url.startswith('https://'):
         error_msg = f"Invalid XRAY_API_URL format: {api_url}. Must start with http:// or https://"
         logger.error(error_msg)
         raise ValueError(error_msg)
+    
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: Запрещаем использование private IP адресов
+    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+    api_url_lower = api_url.lower()
+    for pattern in forbidden_patterns:
+        if pattern in api_url_lower:
+            error_msg = (
+                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                f"not private IP. Got: {api_url}. "
+                f"Expected format: https://api.myvpncloud.net"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
     
     # Используем формат /remove-user/{uuid} (UUID в пути, не в body)
     uuid_clean = uuid.strip()
@@ -328,8 +363,12 @@ async def remove_vless_user(uuid: str) -> None:
                 logger.debug(f"vpn_api remove_user: ATTEMPT [uuid={uuid_preview}, attempt={attempt + 1}/{MAX_RETRIES + 1}]")
                 response = await client.post(url, headers=headers)
                 
-                # Логируем статус ответа
-                logger.info(f"vpn_api remove_user: RESPONSE [uuid={uuid_preview}, status={response.status_code}, attempt={attempt + 1}]")
+                # Логируем статус ответа и тело (для диагностики)
+                response_text_preview = response.text[:200] if response.text else "empty"
+                logger.info(
+                    f"vpn_api remove_user: RESPONSE [uuid={uuid_preview}, status={response.status_code}, "
+                    f"attempt={attempt + 1}, response_preview={response_text_preview}]"
+                )
                 
                 # Проверяем статус ответа
                 if response.status_code == 401 or response.status_code == 403:

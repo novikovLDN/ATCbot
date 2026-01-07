@@ -1554,8 +1554,9 @@ async def grant_access(
     try:
         now = datetime.now()
         
-        # Логируем начало операции
-        logger.info(f"grant_access: START [user={telegram_id}, source={source}, duration_days={duration.days if duration.days > 0 else f'{int(duration.total_seconds() / 60)}m'}]")
+        # Логируем начало операции с полными данными
+        duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
+        logger.info(f"grant_access: START [telegram_id={telegram_id}, source={source}, duration={duration_str}]")
         
         # =====================================================================
         # STEP 1: Получить текущую подписку
@@ -1644,9 +1645,10 @@ async def grant_access(
                 
                 # Безопасное логирование UUID (только первые 8 символов)
                 uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+                duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
                 logger.info(
-                    f"grant_access: RENEWED [action=renew, user={telegram_id}, uuid={uuid_preview}, "
-                    f"subscription_end={subscription_end.isoformat()}, source={source}, duration_days={duration.days}]"
+                    f"grant_access: RENEWED [telegram_id={telegram_id}, uuid={uuid_preview}, "
+                    f"subscription_end={subscription_end.isoformat()}, source={source}, duration={duration_str}]"
                 )
                 
                 return {
@@ -1717,7 +1719,7 @@ async def grant_access(
             history_action_type = source
         
         # Сохраняем/обновляем подписку
-        logger.info(f"grant_access: SAVING_SUBSCRIPTION [user={telegram_id}, subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}]")
+        logger.info(f"grant_access: SAVING_SUBSCRIPTION [telegram_id={telegram_id}, subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}]")
         await conn.execute(
             """INSERT INTO subscriptions (
                    telegram_id, uuid, vpn_key, expires_at, status, source,
@@ -1743,7 +1745,7 @@ async def grant_access(
                    last_bytes = 0""",
             telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start
         )
-        logger.info(f"grant_access: SUBSCRIPTION_SAVED [user={telegram_id}]")
+        logger.info(f"grant_access: SUBSCRIPTION_SAVED [telegram_id={telegram_id}, uuid={uuid_preview}]")
         
         # Записываем в историю подписок
         await _log_subscription_history_atomic(conn, telegram_id, vless_url, subscription_start, subscription_end, history_action_type)
@@ -1758,8 +1760,9 @@ async def grant_access(
         # Безопасное логирование UUID
         uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
         logger.info(
-            f"grant_access: SUCCESS [user={telegram_id}, uuid={uuid_preview}, "
-            f"subscription_end={subscription_end.isoformat()}, source={source}]"
+            f"grant_access: SUCCESS [telegram_id={telegram_id}, uuid={uuid_preview}, "
+            f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
+            f"source={source}, duration={duration_str}]"
         )
         
         return {
