@@ -69,8 +69,10 @@ async def fast_expiry_cleanup_task():
                         continue
                     
                     # ATOMIC LOGIC: СНАЧАЛА удаляем UUID из Xray API
+                    # Безопасное логирование UUID
+                    uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                     logger.info(
-                        f"Fast cleanup: REMOVING_UUID [action=expire, user={telegram_id}, uuid={uuid}, "
+                        f"Fast cleanup: REMOVING_UUID [action=expire, user={telegram_id}, uuid={uuid_preview}, "
                         f"expires_at={expires_at.isoformat()}]"
                     )
                     
@@ -109,9 +111,11 @@ async def fast_expiry_cleanup_task():
                                 await database._log_audit_event_atomic(conn, "uuid_fast_deleted", config.ADMIN_TELEGRAM_ID, telegram_id, 
                                     f"Fast-deleted expired UUID {uuid}, expired_at={expires_at.isoformat()}")
                                 
+                                # Безопасное логирование UUID
+                                uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                                 logger.info(
                                     f"Fast cleanup: EXPIRED_SUBSCRIPTION [action=expire_success, user={telegram_id}, "
-                                    f"uuid={uuid}, expired_at={expires_at.isoformat()}]"
+                                    f"uuid={uuid_preview}, expired_at={expires_at.isoformat()}]"
                                 )
                             else:
                                 logger.debug(

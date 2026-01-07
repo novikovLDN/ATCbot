@@ -1219,9 +1219,11 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     # Удаляем UUID из Xray API
                     try:
                         await vpn_utils.remove_vless_user(uuid)
+                        # Безопасное логирование UUID
+                        uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                         logger.info(
                             f"check_and_disable: REMOVED_UUID [action=expire_realtime, user={telegram_id}, "
-                            f"uuid={uuid}]"
+                            f"uuid={uuid_preview}]"
                         )
                     except ValueError as e:
                         # VPN API не настроен - логируем и помечаем как expired в БД (UUID уже неактивен)
@@ -1296,38 +1298,21 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
 
 
 async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tuple[datetime, bool]:
-    """Создать или продлить подписку для пользователя
-    
-    Если подписка уже существует, продлевает её срок действия.
-    Формула продления: expires_at = max(current_expires_at, now) + tariff_duration
     """
-    now = datetime.now()
-    tariff_duration = timedelta(days=months * 30)
+    DEPRECATED: Эта функция обходит grant_access() и НЕ должна использоваться.
     
-    # Получаем текущую подписку
-    current_subscription = await get_subscription(telegram_id)
+    Используйте grant_access() вместо этой функции.
+    Эта функция оставлена только для обратной совместимости и будет удалена.
     
-    if current_subscription:
-        # Продление: берем максимальное значение между текущим expires_at и now
-        current_expires_at = current_subscription["expires_at"]
-        base_date = max(current_expires_at, now)
-        expires_at = base_date + tariff_duration
-        is_renewal = True
-    else:
-        # Новая подписка
-        expires_at = now + tariff_duration
-        is_renewal = False
-    
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO subscriptions (telegram_id, vpn_key, expires_at, reminder_sent, reminder_3d_sent, reminder_24h_sent, reminder_3h_sent, reminder_6h_sent, admin_grant_days)
-               VALUES ($1, $2, $3, FALSE, FALSE, FALSE, FALSE, FALSE, NULL)
-               ON CONFLICT (telegram_id) 
-               DO UPDATE SET vpn_key = $2, expires_at = $3, reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE, reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, admin_grant_days = NULL""",
-            telegram_id, vpn_key, expires_at
-        )
-        return expires_at, is_renewal
+    Raises:
+        Exception: Всегда, так как эта функция устарела
+    """
+    error_msg = (
+        "create_subscription() is DEPRECATED and should not be used. "
+        "Use grant_access() instead. This function bypasses VPN API and UUID management."
+    )
+    logger.error(f"DEPRECATED create_subscription() called for user {telegram_id}: {error_msg}")
+    raise Exception(error_msg)
 
 
 # Функция get_free_vpn_keys_count удалена - больше не используется
@@ -1431,7 +1416,12 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                 if old_uuid:
                     try:
                         await vpn_utils.remove_vless_user(old_uuid)
-                        logger.info(f"Deleted old UUID {old_uuid} for user {telegram_id} during reissue")
+                        # Безопасное логирование UUID
+                        old_uuid_preview = f"{old_uuid[:8]}..." if old_uuid and len(old_uuid) > 8 else (old_uuid or "N/A")
+                        logger.info(
+                            f"VPN key reissue [action=remove_old, user={telegram_id}, "
+                            f"old_uuid={old_uuid_preview}, reason=reissue]"
+                        )
                     except Exception as e:
                         logger.warning(f"Failed to delete old UUID {old_uuid} for user {telegram_id}: {e}")
                         # Продолжаем, даже если не удалось удалить старый UUID
@@ -1455,11 +1445,18 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                 expires_at = subscription["expires_at"]
                 await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
                 
-                # 6. Записываем событие в audit_log
-                details = f"User {telegram_id}, Old key: {old_vpn_key[:20] if old_vpn_key else 'N/A'}..., New key: {new_vpn_key[:20]}..., Expires: {expires_at.isoformat()}"
+                # 6. Записываем событие в audit_log (безопасное логирование ключей)
+                old_key_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
+                new_key_preview = f"{new_vpn_key[:20]}..." if new_vpn_key and len(new_vpn_key) > 20 else (new_vpn_key or "N/A")
+                details = f"User {telegram_id}, Old key: {old_key_preview}, New key: {new_key_preview}, Expires: {expires_at.isoformat()}"
                 await _log_audit_event_atomic(conn, "vpn_key_reissued", admin_telegram_id, telegram_id, details)
                 
-                logger.info(f"VPN key reissued for user {telegram_id} by admin {admin_telegram_id}")
+                # Безопасное логирование UUID
+                new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+                logger.info(
+                    f"VPN key reissued [action=reissue, user={telegram_id}, admin={admin_telegram_id}, "
+                    f"new_uuid={new_uuid_preview}, expires_at={expires_at.isoformat()}]"
+                )
                 return new_vpn_key, old_vpn_key
                 
             except Exception as e:
@@ -1565,8 +1562,25 @@ async def grant_access(
         # Определяем статус подписки
         if subscription:
             expires_at = subscription.get("expires_at")
-            status = subscription.get("status", "active" if expires_at and expires_at > now else "expired")
+            db_status = subscription.get("status")
             uuid = subscription.get("uuid")
+            
+            # КРИТИЧЕСКАЯ ПРОВЕРКА: Подписка активна ТОЛЬКО если:
+            # 1. status = 'active' И
+            # 2. expires_at > now() И
+            # 3. uuid IS NOT NULL
+            is_active = (
+                db_status == "active" and
+                expires_at and
+                expires_at > now and
+                uuid is not None
+            )
+            
+            if not is_active:
+                # Подписка неактивна (истекла или нет UUID)
+                status = "expired"
+            else:
+                status = "active"
         else:
             status = None
             expires_at = None
@@ -1575,7 +1589,7 @@ async def grant_access(
         # =====================================================================
         # STEP 2: Активная подписка - продлеваем
         # =====================================================================
-        if subscription and status == "active" and uuid:
+        if subscription and status == "active" and uuid and expires_at and expires_at > now:
             # ЗАЩИТА: Не продлеваем если UUID отсутствует (не должно быть, но на всякий случай)
             if not uuid:
                 logger.warning(f"grant_access: Active subscription without UUID for user {telegram_id}, will create new UUID")
@@ -1614,12 +1628,15 @@ async def grant_access(
                 # Audit log
                 if admin_telegram_id:
                     duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
-                    details = f"Renewed access: {duration_str} via {source}, Expires: {subscription_end.isoformat()}, UUID: {uuid}"
+                    uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+                    details = f"Renewed access: {duration_str} via {source}, Expires: {subscription_end.isoformat()}, UUID: {uuid_preview}"
                     await _log_audit_event_atomic(conn, "subscription_renewed", admin_telegram_id, telegram_id, details)
                 
+                # Безопасное логирование UUID (только первые 8 символов)
+                uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                 logger.info(
-                    f"grant_access: RENEWED [action=renew, user={telegram_id}, uuid={uuid}, "
-                    f"subscription_end={subscription_end.isoformat()}, source={source}]"
+                    f"grant_access: RENEWED [action=renew, user={telegram_id}, uuid={uuid_preview}, "
+                    f"subscription_end={subscription_end.isoformat()}, source={source}, duration_days={duration.days}]"
                 )
                 
                 return {
@@ -1646,9 +1663,11 @@ async def grant_access(
         if uuid:
             try:
                 await vpn_utils.remove_vless_user(uuid)
+                # Безопасное логирование UUID
+                uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                 logger.info(
                     f"grant_access: REMOVED_OLD_UUID [action=remove_old, user={telegram_id}, "
-                    f"old_uuid={uuid}, reason=creating_new_subscription]"
+                    f"old_uuid={uuid_preview}, reason=creating_new_subscription]"
                 )
             except Exception as e:
                 logger.warning(
@@ -1662,9 +1681,11 @@ async def grant_access(
             new_uuid = vless_result["uuid"]
             vless_url = vless_result["vless_url"]
             
+            # Безопасное логирование UUID (только первые 8 символов)
+            uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
             logger.info(
-                f"grant_access: CREATED_UUID [action=create, user={telegram_id}, uuid={new_uuid}, "
-                f"source={source}, vless_url_length={len(vless_url)}]"
+                f"grant_access: CREATED_UUID [action=create, user={telegram_id}, uuid={uuid_preview}, "
+                f"source={source}, vless_url_length={len(vless_url) if vless_url else 0}]"
             )
         except Exception as e:
             logger.error(
@@ -1718,11 +1739,14 @@ async def grant_access(
         # Audit log
         if admin_telegram_id:
             duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
-            details = f"Granted {duration_str} access via {source}, Expires: {subscription_end.isoformat()}, UUID: {new_uuid}"
+            uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+            details = f"Granted {duration_str} access via {source}, Expires: {subscription_end.isoformat()}, UUID: {uuid_preview}"
             await _log_audit_event_atomic(conn, "subscription_created", admin_telegram_id, telegram_id, details)
         
+        # Безопасное логирование UUID
+        uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
         logger.info(
-            f"grant_access: CREATED_SUBSCRIPTION [action=create, user={telegram_id}, uuid={new_uuid}, "
+            f"grant_access: CREATED_SUBSCRIPTION [action=create, user={telegram_id}, uuid={uuid_preview}, "
             f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
             f"source={source}, duration_days={duration.days}]"
         )
@@ -2706,7 +2730,12 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                 expires_at = result["subscription_end"]
                 final_vpn_key = result.get("vless_url") or result["uuid"]
                 
-                logger.info(f"Admin {admin_telegram_id} granted {minutes} minutes access to user {telegram_id}, UUID: {result['uuid']}, expires_at: {expires_at}")
+                # Безопасное логирование UUID
+                uuid_preview = f"{result['uuid'][:8]}..." if result.get('uuid') and len(result['uuid']) > 8 else (result.get('uuid') or "N/A")
+                logger.info(
+                    f"Admin grant access [action=admin_grant_minutes, admin={admin_telegram_id}, user={telegram_id}, "
+                    f"minutes={minutes}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]"
+                )
                 return expires_at, final_vpn_key
                 
             except Exception as e:

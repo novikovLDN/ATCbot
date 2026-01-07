@@ -226,7 +226,9 @@ async def remove_vless_user(uuid: str) -> None:
             # Проверяем статус ответа
             response.raise_for_status()
             
-            logger.info(f"VLESS user removed successfully: uuid={uuid}")
+            # Безопасное логирование UUID
+            uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+            logger.info(f"VLESS user removed successfully: uuid={uuid_preview}")
             
     except httpx.TimeoutException as e:
         error_msg = f"Timeout while removing VLESS user uuid={uuid}: {e}"
