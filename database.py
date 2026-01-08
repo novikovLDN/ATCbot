@@ -3692,6 +3692,114 @@ async def get_referral_rewards_history_count(
         return count
 
 
+async def calculate_final_price(
+    telegram_id: int,
+    tariff: str,
+    period_days: int,
+    promo_code: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    ЕДИНАЯ ФУНКЦИЯ РАСЧЕТА ФИНАЛЬНОЙ ЦЕНЫ (SINGLE SOURCE OF TRUTH)
+    
+    Рассчитывает финальную цену тарифа с учетом всех скидок:
+    - Базовая цена из config.TARIFFS
+    - Промокод (высший приоритет)
+    - VIP-скидка 30% (если нет промокода)
+    - Персональная скидка (если нет промокода и VIP)
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        tariff: Тип тарифа ("basic" или "plus")
+        period_days: Период в днях (30, 90, 180, 365)
+        promo_code: Промокод (опционально)
+    
+    Returns:
+        {
+            "base_price_kopecks": int,      # Базовая цена в копейках
+            "discount_amount_kopecks": int, # Размер скидки в копейках
+            "final_price_kopecks": int,     # Финальная цена в копейках
+            "discount_percent": int,        # Процент скидки (0-100)
+            "discount_type": str,           # "promo", "vip", "personal", None
+            "promo_code": Optional[str],    # Промокод (если применен)
+            "is_valid": bool                # True если цена >= 64 RUB
+        }
+    
+    Raises:
+        ValueError: Если тариф или период не найдены в конфиге
+    """
+    import config
+    
+    # Проверяем валидность тарифа и периода
+    if tariff not in config.TARIFFS:
+        raise ValueError(f"Invalid tariff: {tariff}")
+    
+    if period_days not in config.TARIFFS[tariff]:
+        raise ValueError(f"Invalid period_days: {period_days} for tariff {tariff}")
+    
+    # Получаем базовую цену в рублях из конфига
+    base_price_rubles = config.TARIFFS[tariff][period_days]["price"]
+    base_price_kopecks = int(base_price_rubles * 100)
+    
+    # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
+    promo_data = None
+    if promo_code:
+        promo_data = await check_promo_code_valid(promo_code.upper())
+    
+    has_promo = promo_data is not None
+    
+    # ПРИОРИТЕТ 1: VIP-статус (только если нет промокода)
+    is_vip = await is_vip_user(telegram_id) if not has_promo else False
+    
+    # ПРИОРИТЕТ 2: Персональная скидка (только если нет промокода и VIP)
+    personal_discount = None
+    if not has_promo and not is_vip:
+        personal_discount = await get_user_discount(telegram_id)
+    
+    # Применяем скидку в порядке приоритета
+    discount_amount_kopecks = 0
+    discount_percent = 0
+    discount_type = None
+    final_price_kopecks = base_price_kopecks
+    
+    if has_promo:
+        discount_percent = promo_data["discount_percent"]
+        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
+        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
+        discount_type = "promo"
+        applied_promo_code = promo_code.upper()
+    elif is_vip:
+        discount_percent = 30
+        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
+        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
+        discount_type = "vip"
+        applied_promo_code = None
+    elif personal_discount:
+        discount_percent = personal_discount["discount_percent"]
+        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
+        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
+        discount_type = "personal"
+        applied_promo_code = None
+    else:
+        applied_promo_code = None
+    
+    # Округляем до целых копеек
+    final_price_kopecks = int(final_price_kopecks)
+    
+    # Проверяем минимальную цену (64 RUB = 6400 kopecks)
+    MIN_PRICE_KOPECKS = 6400
+    is_valid = final_price_kopecks >= MIN_PRICE_KOPECKS
+    
+    return {
+        "base_price_kopecks": base_price_kopecks,
+        "discount_amount_kopecks": discount_amount_kopecks,
+        "final_price_kopecks": final_price_kopecks,
+        "discount_percent": discount_percent,
+        "discount_type": discount_type,
+        "promo_code": applied_promo_code,
+        "is_valid": is_valid
+    }
+
+
 async def create_pending_purchase(
     telegram_id: int,
     tariff: str,  # "basic" или "plus"
