@@ -3,6 +3,7 @@ import os
 import sys
 import hashlib
 import base64
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
@@ -65,6 +66,31 @@ async def init_db():
         except Exception:
             pass
         
+        # Таблица purchases - контекст покупки для защиты от устаревших кнопок
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS purchases (
+                id SERIAL PRIMARY KEY,
+                purchase_id TEXT UNIQUE NOT NULL,
+                telegram_id BIGINT NOT NULL,
+                tariff TEXT NOT NULL,
+                months INTEGER NOT NULL,
+                price_kopecks INTEGER NOT NULL,
+                promo_code TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
+            )
+        """)
+        
+        # Создаем индексы для быстрого поиска
+        try:
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_purchases_status ON purchases(status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_purchases_telegram_id ON purchases(telegram_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_purchases_purchase_id ON purchases(purchase_id)")
+        except Exception:
+            # Индексы уже существуют или PostgreSQL не поддерживает IF NOT EXISTS для индексов
+            pass
+        
         # Таблица payments
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS payments (
@@ -73,7 +99,8 @@ async def init_db():
                 tariff TEXT NOT NULL,
                 amount INTEGER,
                 status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                purchase_id TEXT
             )
         """)
         
@@ -2865,11 +2892,129 @@ async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]
                 "purchase_id": row["purchase_id"]
             })
         
-        return {
-            "referrer_id": referrer_id,
-            "username": referrer["username"] or f"ID{referrer_id}",
-            "invited_list": invited_list
-        }
+            return {
+                "referrer_id": referrer_id,
+                "username": referrer["username"] or f"ID{referrer_id}",
+                "invited_list": invited_list
+            }
+
+
+async def create_purchase_context(
+    telegram_id: int,
+    tariff_key: str,
+    price_kopecks: int,
+    promo_code: Optional[str] = None
+) -> str:
+    """
+    Создать контекст покупки с уникальным purchase_id
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        tariff_key: Ключ тарифа (например, "1", "3", "6", "12")
+        price_kopecks: Цена в копейках
+        promo_code: Промокод (опционально)
+    
+    Returns:
+        purchase_id: Уникальный ID покупки
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Отменяем все предыдущие pending покупки этого пользователя
+        await conn.execute(
+            "UPDATE purchases SET status = 'cancelled' WHERE telegram_id = $1 AND status = 'pending'",
+            telegram_id
+        )
+        
+        # Получаем данные тарифа
+        tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+        months = tariff_data["months"]
+        
+        # Генерируем уникальный purchase_id
+        purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
+        
+        # Срок действия контекста покупки (30 минут)
+        expires_at = datetime.now() + timedelta(minutes=30)
+        
+        # Создаем запись о покупке
+        await conn.execute(
+            """INSERT INTO purchases (purchase_id, telegram_id, tariff, months, price_kopecks, promo_code, status, expires_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+            purchase_id, telegram_id, tariff_key, months, price_kopecks, promo_code, "pending", expires_at
+        )
+        
+        logger.info(f"Purchase context created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff_key}, price={price_kopecks} kopecks")
+        
+        return purchase_id
+
+
+async def validate_purchase_context(purchase_id: str, telegram_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Валидировать контекст покупки
+    
+    Args:
+        purchase_id: ID покупки
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        Словарь с данными покупки, если валидна, иначе None
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        purchase = await conn.fetchrow(
+            """SELECT * FROM purchases 
+               WHERE purchase_id = $1 AND telegram_id = $2 AND status = 'pending' AND expires_at > NOW()""",
+            purchase_id, telegram_id
+        )
+        
+        if purchase:
+            return dict(purchase)
+        else:
+            logger.warning(f"Invalid purchase context: purchase_id={purchase_id}, telegram_id={telegram_id}")
+            return None
+
+
+async def cancel_purchase_context(telegram_id: int, reason: str = "user_action") -> None:
+    """
+    Отменить все pending покупки пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        reason: Причина отмены
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE purchases SET status = 'cancelled' WHERE telegram_id = $1 AND status = 'pending'",
+            telegram_id
+        )
+        
+        if result != "UPDATE 0":
+            logger.info(f"Purchase contexts cancelled: telegram_id={telegram_id}, reason={reason}")
+
+
+async def mark_purchase_completed(purchase_id: str) -> bool:
+    """
+    Пометить покупку как выполненную
+    
+    Args:
+        purchase_id: ID покупки
+    
+    Returns:
+        True если успешно, False если покупка не найдена или уже выполнена
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE purchases SET status = 'completed' WHERE purchase_id = $1 AND status = 'pending'",
+            purchase_id
+        )
+        
+        if result == "UPDATE 1":
+            logger.info(f"Purchase marked as completed: purchase_id={purchase_id}")
+            return True
+        else:
+            logger.warning(f"Failed to mark purchase as completed: purchase_id={purchase_id}, result={result}")
+            return False
 
 
 async def get_all_users_for_export() -> list:
