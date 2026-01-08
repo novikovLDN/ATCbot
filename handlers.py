@@ -23,6 +23,10 @@ class AdminUserSearch(StatesGroup):
     waiting_for_user_id = State()
 
 
+class AdminReferralSearch(StatesGroup):
+    waiting_for_search_query = State()
+
+
 class BroadcastCreate(StatesGroup):
     waiting_for_title = State()
     waiting_for_test_type = State()
@@ -643,6 +647,7 @@ def get_admin_dashboard_keyboard():
         [InlineKeyboardButton(text="📤 Экспорт данных", callback_data="admin:export")],
         [InlineKeyboardButton(text="📣 Уведомления", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="📊 Статистика промокодов", callback_data="admin_promo_stats")],
+        [InlineKeyboardButton(text="🤝 Реферальная статистика", callback_data="admin:referral_stats")],
     ])
     return keyboard
 
@@ -3006,6 +3011,319 @@ async def callback_admin_stats(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_stats: {e}")
         await callback.answer("Ошибка при получении статистики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:referral_stats")
+async def callback_admin_referral_stats(callback: CallbackQuery):
+    """Реферальная статистика - главный экран"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        # Получаем агрегированную статистику (первые 20 рефереров, отсортированные по доходу)
+        stats_list = await database.get_admin_referral_stats(
+            search_query=None,
+            sort_by="total_revenue",
+            sort_order="DESC",
+            limit=20,
+            offset=0
+        )
+        
+        if not stats_list:
+            text = "📊 Реферальная статистика\n\nРефереры не найдены."
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            ])
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        
+        # Формируем текст со статистикой
+        text = "📊 Реферальная статистика\n\n"
+        text += f"Всего рефереров: {len(stats_list)}\n\n"
+        
+        # Показываем топ-10 рефереров
+        for idx, stat in enumerate(stats_list[:10], 1):
+            username = stat["username"]
+            invited_count = stat["invited_count"]
+            paid_count = stat["paid_count"]
+            conversion = stat["conversion_percent"]
+            revenue = stat["total_invited_revenue"]
+            cashback = stat["total_cashback_paid"]
+            cashback_percent = stat["current_cashback_percent"]
+            
+            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+            text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
+            text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
+        
+        if len(stats_list) > 10:
+            text += f"... и еще {len(stats_list) - 10} рефереров\n\n"
+        
+        # Клавиатура с кнопками фильтров и сортировки
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+            ],
+            [
+                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+            ],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        # Логируем просмотр статистики
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_referral_stats", 
+            callback.from_user.id, 
+            None, 
+            f"Admin viewed referral stats: {len(stats_list)} referrers"
+        )
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_referral_stats: {e}")
+        await callback.answer("Ошибка при получении реферальной статистики", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:referral_sort:"))
+async def callback_admin_referral_sort(callback: CallbackQuery):
+    """Сортировка реферальной статистики"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        # Извлекаем параметр сортировки
+        sort_by = callback.data.split(":")[-1]
+        
+        # Получаем статистику с новой сортировкой
+        stats_list = await database.get_admin_referral_stats(
+            search_query=None,
+            sort_by=sort_by,
+            sort_order="DESC",
+            limit=20,
+            offset=0
+        )
+        
+        if not stats_list:
+            text = "📊 Реферальная статистика\n\nРефереры не найдены."
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            ])
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        
+        # Формируем текст со статистикой
+        sort_labels = {
+            "total_revenue": "По доходу",
+            "invited_count": "По приглашениям",
+            "cashback_paid": "По кешбэку"
+        }
+        sort_label = sort_labels.get(sort_by, "По доходу")
+        
+        text = f"📊 Реферальная статистика\nСортировка: {sort_label}\n\n"
+        text += f"Всего рефереров: {len(stats_list)}\n\n"
+        
+        # Показываем топ-10 рефереров
+        for idx, stat in enumerate(stats_list[:10], 1):
+            username = stat["username"]
+            invited_count = stat["invited_count"]
+            paid_count = stat["paid_count"]
+            conversion = stat["conversion_percent"]
+            revenue = stat["total_invited_revenue"]
+            cashback = stat["total_cashback_paid"]
+            cashback_percent = stat["current_cashback_percent"]
+            
+            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+            text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
+            text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
+        
+        if len(stats_list) > 10:
+            text += f"... и еще {len(stats_list) - 10} рефереров\n\n"
+        
+        # Клавиатура с кнопками фильтров и сортировки
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+            ],
+            [
+                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+            ],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_referral_sort: {e}")
+        await callback.answer("Ошибка при сортировке статистики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:referral_search")
+async def callback_admin_referral_search(callback: CallbackQuery, state: FSMContext):
+    """Поиск реферальной статистики"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    text = "🔍 Поиск реферальной статистики\n\nВведите telegram_id или username для поиска:"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:referral_stats")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await state.set_state(AdminReferralSearch.waiting_for_search_query)
+
+
+@router.message(AdminReferralSearch.waiting_for_search_query)
+async def process_admin_referral_search(message: Message, state: FSMContext):
+    """Обработка поискового запроса"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Недостаточно прав доступа")
+        await state.clear()
+        return
+    
+    search_query = message.text.strip()
+    await state.clear()
+    
+    try:
+        # Получаем статистику с поисковым запросом
+        stats_list = await database.get_admin_referral_stats(
+            search_query=search_query,
+            sort_by="total_revenue",
+            sort_order="DESC",
+            limit=20,
+            offset=0
+        )
+        
+        if not stats_list:
+            text = f"📊 Реферальная статистика\n\nПо запросу '{search_query}' ничего не найдено."
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+            ])
+            await message.answer(text, reply_markup=keyboard)
+            return
+        
+        # Формируем текст со статистикой
+        text = f"📊 Реферальная статистика\nПоиск: '{search_query}'\n\n"
+        text += f"Найдено рефереров: {len(stats_list)}\n\n"
+        
+        # Показываем результаты поиска
+        for idx, stat in enumerate(stats_list[:10], 1):
+            username = stat["username"]
+            invited_count = stat["invited_count"]
+            paid_count = stat["paid_count"]
+            conversion = stat["conversion_percent"]
+            revenue = stat["total_invited_revenue"]
+            cashback = stat["total_cashback_paid"]
+            cashback_percent = stat["current_cashback_percent"]
+            
+            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+            text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
+            text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
+        
+        if len(stats_list) > 10:
+            text += f"... и еще {len(stats_list) - 10} рефереров\n\n"
+        
+        # Клавиатура
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+            ],
+            [
+                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+            ],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+        ])
+        
+        await message.answer(text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logging.exception(f"Error in process_admin_referral_search: {e}")
+        await message.answer("Ошибка при поиске статистики")
+
+
+@router.callback_query(F.data.startswith("admin:referral_detail:"))
+async def callback_admin_referral_detail(callback: CallbackQuery):
+    """Детальная информация по рефереру"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        # Извлекаем referrer_id
+        referrer_id = int(callback.data.split(":")[-1])
+        
+        # Получаем детальную информацию
+        detail = await database.get_admin_referral_detail(referrer_id)
+        
+        if not detail:
+            await callback.answer("Реферер не найден", show_alert=True)
+            return
+        
+        # Формируем текст с детальной информацией
+        username = detail["username"]
+        invited_list = detail["invited_list"]
+        
+        text = f"📊 Детали реферера\n\n"
+        text += f"@{username} (ID: {referrer_id})\n\n"
+        text += f"Всего приглашено: {len(invited_list)}\n\n"
+        
+        if invited_list:
+            text += "Приглашённые пользователи:\n\n"
+            for idx, invited in enumerate(invited_list[:15], 1):  # Ограничение 15 записей для читаемости
+                invited_username = invited["username"]
+                registered_at = invited["registered_at"]
+                first_payment = invited["first_payment_date"]
+                purchase_amount = invited["purchase_amount"]
+                cashback_amount = invited["cashback_amount"]
+                
+                text += f"{idx}. @{invited_username} (ID: {invited['invited_user_id']})\n"
+                text += f"   Зарегистрирован: {registered_at.strftime('%Y-%m-%d') if registered_at else 'N/A'}\n"
+                if first_payment:
+                    text += f"   Первая оплата: {first_payment.strftime('%Y-%m-%d')}\n"
+                    text += f"   Сумма: {purchase_amount:.2f} ₽ | Кешбэк: {cashback_amount:.2f} ₽\n"
+                else:
+                    text += f"   Оплаты нет\n"
+                text += "\n"
+            
+            if len(invited_list) > 15:
+                text += f"... и еще {len(invited_list) - 15} пользователей\n\n"
+        else:
+            text += "Приглашённые пользователи отсутствуют.\n\n"
+        
+        # Клавиатура
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к статистике", callback_data="admin:referral_stats")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        # Логируем просмотр деталей
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_referral_detail", 
+            callback.from_user.id, 
+            referrer_id, 
+            f"Admin viewed referral detail for referrer_id={referrer_id}"
+        )
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_referral_detail: {e}")
+        await callback.answer("Ошибка при получении деталей", show_alert=True)
 
 
 @router.callback_query(F.data == "admin:analytics")
