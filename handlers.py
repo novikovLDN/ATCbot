@@ -2557,12 +2557,54 @@ async def process_successful_payment(message: Message):
             f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}]"
         )
         
-        # Начисляем реферальный кешбэк при успешной оплате
+        # Начисляем реферальный кешбэк при успешной активации подписки
         try:
-            await database.process_referral_reward_cashback(telegram_id, payment_amount_rubles)
-            logger.info(f"Referral cashback processed for payment: user={telegram_id}, amount={payment_amount_rubles} RUB")
+            reward_result = await database.process_referral_reward(
+                buyer_id=telegram_id,
+                purchase_id=pending_purchase.get("purchase_id"),
+                amount_rubles=payment_amount_rubles
+            )
+            
+            if reward_result.get("success"):
+                referrer_id = reward_result.get("referrer_id")
+                reward_amount = reward_result.get("reward_amount")
+                percent = reward_result.get("percent")
+                
+                logger.info(
+                    f"Referral reward processed successfully: buyer={telegram_id}, "
+                    f"referrer={referrer_id}, percent={percent}%, amount={reward_amount:.2f} RUB"
+                )
+                
+                # Отправляем уведомление рефереру
+                if referrer_id:
+                    try:
+                        referrer_user = await database.get_user(referrer_id)
+                        referrer_language = referrer_user.get("language", "ru") if referrer_user else "ru"
+                        referrer_balance = await database.get_user_balance(referrer_id)
+                        
+                        notification_text = localization.get_text(
+                            referrer_language,
+                            "referral_reward_notification",
+                            amount=reward_amount,
+                            balance=referrer_balance,
+                            default=f"🔥 Вам начислен реферальный кешбэк!\n\nВаш друг оформил подписку.\n💰 Начислено: {reward_amount:.2f} ₽\nБаланс: {referrer_balance:.2f} ₽"
+                        )
+                        
+                        # Получаем bot из message
+                        bot = message.bot
+                        await bot.send_message(referrer_id, notification_text)
+                        logger.info(f"Referral reward notification sent to referrer: {referrer_id}")
+                    except Exception as e:
+                        logger.exception(f"Error sending referral reward notification to referrer {referrer_id}: {e}")
+                        # Не блокируем процесс, если уведомление не отправлено
+            else:
+                logger.debug(
+                    f"Referral reward not processed: buyer={telegram_id}, "
+                    f"message={reward_result.get('message')}"
+                )
         except Exception as e:
-            logger.exception(f"Error processing referral cashback: user={telegram_id}: {e}")
+            logger.exception(f"Error processing referral reward: buyer={telegram_id}: {e}")
+            # Не блокируем процесс активации подписки при ошибке начисления кешбэка
     except Exception as e:
         logger.error(
             f"process_successful_payment: CRITICAL_ERROR [user={telegram_id}, payment_id={payment_id}, "
@@ -2848,127 +2890,249 @@ async def callback_instruction(callback: CallbackQuery):
 
 @router.callback_query(F.data == "menu_referral")
 async def callback_referral(callback: CallbackQuery):
-    """Партнёрская программа - экран «Пригласить друга»"""
+    """
+    Партнёрская программа - экран «Пригласить друга»
+    
+    КРИТИЧЕСКИ ВАЖНО:
+    - Экран должен открываться ВСЕГДА
+    - Не зависит от FSM состояния
+    - Все данные берутся из БД динамически
+    - Статистика обновляется после каждой покупки рефералом
+    """
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = "ru"
     
-    # Генерируем referral_code при первом открытии экрана, если его нет
-    if not user.get("referral_code"):
-        referral_code = database.generate_referral_code(telegram_id)
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
-                referral_code, telegram_id
-            )
-        logger.info(f"Generated referral_code for user {telegram_id}: {referral_code}")
-    else:
-        referral_code = user["referral_code"]
-    
-    # Получаем информацию об уровне и прогрессе (используем единую функцию, без дублирования)
-    level_info = await database.get_referral_level_info(telegram_id)
-    current_percent = level_info["current_level"]
-    referrals_count = level_info["referrals_count"]
-    next_level = level_info["next_level"]
-    referrals_to_next = level_info["referrals_to_next"]
-    
-    # Получаем общую сумму заработанного кешбэка
-    total_cashback = await database.get_total_cashback_earned(telegram_id)
-    
-    # Получаем username бота для ссылки
-    bot_username = (await callback.bot.get_me()).username
-    referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
-    
-    # Формируем текст с актуальными данными (без технических терминов)
     try:
-        # Пробуем использовать локализацию
-        text = localization.get_text(
+        # Получаем пользователя (если не существует - создадим позже при /start)
+        user = await database.get_user(telegram_id)
+        if user:
+            language = user.get("language", "ru")
+    except Exception as e:
+        logger.warning(f"Error getting user in referral screen: {e}, using default language")
+        # Продолжаем с языком по умолчанию
+    
+    try:
+        # Получаем информацию об уровне и прогрессе (на основе ОПЛАТИВШИХ рефералов)
+        level_info = await database.get_referral_level_info(telegram_id)
+        current_percent = level_info["current_level"]
+        referrals_count = level_info["referrals_count"]  # Всего приглашённых
+        paid_referrals_count = level_info.get("paid_referrals_count", 0)  # Оплативших
+        next_level = level_info["next_level"]
+        referrals_to_next = level_info["referrals_to_next"]
+        
+        # Получаем общую сумму заработанного кешбэка
+        total_cashback = await database.get_total_cashback_earned(telegram_id)
+        
+        # Получаем username бота для реферальной ссылки
+        bot_info = await callback.bot.get_me()
+        bot_username = bot_info.username
+        # Реферальная ссылка: https://t.me/<bot_username>?start=ref_<telegram_id>
+        referral_link = f"https://t.me/{bot_username}?start=ref_{telegram_id}"
+        
+        # Формируем текст согласно требованиям
+        try:
+            # Используем новую локализацию
+            text = localization.get_text(
+                language,
+                "referral_program_screen",
+                cashback_percent=current_percent,
+                invited_count=referrals_count,
+                paid_count=paid_referrals_count,
+                total_cashback=total_cashback,
+                referral_link=referral_link,
+                default=(
+                    f"👥 Пригласить друга\n\n"
+                    f"Приглашайте друзей и получайте кешбэк\n"
+                    f"с каждой их покупки.\n\n"
+                    f"🎁 Ваш кешбэк: {current_percent}%\n"
+                    f"👤 Приглашено: {referrals_count}\n"
+                    f"💰 Заработано: {total_cashback:.2f} ₽\n\n"
+                    f"🔗 Ваша ссылка:\n{referral_link}"
+                )
+            )
+            
+            # Добавляем информацию о прогрессе до следующего уровня
+            if next_level and referrals_to_next:
+                progress_text = localization.get_text(
+                    language,
+                    "referral_level_progress",
+                    current_level=current_percent,
+                    next_level=next_level,
+                    referrals_to_next=referrals_to_next,
+                    default=f"\n\n📈 Ваш уровень: {current_percent}% кешбэка\nДо уровня {next_level}% осталось {referrals_to_next} рефералов"
+                )
+                text += progress_text
+            elif next_level is None:
+                max_level_text = localization.get_text(
+                    language,
+                    "referral_max_level",
+                    current_level=current_percent,
+                    default=f"\n\n🎉 Вы достигли максимального уровня {current_percent}%!"
+                )
+                text += max_level_text
+        except (KeyError, TypeError) as e:
+            logger.warning(f"Error using localization for referral screen: {e}, using fallback")
+            # Fallback текст
+            text = (
+                f"👥 Пригласить друга\n\n"
+                f"Приглашайте друзей и получайте кешбэк\n"
+                f"с каждой их покупки.\n\n"
+                f"🎁 Ваш кешбэк: {current_percent}%\n"
+                f"👤 Приглашено: {referrals_count}\n"
+                f"💰 Заработано: {total_cashback:.2f} ₽\n\n"
+                f"🔗 Ваша ссылка:\n{referral_link}"
+            )
+            
+            if next_level and referrals_to_next:
+                text += f"\n\n📈 Ваш уровень: {current_percent}% кешбэка\nДо уровня {next_level}% осталось {referrals_to_next} рефералов"
+            elif next_level is None:
+                text += f"\n\n🎉 Вы достигли максимального уровня {current_percent}%!"
+        
+        # Клавиатура согласно требованиям
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "copy_referral_link", default="🔗 Скопировать реферальную ссылку"),
+                callback_data="copy_referral_link"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "referral_how_it_works", default="📊 Как работает программа"),
+                callback_data="referral_how_it_works"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                callback_data="menu_main"
+            )],
+        ])
+        
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            await callback.answer()
+            
+            logger.info(
+                f"Referral screen opened: user={telegram_id}, "
+                f"invited={referrals_count}, paid={paid_referrals_count}, "
+                f"percent={current_percent}%, cashback={total_cashback:.2f} RUB"
+            )
+        except Exception as e:
+            logger.exception(f"Error editing message in referral screen: user={telegram_id}: {e}")
+            # Показываем минимальный fallback, чтобы экран всегда открывался
+            error_text = localization.get_text(
+                language,
+                "error_profile_load",
+                default="Ошибка загрузки данных. Попробуйте позже."
+            )
+            await callback.answer(error_text, show_alert=True)
+            
+    except Exception as e:
+        logger.exception(f"Error in referral screen handler: user={telegram_id}: {e}")
+        # Показываем минимальный fallback, чтобы экран всегда открывался
+        error_text = localization.get_text(
             language,
-            "referral_program_text",
-            referral_link=referral_link,
-            total_referred=referrals_count,
-            cashback_percent=current_percent,
-            total_cashback=total_cashback
+            "error_profile_load",
+            default="Ошибка загрузки данных. Попробуйте позже."
         )
-        
-        # Добавляем информацию о прогрессе до следующего уровня
-        if next_level and referrals_to_next:
-            progress_text = f"\n\n🎯 До уровня {next_level}% осталось пригласить: {referrals_to_next} друзей"
-            text += progress_text
-    except KeyError:
-        # Fallback если локализация не поддерживает все параметры
-        text = (
-            f"🤝 Пригласить друга\n\n"
-            f"Приглашайте друзей и получайте кешбэк\n"
-            f"на баланс за их оплаты.\n\n"
-            f"📊 Ваша статистика:\n"
-            f"Приглашено друзей: {referrals_count}\n"
-            f"Ваш кешбэк: {current_percent}%\n"
-            f"Заработано: {total_cashback:.2f} ₽\n"
-        )
-        
-        # Добавляем информацию о прогрессе
-        if next_level and referrals_to_next:
-            text += f"\n🎯 До уровня {next_level}% осталось: {referrals_to_next} друзей\n"
-        elif next_level is None:
-            text += f"\n🎉 Вы достигли максимального уровня!\n"
-        
-        text += (
-            f"\n🔗 Ваша ссылка:\n"
-            f"{referral_link}\n\n"
-            f"💡 Как это работает:\n"
-            f"• 0-24 друга → 10% кешбэк\n"
-            f"• 25-49 друзей → 25% кешбэк\n"
-            f"• 50+ друзей → 45% кешбэк"
-        )
-    
-    # Клавиатура
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "copy_referral_link", default="📋 Скопировать ссылку"),
-            callback_data="copy_referral_link"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "back", default="← Назад"),
-            callback_data="menu_main"
-        )],
-    ])
-    
-    await callback.message.edit_text(text, reply_markup=keyboard)
-    await callback.answer()
+        await callback.answer(error_text, show_alert=True)
 
 
 @router.callback_query(F.data == "copy_referral_link")
 async def callback_copy_referral_link(callback: CallbackQuery):
-    """Копировать реферальную ссылку"""
+    """Копировать реферальную ссылку - отправляет ссылку отдельным сообщением"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = "ru"
     
-    # Получаем referral_code
-    if not user.get("referral_code"):
-        referral_code = database.generate_referral_code(telegram_id)
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
-                referral_code, telegram_id
+    try:
+        user = await database.get_user(telegram_id)
+        if user:
+            language = user.get("language", "ru")
+    except Exception as e:
+        logger.warning(f"Error getting user in copy_referral_link: {e}")
+    
+    try:
+        # Получаем username бота для реферальной ссылки
+        bot_info = await callback.bot.get_me()
+        bot_username = bot_info.username
+        # Реферальная ссылка: https://t.me/<bot_username>?start=ref_<telegram_id>
+        referral_link = f"https://t.me/{bot_username}?start=ref_{telegram_id}"
+        
+        # Отправляем ссылку отдельным сообщением для копирования (одно нажатие в Telegram)
+        await callback.message.answer(
+            f"<code>{referral_link}</code>",
+            parse_mode="HTML"
+        )
+        
+        # Показываем toast уведомление
+        success_text = localization.get_text(
+            language,
+            "referral_link_copied",
+            default="✅ Ссылка отправлена отдельным сообщением"
+        )
+        await callback.answer(success_text, show_alert=False)
+        
+        logger.info(f"Referral link sent to user: {telegram_id}")
+        
+    except Exception as e:
+        logger.exception(f"Error in copy_referral_link handler: user={telegram_id}: {e}")
+        error_text = localization.get_text(
+            language,
+            "error_profile_load",
+            default="Ошибка загрузки данных. Попробуйте позже."
+        )
+        await callback.answer(error_text, show_alert=True)
+
+
+@router.callback_query(F.data == "referral_how_it_works")
+async def callback_referral_how_it_works(callback: CallbackQuery):
+    """Экран «Как работает программа» для реферальной программы"""
+    telegram_id = callback.from_user.id
+    language = "ru"
+    
+    try:
+        user = await database.get_user(telegram_id)
+        if user:
+            language = user.get("language", "ru")
+    except Exception as e:
+        logger.warning(f"Error getting user in referral_how_it_works: {e}")
+    
+    try:
+        # Получаем текст о том, как работает программа
+        text = localization.get_text(
+            language,
+            "referral_how_it_works_text",
+            default=(
+                "📊 Как работает реферальная программа\n\n"
+                "1. Отправьте другу вашу реферальную ссылку\n"
+                "2. Друг переходит по ссылке и регистрируется\n"
+                "3. Когда друг оплачивает подписку, вам начисляется кешбэк\n\n"
+                "🎁 Уровни кешбэка:\n"
+                "• 0-24 друга → 10% кешбэк\n"
+                "• 25-49 друзей → 25% кешбэк\n"
+                "• 50+ друзей → 45% кешбэк\n\n"
+                "💰 Кешбэк начисляется автоматически на ваш баланс\n"
+                "при каждой покупке реферала.\n\n"
+                "💡 Уровень определяется по количеству рефералов,\n"
+                "которые ХОТЯ БЫ ОДИН РАЗ оплатили подписку."
             )
-    else:
-        referral_code = user["referral_code"]
-    
-    # Получаем username бота для ссылки
-    bot_username = (await callback.bot.get_me()).username
-    referral_link = f"https://t.me/{bot_username}?start=ref_{referral_code}"
-    
-    # Отправляем ссылку отдельным сообщением для копирования
-    await callback.message.answer(
-        referral_link,
-        parse_mode="HTML"
-    )
-    
-    await callback.answer(localization.get_text(language, "referral_link_copied", default="Ссылка отправлена"))
+        )
+        
+        # Клавиатура с кнопкой "Назад"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                callback_data="menu_referral"
+            )],
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+        
+    except Exception as e:
+        logger.exception(f"Error in referral_how_it_works handler: user={telegram_id}: {e}")
+        error_text = localization.get_text(
+            language,
+            "error_profile_load",
+            default="Ошибка загрузки данных. Попробуйте позже."
+        )
+        await callback.answer(error_text, show_alert=True)
 
 
 @router.callback_query(F.data == "menu_support")
@@ -3201,7 +3365,7 @@ async def callback_admin_stats(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin:referral_stats")
 async def callback_admin_referral_stats(callback: CallbackQuery):
-    """Реферальная статистика - главный экран"""
+    """Реферальная статистика - главный экран с общей статистикой"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -3209,46 +3373,52 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
     await callback.answer()
     
     try:
-        # Получаем агрегированную статистику (первые 20 рефереров, отсортированные по доходу)
-        stats_list = await database.get_admin_referral_stats(
+        # Получаем общую статистику
+        overall_stats = await database.get_referral_overall_stats()
+        
+        # Получаем топ рефереров (первые 10, отсортированные по доходу)
+        top_referrers = await database.get_admin_referral_stats(
             search_query=None,
             sort_by="total_revenue",
             sort_order="DESC",
-            limit=20,
+            limit=10,
             offset=0
         )
         
-        if not stats_list:
-            text = "📊 Реферальная статистика\n\nРефереры не найдены."
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
-            ])
-            await callback.message.edit_text(text, reply_markup=keyboard)
-            return
+        # Формируем текст с общей статистикой
+        text = "📈 Реферальная статистика\n\n"
+        text += "📊 Общая статистика:\n"
+        text += f"• Всего рефереров: {overall_stats['total_referrers']}\n"
+        text += f"• Всего приглашённых: {overall_stats['total_referrals']}\n"
+        text += f"• Всего оплат: {overall_stats['total_paid_referrals']}\n"
+        text += f"• Общий доход: {overall_stats['total_revenue']:.2f} ₽\n"
+        text += f"• Выплачено кешбэка: {overall_stats['total_cashback_paid']:.2f} ₽\n"
+        text += f"• Средний кешбэк на реферера: {overall_stats['avg_cashback_per_referrer']:.2f} ₽\n\n"
         
-        # Формируем текст со статистикой
-        text = "📊 Реферальная статистика\n\n"
-        text += f"Всего рефереров: {len(stats_list)}\n\n"
+        # Топ рефереров
+        if top_referrers:
+            text += "🏆 Топ рефереров:\n\n"
+            for idx, stat in enumerate(top_referrers[:10], 1):
+                username = stat["username"]
+                invited_count = stat["invited_count"]
+                paid_count = stat["paid_count"]
+                conversion = stat["conversion_percent"]
+                revenue = stat["total_invited_revenue"]
+                cashback = stat["total_cashback_paid"]
+                cashback_percent = stat["current_cashback_percent"]
+                
+                text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+                text += f"   Оплативших: {paid_count} | Уровень: {cashback_percent}%\n"
+                text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽\n\n"
+        else:
+            text += "🏆 Топ рефереров:\nРефереры не найдены.\n\n"
         
-        # Показываем топ-10 рефереров
-        for idx, stat in enumerate(stats_list[:10], 1):
-            username = stat["username"]
-            invited_count = stat["invited_count"]
-            paid_count = stat["paid_count"]
-            conversion = stat["conversion_percent"]
-            revenue = stat["total_invited_revenue"]
-            cashback = stat["total_cashback_paid"]
-            cashback_percent = stat["current_cashback_percent"]
-            
-            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
-            text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
-            text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
-        
-        if len(stats_list) > 10:
-            text += f"... и еще {len(stats_list) - 10} рефереров\n\n"
-        
-        # Клавиатура с кнопками фильтров и сортировки
+        # Клавиатура с кнопками
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📋 История начислений", callback_data="admin:referral_history"),
+                InlineKeyboardButton(text="📈 Топ рефереров", callback_data="admin:referral_top")
+            ],
             [
                 InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
                 InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
@@ -3267,7 +3437,7 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
             "admin_view_referral_stats", 
             callback.from_user.id, 
             None, 
-            f"Admin viewed referral stats: {len(stats_list)} referrers"
+            f"Admin viewed referral stats: {overall_stats['total_referrers']} referrers"
         )
         
     except Exception as e:
@@ -3510,6 +3680,225 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_detail: {e}")
         await callback.answer("Ошибка при получении деталей", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:referral_history")
+async def callback_admin_referral_history(callback: CallbackQuery):
+    """История начислений реферального кешбэка"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        # Получаем историю начислений (первые 20 записей)
+        history = await database.get_referral_rewards_history(
+            date_from=None,
+            date_to=None,
+            limit=20,
+            offset=0
+        )
+        
+        # Получаем общее количество для пагинации
+        total_count = await database.get_referral_rewards_history_count()
+        
+        if not history:
+            text = "📋 История начислений\n\nНачисления не найдены."
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+            ])
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        
+        # Формируем текст с историей
+        text = "📋 История начислений\n\n"
+        text += f"Всего записей: {total_count}\n\n"
+        
+        for idx, reward in enumerate(history[:20], 1):
+            referrer = reward["referrer_username"]
+            buyer = reward["buyer_username"]
+            purchase_amount = reward["purchase_amount"]
+            percent = reward["percent"]
+            reward_amount = reward["reward_amount"]
+            created_at = reward["created_at"].strftime("%d.%m.%Y %H:%M") if reward["created_at"] else "N/A"
+            
+            text += f"{idx}. {created_at}\n"
+            text += f"   Реферер: @{referrer} (ID: {reward['referrer_id']})\n"
+            text += f"   Покупатель: @{buyer} (ID: {reward['buyer_id']})\n"
+            text += f"   Покупка: {purchase_amount:.2f} ₽ | Кешбэк: {percent}% = {reward_amount:.2f} ₽\n\n"
+        
+        if total_count > 20:
+            text += f"... и еще {total_count - 20} записей\n\n"
+        
+        # Клавиатура
+        keyboard_buttons = []
+        if total_count > 20:
+            keyboard_buttons.append([
+                InlineKeyboardButton(text="➡️ Следующие", callback_data="admin:referral_history:page:1")
+            ])
+        keyboard_buttons.append([
+            InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")
+        ])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        # Логируем просмотр истории
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_referral_history",
+            callback.from_user.id,
+            None,
+            f"Admin viewed referral history: {len(history)} records"
+        )
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_referral_history: {e}")
+        await callback.answer("Ошибка при получении истории начислений", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin:referral_history:page:"))
+async def callback_admin_referral_history_page(callback: CallbackQuery):
+    """Пагинация истории начислений"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        # Извлекаем номер страницы
+        page = int(callback.data.split(":")[-1])
+        limit = 20
+        offset = page * limit
+        
+        # Получаем историю начислений
+        history = await database.get_referral_rewards_history(
+            date_from=None,
+            date_to=None,
+            limit=limit,
+            offset=offset
+        )
+        
+        # Получаем общее количество
+        total_count = await database.get_referral_rewards_history_count()
+        total_pages = (total_count + limit - 1) // limit
+        
+        if not history:
+            text = "📋 История начислений\n\nНачисления не найдены."
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+            ])
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        
+        # Формируем текст
+        text = f"📋 История начислений (стр. {page + 1}/{total_pages})\n\n"
+        text += f"Всего записей: {total_count}\n\n"
+        
+        for idx, reward in enumerate(history, 1):
+            referrer = reward["referrer_username"]
+            buyer = reward["buyer_username"]
+            purchase_amount = reward["purchase_amount"]
+            percent = reward["percent"]
+            reward_amount = reward["reward_amount"]
+            created_at = reward["created_at"].strftime("%d.%m.%Y %H:%M") if reward["created_at"] else "N/A"
+            
+            text += f"{offset + idx}. {created_at}\n"
+            text += f"   Реферер: @{referrer} (ID: {reward['referrer_id']})\n"
+            text += f"   Покупатель: @{buyer} (ID: {reward['buyer_id']})\n"
+            text += f"   Покупка: {purchase_amount:.2f} ₽ | Кешбэк: {percent}% = {reward_amount:.2f} ₽\n\n"
+        
+        # Клавиатура с пагинацией
+        keyboard_buttons = []
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:referral_history:page:{page - 1}"))
+        if offset + limit < total_count:
+            nav_buttons.append(InlineKeyboardButton(text="➡️ Вперёд", callback_data=f"admin:referral_history:page:{page + 1}"))
+        if nav_buttons:
+            keyboard_buttons.append(nav_buttons)
+        keyboard_buttons.append([
+            InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")
+        ])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_referral_history_page: {e}")
+        await callback.answer("Ошибка при получении истории начислений", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:referral_top")
+async def callback_admin_referral_top(callback: CallbackQuery):
+    """Топ рефереров - расширенный список"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        # Получаем топ рефереров (50 лучших)
+        top_referrers = await database.get_admin_referral_stats(
+            search_query=None,
+            sort_by="total_revenue",
+            sort_order="DESC",
+            limit=50,
+            offset=0
+        )
+        
+        if not top_referrers:
+            text = "🏆 Топ рефереров\n\nРефереры не найдены."
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+            ])
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            return
+        
+        # Формируем текст
+        text = "🏆 Топ рефереров\n\n"
+        
+        for idx, stat in enumerate(top_referrers, 1):
+            username = stat["username"]
+            invited_count = stat["invited_count"]
+            paid_count = stat["paid_count"]
+            conversion = stat["conversion_percent"]
+            revenue = stat["total_invited_revenue"]
+            cashback = stat["total_cashback_paid"]
+            cashback_percent = stat["current_cashback_percent"]
+            
+            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+            text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
+            text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
+        
+        # Клавиатура
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+            ],
+            [
+                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+            ],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        # Логируем просмотр топа
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_referral_top",
+            callback.from_user.id,
+            None,
+            f"Admin viewed top referrers: {len(top_referrers)} referrers"
+        )
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_referral_top: {e}")
+        await callback.answer("Ошибка при получении топа рефереров", show_alert=True)
 
 
 @router.callback_query(F.data == "admin:analytics")

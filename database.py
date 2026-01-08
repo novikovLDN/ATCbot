@@ -268,6 +268,30 @@ async def init_db():
         except Exception:
             pass
         
+        # Таблица referral_rewards - история всех начислений реферального кешбэка
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS referral_rewards (
+                id SERIAL PRIMARY KEY,
+                referrer_id BIGINT NOT NULL,
+                buyer_id BIGINT NOT NULL,
+                purchase_id TEXT,
+                purchase_amount INTEGER NOT NULL,
+                percent INTEGER NOT NULL,
+                reward_amount INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (buyer_id, purchase_id) WHERE purchase_id IS NOT NULL
+            )
+        """)
+        
+        # Создаём индексы для быстрого поиска
+        try:
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_referrer ON referral_rewards(referrer_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_buyer ON referral_rewards(buyer_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_purchase_id ON referral_rewards(purchase_id) WHERE purchase_id IS NOT NULL")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_created_at ON referral_rewards(created_at)")
+        except Exception:
+            pass
+        
         # Таблица vpn_keys
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS vpn_keys (
@@ -957,41 +981,55 @@ async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
     """
     Получить информацию об уровне реферала и прогрессе до следующего уровня
     
+    ВАЖНО: Уровень определяется по количеству РЕФЕРАЛОВ, КОТОРЫЕ ОПЛАТИЛИ подписку
+    (не по количеству приглашённых, а по количеству оплативших)
+    
     Args:
         partner_id: Telegram ID партнёра
     
     Returns:
         Словарь с ключами:
         - current_level: текущий процент (10, 25 или 45)
-        - referrals_count: текущее количество приглашённых
+        - referrals_count: текущее количество приглашённых (из таблицы referrals)
+        - paid_referrals_count: количество рефералов, которые оплатили подписку (из referral_rewards)
         - next_level: следующий процент (25, 45 или None)
-        - referrals_to_next: сколько нужно пригласить до следующего уровня (или None)
+        - referrals_to_next: сколько нужно оплативших рефералов до следующего уровня (или None)
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Считаем количество приглашённых пользователей
+        # Считаем количество приглашённых пользователей (из таблицы referrals)
         referrals_count = await conn.fetchval(
             "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
             partner_id
         ) or 0
         
-        # Определяем текущий уровень и следующий
-        if referrals_count >= 50:
+        # Считаем количество РЕФЕРАЛОВ, КОТОРЫЕ ОПЛАТИЛИ подписку (из referral_rewards)
+        # Это важное отличие: уровень определяется по оплатившим, а не по приглашённым
+        paid_referrals_count = await conn.fetchval(
+            """SELECT COUNT(DISTINCT rr.buyer_id)
+               FROM referral_rewards rr
+               WHERE rr.referrer_id = $1""",
+            partner_id
+        ) or 0
+        
+        # Определяем текущий уровень и следующий НА ОСНОВЕ ОПЛАТИВШИХ
+        if paid_referrals_count >= 50:
             current_level = 45
             next_level = None
             referrals_to_next = None
-        elif referrals_count >= 25:
+        elif paid_referrals_count >= 25:
             current_level = 25
             next_level = 45
-            referrals_to_next = 50 - referrals_count
+            referrals_to_next = 50 - paid_referrals_count
         else:
             current_level = 10
             next_level = 25
-            referrals_to_next = 25 - referrals_count
+            referrals_to_next = 25 - paid_referrals_count
         
         return {
             "current_level": current_level,
             "referrals_count": referrals_count,
+            "paid_referrals_count": paid_referrals_count,
             "next_level": next_level,
             "referrals_to_next": referrals_to_next
         }
@@ -1022,7 +1060,23 @@ async def get_total_cashback_earned(partner_id: int) -> float:
 
 async def process_referral_reward_cashback(referred_user_id: int, payment_amount_rubles: float) -> bool:
     """
+    DEPRECATED: Используйте process_referral_reward вместо этой функции.
+    Оставлена для обратной совместимости.
+    """
+    result = await process_referral_reward(
+        buyer_id=referred_user_id,
+        purchase_id=None,
+        amount_rubles=payment_amount_rubles
+    )
+    return result.get("success", False)
+
+
+async def _process_referral_reward_cashback_OLD(referred_user_id: int, payment_amount_rubles: float) -> bool:
+    """
     Начислить кешбэк партнёру при КАЖДОЙ оплате приглашенного пользователя
+    
+    DEPRECATED: Используйте process_referral_reward вместо этой функции.
+    Оставлена для обратной совместимости.
     
     Args:
         referred_user_id: Telegram ID приглашенного пользователя, который совершил оплату
@@ -1031,75 +1085,204 @@ async def process_referral_reward_cashback(referred_user_id: int, payment_amount
     Returns:
         True если кешбэк начислен, False если партнёр не найден или ошибка
     """
+    # Вызываем новую функцию без purchase_id (для legacy поддержки)
+    result = await process_referral_reward(
+        buyer_id=referred_user_id,
+        purchase_id=None,
+        amount_rubles=payment_amount_rubles
+    )
+    return result.get("success", False)
+
+
+async def process_referral_reward(
+    buyer_id: int,
+    purchase_id: Optional[str],
+    amount_rubles: float
+) -> Dict[str, Any]:
+    """
+    Начислить реферальный кешбэк рефереру при успешной активации подписки покупателя.
+    
+    КРИТИЧЕСКИ ВАЖНО:
+    - Начисление происходит ТОЛЬКО при успешной активации подписки (source='payment')
+    - НЕ начисляется при admin-grant, test-access, free-access
+    - Защита от повторного начисления за один purchase_id
+    - Защита от самореферала
+    
+    Args:
+        buyer_id: Telegram ID покупателя, который оплатил подписку
+        purchase_id: ID покупки (для защиты от повторного начисления). Если None - начисление происходит без защиты
+        amount_rubles: Сумма оплаты в рублях
+    
+    Returns:
+        Словарь с результатом:
+        {
+            "success": bool,
+            "referrer_id": Optional[int],
+            "percent": Optional[int],
+            "reward_amount": Optional[float],
+            "message": str
+        }
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Получаем партнёра (реферера) для этого пользователя
+                # 1. Получаем реферера покупателя
                 user = await conn.fetchrow(
-                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1", referred_user_id
+                    "SELECT referrer_id FROM users WHERE telegram_id = $1",
+                    buyer_id
                 )
                 
                 if not user:
-                    logger.debug(f"User {referred_user_id} not found")
-                    return False
+                    logger.debug(f"process_referral_reward: User {buyer_id} not found")
+                    return {
+                        "success": False,
+                        "referrer_id": None,
+                        "percent": None,
+                        "reward_amount": None,
+                        "message": "User not found"
+                    }
                 
-                # Используем referrer_id, если есть, иначе referred_by (для обратной совместимости)
-                partner_id = user.get("referrer_id") or user.get("referred_by")
+                referrer_id = user.get("referrer_id")
                 
-                if not partner_id:
+                if not referrer_id:
                     # Пользователь не был приглашён через реферальную программу
-                    logger.debug(f"User {referred_user_id} has no referrer")
-                    return False
+                    logger.debug(f"process_referral_reward: User {buyer_id} has no referrer")
+                    return {
+                        "success": False,
+                        "referrer_id": None,
+                        "percent": None,
+                        "reward_amount": None,
+                        "message": "No referrer"
+                    }
                 
-                # Проверяем, что партнёр не приглашает сам себя
-                if partner_id == referred_user_id:
-                    logger.warning(f"Self-referral detected: user {referred_user_id}")
-                    return False
+                # 2. ЗАЩИТА ОТ САМОРЕФЕРАЛА
+                if referrer_id == buyer_id:
+                    logger.warning(f"process_referral_reward: Self-referral detected: user {buyer_id}")
+                    return {
+                        "success": False,
+                        "referrer_id": referrer_id,
+                        "percent": None,
+                        "reward_amount": None,
+                        "message": "Self-referral detected"
+                    }
                 
-                # Определяем процент кешбэка динамически (без хардкода в handlers)
-                cashback_percent = await get_referral_cashback_percent(partner_id)
+                # 3. ЗАЩИТА ОТ ПОВТОРНОГО НАЧИСЛЕНИЯ (если purchase_id указан)
+                if purchase_id:
+                    existing_reward = await conn.fetchrow(
+                        "SELECT id FROM referral_rewards WHERE buyer_id = $1 AND purchase_id = $2",
+                        buyer_id, purchase_id
+                    )
+                    
+                    if existing_reward:
+                        logger.warning(
+                            f"process_referral_reward: Duplicate reward attempt detected: "
+                            f"buyer_id={buyer_id}, purchase_id={purchase_id}"
+                        )
+                        return {
+                            "success": False,
+                            "referrer_id": referrer_id,
+                            "percent": None,
+                            "reward_amount": None,
+                            "message": "Reward already processed for this purchase"
+                        }
                 
-                # Рассчитываем кешбэк (в копейках)
-                cashback_rubles = payment_amount_rubles * (cashback_percent / 100.0)
-                cashback_kopecks = int(cashback_rubles * 100)
+                # 4. Определяем процент кешбэка на основе количества оплативших рефералов
+                # Считаем количество рефералов, которые ХОТЯ БЫ ОДИН РАЗ оплатили подписку
+                paid_referrals_count = await conn.fetchval(
+                    """SELECT COUNT(DISTINCT rr.buyer_id)
+                       FROM referral_rewards rr
+                       WHERE rr.referrer_id = $1""",
+                    referrer_id
+                ) or 0
                 
-                if cashback_kopecks <= 0:
-                    logger.warning(f"Invalid cashback amount: {cashback_kopecks} kopecks for payment {payment_amount_rubles} RUB")
-                    return False
+                # Определяем процент по прогрессивной шкале
+                if paid_referrals_count >= 50:
+                    percent = 45
+                elif paid_referrals_count >= 25:
+                    percent = 25
+                else:
+                    percent = 10
                 
-                # Начисляем кешбэк на баланс партнёра
+                # 5. Рассчитываем сумму кешбэка (в копейках)
+                purchase_amount_kopecks = int(amount_rubles * 100)
+                reward_amount_kopecks = int(purchase_amount_kopecks * percent / 100)
+                reward_amount_rubles = reward_amount_kopecks / 100.0
+                
+                if reward_amount_kopecks <= 0:
+                    logger.warning(
+                        f"process_referral_reward: Invalid reward amount: "
+                        f"{reward_amount_kopecks} kopecks for payment {amount_rubles} RUB, percent={percent}%"
+                    )
+                    return {
+                        "success": False,
+                        "referrer_id": referrer_id,
+                        "percent": percent,
+                        "reward_amount": None,
+                        "message": "Invalid reward amount"
+                    }
+                
+                # 6. Начисляем кешбэк на баланс реферера
                 await conn.execute(
                     "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
-                    cashback_kopecks, partner_id
+                    reward_amount_kopecks, referrer_id
                 )
                 
-                # Записываем транзакцию баланса с указанием связанного пользователя
-                # Тип транзакции: cashback (для реферального кешбэка)
+                # 7. Записываем транзакцию баланса
                 await conn.execute(
                     """INSERT INTO balance_transactions (user_id, amount, type, source, description, related_user_id)
                        VALUES ($1, $2, $3, $4, $5, $6)""",
-                    partner_id, cashback_kopecks, "cashback", "referral",
-                    f"Реферальный кешбэк {cashback_percent}% за оплату пользователя {referred_user_id}",
-                    referred_user_id
+                    referrer_id, reward_amount_kopecks, "cashback", "referral",
+                    f"Реферальный кешбэк {percent}% за оплату пользователя {buyer_id}",
+                    buyer_id
                 )
                 
-                # Логируем событие
-                details = f"Referral cashback awarded: partner={partner_id} ({cashback_percent}%), referred={referred_user_id}, payment={payment_amount_rubles:.2f} RUB, cashback={cashback_rubles:.2f} RUB ({cashback_kopecks} kopecks)"
+                # 8. Создаём запись в referral_rewards (история начислений)
+                await conn.execute(
+                    """INSERT INTO referral_rewards 
+                       (referrer_id, buyer_id, purchase_id, purchase_amount, percent, reward_amount)
+                       VALUES ($1, $2, $3, $4, $5, $6)""",
+                    referrer_id, buyer_id, purchase_id, purchase_amount_kopecks, percent, reward_amount_kopecks
+                )
+                
+                # 9. Логируем событие
+                details = (
+                    f"Referral reward awarded: referrer={referrer_id} ({percent}%), "
+                    f"buyer={buyer_id}, purchase_id={purchase_id}, "
+                    f"purchase={amount_rubles:.2f} RUB, reward={reward_amount_rubles:.2f} RUB "
+                    f"({reward_amount_kopecks} kopecks), paid_referrals_count={paid_referrals_count}"
+                )
                 await _log_audit_event_atomic(
                     conn,
-                    "referral_cashback",
-                    partner_id,
-                    referred_user_id,
+                    "referral_reward",
+                    referrer_id,
+                    buyer_id,
                     details
                 )
                 
-                logger.info(f"Referral cashback awarded: partner={partner_id}, referred={referred_user_id}, percent={cashback_percent}%, amount={cashback_rubles:.2f} RUB")
-                return True
+                logger.info(
+                    f"Referral reward awarded: referrer={referrer_id}, buyer={buyer_id}, "
+                    f"percent={percent}%, amount={reward_amount_rubles:.2f} RUB, "
+                    f"paid_referrals_count={paid_referrals_count}"
+                )
+                
+                return {
+                    "success": True,
+                    "referrer_id": referrer_id,
+                    "percent": percent,
+                    "reward_amount": reward_amount_rubles,
+                    "message": "Reward awarded successfully"
+                }
                 
             except Exception as e:
-                logger.exception(f"Error processing referral cashback: referred_user_id={referred_user_id}")
-                return False
+                logger.exception(f"Error processing referral reward: buyer_id={buyer_id}, purchase_id={purchase_id}: {e}")
+                return {
+                    "success": False,
+                    "referrer_id": None,
+                    "percent": None,
+                    "reward_amount": None,
+                    "message": f"Error: {str(e)}"
+                }
 
 
 async def update_user_language(telegram_id: int, language: str):
@@ -2893,11 +3076,236 @@ async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]
                 "purchase_id": row["purchase_id"]
             })
         
-            return {
-                "referrer_id": referrer_id,
-                "username": referrer["username"] or f"ID{referrer_id}",
-                "invited_list": invited_list
-            }
+        return {
+            "referrer_id": referrer_id,
+            "username": referrer["username"] or f"ID{referrer_id}",
+            "invited_list": invited_list
+        }
+
+
+async def get_referral_overall_stats(
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None
+) -> Dict[str, Any]:
+    """
+    Получить общую статистику по реферальной системе
+    
+    Args:
+        date_from: Начальная дата для фильтрации (опционально)
+        date_to: Конечная дата для фильтрации (опционально)
+    
+    Returns:
+        Словарь с общей статистикой:
+        - total_referrers: Всего рефереров
+        - total_referrals: Всего приглашённых пользователей
+        - total_paid_referrals: Всего оплативших рефералов
+        - total_revenue: Общий доход от рефералов (рубли)
+        - total_cashback_paid: Общий выплаченный кешбэк (рубли)
+        - avg_cashback_per_referrer: Средний кешбэк на реферера (рубли)
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Базовые условия для фильтрации по дате
+        date_filter = ""
+        params = []
+        if date_from or date_to:
+            conditions = []
+            if date_from:
+                conditions.append("rr.created_at >= $1")
+                params.append(date_from)
+            if date_to:
+                param_idx = len(params) + 1
+                conditions.append(f"rr.created_at <= ${param_idx}")
+                params.append(date_to)
+            date_filter = "WHERE " + " AND ".join(conditions)
+        
+        # Всего рефереров (уникальных)
+        total_referrers_query = f"""
+            SELECT COUNT(DISTINCT rr.referrer_id)
+            FROM referral_rewards rr
+            {date_filter}
+        """
+        total_referrers = await conn.fetchval(total_referrers_query, *params) or 0
+        
+        # Всего приглашённых (из таблицы referrals)
+        total_referrals_query = "SELECT COUNT(DISTINCT referred_user_id) FROM referrals"
+        if date_from or date_to:
+            # Если есть фильтр по дате, применяем его к referrals
+            if date_from:
+                total_referrals_query += " WHERE created_at >= $1"
+            if date_to:
+                param_idx = len([date_from]) + 1
+                total_referrals_query += f" {'AND' if date_from else 'WHERE'} created_at <= ${param_idx}"
+        total_referrals = await conn.fetchval(total_referrals_query, *params) or 0
+        
+        # Всего оплативших рефералов (уникальных buyer_id из referral_rewards)
+        total_paid_referrals_query = f"""
+            SELECT COUNT(DISTINCT rr.buyer_id)
+            FROM referral_rewards rr
+            {date_filter}
+        """
+        total_paid_referrals = await conn.fetchval(total_paid_referrals_query, *params) or 0
+        
+        # Общий доход от рефералов (сумма purchase_amount из referral_rewards)
+        total_revenue_query = f"""
+            SELECT COALESCE(SUM(rr.purchase_amount), 0)
+            FROM referral_rewards rr
+            {date_filter}
+        """
+        total_revenue_kopecks = await conn.fetchval(total_revenue_query, *params) or 0
+        total_revenue = total_revenue_kopecks / 100.0
+        
+        # Общий выплаченный кешбэк (сумма reward_amount из referral_rewards)
+        total_cashback_query = f"""
+            SELECT COALESCE(SUM(rr.reward_amount), 0)
+            FROM referral_rewards rr
+            {date_filter}
+        """
+        total_cashback_kopecks = await conn.fetchval(total_cashback_query, *params) or 0
+        total_cashback_paid = total_cashback_kopecks / 100.0
+        
+        # Средний кешбэк на реферера
+        avg_cashback_per_referrer = total_cashback_paid / total_referrers if total_referrers > 0 else 0.0
+        
+        return {
+            "total_referrers": total_referrers,
+            "total_referrals": total_referrals,
+            "total_paid_referrals": total_paid_referrals,
+            "total_revenue": round(total_revenue, 2),
+            "total_cashback_paid": round(total_cashback_paid, 2),
+            "avg_cashback_per_referrer": round(avg_cashback_per_referrer, 2)
+        }
+
+
+async def get_referral_rewards_history(
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    limit: int = 50,
+    offset: int = 0
+) -> List[Dict[str, Any]]:
+    """
+    Получить историю начислений реферального кешбэка
+    
+    Args:
+        date_from: Начальная дата для фильтрации (опционально)
+        date_to: Конечная дата для фильтрации (опционально)
+        limit: Максимальное количество записей
+        offset: Смещение для пагинации
+    
+    Returns:
+        Список словарей с историей начислений:
+        - id: ID записи
+        - referrer_id: Telegram ID реферера
+        - referrer_username: Username реферера
+        - buyer_id: Telegram ID покупателя
+        - buyer_username: Username покупателя
+        - purchase_amount: Сумма покупки (рубли)
+        - percent: Процент кешбэка
+        - reward_amount: Сумма кешбэка (рубли)
+        - created_at: Дата начисления
+        - purchase_id: ID покупки
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Базовый запрос
+        base_query = """
+            SELECT 
+                rr.id,
+                rr.referrer_id,
+                referrer_user.username AS referrer_username,
+                rr.buyer_id,
+                buyer_user.username AS buyer_username,
+                rr.purchase_amount,
+                rr.percent,
+                rr.reward_amount,
+                rr.created_at,
+                rr.purchase_id
+            FROM referral_rewards rr
+            LEFT JOIN users referrer_user ON rr.referrer_id = referrer_user.telegram_id
+            LEFT JOIN users buyer_user ON rr.buyer_id = buyer_user.telegram_id
+        """
+        
+        where_clauses = []
+        params = []
+        param_index = 1
+        
+        # Фильтрация по дате
+        if date_from:
+            where_clauses.append(f"rr.created_at >= ${param_index}")
+            params.append(date_from)
+            param_index += 1
+        
+        if date_to:
+            where_clauses.append(f"rr.created_at <= ${param_index}")
+            params.append(date_to)
+            param_index += 1
+        
+        # Собираем запрос
+        where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+        order_by = "ORDER BY rr.created_at DESC"
+        limit_clause = f"LIMIT ${param_index} OFFSET ${param_index + 1}"
+        params.extend([limit, offset])
+        
+        full_query = f"{base_query} {where_clause} {order_by} {limit_clause}"
+        
+        rows = await conn.fetch(full_query, *params)
+        
+        # Обрабатываем результаты
+        result = []
+        for row in rows:
+            result.append({
+                "id": row["id"],
+                "referrer_id": row["referrer_id"],
+                "referrer_username": row["referrer_username"] or f"ID{row['referrer_id']}",
+                "buyer_id": row["buyer_id"],
+                "buyer_username": row["buyer_username"] or f"ID{row['buyer_id']}",
+                "purchase_amount": (row["purchase_amount"] or 0) / 100.0,
+                "percent": row["percent"] or 0,
+                "reward_amount": (row["reward_amount"] or 0) / 100.0,
+                "created_at": row["created_at"],
+                "purchase_id": row["purchase_id"]
+            })
+        
+        return result
+
+
+async def get_referral_rewards_history_count(
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None
+) -> int:
+    """
+    Получить общее количество записей в истории начислений (для пагинации)
+    
+    Args:
+        date_from: Начальная дата для фильтрации (опционально)
+        date_to: Конечная дата для фильтрации (опционально)
+    
+    Returns:
+        Общее количество записей
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        base_query = "SELECT COUNT(*) FROM referral_rewards rr"
+        
+        where_clauses = []
+        params = []
+        param_index = 1
+        
+        if date_from:
+            where_clauses.append(f"rr.created_at >= ${param_index}")
+            params.append(date_from)
+            param_index += 1
+        
+        if date_to:
+            where_clauses.append(f"rr.created_at <= ${param_index}")
+            params.append(date_to)
+            param_index += 1
+        
+        where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+        full_query = f"{base_query} {where_clause}"
+        
+        count = await conn.fetchval(full_query, *params) or 0
+        return count
 
 
 async def create_pending_purchase(

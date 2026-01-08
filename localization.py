@@ -32,8 +32,35 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "• 25-49 друзей → 25% кешбэк\n"
             "• 50+ друзей → 45% кешбэк"
         ),
+        "referral_program_screen": (
+            "👥 Пригласить друга\n\n"
+            "Приглашайте друзей и получайте кешбэк\n"
+            "с каждой их покупки.\n\n"
+            "🎁 Ваш кешбэк: {cashback_percent}%\n"
+            "👤 Приглашено: {invited_count}\n"
+            "💰 Заработано: {total_cashback:.2f} ₽\n\n"
+            "🔗 Ваша ссылка:\n{referral_link}"
+        ),
+        "referral_level_progress": "\n\n📈 Ваш уровень: {current_level}% кешбэка\nДо уровня {next_level}% осталось {referrals_to_next} рефералов",
+        "referral_max_level": "\n\n🎉 Вы достигли максимального уровня {current_level}%!",
+        "referral_how_it_works": "📊 Как работает программа",
+        "referral_how_it_works_text": (
+            "📊 Как работает реферальная программа\n\n"
+            "1. Отправьте другу вашу реферальную ссылку\n"
+            "2. Друг переходит по ссылке и регистрируется\n"
+            "3. Когда друг оплачивает подписку, вам начисляется кешбэк\n\n"
+            "🎁 Уровни кешбэка:\n"
+            "• 0-24 друга → 10% кешбэк\n"
+            "• 25-49 друзей → 25% кешбэк\n"
+            "• 50+ друзей → 45% кешбэк\n\n"
+            "💰 Кешбэк начисляется автоматически на ваш баланс\n"
+            "при каждой покупке реферала.\n\n"
+            "💡 Уровень определяется по количеству рефералов,\n"
+            "которые ХОТЯ БЫ ОДИН РАЗ оплатили подписку."
+        ),
         "copy_referral_link": "📋 Скопировать ссылку",
         "referral_link_copied": "Ссылка отправлена",
+        "referral_reward_notification": "🔥 Вам начислен реферальный кешбэк!\n\nВаш друг оформил подписку.\n💰 Начислено: {amount:.2f} ₽\nБаланс: {balance:.2f} ₽",
         "back": "← Назад",
         "copy_key": "📋 Скопировать ключ",
         "go_to_connection": "🔌 Перейти к подключению",
@@ -293,6 +320,33 @@ TEXTS: Dict[str, Dict[str, str]] = {
         ),
         "copy_referral_link": "📋 Copy Link",
         "referral_link_copied": "Link sent",
+        "referral_reward_notification": "🔥 You've earned referral cashback!\n\nYour friend has purchased a subscription.\n💰 Awarded: {amount:.2f} ₽\nBalance: {balance:.2f} ₽",
+        "referral_program_screen": (
+            "👥 Invite Friend\n\n"
+            "Invite friends and get cashback\n"
+            "from each of their purchases.\n\n"
+            "🎁 Your cashback: {cashback_percent}%\n"
+            "👤 Invited: {invited_count}\n"
+            "💰 Earned: {total_cashback:.2f} ₽\n\n"
+            "🔗 Your link:\n{referral_link}"
+        ),
+        "referral_level_progress": "\n\n📈 Your level: {current_level}% cashback\n{referrals_to_next} referrals left to reach {next_level}% level",
+        "referral_max_level": "\n\n🎉 You've reached the maximum level {current_level}%!",
+        "referral_how_it_works": "📊 How the program works",
+        "referral_how_it_works_text": (
+            "📊 How the referral program works\n\n"
+            "1. Send your referral link to a friend\n"
+            "2. Friend clicks the link and registers\n"
+            "3. When friend purchases a subscription, you get cashback\n\n"
+            "🎁 Cashback levels:\n"
+            "• 0-24 friends → 10% cashback\n"
+            "• 25-49 friends → 25% cashback\n"
+            "• 50+ friends → 45% cashback\n\n"
+            "💰 Cashback is automatically credited to your balance\n"
+            "on each referral purchase.\n\n"
+            "💡 Level is determined by the number of referrals\n"
+            "who have paid for a subscription AT LEAST ONCE."
+        ),
         "back": "← Back",
         "copy_key": "📋 Copy Key",
         "go_to_connection": "🔌 Go to Connection",
@@ -537,6 +591,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         ),
         "copy_referral_link": "📋 Havolani nusxalash",
         "referral_link_copied": "Havola yuborildi",
+        "referral_reward_notification": "🔥 Sizga referal cashback to'landi!\n\nSizning do'stingiz obuna sotib oldi.\n💰 To'langan: {amount:.2f} ₽\nBalans: {balance:.2f} ₽",
         "back": "← Orqaga",
         "copy_key": "📋 Kalitni nusxalash",
         "go_to_connection": "🔌 Ulanishga o'tish",
@@ -765,6 +820,33 @@ TEXTS: Dict[str, Dict[str, str]] = {
         ),
         "copy_referral_link": "📋 Пайвандро нусхабардорӣ кардан",
         "referral_link_copied": "Пайванд фиристода шуд",
+        "referral_reward_notification": "🔥 Ба шумо cashback-и рефералӣ баҳо дода шуд!\n\nДӯсти шумо обуна харидааст.\n💰 Баҳодиҳӣ: {amount:.2f} ₽\nБалланс: {balance:.2f} ₽",
+        "referral_program_screen": (
+            "👥 Дӯстро даъват кардан\n\n"
+            "Дӯстронро даъват кунед ва аз\n"
+            "ҳар як харидашон cashback гиред.\n\n"
+            "🎁 Cashback-и шумо: {cashback_percent}%\n"
+            "👤 Даъватшуда: {invited_count}\n"
+            "💰 Ҳосилшуда: {total_cashback:.2f} ₽\n\n"
+            "🔗 Ҳаволаи шумо:\n{referral_link}"
+        ),
+        "referral_level_progress": "\n\n📈 Сатҳи шумо: {current_level}% cashback\nБарои расидан ба сатҳи {next_level}% {referrals_to_next} даъват боқӣ мондааст",
+        "referral_max_level": "\n\n🎉 Шумо ба сатҳи максималӣ {current_level}% расидед!",
+        "referral_how_it_works": "📊 Барнома чӣ тавр кор мекунад",
+        "referral_how_it_works_text": (
+            "📊 Барномаи таклифӣ чӣ тавр кор мекунад\n\n"
+            "1. Ҳаволаи таклифиро ба дӯстатон фиристед\n"
+            "2. Дӯст ҳаволаро пахш карда сабт мешавад\n"
+            "3. Ҳангоме ки дӯст обуна мехарад, ба шумо cashback дода мешавад\n\n"
+            "🎁 Сатҳҳои cashback:\n"
+            "• 0-24 дӯст → 10% cashback\n"
+            "• 25-49 дӯст → 25% cashback\n"
+            "• 50+ дӯст → 45% cashback\n\n"
+            "💰 Cashback ҳар як хариди таклифӣ дар\n"
+            "балланси шумо ба таври худкор илова карда мешавад.\n\n"
+            "💡 Сатҳ ба андозаи даъватшудагон муайян карда мешавад,\n"
+            "ки ҳадди ақалл ЯК БОР обуна пардохт кардаанд."
+        ),
         "back": "← Бозгашт",
         "copy_key": "📋 Калидро нусхабардорӣ кардан",
         "go_to_connection": "🔌 Ба пайвандшавӣ гузаштан",
