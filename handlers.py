@@ -112,10 +112,6 @@ def get_main_menu_keyboard(language: str):
             text=localization.get_text(language, "referral_program"),
             callback_data="menu_referral"
         )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "service_status"),
-            callback_data="menu_service_status"
-        )],
         [
             InlineKeyboardButton(
                 text=localization.get_text(language, "about"),
@@ -252,7 +248,7 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
     """
     # Отменяем старые покупки пользователя при показе нового экрана
     if not purchase_id:
-        await database.cancel_purchase_context(telegram_id, "new_tariff_selection")
+        await database.cancel_pending_purchases(telegram_id, "new_tariff_selection")
     
     buttons = []
     
@@ -392,12 +388,9 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
         
         # Генерируем purchase_id для каждого тарифа (с учетом текущих скидок)
         # ВАЖНО: Каждый тариф получает свой purchase_id, так как цены могут отличаться
-        tariff_purchase_id = await database.create_purchase_context(
-            telegram_id=telegram_id,
-            tariff_key=tariff_key,
-            price_kopecks=price * 100,
-            promo_code=promo_code.upper() if promo_code else None
-        )
+        # Функция get_tariff_keyboard больше не создаёт purchase_id
+        # purchase_id создаётся в callback_tariff_type для каждого периода
+        tariff_purchase_id = None
         
         # Включаем purchase_id в callback_data
         buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}:{tariff_purchase_id}")])
@@ -471,10 +464,6 @@ def get_about_keyboard(language: str):
         [InlineKeyboardButton(
             text=localization.get_text(language, "privacy_policy"),
             callback_data="about_privacy"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "service_status"),
-            callback_data="menu_service_status"
         )],
         [InlineKeyboardButton(
             text=localization.get_text(language, "back"),
@@ -1403,16 +1392,16 @@ async def callback_topup_balance(callback: CallbackQuery):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="500 ₽",
-            callback_data="topup_amount:500"
+            text="250 ₽",
+            callback_data="topup_amount:250"
         )],
         [InlineKeyboardButton(
-            text="1000 ₽",
-            callback_data="topup_amount:1000"
+            text="750 ₽",
+            callback_data="topup_amount:750"
         )],
         [InlineKeyboardButton(
-            text="2000 ₽",
-            callback_data="topup_amount:2000"
+            text="999 ₽",
+            callback_data="topup_amount:999"
         )],
         [InlineKeyboardButton(
             text=localization.get_text(language, "topup_custom_amount", default="Другая сумма"),
@@ -1587,7 +1576,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "copy_key")
 async def callback_copy_key(callback: CallbackQuery):
-    """Копировать VPN-ключ (one-tap copy via callback)"""
+    """Копировать VPN-ключ - отправляет ключ как отдельное сообщение"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1623,39 +1612,23 @@ async def callback_copy_key(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
         return
     
-    # One-tap copy через временное сообщение с почти мгновенным удалением
-    # К сожалению, Telegram Bot API не поддерживает прямой параметр copy_text для inline кнопок
-    # Используем оптимизированный подход: отправляем сообщение с ключом в формате <code>
-    # и удаляем его через 0.3 секунды (достаточно для копирования, но не видно в чате)
-    success_text = localization.get_text(
-        language,
-        "vpn_key_copied_toast",
-        default="✅ Ключ скопирован в буфер обмена"
-    )
-    
-    # Отправляем временное сообщение с ключом (<code> формат позволяет одно нажатие для копирования)
-    sent_message = await callback.message.answer(
+    # Отправляем VPN-ключ как отдельное сообщение (позволяет одно нажатие для копирования в Telegram)
+    await callback.message.answer(
         f"<code>{vpn_key}</code>",
         parse_mode="HTML"
     )
     
-    # Удаляем сообщение через 0.3 секунды (почти мгновенно, создает эффект прямого копирования)
-    import asyncio
-    async def delete_message_quick():
-        await asyncio.sleep(0.3)
-        try:
-            await sent_message.delete()
-        except Exception as e:
-            logging.debug(f"Could not delete copy message: {e}")
-    
-    asyncio.create_task(delete_message_quick())
-    
     # Показываем toast уведомление о копировании
+    success_text = localization.get_text(
+        language,
+        "vpn_key_copied_toast",
+        default="✅ Ключ отправлен отдельным сообщением"
+    )
     await callback.answer(success_text, show_alert=False)
 
 @router.callback_query(F.data == "copy_vpn_key")
 async def callback_copy_vpn_key(callback: CallbackQuery):
-    """Скопировать VPN-ключ (one-tap copy via callback)"""
+    """Скопировать VPN-ключ - отправляет ключ как отдельное сообщение"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1691,34 +1664,18 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
         return
     
-    # One-tap copy через временное сообщение с почти мгновенным удалением
-    # К сожалению, Telegram Bot API не поддерживает прямой параметр copy_text для inline кнопок
-    # Используем оптимизированный подход: отправляем сообщение с ключом в формате <code>
-    # и удаляем его через 0.3 секунды (достаточно для копирования, но не видно в чате)
-    success_text = localization.get_text(
-        language,
-        "vpn_key_copied_toast",
-        default="✅ Ключ скопирован в буфер обмена"
-    )
-    
-    # Отправляем временное сообщение с ключом (<code> формат позволяет одно нажатие для копирования)
-    sent_message = await callback.message.answer(
+    # Отправляем VPN-ключ как отдельное сообщение (позволяет одно нажатие для копирования в Telegram)
+    await callback.message.answer(
         f"<code>{vpn_key}</code>",
         parse_mode="HTML"
     )
     
-    # Удаляем сообщение через 0.3 секунды (почти мгновенно, создает эффект прямого копирования)
-    import asyncio
-    async def delete_message_quick():
-        await asyncio.sleep(0.3)
-        try:
-            await sent_message.delete()
-        except Exception as e:
-            logging.debug(f"Could not delete copy message: {e}")
-    
-    asyncio.create_task(delete_message_quick())
-    
     # Показываем toast уведомление о копировании
+    success_text = localization.get_text(
+        language,
+        "vpn_key_copied_toast",
+        default="✅ Ключ отправлен отдельным сообщением"
+    )
     await callback.answer(success_text, show_alert=False)
 
 
@@ -1832,7 +1789,7 @@ async def callback_subscription_history(callback: CallbackQuery):
 
 @router.callback_query(F.data == "menu_buy_vpn")
 async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
-    """Купить VPN - выбор тарифа"""
+    """Купить VPN - выбор типа тарифа (Basic/Plus)"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1840,11 +1797,312 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     # Очищаем промокод из состояния при входе в меню
     await state.update_data(promo_code=None)
     
-    text = localization.get_text(language, "select_tariff")
-    # Отменяем старые покупки при показе нового экрана выбора тарифа
-    await database.cancel_purchase_context(telegram_id, "tariff_selection_shown")
-    await callback.message.edit_text(text, reply_markup=await get_tariff_keyboard(language, telegram_id, None))
+    # Отменяем старые pending покупки при показе нового экрана
+    await database.cancel_pending_purchases(telegram_id, "tariff_selection_shown")
+    
+    text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🪙 Тариф Basic",
+            callback_data="tariff_type:basic"
+        )],
+        [InlineKeyboardButton(
+            text="🔑 Тариф Plus",
+            callback_data="tariff_type:plus"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back", default="← Назад"),
+            callback_data="menu_main"
+        )],
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tariff_type:"))
+async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
+    """Обработчик выбора типа тарифа (Basic/Plus)"""
+    tariff_type = callback.data.split(":")[1]  # "basic" или "plus"
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Отменяем старые pending покупки при выборе нового тарифа
+    await database.cancel_pending_purchases(telegram_id, "tariff_type_selected")
+    
+    # Определяем текст в зависимости от типа тарифа
+    if tariff_type == "basic":
+        text = localization.get_text(language, "tariff_basic_selected", default="🔐 Выбран тариф Basic\nНа какой срок интересно?")
+    else:
+        text = localization.get_text(language, "tariff_plus_selected", default="🔐 Выбран тариф Plus\nНа какой срок интересно?")
+    
+    # Создаем pending purchase для этого тарифа (без периода пока)
+    # Период будет выбран на следующем экране
+    buttons = []
+    
+    # Получаем цены для выбранного тарифа
+    periods = config.TARIFFS[tariff_type]
+    
+    for period_days, period_data in periods.items():
+        price = period_data["price"]
+        months = period_days // 30
+        
+        # Формируем правильное склонение "месяц/месяца/месяцев"
+        if months == 1:
+            period_text = "1 месяц"
+        elif months in [2, 3, 4]:
+            period_text = f"{months} месяца"
+        else:
+            period_text = f"{months} месяцев"
+        
+        # Создаем pending purchase для каждого периода
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=price * 100,
+            promo_code=None
+        )
+        
+        buttons.append([InlineKeyboardButton(
+            text=f"{price} ₽ — {period_text}",
+            callback_data=f"tariff_period:{tariff_type}:{period_days}:{purchase_id}"
+        )])
+    
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "back", default="← Назад"),
+        callback_data="menu_buy_vpn"
+    )])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tariff_period:"))
+async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
+    """Обработчик выбора периода тарифа"""
+    # Формат: "tariff_period:basic:30:purchase_abc123"
+    parts = callback.data.split(":")
+    tariff_type = parts[1]  # "basic" или "plus"
+    period_days = int(parts[2])
+    purchase_id = parts[3] if len(parts) > 3 else None
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # ВАЛИДАЦИЯ: Проверяем наличие purchase_id
+    if not purchase_id:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Purchase ID missing in tariff_period: user={telegram_id}, callback_data={callback.data}")
+        return
+    
+    # ВАЛИДАЦИЯ: Проверяем валидность pending purchase
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    if not pending_purchase:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid pending purchase: user={telegram_id}, purchase_id={purchase_id}")
+        return
+    
+    # Проверяем, что тариф и период соответствуют purchase
+    if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Tariff/period mismatch: user={telegram_id}, purchase_id={purchase_id}")
+        return
+    
+    # Отменяем остальные pending покупки этого пользователя (оставляем только выбранную)
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending' AND purchase_id != $2",
+            telegram_id, purchase_id
+        )
+    
+    # Переходим к проверке баланса и оплате
+    await process_tariff_purchase_selection(callback, state, purchase_id, tariff_type, period_days)
+
+
+async def process_tariff_purchase_selection(
+    callback: CallbackQuery,
+    state: FSMContext,
+    purchase_id: str,
+    tariff_type: str,
+    period_days: int
+):
+    """Обработать выбранный тариф: проверить баланс и предложить оплату"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Получаем pending purchase для валидации
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    if not pending_purchase:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        return
+    
+    # Проверяем наличие provider_token
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
+        return
+    
+    # Используем данные из pending purchase
+    amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    
+    # Получаем баланс пользователя
+    balance_rubles = await database.get_user_balance(telegram_id)
+    
+    # Формируем описание тарифа
+    months = period_days // 30
+    tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+    description = f"Atlas Secure VPN тариф {tariff_name}, подписка на {months} месяц" + ("а" if months % 10 in [2, 3, 4] and months % 100 not in [12, 13, 14] else "ев" if months % 10 in [5, 6, 7, 8, 9, 0] or months % 100 in [11, 12, 13, 14] else "")
+    
+    # Проверяем, хватает ли баланса
+    if balance_rubles >= amount_rubles:
+        # Баланса хватает - списываем и активируем подписку
+        await callback.answer()
+        
+        # Списываем баланс
+        success = await database.decrease_balance(
+            telegram_id=telegram_id,
+            amount=amount_rubles,
+            source="subscription_payment",
+            description=f"Оплата подписки {tariff_name} на {months} месяц(ев)"
+        )
+        
+        if not success:
+            logger.error(f"Failed to decrease balance for subscription payment: user={telegram_id}, amount={amount_rubles}")
+            await callback.message.answer(localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Обратитесь в поддержку."))
+            return
+        
+        # ВАЛИДАЦИЯ: Помечаем pending purchase как оплаченный
+        success_mark = await database.mark_pending_purchase_paid(purchase_id)
+        if not success_mark:
+            logger.warning(f"Failed to mark pending purchase as paid: user={telegram_id}, purchase_id={purchase_id}")
+        
+        # Активируем подписку через grant_access
+        duration = timedelta(days=period_days)
+        
+        try:
+            result = await database.grant_access(
+                telegram_id=telegram_id,
+                duration=duration,
+                source="payment",
+                admin_telegram_id=None,
+                admin_grant_days=None
+            )
+            
+            expires_at = result["subscription_end"]
+            # Если vless_url есть - это новый UUID, используем его
+            # Если vless_url нет - это продление, получаем vpn_key из подписки
+            if result.get("vless_url"):
+                vpn_key = result["vless_url"]
+                is_renewal = False
+            else:
+                # Продление - получаем vpn_key из существующей подписки
+                subscription = await database.get_subscription(telegram_id)
+                if subscription and subscription.get("vpn_key"):
+                    vpn_key = subscription["vpn_key"]
+                else:
+                    # Fallback: используем UUID
+                    vpn_key = result.get("uuid", "")
+                is_renewal = True
+            
+            if not expires_at or not vpn_key:
+                raise Exception(f"grant_access returned invalid result: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
+        except Exception as e:
+            logger.exception(f"CRITICAL: Failed to grant access after balance payment for user {telegram_id}: {e}")
+            # Возвращаем деньги на баланс
+            await database.increase_balance(
+                telegram_id=telegram_id,
+                amount=amount_rubles,
+                source="refund",
+                description=f"Возврат средств за неудачную активацию подписки"
+            )
+            await callback.message.answer(localization.get_text(language, "error_subscription_activation", default="Ошибка активации подписки. Средства возвращены на баланс."))
+            return
+        
+        # Создаем запись о платеже для аналитики
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id) VALUES ($1, $2, $3, 'approved', $4)",
+                telegram_id, f"{tariff_type}_{period_days}", int(amount_rubles * 100), purchase_id
+            )
+        
+        # Начисляем реферальный кешбэк при оплате с баланса
+        try:
+            await database.process_referral_reward_cashback(telegram_id, amount_rubles)
+            logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={amount_rubles} RUB")
+        except Exception as e:
+            logger.exception(f"Error processing referral cashback for balance payment: user={telegram_id}: {e}")
+        
+        # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
+        import vpn_utils
+        if not vpn_utils.validate_vless_link(vpn_key):
+            error_msg = (
+                f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
+                "Key will NOT be sent to user."
+            )
+            logger.error(f"callback_tariff_period (balance payment): {error_msg}")
+            error_text = localization.get_text(
+                language,
+                "error_subscription_activation",
+                default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
+            )
+            await callback.message.answer(error_text)
+            return
+        
+        # Отправляем сообщение об успешной активации (без ключа)
+        expires_str = expires_at.strftime("%d.%m.%Y")
+        text = localization.get_text(language, "payment_approved", date=expires_str)
+        await callback.message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
+        
+        # Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
+        await callback.message.answer(
+            f"<code>{vpn_key}</code>",
+            parse_mode="HTML"
+        )
+        
+        logger.info(f"Subscription activated from balance: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, purchase_id={purchase_id}")
+        
+    else:
+        # Баланса не хватает - показываем экран с опциями
+        await callback.answer()
+        
+        shortage = amount_rubles - balance_rubles
+        try:
+            text = localization.get_text(
+                language,
+                "insufficient_balance_for_subscription",
+                amount=amount_rubles,
+                balance=balance_rubles,
+                shortage=shortage
+            )
+        except KeyError:
+            text = f"Недостаточно средств на балансе.\n\nСтоимость: {amount_rubles:.2f} ₽\nНа балансе: {balance_rubles:.2f} ₽\nНе хватает: {shortage:.2f} ₽"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "topup_balance", default="➕ Пополнить баланс"),
+                callback_data="topup_balance"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
+                callback_data=f"pay_tariff_card:{tariff_type}:{period_days}:{purchase_id}"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="← Назад"),
+                callback_data="menu_buy_vpn"
+            )],
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "enter_promo")
@@ -1870,11 +2128,12 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Извлекаем tariff_key и purchase_id из callback_data
-    # Формат: "pay_tariff_card:1:purchase_abc123" или "pay_tariff_card:1" (legacy)
+    # Извлекаем tariff_type, period_days и purchase_id из callback_data
+    # Формат: "pay_tariff_card:basic:30:purchase_abc123"
     callback_data_parts = callback.data.split(":")
-    tariff_key = callback_data_parts[1] if len(callback_data_parts) > 1 else None
-    purchase_id = callback_data_parts[2] if len(callback_data_parts) > 2 else None
+    tariff_type = callback_data_parts[1] if len(callback_data_parts) > 1 else None
+    period_days = int(callback_data_parts[2]) if len(callback_data_parts) > 2 and callback_data_parts[2].isdigit() else None
+    purchase_id = callback_data_parts[3] if len(callback_data_parts) > 3 else None
     
     # ВАЛИДАЦИЯ: Проверяем наличие purchase_id (обязательно для новых покупок)
     if not purchase_id:
@@ -1889,12 +2148,12 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    # ВАЛИДАЦИЯ: Проверяем валидность purchase context
-    purchase_context = await database.validate_purchase_context(purchase_id, telegram_id)
-    if not purchase_context:
+    # ВАЛИДАЦИЯ: Проверяем валидность pending purchase
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    if not pending_purchase:
         error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
         await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid purchase context in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
+        logger.warning(f"Invalid pending purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
         await database._log_audit_event_atomic_standalone(
             "purchase_context_invalid",
             telegram_id,
@@ -1903,11 +2162,11 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    # Проверяем, что tariff_key из callback соответствует purchase context
-    if purchase_context["tariff"] != tariff_key:
+    # Проверяем, что tariff_type и period_days из callback соответствуют pending purchase
+    if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
         error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
         await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Tariff mismatch in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, expected={purchase_context['tariff']}, got={tariff_key}")
+        logger.warning(f"Tariff/period mismatch in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, expected={pending_purchase['tariff']}/{pending_purchase['period_days']}, got={tariff_type}/{period_days}")
         return
     
     # Проверяем наличие provider_token
@@ -1915,34 +2174,19 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
         return
     
-    # Используем данные из purchase context (а не из FSM)
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
-    amount = purchase_context["price_kopecks"] // 100  # Конвертируем из копеек в рубли
-    promo_code_from_context = purchase_context.get("promo_code")
-    
-    # Проверяем промокод (для обратной совместимости)
-    promo_data = None
-    if promo_code_from_context:
-        promo_data = await database.check_promo_code_valid(promo_code_from_context.upper())
-    
-    has_promo = promo_data is not None
+    # Используем данные из pending purchase (а не из FSM)
+    amount_rubles = pending_purchase["price_kopecks"] / 100.0
     
     # Используем purchase_id в payload
     payload = f"purchase:{purchase_id}"
     
-    # Очищаем промокод из состояния после использования
-    if has_promo:
-        await state.update_data(promo_code=None)
-    
     # Формируем описание тарифа
-    months = tariff_data["months"]
-    if has_promo:
-        description = f"Atlas Secure VPN подписка на {months} месяц(ев) (промокод)"
-    else:
-        description = f"Atlas Secure VPN подписка на {months} месяц(ев)"
+    months = period_days // 30
+    tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+    description = f"Atlas Secure VPN тариф {tariff_name}, подписка на {months} месяц" + ("а" if months % 10 in [2, 3, 4] and months % 100 not in [12, 13, 14] else "ев" if months % 10 in [5, 6, 7, 8, 9, 0] or months % 100 in [11, 12, 13, 14] else "")
     
     # Формируем prices (цена в копейках)
-    prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
+    prices = [LabeledPrice(label="К оплате", amount=int(amount_rubles * 100))]
     
     try:
         # Отправляем invoice
@@ -1986,258 +2230,32 @@ async def process_promo_code(message: Message, state: FSMContext):
         text = localization.get_text(language, "promo_applied", default="✅ Промокод применён")
         await message.answer(text)
         
-        # Обновляем экран выбора тарифа (отменяем старые покупки при применении промокода)
-        await database.cancel_purchase_context(telegram_id, "promo_code_applied")
-        tariff_text = localization.get_text(language, "select_tariff")
-        await message.answer(tariff_text, reply_markup=await get_tariff_keyboard(language, telegram_id, promo_code))
+        # Обновляем экран выбора тарифа (отменяем старые pending покупки при применении промокода)
+        await database.cancel_pending_purchases(telegram_id, "promo_code_applied")
+        # Возвращаемся к выбору типа тарифа (Basic/Plus)
+        tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🪙 Тариф Basic",
+                callback_data="tariff_type:basic"
+            )],
+            [InlineKeyboardButton(
+                text="🔑 Тариф Plus",
+                callback_data="tariff_type:plus"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="← Назад"),
+                callback_data="menu_main"
+            )],
+        ])
+        await message.answer(tariff_text, reply_markup=keyboard)
     else:
         # Промокод невалиден
         text = localization.get_text(language, "invalid_promo", default="❌ Промокод недействителен")
         await message.answer(text)
 
 
-@router.callback_query(F.data.startswith("tariff_"))
-async def callback_tariff(callback: CallbackQuery, state: FSMContext):
-    """Обработчик выбора тарифа - отправляет invoice через Telegram Payments"""
-    telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
-    # Извлекаем tariff_key и purchase_id из callback_data
-    # Формат: "tariff_1:purchase_abc123" или "tariff_1" (для обратной совместимости)
-    callback_data_parts = callback.data.split(":")
-    tariff_key_part = callback_data_parts[0]
-    tariff_key = tariff_key_part.split("_")[1] if "_" in tariff_key_part else None
-    purchase_id_from_callback = callback_data_parts[1] if len(callback_data_parts) > 1 else None
-    purchase_id = purchase_id_from_callback  # Для использования в дальнейшем коде
-    
-    # ВАЛИДАЦИЯ: Проверяем наличие purchase_id (обязательно для новых покупок)
-    if not purchase_id:
-        # Старая кнопка без purchase_id - отклоняем
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Purchase context missing: user={telegram_id}, callback_data={callback.data}")
-        await database._log_audit_event_atomic_standalone(
-            "purchase_context_invalid",
-            telegram_id,
-            None,
-            f"Missing purchase_id in callback: {callback.data}"
-        )
-        return
-    
-    # ВАЛИДАЦИЯ: Проверяем валидность purchase context
-    purchase_context = await database.validate_purchase_context(purchase_id, telegram_id)
-    if not purchase_context:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid purchase context: user={telegram_id}, purchase_id={purchase_id}")
-        await database._log_audit_event_atomic_standalone(
-            "purchase_context_invalid",
-            telegram_id,
-            None,
-            f"Invalid or expired purchase_id: {purchase_id}"
-        )
-        return
-    
-    # Проверяем, что tariff_key из callback соответствует purchase context
-    if purchase_context["tariff"] != tariff_key:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Tariff mismatch: user={telegram_id}, purchase_id={purchase_id}, expected={purchase_context['tariff']}, got={tariff_key}")
-        await database._log_audit_event_atomic_standalone(
-            "purchase_context_invalid",
-            telegram_id,
-            None,
-            f"Tariff mismatch for purchase_id={purchase_id}"
-        )
-        return
-    
-    # Проверяем наличие provider_token
-    if not config.TG_PROVIDER_TOKEN:
-        await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
-        return
-    
-    # Используем данные из purchase context (а не из FSM)
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
-    base_price = tariff_data["price"]
-    
-    # Используем цену и промокод из purchase context
-    amount = purchase_context["price_kopecks"] // 100  # Конвертируем из копеек в рубли
-    promo_code_from_context = purchase_context.get("promo_code")
-    
-    # Проверяем промокод (для обратной совместимости, но приоритет у purchase context)
-    promo_data = None
-    if promo_code_from_context:
-        promo_data = await database.check_promo_code_valid(promo_code_from_context.upper())
-    
-    has_promo = promo_data is not None
-    
-    # Используем purchase_id в payload (цена уже из purchase context)
-    payload = f"purchase:{purchase_id}"
-    
-    # Очищаем промокод из состояния после использования (если был)
-    if has_promo:
-        await state.update_data(promo_code=None)
-    
-    # Формируем описание тарифа
-    months = tariff_data["months"]
-    if has_promo:
-        description = f"Atlas Secure VPN подписка на {months} месяц(ев) (промокод)"
-    else:
-        description = f"Atlas Secure VPN подписка на {months} месяц(ев)"
-    
-    # Проверяем, что цена корректна
-    if amount <= 0:
-        await callback.answer("Ошибка расчета цены", show_alert=True)
-        return
-    
-    # Получаем баланс пользователя
-    balance_rubles = await database.get_user_balance(telegram_id)
-    amount_rubles = float(amount)
-    
-    # Проверяем, хватает ли баланса
-    if balance_rubles >= amount_rubles:
-        # Баланса хватает - списываем и активируем подписку
-        await callback.answer()
-        
-        # Списываем баланс
-        success = await database.decrease_balance(
-            telegram_id=telegram_id,
-            amount=amount_rubles,
-            source="subscription_payment",
-            description=f"Оплата подписки {tariff_key} месяца(ев)"
-        )
-        
-        if not success:
-            logger.error(f"Failed to decrease balance for subscription payment: user={telegram_id}, amount={amount_rubles}")
-            await callback.message.answer(localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Обратитесь в поддержку."))
-            return
-        
-        # ВАЛИДАЦИЯ: Помечаем purchase как выполненный после успешного списания баланса
-        success_mark = await database.mark_purchase_completed(purchase_id)
-        if not success_mark:
-            logger.warning(f"Failed to mark purchase as completed: user={telegram_id}, purchase_id={purchase_id}")
-        
-        # Активируем подписку через grant_access
-        months = tariff_data["months"]
-        duration = timedelta(days=months * 30)
-        
-        try:
-            result = await database.grant_access(
-                telegram_id=telegram_id,
-                duration=duration,
-                source="payment",
-                admin_telegram_id=None,
-                admin_grant_days=None
-            )
-            
-            expires_at = result["subscription_end"]
-            # Если vless_url есть - это новый UUID, используем его
-            # Если vless_url нет - это продление, получаем vpn_key из подписки
-            if result.get("vless_url"):
-                vpn_key = result["vless_url"]
-                is_renewal = False
-            else:
-                # Продление - получаем vpn_key из существующей подписки
-                subscription = await database.get_subscription(telegram_id)
-                if subscription and subscription.get("vpn_key"):
-                    vpn_key = subscription["vpn_key"]
-                else:
-                    # Fallback: используем UUID
-                    vpn_key = result.get("uuid", "")
-                is_renewal = True
-            
-            if not expires_at or not vpn_key:
-                raise Exception(f"grant_access returned invalid result: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
-        except Exception as e:
-            logger.exception(f"CRITICAL: Failed to grant access after balance payment for user {telegram_id}: {e}")
-            # Возвращаем деньги на баланс
-            await database.increase_balance(
-                telegram_id=telegram_id,
-                amount=amount_rubles,
-                source="refund",
-                description=f"Возврат средств за неудачную активацию подписки"
-            )
-            await callback.message.answer(localization.get_text(language, "error_subscription_activation", default="Ошибка активации подписки. Средства возвращены на баланс."))
-            return
-        
-        # Создаем запись о платеже для аналитики (с purchase_id если используется)
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id) VALUES ($1, $2, $3, 'approved', $4)",
-                telegram_id, tariff_key, amount, purchase_id
-            )
-        
-        # Начисляем реферальный кешбэк при оплате с баланса
-        # Кешбэк начисляется при КАЖДОЙ оплате подписки (включая оплату с баланса)
-        try:
-            await database.process_referral_reward_cashback(telegram_id, amount_rubles)
-            logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={amount_rubles} RUB")
-        except Exception as e:
-            logger.exception(f"Error processing referral cashback for balance payment: user={telegram_id}: {e}")
-            # Не прерываем основной flow при ошибке начисления кешбэка
-        
-        # Очищаем промокод из состояния после использования
-        if has_promo:
-            await state.update_data(promo_code=None)
-        
-        # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
-        import vpn_utils
-        if not vpn_utils.validate_vless_link(vpn_key):
-            error_msg = (
-                f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
-                "Key will NOT be sent to user."
-            )
-            logger.error(f"callback_tariff (balance payment): {error_msg}")
-            error_text = localization.get_text(
-                language,
-                "error_subscription_activation",
-                default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
-            )
-            await callback.message.answer(error_text)
-            return
-        
-        # Отправляем сообщение об успешной активации
-        expires_str = expires_at.strftime("%d.%m.%Y")
-        vpn_key_html = f"<code>{vpn_key}</code>"
-        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key_html, date=expires_str)
-        await callback.message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
-        
-        logger.info(f"Subscription activated from balance: user={telegram_id}, tariff={tariff_key}, amount={amount_rubles} RUB, balance_after={balance_rubles - amount_rubles:.2f} RUB")
-        
-    else:
-        # Баланса не хватает - показываем экран с опциями
-        await callback.answer()
-        
-        shortage = amount_rubles - balance_rubles
-        try:
-            text = localization.get_text(
-                language,
-                "insufficient_balance_for_subscription",
-                amount=amount_rubles,
-                balance=balance_rubles,
-                shortage=shortage
-            )
-        except KeyError:
-            text = f"Недостаточно средств на балансе.\n\nСтоимость: {amount_rubles:.2f} ₽\nНа балансе: {balance_rubles:.2f} ₽\nНе хватает: {shortage:.2f} ₽"
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "topup_balance", default="➕ Пополнить баланс"),
-                callback_data="topup_balance"
-            )],
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
-                callback_data=f"pay_tariff_card:{tariff_key}:{purchase_id}"
-            )],
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="← Назад"),
-                callback_data="menu_buy_vpn"
-            )],
-        ])
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
+# Старый обработчик tariff_* удалён - теперь используется новый флоу tariff_type -> tariff_period
 
 
 @router.pre_checkout_query()
@@ -2342,10 +2360,11 @@ async def process_successful_payment(message: Message):
             await message.answer(localization.get_text(language, "error_payment_processing"))
             return
     
-    # Обработка платежей за подписку с валидацией purchase context
-    purchase_context = None
+    # Обработка платежей за подписку с валидацией pending purchase
+    pending_purchase = None
     promo_code_used = None
-    tariff_key = None
+    tariff_type = None
+    period_days = None
     payment_amount = None
     
     try:
@@ -2353,33 +2372,34 @@ async def process_successful_payment(message: Message):
         if payload.startswith("purchase:"):
             purchase_id = payload.split(":", 1)[1]
             
-            # ВАЛИДАЦИЯ: Проверяем валидность purchase context
-            purchase_context = await database.validate_purchase_context(purchase_id, telegram_id)
-            if not purchase_context:
+            # ВАЛИДАЦИЯ: Проверяем валидность pending purchase
+            pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+            if not pending_purchase:
                 error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
                 user = await database.get_user(telegram_id)
                 language = user.get("language", "ru") if user else "ru"
                 await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
-                logger.warning(f"Invalid purchase context in successful_payment: user={telegram_id}, purchase_id={purchase_id}")
+                logger.error(f"Invalid pending purchase in successful_payment: user={telegram_id}, purchase_id={purchase_id}")
                 await database._log_audit_event_atomic_standalone(
                     "purchase_rejected_due_to_stale_context",
                     telegram_id,
                     None,
-                    f"Payment received but purchase context invalid: purchase_id={purchase_id}"
+                    f"Payment received but pending purchase invalid: purchase_id={purchase_id}"
                 )
                 return
             
-            # Используем данные из purchase context
-            tariff_key = purchase_context["tariff"]
-            payment_amount = purchase_context["price_kopecks"] / 100.0  # Конвертируем в рубли
-            promo_code_used = purchase_context.get("promo_code")
+            # Используем данные из pending purchase
+            tariff_type = pending_purchase["tariff"]
+            period_days = pending_purchase["period_days"]
+            payment_amount = pending_purchase["price_kopecks"] / 100.0  # Конвертируем в рубли
+            promo_code_used = pending_purchase.get("promo_code")
             
-            logger.info(f"Payment received with valid purchase context: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_key}, amount={payment_amount} RUB")
+            logger.info(f"Payment received with valid pending purchase: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_type}, period_days={period_days}, amount={payment_amount} RUB")
             await database._log_audit_event_atomic_standalone(
                 "payment_received",
                 telegram_id,
                 None,
-                f"Payment received with valid purchase context: purchase_id={purchase_id}, amount={payment_amount} RUB"
+                f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount} RUB"
             )
         elif payload.startswith("renew:"):
             # Продление подписки (legacy формат, сохраняем для обратной совместимости)
@@ -2442,7 +2462,7 @@ async def process_successful_payment(message: Message):
                 language = user.get("language", "ru") if user else "ru"
                 await message.answer(localization.get_text(language, "error_payment_processing"))
                 return
-        
+            
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing payload {payload}: {e}")
         user = await database.get_user(telegram_id)
@@ -2450,96 +2470,99 @@ async def process_successful_payment(message: Message):
         await message.answer(localization.get_text(language, "error_payment_processing"))
         return
     
-    # Определяем payment_amount и tariff_key из purchase context или legacy формата
-    if purchase_context:
-        payment_amount = purchase_context["price_kopecks"] / 100.0  # Конвертируем из копеек в рубли
-        tariff_key = purchase_context["tariff"]
-        promo_code_used = purchase_context.get("promo_code")
-    else:
-        # Legacy: вычисляем из payload
-        payment_amount = payment.total_amount / 100.0  # Конвертируем из копеек в рубли
+    # Используем данные из pending purchase
+    if not pending_purchase:
+        # Это не должно произойти, так как мы уже отклонили legacy формат
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
+        logger.error(f"No pending purchase found: user={telegram_id}, payload={payload}")
+        return
+    
+    payment_amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    tariff_type = pending_purchase["tariff"]
+    period_days = pending_purchase["period_days"]
+    promo_code_used = pending_purchase.get("promo_code")
     
     # Создаем платеж в БД
-    # Для Telegram Payments создаем платеж при successful_payment
-    # (в отличие от СБП, где платеж создается заранее)
-    # create_payment может вернуть None если есть pending - в этом случае
-    # используем существующий платеж
-    existing_payment = await database.get_pending_payment_by_user(telegram_id)
-    if existing_payment:
-        # Используем существующий pending платеж
-        payment_id = existing_payment["id"]
-        # Обновляем сумму на актуальную из платежа
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE payments SET amount = $1 WHERE id = $2",
-                payment_amount, payment_id
-            )
-    else:
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
         # Создаем новый платеж с фактической суммой из платежа
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            payment_id = await conn.fetchval(
-                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
-                telegram_id, tariff_key, payment_amount
-            )
-        if not payment_id:
-            logger.error(f"Failed to create payment record for user {telegram_id}, tariff {tariff_key}")
-            user = await database.get_user(telegram_id)
-            language = user.get("language", "ru") if user else "ru"
-            await message.answer(localization.get_text(language, "error_payment_processing"))
-            return
+        payment_id = await conn.fetchval(
+            "INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id) VALUES ($1, $2, $3, 'pending', $4) RETURNING id",
+            telegram_id, f"{tariff_type}_{period_days}", int(payment_amount_rubles * 100), pending_purchase["purchase_id"]  # Сохраняем в копейках
+        )
     
-    # Получаем тариф
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
-    months = tariff_data["months"]
+    if not payment_id:
+        logger.error(f"Failed to create payment record for user {telegram_id}, tariff={tariff_type}, period_days={period_days}")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_payment_processing"))
+        return
     
-    # Активируем подписку через grant_access
-    # ВАЛИДАЦИЯ: Если используется purchase context, проверяем что он еще валиден
-    if purchase_context:
-        # Проверяем, что purchase context не был отменен после создания платежа
-        recheck_context = await database.validate_purchase_context(purchase_context["purchase_id"], telegram_id)
-        if not recheck_context:
-            error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-            user = await database.get_user(telegram_id)
-            language = user.get("language", "ru") if user else "ru"
-            await message.answer(localization.get_text(language, "error_subscription_activation", default=error_text))
-            logger.error(f"Purchase context became invalid during payment processing: user={telegram_id}, purchase_id={purchase_context['purchase_id']}")
-            await database._log_audit_event_atomic_standalone(
-                "purchase_rejected_due_to_stale_context",
-                telegram_id,
-                None,
-                f"Purchase context invalidated during processing: purchase_id={purchase_context['purchase_id']}"
-            )
-            return
+    # Получаем период в днях из pending purchase
+    duration = timedelta(days=period_days)
     
     logger.info(
         f"process_successful_payment: ACTIVATING_SUBSCRIPTION [user={telegram_id}, payment_id={payment_id}, "
-        f"tariff={tariff_key}, months={months}, purchase_id={purchase_context['purchase_id'] if purchase_context else 'legacy'}]"
+        f"tariff={tariff_type}, period_days={period_days}, purchase_id={pending_purchase['purchase_id']}]"
     )
     try:
-        expires_at, is_renewal, vpn_key = await database.approve_payment_atomic(
-            payment_id,
-            months,
-            admin_telegram_id=config.ADMIN_TELEGRAM_ID,  # Используем системного админа
-            bot=message.bot  # Передаём бот для отправки уведомлений рефереру
+        # Активируем подписку через grant_access
+        result = await database.grant_access(
+            telegram_id=telegram_id,
+            duration=duration,
+            source="payment",
+            admin_telegram_id=None,
+            admin_grant_days=None
         )
+        
+        expires_at = result["subscription_end"]
+        # Если vless_url есть - это новый UUID
+        if result.get("vless_url"):
+            vpn_key = result["vless_url"]
+            is_renewal = False
+        else:
+            # Продление - получаем vpn_key из существующей подписки
+            subscription = await database.get_subscription(telegram_id)
+            if subscription and subscription.get("vpn_key"):
+                vpn_key = subscription["vpn_key"]
+            else:
+                # Fallback: используем UUID
+                vpn_key = result.get("uuid", "")
+            is_renewal = True
         
         # ВАЛИДАЦИЯ: Запрещено выдавать ключ без записи в БД и subscription_end
         if not expires_at:
-            error_msg = f"approve_payment_atomic returned None expires_at for user {telegram_id}, payment_id={payment_id}"
+            error_msg = f"grant_access returned None expires_at for user {telegram_id}, payment_id={payment_id}"
             logger.error(f"process_successful_payment: ERROR_NO_EXPIRES_AT [user={telegram_id}, payment_id={payment_id}]")
             raise Exception(error_msg)
         
         if not vpn_key:
-            error_msg = f"approve_payment_atomic returned None vpn_key for user {telegram_id}, payment_id={payment_id}"
+            error_msg = f"grant_access returned None vpn_key for user {telegram_id}, payment_id={payment_id}"
             logger.error(f"process_successful_payment: ERROR_NO_VPN_KEY [user={telegram_id}, payment_id={payment_id}]")
             raise Exception(error_msg)
+        
+        # Обновляем статус платежа на approved
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE payments SET status = 'approved' WHERE id = $1",
+                payment_id
+            )
         
         logger.info(
             f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
             f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}]"
         )
+        
+        # Начисляем реферальный кешбэк при успешной оплате
+        try:
+            await database.process_referral_reward_cashback(telegram_id, payment_amount_rubles)
+            logger.info(f"Referral cashback processed for payment: user={telegram_id}, amount={payment_amount_rubles} RUB")
+        except Exception as e:
+            logger.exception(f"Error processing referral cashback: user={telegram_id}: {e}")
     except Exception as e:
         logger.error(
             f"process_successful_payment: CRITICAL_ERROR [user={telegram_id}, payment_id={payment_id}, "
@@ -2570,9 +2593,9 @@ async def process_successful_payment(message: Message):
                 if promo_data:
                     discount_percent = promo_data["discount_percent"]
                     # Рассчитываем price_before (базовая цена тарифа)
-                    base_price = tariff_data["price"]
+                    base_price = config.TARIFFS[tariff_type][period_days]["price"]
                     price_before = base_price
-                    price_after = payment_amount if payment_amount else payment.total_amount / 100.0
+                    price_after = payment_amount_rubles
                     
                     # Увеличиваем счетчик использований
                     await database.increment_promo_code_use(promo_code_used)
@@ -2581,7 +2604,7 @@ async def process_successful_payment(message: Message):
                     await database.log_promo_code_usage(
                         promo_code=promo_code_used,
                         telegram_id=telegram_id,
-                        tariff=tariff_key,
+                        tariff=f"{tariff_type}_{period_days}",
                         discount_percent=discount_percent,
                         price_before=price_before,
                         price_after=price_after
@@ -2607,24 +2630,27 @@ async def process_successful_payment(message: Message):
             return
         
         expires_str = expires_at.strftime("%d.%m.%Y")
-        # Обертываем ключ в HTML тег для копирования
-        vpn_key_html = f"<code>{vpn_key}</code>"
-        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key_html, date=expires_str)
-        
-        # Отправляем сообщение с VPN-ключом
+        # Отправляем сообщение об успешной активации (без ключа)
+        text = localization.get_text(language, "payment_approved", date=expires_str)
         await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
         
-        logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_key}, amount={payment_amount}")
+        # Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
+        await message.answer(
+            f"<code>{vpn_key}</code>",
+            parse_mode="HTML"
+        )
+        
+        logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, purchase_id={pending_purchase['purchase_id']}")
         
         # Начисляем реферальный кешбэк при КАЖДОЙ успешной оплате подписки
         # Кешбэк начисляется ТОЛЬКО с реальных платежей через Telegram Payments
         # НЕ начисляется с:
         #   - пополнения баланса (payload.startswith("balance_topup_"))
-        #   - оплаты с баланса (проходит через callback_tariff, не через successful_payment)
+        #   - оплаты с баланса (проходит через callback_tariff_period, не через successful_payment)
         #   - тестовых/админских доступов (source != "payment")
         try:
-            await database.process_referral_reward_cashback(telegram_id, payment_amount)
-            logger.info(f"Referral cashback processed for user {telegram_id}, payment_amount={payment_amount} RUB")
+            await database.process_referral_reward_cashback(telegram_id, payment_amount_rubles)
+            logger.info(f"Referral cashback processed for user {telegram_id}, payment_amount={payment_amount_rubles} RUB")
         except Exception as e:
             logger.exception(f"Error processing referral cashback for user {telegram_id}: {e}")
             # Не прерываем основной flow при ошибке начисления кешбэка
@@ -2634,7 +2660,7 @@ async def process_successful_payment(message: Message):
             "telegram_payment_successful",
             config.ADMIN_TELEGRAM_ID,
             telegram_id,
-            f"Telegram payment successful: payment_id={payment_id}, payload={payload}, amount={payment_amount} RUB"
+            f"Telegram payment successful: payment_id={payment_id}, payload={payload}, amount={payment_amount_rubles} RUB, purchase_id={pending_purchase['purchase_id']}"
         )
     else:
         logger.error(f"Failed to activate subscription for payment {payment_id}")
@@ -3020,9 +3046,8 @@ async def approve_payment(callback: CallbackQuery):
         language = user.get("language", "ru") if user else "ru"
         
         expires_str = expires_at.strftime("%d.%m.%Y")
-        # Обертываем ключ в HTML тег для копирования
-        vpn_key_html = f"<code>{vpn_key}</code>"
-        text = localization.get_text(language, "payment_approved", vpn_key=vpn_key_html, date=expires_str)
+        # Отправляем сообщение об успешной активации (без ключа)
+        text = localization.get_text(language, "payment_approved", date=expires_str)
         
         try:
             await callback.bot.send_message(
@@ -3031,7 +3056,15 @@ async def approve_payment(callback: CallbackQuery):
                 reply_markup=get_vpn_key_keyboard(language),
                 parse_mode="HTML"
             )
-            logging.info(f"Approval message sent to user {telegram_id} for payment {payment_id}")
+            
+            # Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
+            await callback.bot.send_message(
+                telegram_id,
+                f"<code>{vpn_key}</code>",
+                parse_mode="HTML"
+            )
+            
+            logging.info(f"Approval message and VPN key sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
             logging.error(f"Error sending approval message to user {telegram_id}: {e}")
         
