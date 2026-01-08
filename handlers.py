@@ -1277,8 +1277,28 @@ async def callback_vip_access(callback: CallbackQuery):
 
 @router.callback_query(F.data == "renew_same_period")
 async def callback_renew_same_period(callback: CallbackQuery):
-    """Продление подписки на тот же период - работает для всех типов подписок (paid, admin, test)"""
-    await callback.answer()
+    """Продление подписки на тот же период - ОТКЛЮЧЕНО
+    
+    ВРЕМЕННО ОТКЛЮЧЕНО: Этот handler использует устаревшую модель (months)
+    и не соответствует новой двухшаговой логике покупки.
+    
+    Для продления подписки используйте стандартный flow:
+    /buy -> выбор тарифа -> выбор периода -> выбор способа оплаты
+    """
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    await callback.answer(
+        localization.get_text(
+            language,
+            "error_session_expired",
+            default="Функция временно недоступна. Используйте /buy для покупки/продления подписки."
+        ),
+        show_alert=True
+    )
+    logger.warning(f"callback_renew_same_period called but disabled: user={telegram_id}")
+    return
     
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
@@ -1361,9 +1381,16 @@ async def callback_renew_same_period(callback: CallbackQuery):
     # Формируем payload (формат: renew:user_id:tariff:timestamp для уникальности)
     payload = f"renew:{telegram_id}:{tariff_key}:{int(time.time())}"
     
-    # Формируем описание
-    months = tariff_data["months"]
-    description = f"Atlas Secure VPN продление подписки на {months} месяц(ев)"
+    # Формируем описание (используем period_days вместо months)
+    period_days = 30  # Дефолтный период для продления
+    months = period_days // 30
+    if months == 1:
+        period_text = "1 месяц"
+    elif months in [2, 3, 4]:
+        period_text = f"{months} месяца"
+    else:
+        period_text = f"{months} месяцев"
+    description = f"Atlas Secure VPN продление подписки на {period_text}"
     
     logger.info(
         f"invoice_created: user={telegram_id}, renewal=True, tariff={tariff_key}, "
@@ -1444,9 +1471,16 @@ async def callback_renewal_pay(callback: CallbackQuery):
     import time
     payload = f"renew:{telegram_id}:{tariff_key}:{int(time.time())}"
     
-    # Формируем описание тарифа
-    months = tariff_data["months"]
-    description = f"Atlas Secure VPN продление подписки на {months} месяц(ев)"
+    # Формируем описание тарифа (используем period_days вместо months)
+    period_days = 30  # Дефолтный период для продления
+    months = period_days // 30
+    if months == 1:
+        period_text = "1 месяц"
+    elif months in [2, 3, 4]:
+        period_text = f"{months} месяца"
+    else:
+        period_text = f"{months} месяцев"
+    description = f"Atlas Secure VPN продление подписки на {period_text}"
     
     # Формируем prices (цена в копейках)
     prices = [LabeledPrice(label="К оплате", amount=amount * 100)]
@@ -2284,10 +2318,27 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         logger.info(f"Insufficient balance for payment: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={final_price_rubles:.2f} RUB")
         return
     
+    # КРИТИЧНО: ИДЕМПОТЕНТНОСТЬ - Проверяем FSM state и предотвращаем повторное списание
+    # Если уже в processing_payment - значит оплата уже обрабатывается
+    current_state = await state.get_state()
+    if current_state == PurchaseState.processing_payment:
+        logger.warning(
+            f"IDEMPOTENCY_CHECK: Duplicate payment attempt blocked: user={telegram_id}, "
+            f"current_state={current_state}, reason=already_processing_payment"
+        )
+        error_text = localization.get_text(
+            language,
+            "error_session_expired",
+            default="Оплата уже обрабатывается. Пожалуйста, подождите."
+        )
+        await callback.answer(error_text, show_alert=True)
+        return
+    
     # Баланса хватает - списываем и активируем подписку в ОДНОЙ транзакции
     await callback.answer()
     
-    # КРИТИЧНО: Переходим в состояние processing_payment
+    # КРИТИЧНО: Переходим в состояние processing_payment ПЕРЕД списанием баланса
+    # Это блокирует повторные клики до завершения транзакции
     await state.set_state(PurchaseState.processing_payment)
     
     # КРИТИЧНО: Формируем данные для активации подписки
@@ -3568,7 +3619,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
         "admin_payment_notification",
         username=username,
         telegram_id=telegram_id,
-        tariff=tariff_data['months'],
+        tariff=f"{tariff_key}_30",  # Используем period_days вместо months
         price=actual_amount
     )
     
@@ -3981,9 +4032,11 @@ async def approve_payment(callback: CallbackQuery):
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
         # VPN-ключ создается через Xray API
         admin_telegram_id = callback.from_user.id
+        # Пересчитываем months из period_days для совместимости со старой функцией
+        months = period_days // 30
         result = await database.approve_payment_atomic(
             payment_id, 
-            tariff_data["months"], 
+            months,  # Используем пересчитанное значение из period_days
             admin_telegram_id,
             bot=callback.bot  # Передаём бот для отправки уведомлений рефереру
         )
