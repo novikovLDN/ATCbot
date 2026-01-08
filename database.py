@@ -278,8 +278,7 @@ async def init_db():
                 purchase_amount INTEGER NOT NULL,
                 percent INTEGER NOT NULL,
                 reward_amount INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE (buyer_id, purchase_id) WHERE purchase_id IS NOT NULL
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         
@@ -287,6 +286,8 @@ async def init_db():
         try:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_referrer ON referral_rewards(referrer_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_buyer ON referral_rewards(buyer_id)")
+            # Частичный уникальный индекс для предотвращения дубликатов начислений по одному purchase_id
+            await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_rewards_unique_buyer_purchase ON referral_rewards(buyer_id, purchase_id) WHERE purchase_id IS NOT NULL")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_purchase_id ON referral_rewards(purchase_id) WHERE purchase_id IS NOT NULL")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_referral_rewards_created_at ON referral_rewards(created_at)")
         except Exception:
