@@ -832,22 +832,26 @@ async def cmd_start(message: Message):
             if referrer:
                 referrer_user_id = referrer["telegram_id"]
                 
-                # Проверяем условия:
+                # ЗАЩИТА ОТ РЕФЕРАЛЬНОГО ФРОДА:
                 # 1. Это не тот же пользователь (self-referral запрещен)
                 # 2. У текущего пользователя referrer_id IS NULL (еще не был приглашен)
                 # 3. Защита от циклов: проверяем, что реферер не является рефералом текущего пользователя
-                if referrer_user_id != telegram_id:
+                
+                # ПРОВЕРКА 1: Self-referral запрещен
+                if referrer_user_id == telegram_id:
+                    logger.warning(f"REFERRAL FRAUD: Self-referral attempt blocked - user_id={telegram_id}, referral_code={referral_code}")
+                    # Игнорируем попытку, не отправляем сообщение пользователю
+                else:
                     user = await database.get_user(telegram_id)
                     if user:
-                        # Проверяем, что пользователь еще не был приглашен
-                        # referrer_id сохраняется ОДИН РАЗ и НЕ перезаписывается
+                        # ПРОВЕРКА 2: referrer_id можно установить только один раз
                         if not user.get("referrer_id") and not user.get("referred_by"):
-                            # Проверяем защиту от циклов: реферер не должен быть рефералом текущего пользователя
+                            # ПРОВЕРКА 3: Защита от циклов - реферер не должен быть рефералом текущего пользователя
                             referrer_user = await database.get_user(referrer_user_id)
                             if referrer_user:
                                 referrer_referrer = referrer_user.get("referrer_id") or referrer_user.get("referred_by")
                                 if referrer_referrer == telegram_id:
-                                    logger.warning(f"Referral loop detected: user {telegram_id} -> {referrer_user_id} -> {telegram_id}")
+                                    logger.warning(f"REFERRAL FRAUD: Referral loop detected - user {telegram_id} -> {referrer_user_id} -> {telegram_id}")
                                 else:
                                     # Регистрируем реферала (сохраняет referrer_id ОДИН РАЗ)
                                     success = await database.register_referral(referrer_user_id, telegram_id)
@@ -856,9 +860,8 @@ async def cmd_start(message: Message):
                                     else:
                                         logger.debug(f"Referral registration failed (may already exist): referrer_id={referrer_user_id}, referred_id={telegram_id}")
                         else:
-                            logger.debug(f"User {telegram_id} already has a referrer (referrer_id={user.get('referrer_id')}), skipping registration")
-                else:
-                    logger.warning(f"Self-referral attempt blocked: user_id={telegram_id}")
+                            existing_referrer = user.get("referrer_id") or user.get("referred_by")
+                            logger.debug(f"REFERRAL FRAUD PREVENTION: User {telegram_id} already has a referrer (referrer_id={existing_referrer}), skipping registration. Attempted referral_code={referral_code}")
     
     text = localization.get_text("ru", "language_select")
     await message.answer(text, reply_markup=get_language_keyboard())
@@ -2360,7 +2363,8 @@ async def process_successful_payment(message: Message):
         expires_at, is_renewal, vpn_key = await database.approve_payment_atomic(
             payment_id,
             months,
-            admin_telegram_id=config.ADMIN_TELEGRAM_ID  # Используем системного админа
+            admin_telegram_id=config.ADMIN_TELEGRAM_ID,  # Используем системного админа
+            bot=message.bot  # Передаём бот для отправки уведомлений рефереру
         )
         
         # ВАЛИДАЦИЯ: Запрещено выдавать ключ без записи в БД и subscription_end
@@ -2834,7 +2838,12 @@ async def approve_payment(callback: CallbackQuery):
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
         # VPN-ключ создается через Xray API
         admin_telegram_id = callback.from_user.id
-        result = await database.approve_payment_atomic(payment_id, tariff_data["months"], admin_telegram_id)
+        result = await database.approve_payment_atomic(
+            payment_id, 
+            tariff_data["months"], 
+            admin_telegram_id,
+            bot=callback.bot  # Передаём бот для отправки уведомлений рефереру
+        )
         expires_at, is_renewal, vpn_key = result
         
         if expires_at is None or vpn_key is None:

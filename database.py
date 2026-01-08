@@ -4,11 +4,14 @@ import sys
 import hashlib
 import base64
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
 import logging
 import config
 import vpn_utils
 # outline_api removed - use vpn_utils instead
+
+if TYPE_CHECKING:
+    from aiogram import Bot
 
 logger = logging.getLogger(__name__)
 
@@ -2156,7 +2159,7 @@ def _calculate_subscription_days(months: int) -> int:
     return days_map.get(months, months * 30)
 
 
-async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id: int) -> Tuple[Optional[datetime], bool, Optional[str]]:
+async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id: int, bot: Optional["Bot"] = None) -> Tuple[Optional[datetime], bool, Optional[str]]:
     """Атомарно подтвердить платеж в одной транзакции
     
     В одной транзакции:
@@ -2260,14 +2263,21 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                         referrer_id = user_row.get("referrer_id") or user_row.get("referred_by")
                         
                         if referrer_id:
-                            # Проверяем, что кешбэк еще не был начислен за этого пользователя
-                            referral_row = await conn.fetchrow(
-                                "SELECT is_rewarded FROM referrals WHERE referrer_user_id = $1 AND referred_user_id = $2",
-                                referrer_id, telegram_id
-                            )
-                            
-                            # Начисляем кешбэк только если он еще не был начислен (is_rewarded = FALSE)
-                            if referral_row and not referral_row.get("is_rewarded"):
+                            # ЗАЩИТА ОТ РЕФЕРАЛЬНОГО ФРОДА: invited_user_id НЕ должен быть равен referrer_id
+                            if referrer_id == telegram_id:
+                                logger.warning(
+                                    f"REFERRAL FRAUD: Cashback blocked - invited_user_id ({telegram_id}) == referrer_id ({referrer_id}). "
+                                    f"Payment ID: {payment_id}, Amount: {payment.get('amount', 0) / 100.0:.2f} RUB"
+                                )
+                            else:
+                                # Проверяем, что кешбэк еще не был начислен за этого пользователя
+                                referral_row = await conn.fetchrow(
+                                    "SELECT is_rewarded FROM referrals WHERE referrer_user_id = $1 AND referred_user_id = $2",
+                                    referrer_id, telegram_id
+                                )
+                                
+                                # Начисляем кешбэк только если он еще не был начислен (is_rewarded = FALSE)
+                                if referral_row and not referral_row.get("is_rewarded"):
                                 try:
                                     # Получаем сумму платежа в рублях
                                     payment_amount_rubles = payment.get("amount", 0) / 100.0  # Конвертируем из копеек
@@ -2313,6 +2323,12 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                                                 cashback_kopecks, referrer_id, telegram_id
                                             )
                                             
+                                            # Получаем обновлённый баланс реферера для уведомления
+                                            referrer_balance_row = await conn.fetchrow(
+                                                "SELECT balance FROM users WHERE telegram_id = $1", referrer_id
+                                            )
+                                            referrer_balance = referrer_balance_row["balance"] / 100.0 if referrer_balance_row else 0.0
+                                            
                                             # Логируем событие
                                             details = f"Referral cashback awarded: referrer={referrer_id} ({cashback_percent}%), referred={telegram_id}, payment={payment_amount_rubles:.2f} RUB, cashback={cashback_rubles:.2f} RUB ({cashback_kopecks} kopecks)"
                                             await _log_audit_event_atomic(
@@ -2324,6 +2340,24 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                                             )
                                             
                                             logger.info(f"Referral cashback awarded: referrer_id={referrer_id}, referred_id={telegram_id}, percent={cashback_percent}%, amount={cashback_rubles:.2f} RUB")
+                                            
+                                            # Отправляем уведомление рефереру о начислении кешбэка (вне транзакции)
+                                            if bot:
+                                                try:
+                                                    notification_text = (
+                                                        f"🔥 Вам начислен кешбэк!\n"
+                                                        f"Ваш друг оформил подписку.\n"
+                                                        f"💰 Начислено: {cashback_rubles:.2f} ₽\n"
+                                                        f"Баланс: {referrer_balance:.2f} ₽"
+                                                    )
+                                                    await bot.send_message(
+                                                        chat_id=referrer_id,
+                                                        text=notification_text
+                                                    )
+                                                    logger.info(f"Referral cashback notification sent to referrer_id={referrer_id}, cashback={cashback_rubles:.2f} RUB")
+                                                except Exception as e:
+                                                    # Не блокируем транзакцию при ошибке отправки уведомления
+                                                    logger.warning(f"Failed to send referral cashback notification to referrer_id={referrer_id}: {e}")
                                         else:
                                             logger.warning(f"Invalid cashback amount: {cashback_kopecks} kopecks for payment {payment_amount_rubles} RUB")
                                 except Exception as e:
