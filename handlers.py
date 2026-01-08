@@ -300,160 +300,22 @@ def get_vpn_key_keyboard(language: str):
 async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):
     """Клавиатура выбора тарифа с учетом скидок (промокод имеет высший приоритет)
     
+    DEPRECATED: Эта функция больше не используется напрямую.
+    Кнопки тарифов создаются в callback_tariff_type с использованием calculate_final_price.
+    
     Args:
         language: Язык пользователя
         telegram_id: Telegram ID пользователя
         promo_code: Промокод (опционально)
-        purchase_id: ID покупки (опционально, будет создан если не указан)
+        purchase_id: ID покупки (опционально, больше не используется)
     """
-    # Отменяем старые покупки пользователя при показе нового экрана
-    if not purchase_id:
-        await database.cancel_pending_purchases(telegram_id, "new_tariff_selection")
-    
+    # Эта функция оставлена для обратной совместимости, но не должна использоваться
+    # Реальная логика находится в callback_tariff_type
     buttons = []
     
-    # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
-    promo_data = None
-    if promo_code:
-        promo_data = await database.check_promo_code_valid(promo_code.upper())
-    
-    has_promo = promo_data is not None
-    
-    # ПРИОРИТЕТ 1: Проверяем VIP-статус (только если нет промокода)
-    is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
-    
-    # ПРИОРИТЕТ 2: Проверяем персональную скидку (только если нет промокода и VIP)
-    personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
-    
-    for tariff_key, tariff_data in config.TARIFFS.items():
-        base_price = tariff_data["price"]
-        discount_label = ""
-        has_discount_for_tariff = False
-        
-        # Применяем скидку в порядке приоритета
-        if has_promo:
-            # Промокод применяется ко всем тарифам
-            discount_percent = promo_data["discount_percent"]
-            discounted_price = int(base_price * (100 - discount_percent) / 100)
-            price = discounted_price
-            discount_label = f"🎟 −{discount_percent}%"
-            has_discount_for_tariff = True
-        elif is_vip:
-            # VIP-скидка 30% применяется ко всем тарифам
-            discounted_price = int(base_price * 0.70)  # 30% скидка
-            price = discounted_price
-            discount_label = localization.get_text(
-                language, 
-                "vip_discount_label", 
-                default="👑 VIP-доступ"
-            )
-            has_discount_for_tariff = True
-        elif personal_discount:
-            # Персональная скидка применяется ко всем тарифам
-            discount_percent = personal_discount["discount_percent"]
-            discounted_price = int(base_price * (1 - discount_percent / 100))
-            price = discounted_price
-            discount_label = localization.get_text(
-                language, 
-                "personal_discount_label", 
-                default="🎯 Персональная скидка"
-            ).format(percent=discount_percent)
-            has_discount_for_tariff = True
-        else:
-            price = base_price
-            has_discount_for_tariff = False
-        
-        # Формируем текст кнопки
+    for tariff_key in config.TARIFFS.keys():
         base_text = localization.get_text(language, f"tariff_button_{tariff_key}")
-        
-        if has_discount_for_tariff and discount_label:
-            # Если есть скидка (промокод) - используем новый формат с описаниями
-            if has_promo:
-                # Для промокода используем специальные описания
-                promo_descriptions = {
-                    "1": "Для знакомства",
-                    "3": "Оптимальный выбор",
-                    "6": "Реже продлевать",
-                    "12": "Не думать о доступе"
-                }
-                
-                # Извлекаем срок из base_text (первые 2-3 слова)
-                if "·" in base_text:
-                    parts = base_text.split("·")
-                    full_part = parts[0].strip()
-                    words = full_part.split()
-                    
-                    # Извлекаем срок (первые 2 слова обычно: "1 месяц", "3 месяца", и т.д.)
-                    period_words = []
-                    skip_keywords = {
-                        "ru": ["Для", "знакомства", "Чаще", "всего", "выбирают", "Реже", "продлевать", "Не", "думать", "о", "доступе"],
-                        "en": ["For", "Temporary", "Standard", "Extended", "Priority", "Access"],
-                        "uz": ["Vaqtinchalik", "Standart", "Kengaytirilgan", "Ustuvor", "kirish"],
-                        "tj": ["муваққатӣ", "стандартӣ", "васеъ", "афзалиятнок", "Дастрасии"]
-                    }
-                    
-                    skip_list = skip_keywords.get(language, skip_keywords["ru"])
-                    
-                    for word in words:
-                        if any(skip_word.lower() in word.lower() for skip_word in skip_list):
-                            break
-                        period_words.append(word)
-                    
-                    if not period_words:
-                        period_words = words[:2] if len(words) >= 2 else words
-                    
-                    period_text = " ".join(period_words)
-                else:
-                    # Если формат неожиданный, используем первые 2 слова
-                    words = base_text.split()
-                    period_text = " ".join(words[:2]) if len(words) >= 2 else base_text
-                
-                # Формируем текст с описанием
-                description = promo_descriptions.get(tariff_key, "")
-                star = " ⭐" if tariff_key == "3" else ""
-                text = f"{period_text} · {description} · {price} ₽{star}"
-            else:
-                # Для других скидок (VIP, персональная) используем старый формат
-                if "·" in base_text:
-                    parts = base_text.split("·")
-                    full_part = parts[0].strip()
-                    words = full_part.split()
-                    
-                    period_words = []
-                    skip_keywords = {
-                        "ru": ["Для", "знакомства", "Чаще", "всего", "выбирают", "Реже", "продлевать", "Не", "думать", "о", "доступе"],
-                        "en": ["Temporary", "Standard", "Extended", "Priority", "Access"],
-                        "uz": ["Vaqtinchalik", "Standart", "Kengaytirilgan", "Ustuvor", "kirish"],
-                        "tj": ["муваққатӣ", "стандартӣ", "васеъ", "афзалиятнок", "Дастрасии"]
-                    }
-                    
-                    skip_list = skip_keywords.get(language, skip_keywords["ru"])
-                    
-                    for word in words:
-                        if any(skip_word.lower() in word.lower() for skip_word in skip_list):
-                            break
-                        period_words.append(word)
-                    
-                    if not period_words:
-                        period_words = words[:2] if len(words) >= 2 else words
-                    
-                    period_text = " ".join(period_words)
-                    text = f"{period_text} {discount_label} · {price} ₽"
-                else:
-                    text = base_text.replace(str(base_price), str(price))
-                    text = f"{text} · {discount_label}"
-        else:
-            # Если нет скидки - используем полный формат с названием уровня доступа
-            text = base_text
-        
-        # Генерируем purchase_id для каждого тарифа (с учетом текущих скидок)
-        # ВАЖНО: Каждый тариф получает свой purchase_id, так как цены могут отличаться
-        # Функция get_tariff_keyboard больше не создаёт purchase_id
-        # purchase_id создаётся в callback_tariff_type для каждого периода
-        tariff_purchase_id = None
-        
-        # Включаем purchase_id в callback_data
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}:{tariff_purchase_id}")])
+        buttons.append([InlineKeyboardButton(text=base_text, callback_data=f"tariff_type:{tariff_key}")])
     
     # Кнопка ввода промокода
     buttons.append([InlineKeyboardButton(
@@ -2060,11 +1922,26 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     # Период будет выбран на следующем экране
     buttons = []
     
-    # Получаем цены для выбранного тарифа
+    # Получаем цены для выбранного тарифа с учетом скидок
     periods = config.TARIFFS[tariff_type]
     
+    # Получаем промокод из FSM state (если есть)
+    fsm_data = await state.get_data()
+    promo_code = fsm_data.get("promo_code")
+    
     for period_days, period_data in periods.items():
-        price = period_data["price"]
+        # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
+        price_info = await database.calculate_final_price(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            promo_code=promo_code
+        )
+        
+        base_price_rubles = price_info["base_price_kopecks"] / 100.0
+        final_price_rubles = price_info["final_price_kopecks"] / 100.0
+        has_discount = price_info["discount_percent"] > 0
+        
         months = period_days // 30
         
         # Формируем правильное склонение "месяц/месяца/месяцев"
@@ -2075,17 +1952,23 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         else:
             period_text = f"{months} месяцев"
         
-        # Создаем pending purchase для каждого периода
+        # Создаем pending purchase для каждого периода с финальной ценой
         purchase_id = await database.create_pending_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
-            price_kopecks=price * 100,
-            promo_code=None
+            price_kopecks=price_info["final_price_kopecks"],
+            promo_code=promo_code
         )
         
+        # Формируем текст кнопки с зачеркнутой ценой (если есть скидка)
+        if has_discount:
+            button_text = f"{int(base_price_rubles)} ₽ → {int(final_price_rubles)} ₽ — {period_text}"
+        else:
+            button_text = f"{int(final_price_rubles)} ₽ — {period_text}"
+        
         buttons.append([InlineKeyboardButton(
-            text=f"{price} ₽ — {period_text}",
+            text=button_text,
             callback_data=f"tariff_period:{tariff_type}:{period_days}:{purchase_id}"
         )])
     
@@ -2133,85 +2016,88 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     
     # Если purchase отсутствует или устарел - создаём новый с актуальной ценой
     if not pending_purchase:
-        # Получаем базовую цену из конфига
-        if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
+        # КРИТИЧНО: Получаем промокод из FSM state
+        fsm_data = await state.get_data()
+        promo_code = fsm_data.get("promo_code")
+        
+        # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
+        try:
+            price_info = await database.calculate_final_price(
+                telegram_id=telegram_id,
+                tariff=tariff_type,
+                period_days=period_days,
+                promo_code=promo_code
+            )
+        except ValueError as e:
             error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
             await callback.answer(error_text, show_alert=True)
-            logger.warning(f"Invalid tariff/period: user={telegram_id}, tariff={tariff_type}, period={period_days}")
+            logger.warning(f"Invalid tariff/period: user={telegram_id}, tariff={tariff_type}, period={period_days}, error={e}")
             return
         
-        base_price = config.TARIFFS[tariff_type][period_days]["price"]
-        
-        # Рассчитываем актуальную цену с учётом скидок (та же логика, что в get_tariff_keyboard)
-        # ПРИОРИТЕТ 0: Промокод (если есть в FSM state)
-        promo_code = None
-        promo_data = None
-        fsm_data = await state.get_data()
-        if fsm_data.get("promo_code"):
-            promo_code = fsm_data["promo_code"]
-            promo_data = await database.check_promo_code_valid(promo_code.upper())
-        
-        has_promo = promo_data is not None
-        
-        # ПРИОРИТЕТ 1: VIP-статус (только если нет промокода)
-        is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
-        
-        # ПРИОРИТЕТ 2: Персональная скидка (только если нет промокода и VIP)
-        personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
-        
-        # Применяем скидку в порядке приоритета
-        base_price_kopecks = base_price * 100
-        
-        if has_promo:
-            discount_percent = promo_data["discount_percent"]
-            discounted_price_kopecks = int(base_price * (100 - discount_percent) / 100) * 100
-            price_kopecks = discounted_price_kopecks
-            
-            logger.info(
-                f"tariff_price_updated: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, "
-                f"promo_code={promo_code}, discount_percent={discount_percent}%, "
-                f"base_price_kopecks={base_price_kopecks}, discounted_price_kopecks={discounted_price_kopecks}"
-            )
-        elif is_vip:
-            discounted_price_kopecks = int(base_price * 0.70) * 100  # 30% скидка
-            price_kopecks = discounted_price_kopecks
-            
-            logger.info(
-                f"tariff_price_updated: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, "
-                f"discount_type=vip, discount_percent=30%, "
-                f"base_price_kopecks={base_price_kopecks}, discounted_price_kopecks={discounted_price_kopecks}"
-            )
-        elif personal_discount:
-            discount_percent = personal_discount["discount_percent"]
-            discounted_price_kopecks = int(base_price * (1 - discount_percent / 100)) * 100
-            price_kopecks = discounted_price_kopecks
-            
-            logger.info(
-                f"tariff_price_updated: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, "
-                f"discount_type=personal, discount_percent={discount_percent}%, "
-                f"base_price_kopecks={base_price_kopecks}, discounted_price_kopecks={discounted_price_kopecks}"
-            )
-        else:
-            price_kopecks = base_price_kopecks
-        
-        # Создаём новый pending purchase с актуальной ценой
+        # Создаём новый pending purchase с финальной ценой
         purchase_id = await database.create_pending_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
-            price_kopecks=price_kopecks,
+            price_kopecks=price_info["final_price_kopecks"],
             promo_code=promo_code
         )
         
         logger.info(
             f"Auto-created purchase session: user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period={period_days}, "
-            f"base_price_kopecks={base_price_kopecks}, final_price_kopecks={price_kopecks}, "
-            f"price_rubles={price_kopecks/100:.2f} RUB, promo_code={promo_code or 'N/A'}"
+            f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
+            f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}, "
+            f"promo_code={promo_code or 'N/A'}"
         )
+        
+        # Получаем созданный purchase
+        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+        if not pending_purchase:
+            logger.error(f"CRITICAL: Failed to retrieve created purchase: user={telegram_id}, purchase_id={purchase_id}")
+            error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Пожалуйста, попробуйте ещё раз.")
+            await callback.answer(error_text, show_alert=True)
+            return
     else:
-        # Purchase валиден - используем его
+        # Purchase валиден - проверяем соответствие цены
+        purchase_id = pending_purchase["purchase_id"]
         logger.info(f"Using existing purchase session: user={telegram_id}, purchase_id={purchase_id}")
+        
+        # КРИТИЧНО: Проверяем, что цена в pending_purchase соответствует актуальной цене
+        fsm_data = await state.get_data()
+        promo_code = fsm_data.get("promo_code")
+        
+        try:
+            current_price_info = await database.calculate_final_price(
+                telegram_id=telegram_id,
+                tariff=tariff_type,
+                period_days=period_days,
+                promo_code=promo_code
+            )
+            
+            # Сравниваем цены с допуском 1 копейка (округление)
+            price_diff = abs(pending_purchase["price_kopecks"] - current_price_info["final_price_kopecks"])
+            if price_diff > 1:
+                # Цена изменилась - отменяем старый purchase
+                logger.error(
+                    f"PRICE_MISMATCH: user={telegram_id}, purchase_id={purchase_id}, "
+                    f"stored_price={pending_purchase['price_kopecks']}, current_price={current_price_info['final_price_kopecks']}, "
+                    f"diff={price_diff} kopecks"
+                )
+                await database.cancel_pending_purchases(telegram_id, "price_mismatch")
+                
+                error_text = localization.get_text(
+                    language,
+                    "error_price_updated",
+                    default="Цена обновилась, пожалуйста выберите тариф ещё раз"
+                )
+                await callback.answer(error_text, show_alert=True)
+                return
+        except ValueError as e:
+            logger.error(f"Invalid tariff/period in price validation: user={telegram_id}, error={e}")
+            error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+            await callback.answer(error_text, show_alert=True)
+            return
     
     # Отменяем остальные pending покупки этого пользователя (оставляем только выбранную)
     pool = await database.get_pool()
@@ -2499,71 +2385,41 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     
     # Если purchase отсутствует или устарел - создаём новый с актуальной ценой
     if not pending_purchase:
-        # Получаем базовую цену из конфига
-        base_price = config.TARIFFS[tariff_type][period_days]["price"]
-        
-        # Рассчитываем актуальную цену с учётом скидок
-        promo_code = None
-        promo_data = None
+        # КРИТИЧНО: Получаем промокод из FSM state
         fsm_data = await state.get_data()
-        if fsm_data.get("promo_code"):
-            promo_code = fsm_data["promo_code"]
-            promo_data = await database.check_promo_code_valid(promo_code.upper())
+        promo_code = fsm_data.get("promo_code")
         
-        has_promo = promo_data is not None
-        is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
-        personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
-        
-        # Применяем скидку
-        base_price_kopecks = base_price * 100
-        
-        if has_promo:
-            discount_percent = promo_data["discount_percent"]
-            discounted_price_kopecks = int(base_price * (100 - discount_percent) / 100) * 100
-            price_kopecks = discounted_price_kopecks
-            
-            logger.info(
-                f"tariff_price_updated: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, "
-                f"promo_code={promo_code}, discount_percent={discount_percent}%, "
-                f"base_price_kopecks={base_price_kopecks}, discounted_price_kopecks={discounted_price_kopecks}"
+        # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
+        try:
+            price_info = await database.calculate_final_price(
+                telegram_id=telegram_id,
+                tariff=tariff_type,
+                period_days=period_days,
+                promo_code=promo_code
             )
-        elif is_vip:
-            discounted_price_kopecks = int(base_price * 0.70) * 100  # 30% скидка
-            price_kopecks = discounted_price_kopecks
-            
-            logger.info(
-                f"tariff_price_updated: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, "
-                f"discount_type=vip, discount_percent=30%, "
-                f"base_price_kopecks={base_price_kopecks}, discounted_price_kopecks={discounted_price_kopecks}"
-            )
-        elif personal_discount:
-            discount_percent = personal_discount["discount_percent"]
-            discounted_price_kopecks = int(base_price * (1 - discount_percent / 100)) * 100
-            price_kopecks = discounted_price_kopecks
-            
-            logger.info(
-                f"tariff_price_updated: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, "
-                f"discount_type=personal, discount_percent={discount_percent}%, "
-                f"base_price_kopecks={base_price_kopecks}, discounted_price_kopecks={discounted_price_kopecks}"
-            )
-        else:
-            price_kopecks = base_price_kopecks
+        except ValueError as e:
+            logger.error(f"Invalid tariff/period in pay_tariff_card: user={telegram_id}, error={e}")
+            error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+            await callback.answer(error_text, show_alert=True)
+            return
         
-        # Создаём новый pending purchase с актуальной ценой
+        # Создаём новый pending purchase с финальной ценой
         purchase_id = await database.create_pending_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
-            price_kopecks=price_kopecks,
+            price_kopecks=price_info["final_price_kopecks"],
             promo_code=promo_code
         )
         
         logger.info(
             f"Auto-created purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period={period_days}, "
-            f"base_price_kopecks={base_price_kopecks}, final_price_kopecks={price_kopecks}, "
-            f"price_rubles={price_kopecks/100:.2f} RUB, promo_code={promo_code or 'N/A'}"
+            f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
+            f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}, "
+            f"promo_code={promo_code or 'N/A'}"
         )
+        
         # Получаем созданный purchase
         pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
         if not pending_purchase:
@@ -2573,6 +2429,42 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
             return
     else:
         logger.info(f"Using existing purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
+        
+        # КРИТИЧНО: Проверяем, что цена в pending_purchase соответствует актуальной цене
+        fsm_data = await state.get_data()
+        promo_code = fsm_data.get("promo_code")
+        
+        try:
+            current_price_info = await database.calculate_final_price(
+                telegram_id=telegram_id,
+                tariff=tariff_type,
+                period_days=period_days,
+                promo_code=promo_code
+            )
+            
+            # Сравниваем цены с допуском 1 копейка (округление)
+            price_diff = abs(pending_purchase["price_kopecks"] - current_price_info["final_price_kopecks"])
+            if price_diff > 1:
+                # Цена изменилась - отменяем старый purchase
+                logger.error(
+                    f"PRICE_MISMATCH: user={telegram_id}, purchase_id={purchase_id}, "
+                    f"stored_price={pending_purchase['price_kopecks']}, current_price={current_price_info['final_price_kopecks']}, "
+                    f"diff={price_diff} kopecks"
+                )
+                await database.cancel_pending_purchases(telegram_id, "price_mismatch")
+                
+                error_text = localization.get_text(
+                    language,
+                    "error_price_updated",
+                    default="Цена обновилась, пожалуйста выберите тариф ещё раз"
+                )
+                await callback.answer(error_text, show_alert=True)
+                return
+        except ValueError as e:
+            logger.error(f"Invalid tariff/period in price validation: user={telegram_id}, error={e}")
+            error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+            await callback.answer(error_text, show_alert=True)
+            return
     
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
@@ -2586,9 +2478,13 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Валидация минимальной суммы платежа (64 RUB = 6400 kopecks)
     MIN_PAYMENT_AMOUNT_KOPECKS = 6400
     if final_price_kopecks < MIN_PAYMENT_AMOUNT_KOPECKS:
-        error_text = (
-            f"Сумма после скидки ниже минимальной для оплаты картой (64 ₽).\n"
-            f"Пожалуйста, выберите другой тариф."
+        # Отменяем pending purchase с невалидной ценой
+        await database.cancel_pending_purchases(telegram_id, "min_amount_validation_failed")
+        
+        error_text = localization.get_text(
+            language,
+            "error_payment_min_amount",
+            default=f"Сумма после скидки ниже минимальной для оплаты картой (64 ₽).\nПожалуйста, выберите другой тариф."
         )
         logger.warning(
             f"payment_blocked_min_amount: user={telegram_id}, purchase_id={purchase_id}, "
