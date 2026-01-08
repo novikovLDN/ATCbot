@@ -1353,13 +1353,24 @@ async def callback_renew_same_period(callback: CallbackQuery):
     if last_payment:
         tariff_key = last_payment.get("tariff")
     
-    # Если тариф не найден в платеже (admin/test подписки), используем дефолтный тариф "1" (1 месяц)
+    # Если тариф не найден в платеже (admin/test подписки), используем дефолтный тариф "basic" (30 дней)
     if not tariff_key or tariff_key not in config.TARIFFS:
-        tariff_key = "1"
-        logger.info(f"Using default tariff '1' for renewal: user={telegram_id}, subscription_source=admin_or_test")
+        tariff_key = "basic"
+        logger.info(f"Using default tariff 'basic' (30 days) for renewal: user={telegram_id}, subscription_source=admin_or_test")
     
-    # Получаем цену тарифа
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    # Получаем цену тарифа - используем период 30 дней как дефолт
+    if tariff_key not in config.TARIFFS:
+        error_msg = f"Invalid tariff_key '{tariff_key}' for user {telegram_id}. Valid tariffs: {list(config.TARIFFS.keys())}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # Используем период 30 дней как дефолт для admin/test подписок
+    if 30 not in config.TARIFFS[tariff_key]:
+        error_msg = f"Period 30 days not found in tariff '{tariff_key}' for user {telegram_id}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    tariff_data = config.TARIFFS[tariff_key][30]  # Используем период 30 дней
     base_price = tariff_data["price"]
     
     # Применяем скидки (VIP, персональная) - та же логика, что при покупке
@@ -1414,7 +1425,24 @@ async def callback_renewal_pay(callback: CallbackQuery):
         return
     
     # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    if tariff_key not in config.TARIFFS:
+        error_msg = f"Invalid tariff_key '{tariff_key}' for user {telegram_id}. Valid tariffs: {list(config.TARIFFS.keys())}"
+        logger.error(error_msg)
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    # Для callback_tariff используем период 30 дней как дефолт (если не указан)
+    if 30 not in config.TARIFFS[tariff_key]:
+        error_msg = f"Period 30 days not found in tariff '{tariff_key}' for user {telegram_id}"
+        logger.error(error_msg)
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    tariff_data = config.TARIFFS[tariff_key][30]  # Используем период 30 дней
     base_price = tariff_data["price"]
     
     # ПРИОРИТЕТ 1: VIP-статус
@@ -2194,8 +2222,9 @@ async def process_tariff_purchase_selection(
         pool = await database.get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id) VALUES ($1, $2, $3, 'approved', $4)",
-                telegram_id, f"{tariff_type}_{period_days}", int(amount_rubles * 100), purchase_id
+                # КРИТИЧНО: Используем ТОЛЬКО существующие поля таблицы payments (без purchase_id)
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved')",
+                telegram_id, f"{tariff_type}_{period_days}", int(amount_rubles * 100)
             )
         
         # Начисляем реферальный кешбэк при оплате с баланса
@@ -2713,16 +2742,29 @@ async def process_successful_payment(message: Message):
     promo_code_used = pending_purchase.get("promo_code")
     
     # Создаем платеж в БД
-    pool = await database.get_pool()
-    async with pool.acquire() as conn:
-        # Создаем новый платеж с фактической суммой из платежа
-        payment_id = await conn.fetchval(
-            "INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id) VALUES ($1, $2, $3, 'pending', $4) RETURNING id",
-            telegram_id, f"{tariff_type}_{period_days}", int(payment_amount_rubles * 100), pending_purchase["purchase_id"]  # Сохраняем в копейках
-        )
+    # КРИТИЧНО: Если INSERT payment упал → лог показать и ОСТАНОВИТЬ процесс
+    payment_id = None
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            # Создаем новый платеж с фактической суммой из платежа
+            # КРИТИЧНО: Используем ТОЛЬКО существующие поля таблицы payments (без purchase_id)
+            payment_id = await conn.fetchval(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
+                telegram_id, f"{tariff_type}_{period_days}", int(payment_amount_rubles * 100)  # Сохраняем в копейках
+            )
+    except Exception as e:
+        error_msg = f"CRITICAL: Failed to INSERT payment record for user {telegram_id}, tariff={tariff_type}, period_days={period_days}, error={str(e)}, error_type={type(e).__name__}"
+        logger.error(error_msg)
+        logger.exception(f"process_successful_payment: PAYMENT_INSERT_FAILED [user={telegram_id}]")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_payment_processing"))
+        return
     
     if not payment_id:
-        logger.error(f"Failed to create payment record for user {telegram_id}, tariff={tariff_type}, period_days={period_days}")
+        error_msg = f"CRITICAL: payment_id is None after INSERT for user {telegram_id}, tariff={tariff_type}, period_days={period_days}"
+        logger.error(error_msg)
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_payment_processing"))
@@ -2735,6 +2777,12 @@ async def process_successful_payment(message: Message):
         f"process_successful_payment: ACTIVATING_SUBSCRIPTION [user={telegram_id}, payment_id={payment_id}, "
         f"tariff={tariff_type}, period_days={period_days}, purchase_id={pending_purchase['purchase_id']}]"
     )
+    
+    # КРИТИЧНО: Если VPN API упал → подписку НЕ активировать
+    expires_at = None
+    vpn_key = None
+    is_renewal = False
+    
     try:
         # Активируем подписку через grant_access
         result = await database.grant_access(
@@ -2745,7 +2793,12 @@ async def process_successful_payment(message: Message):
             admin_grant_days=None
         )
         
-        expires_at = result["subscription_end"]
+        if not result:
+            error_msg = f"CRITICAL: grant_access returned None for user {telegram_id}, payment_id={payment_id}"
+            logger.error(f"process_successful_payment: ERROR_GRANT_ACCESS_NONE [user={telegram_id}, payment_id={payment_id}]")
+            raise Exception(error_msg)
+        
+        expires_at = result.get("subscription_end")
         # Если vless_url есть - это новый UUID
         if result.get("vless_url"):
             vpn_key = result["vless_url"]
@@ -2756,28 +2809,40 @@ async def process_successful_payment(message: Message):
             if subscription and subscription.get("vpn_key"):
                 vpn_key = subscription["vpn_key"]
             else:
-                # Fallback: используем UUID
-                vpn_key = result.get("uuid", "")
+                # Fallback: используем UUID для генерации VLESS URL
+                uuid = result.get("uuid")
+                if uuid:
+                    import vpn_utils
+                    vpn_key = vpn_utils.generate_vless_url(uuid)
+                else:
+                    vpn_key = ""
             is_renewal = True
         
         # ВАЛИДАЦИЯ: Запрещено выдавать ключ без записи в БД и subscription_end
         if not expires_at:
-            error_msg = f"grant_access returned None expires_at for user {telegram_id}, payment_id={payment_id}"
+            error_msg = f"CRITICAL: grant_access returned None expires_at for user {telegram_id}, payment_id={payment_id}"
             logger.error(f"process_successful_payment: ERROR_NO_EXPIRES_AT [user={telegram_id}, payment_id={payment_id}]")
             raise Exception(error_msg)
         
         if not vpn_key:
-            error_msg = f"grant_access returned None vpn_key for user {telegram_id}, payment_id={payment_id}"
+            error_msg = f"CRITICAL: grant_access returned None vpn_key for user {telegram_id}, payment_id={payment_id}"
             logger.error(f"process_successful_payment: ERROR_NO_VPN_KEY [user={telegram_id}, payment_id={payment_id}]")
             raise Exception(error_msg)
         
         # Обновляем статус платежа на approved
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE payments SET status = 'approved' WHERE id = $1",
-                payment_id
-            )
+        # КРИТИЧНО: Обновляем статус ТОЛЬКО после успешной активации подписки
+        try:
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE payments SET status = 'approved' WHERE id = $1",
+                    payment_id
+                )
+        except Exception as e:
+            error_msg = f"CRITICAL: Failed to UPDATE payment status to 'approved' for payment_id={payment_id}, user={telegram_id}, error={str(e)}"
+            logger.error(error_msg)
+            logger.exception(f"process_successful_payment: PAYMENT_UPDATE_FAILED [user={telegram_id}, payment_id={payment_id}]")
+            # Не прерываем процесс, так как подписка уже активирована
         
         logger.info(
             f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
@@ -2833,11 +2898,18 @@ async def process_successful_payment(message: Message):
             logger.exception(f"Error processing referral reward: buyer={telegram_id}: {e}")
             # Не блокируем процесс активации подписки при ошибке начисления кешбэка
     except Exception as e:
-        logger.error(
-            f"process_successful_payment: CRITICAL_ERROR [user={telegram_id}, payment_id={payment_id}, "
+        # КРИТИЧНО: Логируем все ошибки с полным контекстом
+        error_msg = (
+            f"CRITICAL: process_successful_payment FAILED [user={telegram_id}, payment_id={payment_id}, "
+            f"tariff={tariff_type}, period_days={period_days}, "
             f"error={str(e)}, error_type={type(e).__name__}]"
         )
+        logger.error(error_msg)
         logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, payment_id={payment_id}]")
+        
+        # НЕ обновляем статус платежа на approved, так как подписка НЕ активирована
+        # Платеж остаётся в статусе 'pending' для ручной обработки админом
+        
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         error_text = localization.get_text(
@@ -2846,6 +2918,18 @@ async def process_successful_payment(message: Message):
             default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
         )
         await message.answer(error_text)
+        
+        # Логируем событие для админа
+        try:
+            await database._log_audit_event_atomic_standalone(
+                "payment_subscription_activation_failed",
+                config.ADMIN_TELEGRAM_ID,
+                telegram_id,
+                f"Payment {payment_id} received but subscription activation failed: {str(e)}"
+            )
+        except Exception as log_error:
+            logger.error(f"Failed to log audit event: {log_error}")
+        
         return
     
     # ВАЛИДАЦИЯ: Дополнительная проверка перед выдачей ключа
@@ -2911,6 +2995,14 @@ async def process_successful_payment(message: Message):
         
         logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, purchase_id={pending_purchase['purchase_id']}")
         
+        # Помечаем pending_purchase как оплаченный
+        try:
+            await database.mark_pending_purchase_paid(pending_purchase['purchase_id'])
+            logger.info(f"Pending purchase marked as paid: purchase_id={pending_purchase['purchase_id']}, user={telegram_id}")
+        except Exception as e:
+            logger.error(f"Failed to mark pending purchase as paid: purchase_id={pending_purchase['purchase_id']}, user={telegram_id}, error={str(e)}")
+            # Не прерываем процесс, так как подписка уже активирована
+        
         # Начисляем реферальный кешбэк при КАЖДОЙ успешной оплате подписки
         # Кешбэк начисляется ТОЛЬКО с реальных платежей через Telegram Payments
         # НЕ начисляется с:
@@ -2959,8 +3051,22 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     language = user.get("language", "ru") if user else "ru"
     
     data = await state.get_data()
-    tariff_key = data.get("tariff", "1")
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    tariff_key = data.get("tariff", "basic")  # Используем "basic" как дефолт вместо "1"
+    
+    if tariff_key not in config.TARIFFS:
+        error_msg = f"Invalid tariff_key '{tariff_key}' for user {telegram_id}. Valid tariffs: {list(config.TARIFFS.keys())}"
+        logger.error(error_msg)
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    # Используем период 30 дней как дефолт
+    if 30 not in config.TARIFFS[tariff_key]:
+        error_msg = f"Period 30 days not found in tariff '{tariff_key}' for user {telegram_id}"
+        logger.error(error_msg)
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    tariff_data = config.TARIFFS[tariff_key][30]  # Используем период 30 дней
     base_price = tariff_data["price"]
     
     # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
@@ -3023,7 +3129,14 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     
     # Получаем данные платежа, чтобы показать реальную сумму администратору
     payment = await database.get_payment(payment_id)
-    actual_amount = payment["amount"] if payment else config.TARIFFS.get(tariff_key, config.TARIFFS["1"])["price"]
+    if payment:
+        actual_amount = payment["amount"] / 100.0  # Конвертируем из копеек
+    else:
+        # Fallback: используем базовую цену тарифа basic 30 дней
+        if "basic" in config.TARIFFS and 30 in config.TARIFFS["basic"]:
+            actual_amount = config.TARIFFS["basic"][30]["price"]
+        else:
+            actual_amount = 149  # Дефолтная цена
     
     # Отправляем сообщение пользователю
     text = localization.get_text(language, "payment_pending")
@@ -3031,7 +3144,17 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     
     # Уведомляем администратора с реальной суммой платежа
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    # Используем базовую цену тарифа basic 30 дней как fallback
+    if tariff_key in config.TARIFFS and 30 in config.TARIFFS[tariff_key]:
+        tariff_data = config.TARIFFS[tariff_key][30]
+    elif "basic" in config.TARIFFS and 30 in config.TARIFFS["basic"]:
+        tariff_data = config.TARIFFS["basic"][30]
+        logger.warning(f"Using fallback tariff 'basic' 30 days for tariff_key '{tariff_key}'")
+    else:
+        error_msg = f"CRITICAL: Cannot find valid tariff data for tariff_key '{tariff_key}'"
+        logger.error(error_msg)
+        tariff_data = {"price": 149}  # Дефолтная цена
+    
     username = callback.from_user.username or "не указан"
     
     # Используем локализацию для админ-уведомления
@@ -3423,7 +3546,32 @@ async def approve_payment(callback: CallbackQuery):
         
         telegram_id = payment["telegram_id"]
         tariff_key = payment["tariff"]
-        tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+        
+        # Парсим tariff_key (формат: "basic_30" или "plus_90")
+        if "_" in tariff_key:
+            tariff_type, period_str = tariff_key.split("_", 1)
+            try:
+                period_days = int(period_str)
+            except ValueError:
+                logger.error(f"Invalid period in tariff_key '{tariff_key}' for payment {payment_id}")
+                period_days = 30
+        else:
+            # Fallback: используем basic 30 дней
+            tariff_type = "basic"
+            period_days = 30
+            logger.warning(f"Invalid tariff_key format '{tariff_key}', using fallback: basic_30")
+        
+        # Получаем данные тарифа
+        if tariff_type in config.TARIFFS and period_days in config.TARIFFS[tariff_type]:
+            tariff_data = config.TARIFFS[tariff_type][period_days]
+        elif "basic" in config.TARIFFS and 30 in config.TARIFFS["basic"]:
+            tariff_data = config.TARIFFS["basic"][30]
+            logger.warning(f"Using fallback tariff 'basic' 30 days for tariff_key '{tariff_key}'")
+        else:
+            error_msg = f"CRITICAL: Cannot find valid tariff data for tariff_key '{tariff_key}'"
+            logger.error(error_msg)
+            await callback.answer("Ошибка: неверный тариф", show_alert=True)
+            return
         
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
         # VPN-ключ создается через Xray API
