@@ -29,12 +29,28 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
     """
     Безопасное редактирование текста сообщения с обработкой ошибки "message is not modified"
     
+    Сравнивает текущий контент с новым перед редактированием, чтобы избежать ненужных вызовов API.
+    
     Args:
         message: Message объект для редактирования
         text: Новый текст сообщения
         reply_markup: Новая клавиатура (опционально)
         parse_mode: Режим парсинга (HTML, Markdown и т.д.)
     """
+    # Сравниваем текущий текст с новым
+    if message.text == text or (message.caption and message.caption == text):
+        # Текст совпадает - проверяем клавиатуру
+        if reply_markup is None:
+            # Удаление клавиатуры - проверяем, есть ли она
+            if message.reply_markup is None:
+                # Контент идентичен - не вызываем edit
+                return
+        else:
+            # Сравниваем клавиатуры (упрощённая проверка)
+            if message.reply_markup and _markups_equal(message.reply_markup, reply_markup):
+                # Контент идентичен - не вызываем edit
+                return
+    
     try:
         await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except TelegramBadRequest as e:
@@ -44,14 +60,62 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
         logger.debug(f"Message not modified (expected): {e}")
 
 
+def _markups_equal(markup1: InlineKeyboardMarkup, markup2: InlineKeyboardMarkup) -> bool:
+    """
+    Упрощённое сравнение клавиатур (проверка по callback_data)
+    
+    Args:
+        markup1: Первая клавиатура
+        markup2: Вторая клавиатура
+    
+    Returns:
+        True если клавиатуры идентичны, False иначе
+    """
+    try:
+        if markup1 is None and markup2 is None:
+            return True
+        if markup1 is None or markup2 is None:
+            return False
+        
+        kb1 = markup1.inline_keyboard if hasattr(markup1, 'inline_keyboard') else []
+        kb2 = markup2.inline_keyboard if hasattr(markup2, 'inline_keyboard') else []
+        
+        if len(kb1) != len(kb2):
+            return False
+        
+        for row1, row2 in zip(kb1, kb2):
+            if len(row1) != len(row2):
+                return False
+            for btn1, btn2 in zip(row1, row2):
+                if btn1.callback_data != btn2.callback_data:
+                    return False
+        
+        return True
+    except Exception:
+        # При ошибке сравнения считаем, что клавиатуры разные
+        return False
+
+
 async def safe_edit_reply_markup(message: Message, reply_markup: InlineKeyboardMarkup = None):
     """
     Безопасное редактирование клавиатуры сообщения с обработкой ошибки "message is not modified"
+    
+    Сравнивает текущую клавиатуру с новой перед редактированием.
     
     Args:
         message: Message объект для редактирования
         reply_markup: Новая клавиатура (или None для удаления)
     """
+    # Сравниваем текущую клавиатуру с новой
+    if reply_markup is None:
+        if message.reply_markup is None:
+            # Клавиатура уже удалена - не вызываем edit
+            return
+    else:
+        if message.reply_markup and _markups_equal(message.reply_markup, reply_markup):
+            # Клавиатуры идентичны - не вызываем edit
+            return
+    
     try:
         await message.edit_reply_markup(reply_markup=reply_markup)
     except TelegramBadRequest as e:
@@ -252,7 +316,7 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
         # Если есть активная подписка - показываем кнопку продления
         buttons.append([InlineKeyboardButton(
             text=localization.get_text(language, "renew_subscription"),
-            callback_data="renew_same_period"
+            callback_data="menu_buy_vpn"  # Используем стандартный flow покупки/продления
         )])
         
         # Кнопка автопродления (только для активных подписок)
@@ -7762,5 +7826,28 @@ async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: F
     await callback.answer()
 
 
+# ====================================================================================
+# GLOBAL FALLBACK HANDLER: Обработка необработанных callback_query
+# ====================================================================================
+@router.callback_query()
+async def callback_fallback(callback: CallbackQuery, state: FSMContext):
+    """
+    Глобальный fallback handler для всех необработанных callback_query
+    
+    Логирует callback_data и текущее FSM-состояние для отладки.
+    НЕ отвечает пользователю, чтобы не ломать UX.
+    """
+    callback_data = callback.data
+    telegram_id = callback.from_user.id
+    current_state = await state.get_state()
+    
+    logger.warning(
+        f"Unhandled callback_query: user={telegram_id}, "
+        f"callback_data='{callback_data}', "
+        f"fsm_state={current_state}"
+    )
+    
+    # НЕ отвечаем пользователю - просто логируем для отладки
+    # Это позволяет видеть устаревшие/лишние callback_data без ломания UX
 
 
