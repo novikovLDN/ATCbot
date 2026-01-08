@@ -489,10 +489,105 @@ def get_support_keyboard(language: str):
     return keyboard
 
 
-def get_instruction_keyboard(language: str):
-    """Клавиатура экрана 'Инструкция' для v2RayTun"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
+def detect_platform(callback_or_message) -> str:
+    """
+    Определить платформу пользователя (iOS, Android, или unknown)
+    
+    Использует эвристики для определения платформы:
+    1. Primary: language_code (косвенный сигнал)
+    2. Secondary: проверка доступных полей в объекте
+    3. Fallback: "unknown" (показываем все кнопки)
+    
+    Args:
+        callback_or_message: CallbackQuery или Message объект из aiogram
+    
+    Returns:
+        "ios", "android", или "unknown"
+    """
+    try:
+        # Получаем пользователя
+        if hasattr(callback_or_message, 'from_user'):
+            user = callback_or_message.from_user
+        elif hasattr(callback_or_message, 'user'):
+            user = callback_or_message.user
+        else:
+            return "unknown"
+        
+        # PRIMARY: Используем language_code как косвенный сигнал
+        # Примечание: это не надежный метод, но может помочь в некоторых случаях
+        language_code = getattr(user, 'language_code', None)
+        
+        if language_code:
+            lang_lower = language_code.lower()
+            # Эвристика: iOS часто использует региональные коды (ru-RU, en-US)
+            # Android чаще использует простые коды (ru, en)
+            # Это НЕ надежно, но может помочь в некоторых случаях
+            
+            # Если language_code содержит дефис (региональный код), склоняемся к iOS
+            if '-' in language_code:
+                # Это может быть iOS (региональные коды)
+                # Но не уверены, поэтому используем как слабый сигнал
+                pass
+        
+        # SECONDARY: Проверка через callback query (если доступно)
+        if hasattr(callback_or_message, 'chat_instance'):
+            # chat_instance может содержать некоторую информацию о клиенте
+            # но не содержит прямой информации о платформе
+            pass
+        
+        # Проверка через web_app (если используется в будущем)
+        if hasattr(callback_or_message, 'web_app'):
+            # Если пользователь использует Web App, можем определить платформу
+            # через navigator.userAgent в клиенте
+            # Но это требует реализации на стороне клиента
+            pass
+        
+        # К сожалению, Telegram Bot API не предоставляет прямую информацию о платформе
+        # Возвращаем "unknown" для безопасного fallback (показываем все кнопки)
+        # 
+        # В будущем можно улучшить:
+        # 1. Хранить платформу в БД при первом взаимодействии (если пользователь сообщает)
+        # 2. Использовать Telegram Web App с определением платформы через JS
+        # 3. Анализ паттернов поведения пользователя
+        # 4. Использование Mini Apps для определения платформы
+        
+        return "unknown"
+    
+    except Exception as e:
+        logging.debug(f"Platform detection error: {e}")
+        return "unknown"
+
+
+def get_instruction_keyboard(language: str, platform: str = "unknown"):
+    """
+    Клавиатура экрана 'Инструкция' для v2RayTun
+    
+    Args:
+        language: Язык пользователя
+        platform: Платформа пользователя ("ios", "android", или "unknown")
+    """
+    buttons = []
+    
+    # Определяем какие кнопки скачивания показывать
+    if platform == "ios":
+        # Только iOS
+        buttons.append([
+            InlineKeyboardButton(
+                text="📱 Скачать v2RayTun (iOS)",
+                url="https://apps.apple.com/app/id6444584972"
+            )
+        ])
+    elif platform == "android":
+        # Только Android
+        buttons.append([
+            InlineKeyboardButton(
+                text="🤖 Скачать v2RayTun (Android)",
+                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
+            )
+        ])
+    else:
+        # Unknown - показываем все кнопки
+        buttons.append([
             InlineKeyboardButton(
                 text="📱 Скачать v2RayTun (iOS)",
                 url="https://apps.apple.com/app/id6444584972"
@@ -501,28 +596,37 @@ def get_instruction_keyboard(language: str):
                 text="🤖 Скачать v2RayTun (Android)",
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
-        ],
-        [
+        ])
+        buttons.append([
             InlineKeyboardButton(
                 text="💻 Скачать v2RayTun (ПК)",
                 url="https://v2raytun.com"
             ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=localization.get_text(language, "copy_key", default="🔑 Скопировать VPN-ключ"),
-                callback_data="copy_vpn_key"
-            ),
-        ],
-        [InlineKeyboardButton(
+        ])
+    
+    # Всегда показываем кнопку копирования ключа
+    buttons.append([
+        InlineKeyboardButton(
+            text=localization.get_text(language, "copy_key", default="🔑 Скопировать VPN-ключ"),
+            callback_data="copy_vpn_key"
+        ),
+    ])
+    
+    # Кнопки навигации
+    buttons.append([
+        InlineKeyboardButton(
             text=localization.get_text(language, "back"),
             callback_data="menu_main"
-        )],
-        [InlineKeyboardButton(
+        )
+    ])
+    buttons.append([
+        InlineKeyboardButton(
             text=localization.get_text(language, "support"),
             callback_data="menu_support"
-        )],
+        )
     ])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
 
 
@@ -2540,8 +2644,11 @@ async def callback_instruction(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
+    # Определяем платформу пользователя
+    platform = detect_platform(callback)
+    
     text = localization.get_text(language, "instruction_text")
-    await callback.message.edit_text(text, reply_markup=get_instruction_keyboard(language))
+    await callback.message.edit_text(text, reply_markup=get_instruction_keyboard(language, platform))
     await callback.answer()
 
 
