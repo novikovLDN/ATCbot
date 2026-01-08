@@ -45,8 +45,9 @@ XRAY_PORT = int(os.getenv("XRAY_PORT", "443"))
 XRAY_SNI = os.getenv("XRAY_SNI", "www.cloudflare.com")
 XRAY_PUBLIC_KEY = os.getenv("XRAY_PUBLIC_KEY", "fDixPEehAKSEsRGm5Q9HY-BNs9uMmN5NIzEDKngDOk8")
 XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
-XRAY_FLOW = os.getenv("XRAY_FLOW", "xtls-rprx-vision")
-XRAY_FP = os.getenv("XRAY_FP", "chrome")
+# XRAY_FLOW удалён: параметр flow ЗАПРЕЩЁН для REALITY протокола
+# VLESS с REALITY не использует flow параметр, так как REALITY несовместим с XTLS flow
+XRAY_FP = os.getenv("XRAY_FP", "ios")  # По умолчанию ios согласно требованиям
 
 logger.info(f"Xray API initialized: config_path={XRAY_CONFIG_PATH}, server_ip={XRAY_SERVER_IP}")
 
@@ -55,8 +56,7 @@ logger.info(f"Xray API initialized: config_path={XRAY_CONFIG_PATH}, server_ip={X
 # Модели данных
 # ============================================================================
 
-class RemoveUserRequest(BaseModel):
-    uuid: str = Field(..., description="UUID пользователя для удаления")
+# RemoveUserRequest больше не нужна - UUID передается в пути
 
 
 class AddUserResponse(BaseModel):
@@ -89,20 +89,33 @@ def generate_vless_link(uuid_str: str) -> str:
     """
     Генерирует VLESS ссылку для подключения к Xray серверу.
     
-    Формат:
-    vless://UUID@SERVER_IP:PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=SNI&fp=FP&pbk=PUBLIC_KEY&sid=SHORT_ID&type=tcp#VPN
+    КРИТИЧЕСКИ ВАЖНО: Параметр flow ЗАПРЕЩЁН для REALITY протокола.
+    REALITY несовместим с XTLS flow (xtls-rprx-vision).
+    Добавление flow приведёт к ошибкам подключения.
+    
+    Формат (БЕЗ flow):
+    vless://UUID@SERVER_IP:PORT?
+    encryption=none
+    &security=reality
+    &type=tcp
+    &sni={REALITY_SNI}
+    &fp=ios
+    &pbk={REALITY_PBK}
+    &sid={REALITY_SID}
+    #VPN
     """
     server_address = f"{uuid_str}@{XRAY_SERVER_IP}:{XRAY_PORT}"
     
+    # Параметры БЕЗ flow (flow ЗАПРЕЩЁН для REALITY)
+    # REALITY протокол не использует flow, так как несовместим с XTLS
     params = {
         "encryption": "none",
-        "flow": XRAY_FLOW,
         "security": "reality",
+        "type": "tcp",
         "sni": XRAY_SNI,
         "fp": XRAY_FP,
         "pbk": XRAY_PUBLIC_KEY,
-        "sid": XRAY_SHORT_ID,
-        "type": "tcp"
+        "sid": XRAY_SHORT_ID
     }
     
     query_parts = [f"{key}={quote(str(value))}" for key, value in params.items()]
@@ -313,10 +326,9 @@ async def add_user():
             logger.warning(f"UUID {new_uuid} already exists, generating new one")
             new_uuid = str(uuid.uuid4())
         
-        # Добавляем нового клиента
+        # Добавляем нового клиента (БЕЗ flow в конфиге - согласно требованиям)
         new_client = {
-            "id": new_uuid,
-            "flow": XRAY_FLOW
+            "id": new_uuid
         }
         clients.append(new_client)
         
@@ -348,15 +360,17 @@ async def add_user():
         )
 
 
-@app.post("/remove-user", response_model=RemoveUserResponse)
-async def remove_user(request: RemoveUserRequest):
+@app.post("/remove-user/{uuid}", response_model=RemoveUserResponse)
+async def remove_user(uuid: str):
     """
     Удалить пользователя из Xray.
     
+    UUID передается в пути URL.
     Удаляет UUID из config.json и перезапускает Xray.
+    Идемпотентно: если UUID не найден, возвращает успех.
     """
     try:
-        target_uuid = request.uuid.strip()
+        target_uuid = uuid.strip()
         
         # Валидация UUID
         if not validate_uuid(target_uuid):

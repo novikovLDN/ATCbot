@@ -1467,6 +1467,23 @@ async def callback_copy_key(callback: CallbackQuery):
     
     # Отправляем VPN-ключ отдельным сообщением
     vpn_key = subscription["vpn_key"]
+    
+    # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
+    import vpn_utils
+    if not vpn_utils.validate_vless_link(vpn_key):
+        error_msg = (
+            f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
+            "Key will NOT be sent to user."
+        )
+        logger.error(f"copy_key: {error_msg}")
+        error_text = localization.get_text(
+            language,
+            "error_subscription_activation",
+            default="❌ Ошибка получения ключа. Пожалуйста, обратитесь в поддержку."
+        )
+        await callback.message.answer(error_text)
+        return
+    
     key_text = localization.get_text(language, "access_key_label", default="Ключ доступа:") + f"\n\n<code>{vpn_key}</code>"
     await callback.message.answer(key_text, parse_mode="HTML")
 
@@ -1493,6 +1510,25 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     
     # Отправляем VPN-ключ отдельным сообщением в формате HTML для копирования
     vpn_key = subscription["vpn_key"]
+    
+    # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
+    import vpn_utils
+    if not vpn_utils.validate_vless_link(vpn_key):
+        error_msg = (
+            f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
+            "Key will NOT be sent to user."
+        )
+        logger.error(f"copy_vpn_key: {error_msg}")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        error_text = localization.get_text(
+            language,
+            "error_subscription_activation",
+            default="❌ Ошибка получения ключа. Пожалуйста, обратитесь в поддержку."
+        )
+        await callback.message.answer(error_text)
+        return
+    
     await callback.message.answer(
         f"<code>{vpn_key}</code>",
         parse_mode="HTML"
@@ -1900,6 +1936,22 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
         if has_promo:
             await state.update_data(promo_code=None)
         
+        # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
+        import vpn_utils
+        if not vpn_utils.validate_vless_link(vpn_key):
+            error_msg = (
+                f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
+                "Key will NOT be sent to user."
+            )
+            logger.error(f"callback_tariff (balance payment): {error_msg}")
+            error_text = localization.get_text(
+                language,
+                "error_subscription_activation",
+                default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
+            )
+            await callback.message.answer(error_text)
+            return
+        
         # Отправляем сообщение об успешной активации
         expires_str = expires_at.strftime("%d.%m.%Y")
         vpn_key_html = f"<code>{vpn_key}</code>"
@@ -2142,6 +2194,10 @@ async def process_successful_payment(message: Message):
     months = tariff_data["months"]
     
     # Активируем подписку через grant_access
+    logger.info(
+        f"process_successful_payment: ACTIVATING_SUBSCRIPTION [user={telegram_id}, payment_id={payment_id}, "
+        f"tariff={tariff_key}, months={months}]"
+    )
     try:
         expires_at, is_renewal, vpn_key = await database.approve_payment_atomic(
             payment_id,
@@ -2149,10 +2205,27 @@ async def process_successful_payment(message: Message):
             admin_telegram_id=config.ADMIN_TELEGRAM_ID  # Используем системного админа
         )
         
-        if not expires_at or not vpn_key:
-            raise Exception(f"approve_payment_atomic returned None: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
+        # ВАЛИДАЦИЯ: Запрещено выдавать ключ без записи в БД и subscription_end
+        if not expires_at:
+            error_msg = f"approve_payment_atomic returned None expires_at for user {telegram_id}, payment_id={payment_id}"
+            logger.error(f"process_successful_payment: ERROR_NO_EXPIRES_AT [user={telegram_id}, payment_id={payment_id}]")
+            raise Exception(error_msg)
+        
+        if not vpn_key:
+            error_msg = f"approve_payment_atomic returned None vpn_key for user {telegram_id}, payment_id={payment_id}"
+            logger.error(f"process_successful_payment: ERROR_NO_VPN_KEY [user={telegram_id}, payment_id={payment_id}]")
+            raise Exception(error_msg)
+        
+        logger.info(
+            f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
+            f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}]"
+        )
     except Exception as e:
-        logger.exception(f"CRITICAL: Failed to grant access after payment for user {telegram_id}, payment_id={payment_id}: {e}")
+        logger.error(
+            f"process_successful_payment: CRITICAL_ERROR [user={telegram_id}, payment_id={payment_id}, "
+            f"error={str(e)}, error_type={type(e).__name__}]"
+        )
+        logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, payment_id={payment_id}]")
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         error_text = localization.get_text(
@@ -2163,6 +2236,7 @@ async def process_successful_payment(message: Message):
         await message.answer(error_text)
         return
     
+    # ВАЛИДАЦИЯ: Дополнительная проверка перед выдачей ключа
     if expires_at and vpn_key:
         # Успешно активирована подписка
         user = await database.get_user(telegram_id)
@@ -2194,6 +2268,23 @@ async def process_successful_payment(message: Message):
                     )
             except Exception as e:
                 logger.error(f"Error processing promo code usage: {e}")
+        
+        # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
+        import vpn_utils
+        if not vpn_utils.validate_vless_link(vpn_key):
+            error_msg = (
+                f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
+                "Key will NOT be sent to user."
+            )
+            logger.error(f"process_successful_payment: {error_msg}")
+            # Не отправляем ключ пользователю
+            error_text = localization.get_text(
+                language,
+                "error_subscription_activation",
+                default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
+            )
+            await message.answer(error_text)
+            return
         
         expires_str = expires_at.strftime("%d.%m.%Y")
         # Обертываем ключ в HTML тег для копирования

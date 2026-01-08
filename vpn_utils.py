@@ -39,31 +39,66 @@ class InvalidResponseError(VPNAPIError):
     pass
 
 
+def validate_vless_link(vless_link: str) -> bool:
+    """
+    Валидирует VLESS ссылку на наличие запрещённых параметров.
+    
+    Защита от регресса конфигурации:
+    - Проверяет что строка НЕ содержит "flow="
+    
+    Args:
+        vless_link: VLESS URL строка для проверки
+    
+    Returns:
+        True если ссылка валидна (не содержит flow=), False в противном случае
+    
+    Raises:
+        ValueError: Если vless_link пустая или None
+    """
+    if not vless_link or not isinstance(vless_link, str):
+        raise ValueError(f"Invalid vless_link: must be non-empty string, got: {vless_link}")
+    
+    # Проверяем наличие запрещённого параметра flow
+    if "flow=" in vless_link:
+        logger.error(
+            f"validate_vless_link: REGRESSION_DETECTED [vless_link_preview={vless_link[:100]}...] - "
+            "contains forbidden 'flow=' parameter"
+        )
+        return False
+    
+    return True
+
+
 def generate_vless_url(uuid: str) -> str:
     """
     Генерирует VLESS URL для подключения к Xray Core серверу.
+    
+    КРИТИЧЕСКИ ВАЖНО: Параметр flow ЗАПРЕЩЁН для REALITY протокола.
+    REALITY несовместим с XTLS flow (xtls-rprx-vision).
+    Добавление flow приведёт к ошибкам подключения.
     
     Формат (БЕЗ flow параметра):
     vless://UUID@SERVER_IP:PORT
     ?encryption=none
     &security=reality
     &type=tcp
-    &sni=www.cloudflare.com
+    &sni={REALITY_SNI}
     &fp=ios
-    &pbk=PUBLIC_KEY
-    &sid=SHORT_ID
+    &pbk={REALITY_PBK}
+    &sid={REALITY_SID}
     #AtlasSecure
     
     Args:
         uuid: UUID пользователя
     
     Returns:
-        VLESS URL строка
+        VLESS URL строка (БЕЗ flow параметра)
     """
     # Кодируем параметры для URL
     server_address = f"{uuid}@{config.XRAY_SERVER_IP}:{config.XRAY_PORT}"
     
-    # Параметры запроса (БЕЗ flow - согласно требованиям)
+    # Параметры запроса (БЕЗ flow - flow ЗАПРЕЩЁН для REALITY)
+    # REALITY протокол не использует flow, так как несовместим с XTLS
     params = {
         "encryption": "none",
         "security": "reality",
@@ -81,6 +116,15 @@ def generate_vless_url(uuid: str) -> str:
     # Формируем полный URL
     fragment = "AtlasSecure"
     vless_url = f"vless://{server_address}?{query_string}#{quote(fragment)}"
+    
+    # ЗАЩИТА ОТ РЕГРЕССА: Валидируем сгенерированную ссылку
+    if not validate_vless_link(vless_url):
+        error_msg = (
+            f"REGRESSION: Generated VLESS URL contains forbidden 'flow=' parameter. "
+            f"This should never happen. UUID: {uuid[:8]}..."
+        )
+        logger.error(f"generate_vless_url: {error_msg}")
+        raise ValueError(error_msg)
     
     return vless_url
 
@@ -374,6 +418,17 @@ async def remove_vless_user(uuid: str) -> None:
                     logger.error(f"vpn_api remove_user: AUTH_ERROR [uuid={uuid_preview}, {error_msg}]")
                     raise AuthError(error_msg)
                 
+                # ИДЕМПОТЕНТНОСТЬ: 404 или 200 - UUID не найден или уже удалён, это НЕ ошибка
+                # FastAPI возвращает 200 OK даже если UUID не найден (идемпотентность)
+                if response.status_code == 404:
+                    logger.info(
+                        f"vpn_api remove_user: UUID_NOT_FOUND [uuid={uuid_preview}, status=404] - "
+                        "UUID already removed or never existed (idempotent operation)"
+                    )
+                    # UUID уже удалён - это успешная операция (идемпотентность)
+                    return
+                
+                # Для всех остальных ошибок - вызываем raise_for_status
                 response.raise_for_status()
                 
                 logger.info(f"vpn_api remove_user: SUCCESS [uuid={uuid_preview}, attempt={attempt + 1}]")

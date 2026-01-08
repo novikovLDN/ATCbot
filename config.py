@@ -65,6 +65,7 @@ XRAY_PORT = int(os.getenv("XRAY_PORT", "443"))
 XRAY_SNI = os.getenv("XRAY_SNI", "www.cloudflare.com")
 XRAY_PUBLIC_KEY = os.getenv("XRAY_PUBLIC_KEY", "fDixPEehAKSEsRGm5Q9HY-BNs9uMmN5NIzEDKngDOk8")
 XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
-XRAY_FLOW = os.getenv("XRAY_FLOW", "xtls-rprx-vision")
+# XRAY_FLOW удалён: параметр flow ЗАПРЕЩЁН для REALITY протокола
+# VLESS с REALITY не использует flow параметр
 XRAY_FP = os.getenv("XRAY_FP", "ios")  # По умолчанию ios согласно требованиям
 

@@ -1599,30 +1599,68 @@ async def grant_access(
         # STEP 2: Активная подписка - продлеваем
         # =====================================================================
         if subscription and status == "active" and uuid and expires_at and expires_at > now:
-            logger.info(f"grant_access: RENEWAL_DETECTED [user={telegram_id}, current_expires={expires_at.isoformat()}]")
+            logger.info(
+                f"grant_access: RENEWAL_DETECTED [user={telegram_id}, current_expires={expires_at.isoformat()}, "
+                f"uuid={uuid[:8] if uuid else 'N/A'}..., source={source}]"
+            )
             # ЗАЩИТА: Не продлеваем если UUID отсутствует (не должно быть, но на всякий случай)
             if not uuid:
-                logger.warning(f"grant_access: Active subscription without UUID for user {telegram_id}, will create new UUID")
+                logger.warning(
+                    f"grant_access: WARNING_ACTIVE_WITHOUT_UUID [user={telegram_id}, "
+                    f"will create new UUID instead of renewal]"
+                )
                 # Переходим к созданию нового UUID
             else:
                 # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
+                old_expires_at = expires_at
                 subscription_end = max(expires_at, now) + duration
                 # subscription_start сохраняется (activated_at не меняется при продлении)
-                subscription_start = subscription.get("activated_at") or expires_at or now
+                subscription_start = subscription.get("activated_at") or subscription.get("expires_at") or now
                 
-                # Обновляем БД
-                await conn.execute(
-                    """UPDATE subscriptions 
-                       SET expires_at = $1, 
-                           status = 'active',
-                           reminder_sent = FALSE,
-                           reminder_3d_sent = FALSE,
-                           reminder_24h_sent = FALSE,
-                           reminder_3h_sent = FALSE,
-                           reminder_6h_sent = FALSE
-                       WHERE telegram_id = $2""",
-                    subscription_end, telegram_id
+                # ВАЛИДАЦИЯ: Проверяем что subscription_end увеличен
+                if subscription_end <= old_expires_at:
+                    error_msg = f"Invalid renewal: new_end={subscription_end} <= old_end={old_expires_at} for user {telegram_id}"
+                    logger.error(f"grant_access: ERROR_INVALID_RENEWAL [user={telegram_id}, error={error_msg}]")
+                    raise Exception(error_msg)
+                
+                logger.info(
+                    f"grant_access: RENEWING_SUBSCRIPTION [user={telegram_id}, old_expires={old_expires_at.isoformat()}, "
+                    f"new_expires={subscription_end.isoformat()}, extension_days={duration.days}, uuid={uuid[:8]}...]"
                 )
+                
+                # Обновляем БД (НЕ вызываем VPN API add-user)
+                try:
+                    await conn.execute(
+                        """UPDATE subscriptions 
+                           SET expires_at = $1, 
+                               status = 'active',
+                               reminder_sent = FALSE,
+                               reminder_3d_sent = FALSE,
+                               reminder_24h_sent = FALSE,
+                               reminder_3h_sent = FALSE,
+                               reminder_6h_sent = FALSE
+                           WHERE telegram_id = $2""",
+                        subscription_end, telegram_id
+                    )
+                    
+                    # ВАЛИДАЦИЯ: Проверяем что запись обновлена
+                    updated_subscription = await conn.fetchrow(
+                        "SELECT expires_at, status, uuid FROM subscriptions WHERE telegram_id = $1",
+                        telegram_id
+                    )
+                    if not updated_subscription or updated_subscription["expires_at"] != subscription_end:
+                        error_msg = f"Failed to verify subscription renewal for user {telegram_id}"
+                        logger.error(f"grant_access: ERROR_RENEWAL_VERIFICATION [user={telegram_id}, error={error_msg}]")
+                        raise Exception(error_msg)
+                    
+                    logger.info(
+                        f"grant_access: RENEWAL_SAVED_SUCCESS [user={telegram_id}, "
+                        f"subscription_end={updated_subscription['expires_at'].isoformat()}, "
+                        f"status={updated_subscription['status']}, uuid={uuid[:8]}...]"
+                    )
+                except Exception as e:
+                    logger.error(f"grant_access: RENEWAL_SAVE_FAILED [user={telegram_id}, error={str(e)}]")
+                    raise Exception(f"Failed to renew subscription in database: {e}") from e
                 
                 # Определяем action_type для истории
                 if source == "payment":
@@ -1647,8 +1685,9 @@ async def grant_access(
                 uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                 duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
                 logger.info(
-                    f"grant_access: RENEWED [telegram_id={telegram_id}, uuid={uuid_preview}, "
-                    f"subscription_end={subscription_end.isoformat()}, source={source}, duration={duration_str}]"
+                    f"grant_access: RENEWAL_SUCCESS [telegram_id={telegram_id}, uuid={uuid_preview}, "
+                    f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
+                    f"source={source}, duration={duration_str}]"
                 )
                 
                 return {
@@ -1688,20 +1727,32 @@ async def grant_access(
                 )
         
         # Создаем новый UUID через Xray API
+        logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, source={source}]")
         try:
             vless_result = await vpn_utils.add_vless_user()
-            new_uuid = vless_result["uuid"]
-            vless_url = vless_result["vless_url"]
+            new_uuid = vless_result.get("uuid")
+            vless_url = vless_result.get("vless_url")
+            
+            # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены
+            if not new_uuid:
+                error_msg = f"VPN API returned empty UUID for user {telegram_id}"
+                logger.error(f"grant_access: ERROR_VPN_API_RESPONSE [user={telegram_id}, error={error_msg}]")
+                raise Exception(error_msg)
+            
+            if not vless_url:
+                error_msg = f"VPN API returned empty vless_url for user {telegram_id}"
+                logger.error(f"grant_access: ERROR_VPN_API_RESPONSE [user={telegram_id}, error={error_msg}]")
+                raise Exception(error_msg)
             
             # Безопасное логирование UUID (только первые 8 символов)
             uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
             logger.info(
-                f"grant_access: CREATED_UUID [action=create, user={telegram_id}, uuid={uuid_preview}, "
+                f"grant_access: VPN_API_SUCCESS [action=add_user, user={telegram_id}, uuid={uuid_preview}, "
                 f"source={source}, vless_url_length={len(vless_url) if vless_url else 0}]"
             )
         except Exception as e:
             logger.error(
-                f"grant_access: FAILED_CREATE_UUID [action=create_failed, user={telegram_id}, "
+                f"grant_access: VPN_API_FAILED [action=add_user_failed, user={telegram_id}, "
                 f"source={source}, error={str(e)}]"
             )
             raise Exception(f"Failed to create VPN access: {e}") from e
@@ -1709,6 +1760,17 @@ async def grant_access(
         # Вычисляем даты
         subscription_start = now
         subscription_end = now + duration
+        
+        # ВАЛИДАЦИЯ: Проверяем что subscription_end вычислен корректно
+        if not subscription_end or subscription_end <= subscription_start:
+            error_msg = f"Invalid subscription_end for user {telegram_id}: start={subscription_start}, end={subscription_end}"
+            logger.error(f"grant_access: ERROR_INVALID_DATES [user={telegram_id}, error={error_msg}]")
+            raise Exception(error_msg)
+        
+        logger.info(
+            f"grant_access: CALCULATED_DATES [user={telegram_id}, subscription_start={subscription_start.isoformat()}, "
+            f"subscription_end={subscription_end.isoformat()}, duration_days={duration.days}]"
+        )
         
         # Определяем action_type для истории
         if source == "payment":
@@ -1718,34 +1780,60 @@ async def grant_access(
         else:
             history_action_type = source
         
-        # Сохраняем/обновляем подписку
-        logger.info(f"grant_access: SAVING_SUBSCRIPTION [telegram_id={telegram_id}, subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}]")
-        await conn.execute(
-            """INSERT INTO subscriptions (
-                   telegram_id, uuid, vpn_key, expires_at, status, source,
-                   reminder_sent, reminder_3d_sent, reminder_24h_sent,
-                   reminder_3h_sent, reminder_6h_sent, admin_grant_days,
-                   activated_at, last_bytes
-               )
-               VALUES ($1, $2, $3, $4, 'active', $5, FALSE, FALSE, FALSE, FALSE, FALSE, $6, $7, 0)
-               ON CONFLICT (telegram_id) 
-               DO UPDATE SET 
-                   uuid = $2,
-                   vpn_key = $3,
-                   expires_at = $4,
-                   status = 'active',
-                   source = $5,
-                   reminder_sent = FALSE,
-                   reminder_3d_sent = FALSE,
-                   reminder_24h_sent = FALSE,
-                   reminder_3h_sent = FALSE,
-                   reminder_6h_sent = FALSE,
-                   admin_grant_days = $6,
-                   activated_at = $7,
-                   last_bytes = 0""",
-            telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start
+        # ВАЛИДАЦИЯ: Запрещено выдавать ключ без записи в БД
+        logger.info(
+            f"grant_access: SAVING_TO_DB [user={telegram_id}, uuid={uuid_preview}, "
+            f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
+            f"status=active, source={source}]"
         )
-        logger.info(f"grant_access: SUBSCRIPTION_SAVED [telegram_id={telegram_id}, uuid={uuid_preview}]")
+        
+        # Сохраняем/обновляем подписку
+        try:
+            await conn.execute(
+                """INSERT INTO subscriptions (
+                       telegram_id, uuid, vpn_key, expires_at, status, source,
+                       reminder_sent, reminder_3d_sent, reminder_24h_sent,
+                       reminder_3h_sent, reminder_6h_sent, admin_grant_days,
+                       activated_at, last_bytes
+                   )
+                   VALUES ($1, $2, $3, $4, 'active', $5, FALSE, FALSE, FALSE, FALSE, FALSE, $6, $7, 0)
+                   ON CONFLICT (telegram_id) 
+                   DO UPDATE SET 
+                       uuid = $2,
+                       vpn_key = $3,
+                       expires_at = $4,
+                       status = 'active',
+                       source = $5,
+                       reminder_sent = FALSE,
+                       reminder_3d_sent = FALSE,
+                       reminder_24h_sent = FALSE,
+                       reminder_3h_sent = FALSE,
+                       reminder_6h_sent = FALSE,
+                       admin_grant_days = $6,
+                       activated_at = $7,
+                       last_bytes = 0""",
+                telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start
+            )
+            
+            # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
+            saved_subscription = await conn.fetchrow(
+                "SELECT uuid, expires_at, status FROM subscriptions WHERE telegram_id = $1",
+                telegram_id
+            )
+            if not saved_subscription or saved_subscription["uuid"] != new_uuid:
+                error_msg = f"Failed to verify subscription save for user {telegram_id}"
+                logger.error(f"grant_access: ERROR_DB_VERIFICATION [user={telegram_id}, error={error_msg}]")
+                raise Exception(error_msg)
+            
+            logger.info(
+                f"grant_access: DB_SAVED_SUCCESS [user={telegram_id}, uuid={uuid_preview}, "
+                f"subscription_end={saved_subscription['expires_at'].isoformat()}, status={saved_subscription['status']}]"
+            )
+        except Exception as e:
+            logger.error(
+                f"grant_access: DB_SAVE_FAILED [user={telegram_id}, uuid={uuid_preview}, error={str(e)}]"
+            )
+            raise Exception(f"Failed to save subscription to database: {e}") from e
         
         # Записываем в историю подписок
         await _log_subscription_history_atomic(conn, telegram_id, vless_url, subscription_start, subscription_end, history_action_type)
@@ -1759,20 +1847,26 @@ async def grant_access(
         
         # Безопасное логирование UUID
         uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+        duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
         logger.info(
             f"grant_access: SUCCESS [telegram_id={telegram_id}, uuid={uuid_preview}, "
             f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
-            f"source={source}, duration={duration_str}]"
+            f"source={source}, duration={duration_str}, vless_url_length={len(vless_url) if vless_url else 0}]"
         )
         
+        # ВАЛИДАЦИЯ: Возвращаем только если все данные сохранены в БД
         return {
             "uuid": new_uuid,
-            "vless_url": vless_url,
+            "vless_url": vless_url,  # VLESS ссылка готова к выдаче пользователю
             "subscription_end": subscription_end
         }
         
     except Exception as e:
-        logger.exception(f"grant_access: Error granting access to user {telegram_id}, source={source}")
+        logger.error(
+            f"grant_access: ERROR [telegram_id={telegram_id}, source={source}, error={str(e)}, "
+            f"error_type={type(e).__name__}]"
+        )
+        logger.exception(f"grant_access: EXCEPTION_TRACEBACK [user={telegram_id}]")
         raise  # Пробрасываем исключение, не возвращаем None
     finally:
         if should_release_conn:
