@@ -1882,8 +1882,16 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("tariff_period:"))
 async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
-    """Обработчик выбора периода тарифа"""
-    # Формат: "tariff_period:basic:30:purchase_abc123"
+    """
+    Обработчик выбора периода тарифа
+    
+    КРИТИЧЕСКИ ВАЖНО:
+    - Кнопки ВСЕГДА работают, даже если сообщение старое
+    - Если purchase_id отсутствует или устарел - создаётся новый автоматически
+    - Тариф и период берутся из callback_data
+    - Цена рассчитывается актуальная (с учётом текущих скидок)
+    """
+    # Формат: "tariff_period:basic:30:purchase_abc123" (purchase_id опционален)
     parts = callback.data.split(":")
     tariff_type = parts[1]  # "basic" или "plus"
     period_days = int(parts[2])
@@ -1893,27 +1901,70 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # ВАЛИДАЦИЯ: Проверяем наличие purchase_id
-    if not purchase_id:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Purchase ID missing in tariff_period: user={telegram_id}, callback_data={callback.data}")
-        return
+    # AUTO-RECOVER: Если purchase_id отсутствует или устарел - создаём новый
+    pending_purchase = None
+    if purchase_id:
+        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+        # Проверяем, что purchase соответствует тарифу и периоду
+        if pending_purchase:
+            if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
+                # Несоответствие - считаем purchase устаревшим
+                pending_purchase = None
+                logger.info(f"Purchase mismatch, creating new: user={telegram_id}, old_purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}")
     
-    # ВАЛИДАЦИЯ: Проверяем валидность pending purchase
-    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    # Если purchase отсутствует или устарел - создаём новый с актуальной ценой
     if not pending_purchase:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid pending purchase: user={telegram_id}, purchase_id={purchase_id}")
-        return
-    
-    # Проверяем, что тариф и период соответствуют purchase
-    if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Tariff/period mismatch: user={telegram_id}, purchase_id={purchase_id}")
-        return
+        # Получаем базовую цену из конфига
+        if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
+            error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+            await callback.answer(error_text, show_alert=True)
+            logger.warning(f"Invalid tariff/period: user={telegram_id}, tariff={tariff_type}, period={period_days}")
+            return
+        
+        base_price = config.TARIFFS[tariff_type][period_days]["price"]
+        
+        # Рассчитываем актуальную цену с учётом скидок (та же логика, что в get_tariff_keyboard)
+        # ПРИОРИТЕТ 0: Промокод (если есть в FSM state)
+        promo_code = None
+        promo_data = None
+        fsm_data = await state.get_data()
+        if fsm_data.get("promo_code"):
+            promo_code = fsm_data["promo_code"]
+            promo_data = await database.check_promo_code_valid(promo_code.upper())
+        
+        has_promo = promo_data is not None
+        
+        # ПРИОРИТЕТ 1: VIP-статус (только если нет промокода)
+        is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
+        
+        # ПРИОРИТЕТ 2: Персональная скидка (только если нет промокода и VIP)
+        personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
+        
+        # Применяем скидку в порядке приоритета
+        if has_promo:
+            discount_percent = promo_data["discount_percent"]
+            price_kopecks = int(base_price * (100 - discount_percent) / 100) * 100
+        elif is_vip:
+            price_kopecks = int(base_price * 0.70) * 100  # 30% скидка
+        elif personal_discount:
+            discount_percent = personal_discount["discount_percent"]
+            price_kopecks = int(base_price * (1 - discount_percent / 100)) * 100
+        else:
+            price_kopecks = base_price * 100
+        
+        # Создаём новый pending purchase с актуальной ценой
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            promo_code=promo_code
+        )
+        
+        logger.info(f"Auto-created purchase session: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}, price={price_kopecks/100:.2f} RUB")
+    else:
+        # Purchase валиден - используем его
+        logger.info(f"Using existing purchase session: user={telegram_id}, purchase_id={purchase_id}")
     
     # Отменяем остальные pending покупки этого пользователя (оставляем только выбранную)
     pool = await database.get_pool()
@@ -1934,15 +1985,23 @@ async def process_tariff_purchase_selection(
     tariff_type: str,
     period_days: int
 ):
-    """Обработать выбранный тариф: проверить баланс и предложить оплату"""
+    """
+    Обработать выбранный тариф: проверить баланс и предложить оплату
+    
+    КРИТИЧЕСКИ ВАЖНО:
+    - purchase_id должен быть валидным (создан в callback_tariff_period)
+    - Если purchase отсутствует - это критическая ошибка (не должно происходить)
+    """
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Получаем pending purchase для валидации
+    # Получаем pending purchase (должен существовать, т.к. создан в callback_tariff_period)
     pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
     if not pending_purchase:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        # Критическая ошибка - purchase должен существовать
+        logger.error(f"CRITICAL: Purchase not found in process_tariff_purchase_selection: user={telegram_id}, purchase_id={purchase_id}")
+        error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Пожалуйста, попробуйте ещё раз.")
         await callback.answer(error_text, show_alert=True)
         return
     
@@ -2123,51 +2182,98 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("pay_tariff_card:"))
 async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
-    """Оплата тарифа картой (когда баланса не хватает)"""
+    """
+    Оплата тарифа картой (когда баланса не хватает)
+    
+    КРИТИЧЕСКИ ВАЖНО:
+    - Кнопки ВСЕГДА работают, даже если сообщение старое
+    - Если purchase_id отсутствует или устарел - создаётся новый автоматически
+    - Тариф и период берутся из callback_data
+    - Цена рассчитывается актуальная (с учётом текущих скидок)
+    """
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
     # Извлекаем tariff_type, period_days и purchase_id из callback_data
-    # Формат: "pay_tariff_card:basic:30:purchase_abc123"
+    # Формат: "pay_tariff_card:basic:30:purchase_abc123" (purchase_id опционален)
     callback_data_parts = callback.data.split(":")
     tariff_type = callback_data_parts[1] if len(callback_data_parts) > 1 else None
     period_days = int(callback_data_parts[2]) if len(callback_data_parts) > 2 and callback_data_parts[2].isdigit() else None
     purchase_id = callback_data_parts[3] if len(callback_data_parts) > 3 else None
     
-    # ВАЛИДАЦИЯ: Проверяем наличие purchase_id (обязательно для новых покупок)
-    if not purchase_id:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+    # Валидация tariff_type и period_days
+    if not tariff_type or not period_days:
+        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
         await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Purchase context missing in pay_tariff_card: user={telegram_id}, callback_data={callback.data}")
-        await database._log_audit_event_atomic_standalone(
-            "purchase_context_invalid",
-            telegram_id,
-            None,
-            f"Missing purchase_id in pay_tariff_card callback: {callback.data}"
-        )
+        logger.warning(f"Invalid tariff/period in pay_tariff_card: user={telegram_id}, callback_data={callback.data}")
         return
     
-    # ВАЛИДАЦИЯ: Проверяем валидность pending purchase
-    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
+        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid tariff/period combination: user={telegram_id}, tariff={tariff_type}, period={period_days}")
+        return
+    
+    # AUTO-RECOVER: Если purchase_id отсутствует или устарел - создаём новый
+    pending_purchase = None
+    if purchase_id:
+        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+        # Проверяем, что purchase соответствует тарифу и периоду
+        if pending_purchase:
+            if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
+                # Несоответствие - считаем purchase устаревшим
+                pending_purchase = None
+                logger.info(f"Purchase mismatch in pay_tariff_card, creating new: user={telegram_id}, old_purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}")
+    
+    # Если purchase отсутствует или устарел - создаём новый с актуальной ценой
     if not pending_purchase:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid pending purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
-        await database._log_audit_event_atomic_standalone(
-            "purchase_context_invalid",
-            telegram_id,
-            None,
-            f"Invalid or expired purchase_id in pay_tariff_card: {purchase_id}"
+        # Получаем базовую цену из конфига
+        base_price = config.TARIFFS[tariff_type][period_days]["price"]
+        
+        # Рассчитываем актуальную цену с учётом скидок
+        promo_code = None
+        promo_data = None
+        fsm_data = await state.get_data()
+        if fsm_data.get("promo_code"):
+            promo_code = fsm_data["promo_code"]
+            promo_data = await database.check_promo_code_valid(promo_code.upper())
+        
+        has_promo = promo_data is not None
+        is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
+        personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
+        
+        # Применяем скидку
+        if has_promo:
+            discount_percent = promo_data["discount_percent"]
+            price_kopecks = int(base_price * (100 - discount_percent) / 100) * 100
+        elif is_vip:
+            price_kopecks = int(base_price * 0.70) * 100
+        elif personal_discount:
+            discount_percent = personal_discount["discount_percent"]
+            price_kopecks = int(base_price * (1 - discount_percent / 100)) * 100
+        else:
+            price_kopecks = base_price * 100
+        
+        # Создаём новый pending purchase
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            promo_code=promo_code
         )
-        return
-    
-    # Проверяем, что tariff_type и period_days из callback соответствуют pending purchase
-    if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Tariff/period mismatch in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, expected={pending_purchase['tariff']}/{pending_purchase['period_days']}, got={tariff_type}/{period_days}")
-        return
+        
+        logger.info(f"Auto-created purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}, price={price_kopecks/100:.2f} RUB")
+        # Получаем созданный purchase
+        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+        if not pending_purchase:
+            logger.error(f"CRITICAL: Failed to retrieve created purchase: user={telegram_id}, purchase_id={purchase_id}")
+            error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Пожалуйста, попробуйте ещё раз.")
+            await callback.answer(error_text, show_alert=True)
+            return
+    else:
+        logger.info(f"Using existing purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
     
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
