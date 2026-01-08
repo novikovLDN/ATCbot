@@ -373,6 +373,10 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS reward_amount INTEGER DEFAULT 0")
         except Exception:
             pass
+        try:
+            await conn.execute("ALTER TABLE referrals ADD COLUMN IF NOT EXISTS first_paid_at TIMESTAMP")
+        except Exception:
+            pass
         
         # Таблица referral_rewards - история всех начислений реферального кешбэка
         await conn.execute("""
@@ -1331,12 +1335,35 @@ async def process_referral_reward(
                             "message": "Reward already processed for this purchase"
                         }
                 
-                # 4. Определяем процент кешбэка на основе количества оплативших рефералов
+                # 4. Обновляем first_paid_at в referrals, если это первый платеж реферала
+                referral_row = await conn.fetchrow(
+                    "SELECT first_paid_at FROM referrals WHERE referrer_user_id = $1 AND referred_user_id = $2",
+                    referrer_id, buyer_id
+                )
+                
+                if not referral_row:
+                    # Создаем запись в referrals, если её нет
+                    await conn.execute(
+                        """INSERT INTO referrals (referrer_user_id, referred_user_id, first_paid_at)
+                           VALUES ($1, $2, NOW())
+                           ON CONFLICT (referred_user_id) DO UPDATE
+                           SET first_paid_at = COALESCE(referrals.first_paid_at, NOW())""",
+                        referrer_id, buyer_id
+                    )
+                elif not referral_row.get("first_paid_at"):
+                    # Обновляем first_paid_at, если он еще не установлен
+                    await conn.execute(
+                        "UPDATE referrals SET first_paid_at = NOW() WHERE referrer_user_id = $1 AND referred_user_id = $2 AND first_paid_at IS NULL",
+                        referrer_id, buyer_id
+                    )
+                
+                # 5. Определяем процент кешбэка на основе количества оплативших рефералов
                 # Считаем количество рефералов, которые ХОТЯ БЫ ОДИН РАЗ оплатили подписку
+                # Используем referrals.first_paid_at как источник истины
                 paid_referrals_count = await conn.fetchval(
-                    """SELECT COUNT(DISTINCT rr.buyer_id)
-                       FROM referral_rewards rr
-                       WHERE rr.referrer_id = $1""",
+                    """SELECT COUNT(DISTINCT referred_user_id)
+                       FROM referrals
+                       WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL""",
                     referrer_id
                 ) or 0
                 
@@ -1348,7 +1375,18 @@ async def process_referral_reward(
                 else:
                     percent = 10
                 
-                # 5. Рассчитываем сумму кешбэка (в копейках)
+                # Вычисляем сколько осталось до следующего уровня
+                if paid_referrals_count < 25:
+                    next_level_threshold = 25
+                    referrals_needed = 25 - paid_referrals_count
+                elif paid_referrals_count < 50:
+                    next_level_threshold = 50
+                    referrals_needed = 50 - paid_referrals_count
+                else:
+                    next_level_threshold = None
+                    referrals_needed = 0
+                
+                # 6. Рассчитываем сумму кешбэка (в копейках)
                 purchase_amount_kopecks = int(amount_rubles * 100)
                 reward_amount_kopecks = int(purchase_amount_kopecks * percent / 100)
                 reward_amount_rubles = reward_amount_kopecks / 100.0
@@ -1366,13 +1404,13 @@ async def process_referral_reward(
                         "message": "Invalid reward amount"
                     }
                 
-                # 6. Начисляем кешбэк на баланс реферера
+                # 7. Начисляем кешбэк на баланс реферера
                 await conn.execute(
                     "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
                     reward_amount_kopecks, referrer_id
                 )
                 
-                # 7. Записываем транзакцию баланса
+                # 8. Записываем транзакцию баланса
                 await conn.execute(
                     """INSERT INTO balance_transactions (user_id, amount, type, source, description, related_user_id)
                        VALUES ($1, $2, $3, $4, $5, $6)""",
@@ -1381,7 +1419,7 @@ async def process_referral_reward(
                     buyer_id
                 )
                 
-                # 8. Создаём запись в referral_rewards (история начислений)
+                # 9. Создаём запись в referral_rewards (история начислений)
                 await conn.execute(
                     """INSERT INTO referral_rewards 
                        (referrer_id, buyer_id, purchase_id, purchase_amount, percent, reward_amount)
@@ -1389,7 +1427,7 @@ async def process_referral_reward(
                     referrer_id, buyer_id, purchase_id, purchase_amount_kopecks, percent, reward_amount_kopecks
                 )
                 
-                # 9. Логируем событие
+                # 10. Логируем событие
                 details = (
                     f"Referral reward awarded: referrer={referrer_id} ({percent}%), "
                     f"buyer={buyer_id}, purchase_id={purchase_id}, "
@@ -1415,6 +1453,9 @@ async def process_referral_reward(
                     "referrer_id": referrer_id,
                     "percent": percent,
                     "reward_amount": reward_amount_rubles,
+                    "paid_referrals_count": paid_referrals_count,
+                    "next_level_threshold": next_level_threshold,
+                    "referrals_needed": referrals_needed,
                     "message": "Reward awarded successfully"
                 }
                 
@@ -3981,13 +4022,14 @@ async def finalize_purchase(
             )
             
             # STEP 7: Обрабатываем реферальный кешбэк
+            referral_reward_result = None
             try:
-                await process_referral_reward(
+                referral_reward_result = await process_referral_reward(
                     buyer_id=telegram_id,
                     purchase_id=purchase_id,
                     amount_rubles=amount_rubles
                 )
-                logger.info(f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, user={telegram_id}")
+                logger.info(f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, user={telegram_id}, success={referral_reward_result.get('success', False)}")
             except Exception as e:
                 # Реферальный кешбэк не критичен - логируем и продолжаем
                 logger.warning(f"finalize_purchase: referral reward failed: purchase_id={purchase_id}, error={e}")
@@ -4016,7 +4058,8 @@ async def finalize_purchase(
                 "payment_id": payment_id,
                 "expires_at": expires_at,
                 "vpn_key": vpn_key,
-                "is_renewal": is_renewal
+                "is_renewal": is_renewal,
+                "referral_reward": referral_reward_result  # Добавляем результат реферального кешбэка
             }
 
 

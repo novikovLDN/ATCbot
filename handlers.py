@@ -112,6 +112,12 @@ class PromoCodeInput(StatesGroup):
 class TopUpStates(StatesGroup):
     waiting_for_amount = State()
 
+
+class AdminCreditBalance(StatesGroup):
+    waiting_for_user_search = State()
+    waiting_for_amount = State()
+    waiting_for_confirmation = State()
+
 router = Router()
 
 logger = logging.getLogger(__name__)
@@ -711,6 +717,7 @@ def get_admin_dashboard_keyboard():
         [InlineKeyboardButton(text="📜 Аудит", callback_data="admin:audit")],
         [InlineKeyboardButton(text="🔑 VPN-ключи", callback_data="admin:keys")],
         [InlineKeyboardButton(text="👤 Пользователь", callback_data="admin:user")],
+        [InlineKeyboardButton(text="💰 Выдать средства", callback_data="admin:credit_balance")],
         [InlineKeyboardButton(text="🚨 Система", callback_data="admin:system")],
         [InlineKeyboardButton(text="📤 Экспорт данных", callback_data="admin:export")],
         [InlineKeyboardButton(text="📣 Уведомления", callback_data="admin:broadcast")],
@@ -752,6 +759,74 @@ def get_reissue_notification_text(vpn_key: str) -> str:
         "Обновление необходимо для сохранения\n"
         "стабильности и производительности соединения."
     )
+
+
+async def send_referral_cashback_notification(
+    bot: Bot,
+    referrer_id: int,
+    referred_id: int,
+    purchase_amount: float,
+    cashback_amount: float,
+    cashback_percent: int,
+    paid_referrals_count: int,
+    referrals_needed: int,
+    action_type: str = "покупку"
+) -> bool:
+    """
+    Отправить уведомление рефереру о начислении кешбэка
+    
+    Args:
+        bot: Экземпляр бота
+        referrer_id: Telegram ID реферера
+        referred_id: Telegram ID реферала
+        purchase_amount: Сумма покупки в рублях
+        cashback_amount: Сумма кешбэка в рублях
+        cashback_percent: Процент кешбэка
+        paid_referrals_count: Количество оплативших рефералов
+        referrals_needed: Сколько рефералов нужно до следующего уровня
+        action_type: Тип действия ("покупку", "продление", "пополнение")
+    
+    Returns:
+        True если уведомление отправлено, False если ошибка
+    """
+    try:
+        # Получаем информацию о реферале (username)
+        referred_user = await database.get_user(referred_id)
+        referred_username = referred_user.get("username") if referred_user else None
+        referred_display = f"@{referred_username}" if referred_username else f"ID: {referred_id}"
+        
+        # Формируем текст уведомления
+        if referrals_needed > 0:
+            progress_text = f"👥 До следующего уровня: осталось пригласить {referrals_needed} друга"
+        else:
+            progress_text = "🎯 Вы достигли максимального уровня!"
+        
+        notification_text = (
+            f"🎉 Ваш реферал совершил {action_type}!\n\n"
+            f"👤 Реферал: {referred_display}\n"
+            f"💳 Сумма {action_type}: {purchase_amount:.2f} ₽\n"
+            f"💰 Начислен кешбэк: {cashback_amount:.2f} ₽ ({cashback_percent}%)\n\n"
+            f"📊 Ваш уровень: {cashback_percent}%\n"
+            f"{progress_text}\n\n"
+            f"Баланс пополнен автоматически."
+        )
+        
+        # Отправляем уведомление
+        await bot.send_message(
+            chat_id=referrer_id,
+            text=notification_text
+        )
+        
+        logger.info(
+            f"Referral cashback notification sent: referrer={referrer_id}, "
+            f"referred={referred_id}, amount={cashback_amount:.2f} RUB, percent={cashback_percent}%"
+        )
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to send referral cashback notification: referrer={referrer_id}, error={e}")
+        return False
 
 
 def get_broadcast_test_type_keyboard():
@@ -845,6 +920,8 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             buttons.append([InlineKeyboardButton(text="❌ Снять VIP", callback_data=f"admin:vip_revoke:{user_id}")])
         else:
             buttons.append([InlineKeyboardButton(text="👑 Выдать VIP", callback_data=f"admin:vip_grant:{user_id}")])
+        # Кнопка выдачи средств
+        buttons.append([InlineKeyboardButton(text="💰 Выдать средства", callback_data=f"admin:credit_balance:{user_id}")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -2267,8 +2344,25 @@ async def process_tariff_purchase_selection(
         
         # Начисляем реферальный кешбэк при оплате с баланса
         try:
-            await database.process_referral_reward_cashback(telegram_id, amount_rubles)
-            logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={amount_rubles} RUB")
+            reward_result = await database.process_referral_reward(
+                buyer_id=telegram_id,
+                purchase_id=None,  # Оплата с баланса не имеет purchase_id
+                amount_rubles=amount_rubles
+            )
+            
+            if reward_result.get("success"):
+                await send_referral_cashback_notification(
+                    bot=callback.message.bot,
+                    referrer_id=reward_result.get("referrer_id"),
+                    referred_id=telegram_id,
+                    purchase_amount=amount_rubles,
+                    cashback_amount=reward_result.get("reward_amount"),
+                    cashback_percent=reward_result.get("percent"),
+                    paid_referrals_count=reward_result.get("paid_referrals_count", 0),
+                    referrals_needed=reward_result.get("referrals_needed", 0),
+                    action_type="продление"
+                )
+                logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={amount_rubles} RUB")
         except Exception as e:
             logger.exception(f"Error processing referral cashback for balance payment: user={telegram_id}: {e}")
         
@@ -2801,6 +2895,30 @@ async def process_successful_payment(message: Message):
                 )
                 await message.answer(text)
                 
+                # Начисляем реферальный кешбэк при пополнении баланса
+                try:
+                    reward_result = await database.process_referral_reward(
+                        buyer_id=telegram_id,
+                        purchase_id=None,  # Пополнение баланса не имеет purchase_id
+                        amount_rubles=payment_amount_rubles
+                    )
+                    
+                    if reward_result.get("success"):
+                        await send_referral_cashback_notification(
+                            bot=message.bot,
+                            referrer_id=reward_result.get("referrer_id"),
+                            referred_id=telegram_id,
+                            purchase_amount=payment_amount_rubles,
+                            cashback_amount=reward_result.get("reward_amount"),
+                            cashback_percent=reward_result.get("percent"),
+                            paid_referrals_count=reward_result.get("paid_referrals_count", 0),
+                            referrals_needed=reward_result.get("referrals_needed", 0),
+                            action_type="пополнение"
+                        )
+                        logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
+                except Exception as e:
+                    logger.exception(f"Error processing referral cashback for balance topup: user={telegram_id}: {e}")
+                
                 # Логируем событие
                 logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
             else:
@@ -3159,7 +3277,23 @@ async def process_successful_payment(message: Message):
     
     # КРИТИЧНО: pending_purchase уже помечен как paid в finalize_purchase
     # Реферальный кешбэк уже обработан в finalize_purchase через process_referral_reward
-    # Здесь только логируем успешное завершение
+    # Отправляем уведомление рефереру (если кешбэк был начислен)
+    try:
+        referral_reward = result.get("referral_reward")
+        if referral_reward and referral_reward.get("success"):
+            await send_referral_cashback_notification(
+                bot=message.bot,
+                referrer_id=referral_reward.get("referrer_id"),
+                referred_id=telegram_id,
+                purchase_amount=payment_amount_rubles,
+                cashback_amount=referral_reward.get("reward_amount"),
+                cashback_percent=referral_reward.get("percent"),
+                paid_referrals_count=referral_reward.get("paid_referrals_count", 0),
+                referrals_needed=referral_reward.get("referrals_needed", 0),
+                action_type="покупку"
+            )
+    except Exception as e:
+        logger.warning(f"Failed to send referral notification: {e}")
     
     logger.info(
         f"process_successful_payment: PAYMENT_COMPLETE [user={telegram_id}, payment_id={payment_id}, "
@@ -7117,6 +7251,221 @@ async def reject_payment(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in reject_payment callback for payment_id={payment_id if 'payment_id' in locals() else 'unknown'}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:credit_balance")
+async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса выдачи средств - запрос поиска пользователя"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    text = "💰 Выдать средства\n\nВведите Telegram ID или username пользователя:"
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+    await state.set_state(AdminCreditBalance.waiting_for_user_search)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:credit_balance:"))
+async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса выдачи средств для конкретного пользователя"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        await state.update_data(target_user_id=user_id)
+        
+        text = f"💰 Выдать средства\n\nПользователь: {user_id}\n\nВведите сумму в рублях:"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:user")]
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(AdminCreditBalance.waiting_for_amount)
+        await callback.answer()
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_credit_balance_user: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.message(AdminCreditBalance.waiting_for_user_search)
+async def process_admin_credit_balance_user_search(message: Message, state: FSMContext):
+    """Обработка поиска пользователя для выдачи средств"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Недостаточно прав доступа")
+        await state.clear()
+        return
+    
+    try:
+        user_input = message.text.strip()
+        
+        # Определяем, является ли ввод числом (ID) или строкой (username)
+        try:
+            target_user_id = int(user_input)
+            user = await database.find_user_by_id_or_username(telegram_id=target_user_id)
+        except ValueError:
+            username = user_input.lstrip('@').lower()
+            user = await database.find_user_by_id_or_username(username=username)
+        
+        if not user:
+            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+            await state.clear()
+            return
+        
+        target_user_id = user["telegram_id"]
+        await state.update_data(target_user_id=target_user_id)
+        
+        text = f"💰 Выдать средства\n\nПользователь: {target_user_id}\n\nВведите сумму в рублях:"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:main")]
+        ])
+        await message.answer(text, reply_markup=keyboard)
+        await state.set_state(AdminCreditBalance.waiting_for_amount)
+        
+    except Exception as e:
+        logging.exception(f"Error in process_admin_credit_balance_user_search: {e}")
+        await message.answer("Ошибка при поиске пользователя. Проверьте логи.")
+        await state.clear()
+
+
+@router.message(AdminCreditBalance.waiting_for_amount)
+async def process_admin_credit_balance_amount(message: Message, state: FSMContext):
+    """Обработка ввода суммы для выдачи средств"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Недостаточно прав доступа")
+        await state.clear()
+        return
+    
+    try:
+        amount = float(message.text.strip().replace(",", "."))
+        
+        if amount <= 0:
+            await message.answer("❌ Сумма должна быть положительным числом.\n\nВведите сумму в рублях:")
+            return
+        
+        data = await state.get_data()
+        target_user_id = data.get("target_user_id")
+        
+        if not target_user_id:
+            await message.answer("Ошибка: пользователь не найден. Начните заново.")
+            await state.clear()
+            return
+        
+        # Сохраняем сумму и показываем подтверждение
+        await state.update_data(amount=amount)
+        
+        user = await database.get_user(target_user_id)
+        current_balance = await database.get_user_balance(target_user_id) if user else 0.0
+        new_balance = current_balance + amount
+        
+        text = (
+            f"💰 Подтверждение выдачи средств\n\n"
+            f"👤 Пользователь: {target_user_id}\n"
+            f"💳 Текущий баланс: {current_balance:.2f} ₽\n"
+            f"➕ Сумма к выдаче: {amount:.2f} ₽\n"
+            f"💵 Новый баланс: {new_balance:.2f} ₽\n\n"
+            f"Подтвердите операцию:"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin:credit_balance_confirm"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="admin:credit_balance_cancel")
+            ]
+        ])
+        
+        await message.answer(text, reply_markup=keyboard)
+        await state.set_state(AdminCreditBalance.waiting_for_confirmation)
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат суммы.\n\nВведите число (например: 500 или 100.50):")
+    except Exception as e:
+        logging.exception(f"Error in process_admin_credit_balance_amount: {e}")
+        await message.answer("Ошибка при обработке суммы. Проверьте логи.")
+        await state.clear()
+
+
+@router.callback_query(F.data == "admin:credit_balance_confirm")
+async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Подтверждение выдачи средств"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        data = await state.get_data()
+        target_user_id = data.get("target_user_id")
+        amount = data.get("amount")
+        
+        if not target_user_id or not amount:
+            await callback.answer("Ошибка: данные не найдены", show_alert=True)
+            await state.clear()
+            return
+        
+        # Начисляем баланс
+        success = await database.increase_balance(
+            telegram_id=target_user_id,
+            amount=amount,
+            source="admin",
+            description=f"Выдача средств администратором {callback.from_user.id}"
+        )
+        
+        if success:
+            # Логируем операцию
+            await database._log_audit_event_atomic_standalone(
+                "admin_credit_balance",
+                callback.from_user.id,
+                target_user_id,
+                f"Admin credited balance: {amount:.2f} RUB"
+            )
+            
+            # Отправляем уведомление пользователю
+            try:
+                new_balance = await database.get_user_balance(target_user_id)
+                notification_text = f"💰 Администратор начислил вам {amount:.2f} ₽ на баланс.\n\nТекущий баланс: {new_balance:.2f} ₽"
+                await bot.send_message(chat_id=target_user_id, text=notification_text)
+            except Exception as e:
+                logger.warning(f"Failed to send balance credit notification to user {target_user_id}: {e}")
+            
+            new_balance = await database.get_user_balance(target_user_id)
+            text = (
+                f"✅ Средства успешно начислены\n\n"
+                f"👤 Пользователь: {target_user_id}\n"
+                f"➕ Сумма: {amount:.2f} ₽\n"
+                f"💵 Новый баланс: {new_balance:.2f} ₽"
+            )
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            ])
+            
+            await callback.message.edit_text(text, reply_markup=keyboard)
+            await state.clear()
+            await callback.answer("✅ Средства начислены", show_alert=True)
+        else:
+            await callback.answer("❌ Ошибка при начислении средств", show_alert=True)
+            await state.clear()
+            
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_credit_balance_confirm: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data == "admin:credit_balance_cancel")
+async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отмена выдачи средств"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.message.edit_text(
+        "❌ Операция отменена",
+        reply_markup=get_admin_back_keyboard()
+    )
+    await state.clear()
+    await callback.answer()
 
 
 
