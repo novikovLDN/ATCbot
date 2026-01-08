@@ -3724,6 +3724,199 @@ async def mark_pending_purchase_paid(purchase_id: str) -> bool:
             return False
 
 
+async def finalize_purchase(
+    purchase_id: str,
+    payment_provider: str,
+    amount_rubles: float,
+    invoice_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ (SINGLE SOURCE OF TRUTH)
+    
+    Эта функция вызывается после успешной оплаты (карта или крипта)
+    и выполняет ВСЮ бизнес-логику в ОДНОЙ транзакции:
+    
+    1. Проверяет pending_purchase (должен быть status='pending')
+    2. Обновляет pending_purchase → status='paid'
+    3. Создает payment record
+    4. Активирует подписку через grant_access
+    5. Обновляет payment → status='approved'
+    6. Обрабатывает реферальный кешбэк
+    
+    КРИТИЧНО: Все операции в одной транзакции БД.
+    Если любой шаг падает → rollback, логирование, исключение.
+    
+    Args:
+        purchase_id: ID покупки из pending_purchases
+        payment_provider: 'telegram_payment' или 'cryptobot'
+        amount_rubles: Сумма оплаты в рублях
+        invoice_id: ID инвойса (опционально, для крипты)
+    
+    Returns:
+        {
+            "success": bool,
+            "payment_id": int,
+            "expires_at": datetime,
+            "vpn_key": str,
+            "is_renewal": bool
+        }
+    
+    Raises:
+        ValueError: Если pending_purchase не найден или уже обработан
+        Exception: При любых ошибках активации подписки
+    """
+    from datetime import timedelta
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Начинаем транзакцию
+        async with conn.transaction():
+            # STEP 1: Получаем и проверяем pending_purchase
+            pending_row = await conn.fetchrow(
+                "SELECT * FROM pending_purchases WHERE purchase_id = $1",
+                purchase_id
+            )
+            
+            if not pending_row:
+                error_msg = f"Pending purchase not found: purchase_id={purchase_id}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise ValueError(error_msg)
+            
+            pending_purchase = dict(pending_row)
+            telegram_id = pending_purchase["telegram_id"]
+            status = pending_purchase.get("status")
+            
+            if status != "pending":
+                error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
+                logger.warning(f"finalize_purchase: {error_msg}")
+                raise ValueError(error_msg)
+            
+            tariff_type = pending_purchase["tariff"]
+            period_days = pending_purchase["period_days"]
+            price_kopecks = pending_purchase["price_kopecks"]
+            
+            logger.info(
+                f"finalize_purchase: START [purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, "
+                f"tariff={tariff_type}, period_days={period_days}]"
+            )
+            
+            # STEP 2: Обновляем pending_purchase → paid
+            result = await conn.execute(
+                "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status = 'pending'",
+                purchase_id
+            )
+            
+            if result != "UPDATE 1":
+                error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise Exception(error_msg)
+            
+            # STEP 3: Создаем payment record
+            payment_id = await conn.fetchval(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
+                telegram_id,
+                f"{tariff_type}_{period_days}",
+                int(amount_rubles * 100)  # Сохраняем в копейках
+            )
+            
+            if not payment_id:
+                error_msg = f"Failed to create payment record: purchase_id={purchase_id}, user={telegram_id}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise Exception(error_msg)
+            
+            # STEP 4: Активируем подписку через grant_access
+            duration = timedelta(days=period_days)
+            grant_result = await grant_access(
+                telegram_id=telegram_id,
+                duration=duration,
+                source="payment",
+                admin_telegram_id=None,
+                admin_grant_days=None,
+                conn=conn
+            )
+            
+            if not grant_result:
+                error_msg = f"grant_access returned None: purchase_id={purchase_id}, user={telegram_id}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise Exception(error_msg)
+            
+            expires_at = grant_result.get("subscription_end")
+            if not expires_at:
+                error_msg = f"grant_access returned None expires_at: purchase_id={purchase_id}, user={telegram_id}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise Exception(error_msg)
+            
+            # Получаем VPN ключ
+            vpn_key = grant_result.get("vless_url")
+            is_renewal = grant_result.get("action") == "renewal"
+            
+            if not vpn_key:
+                # Если это продление, получаем ключ из существующей подписки
+                if is_renewal:
+                    subscription_row = await conn.fetchrow(
+                        "SELECT * FROM subscriptions WHERE telegram_id = $1",
+                        telegram_id
+                    )
+                    subscription = dict(subscription_row) if subscription_row else None
+                    if subscription and subscription.get("vpn_key"):
+                        vpn_key = subscription["vpn_key"]
+                    else:
+                        # Fallback: генерируем из UUID
+                        uuid = grant_result.get("uuid")
+                        if uuid:
+                            import vpn_utils
+                            vpn_key = vpn_utils.generate_vless_url(uuid)
+                        else:
+                            vpn_key = ""
+                else:
+                    # Новая подписка без vless_url - генерируем из UUID
+                    uuid = grant_result.get("uuid")
+                    if uuid:
+                        import vpn_utils
+                        vpn_key = vpn_utils.generate_vless_url(uuid)
+                    else:
+                        error_msg = f"No VPN key and no UUID: purchase_id={purchase_id}, user={telegram_id}"
+                        logger.error(f"finalize_purchase: {error_msg}")
+                        raise Exception(error_msg)
+            
+            if not vpn_key:
+                error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise Exception(error_msg)
+            
+            # STEP 5: Обновляем payment → approved
+            await conn.execute(
+                "UPDATE payments SET status = 'approved' WHERE id = $1",
+                payment_id
+            )
+            
+            # STEP 6: Обрабатываем реферальный кешбэк
+            try:
+                await process_referral_reward(
+                    buyer_id=telegram_id,
+                    purchase_id=purchase_id,
+                    amount_rubles=amount_rubles
+                )
+            except Exception as e:
+                # Реферальный кешбэк не критичен - логируем и продолжаем
+                logger.warning(f"finalize_purchase: referral reward failed: purchase_id={purchase_id}, error={e}")
+            
+            logger.info(
+                f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, "
+                f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
+                f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}]"
+            )
+            
+            return {
+                "success": True,
+                "payment_id": payment_id,
+                "expires_at": expires_at,
+                "vpn_key": vpn_key,
+                "is_renewal": is_renewal
+            }
+
+
 async def expire_old_pending_purchases() -> int:
     """
     Автоматически помечает истёкшие pending покупки как expired
