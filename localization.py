@@ -91,6 +91,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Выбор способа оплаты
         "select_payment": "Выберите способ оплаты.",
+        "select_payment_method": "Выберите способ оплаты:\n\nСумма: {price:.2f} ₽",
+        "pay_balance": "💰 Баланс (доступно: {balance:.2f} ₽)",
+        "pay_card": "💳 Банковская карта",
+        "insufficient_balance": "Недостаточно средств на балансе.\n\nСтоимость: {amount:.2f} ₽\nНа балансе: {balance:.2f} ₽\nНе хватает: {shortage:.2f} ₽",
         "payment_test": "Служебный режим Недоступно",
         "payment_sbp": "СБП",
         
@@ -381,6 +385,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Выбор способа оплаты
         "select_payment": "Choose payment method.",
+        "select_payment_method": "Choose payment method:\n\nAmount: {price:.2f} ₽",
+        "pay_balance": "💰 Balance (available: {balance:.2f} ₽)",
+        "pay_card": "💳 Bank Card",
+        "insufficient_balance": "Insufficient balance.\n\nPrice: {amount:.2f} ₽\nBalance: {balance:.2f} ₽\nShortage: {shortage:.2f} ₽",
         "payment_test": "Service mode Unavailable",
         "payment_sbp": "SBP",
         
@@ -656,6 +664,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "tariff_button_6": "6 oy · Kamroq uzaytirish · 599 ₽",
         "tariff_button_12": "12 oy · Kirish haqida o'ylamaslik · 899 ₽",
         "select_payment": "To'lov usulini tanlang.",
+        "select_payment_method": "To'lov usulini tanlang:\n\nSumma: {price:.2f} ₽",
+        "pay_balance": "💰 Balans (mavjud: {balance:.2f} ₽)",
+        "pay_card": "💳 Bank kartasi",
+        "insufficient_balance": "Balansda mablag' yetarli emas.\n\nNarx: {amount:.2f} ₽\nBalansda: {balance:.2f} ₽\nYetishmaydi: {shortage:.2f} ₽",
         "payment_test": "Xizmat rejimi Mavjud emas",
         "payment_sbp": "SBP",
         
@@ -917,6 +929,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "tariff_button_6": "6 моҳ · Камтар васеъ кардан · 599 ₽",
         "tariff_button_12": "12 моҳ · Дар бораи дастрасӣ фикр накардан · 899 ₽",
         "select_payment": "Усули пардохтро интихоб кунед.",
+        "select_payment_method": "Усули пардохтро интихоб кунед:\n\nМаблағ: {price:.2f} ₽",
+        "pay_balance": "💰 Балланс (дастрас: {balance:.2f} ₽)",
+        "pay_card": "💳 Корти банкӣ",
+        "insufficient_balance": "Дар балланс маблағ кофӣ нест.\n\nНарх: {amount:.2f} ₽\nДар балланс: {balance:.2f} ₽\nКам: {shortage:.2f} ₽",
         "payment_test": "Реҷаи хизматӣ Дастрас нест",
         "payment_sbp": "СБП",
         "sbp_payment_text": "Пас аз интиқол, пардохтро тасдиқ кунед.\n\n⸻\n\nМаълумоти интиқол\n\nБонк: Ozon\nҲисоби корт: 2204321075030551\n\nМаблағи тасдиқ: {amount} ₽",
