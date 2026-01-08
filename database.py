@@ -83,6 +83,20 @@ async def init_db() -> bool:
     global DB_READY
     pool = await get_pool()
     
+    # ====================================================================================
+    # VERSIONED MIGRATIONS: Применяем миграции перед созданием таблиц
+    # ====================================================================================
+    try:
+        import migrations
+        migrations_success = await migrations.run_migrations_safe(pool)
+        if not migrations_success:
+            logger.error("Failed to apply database migrations")
+            return False
+        logger.info("Database migrations applied successfully")
+    except Exception as e:
+        logger.exception(f"Error applying migrations: {e}")
+        return False
+    
     async with pool.acquire() as conn:
         # Таблица users
         await conn.execute("""
