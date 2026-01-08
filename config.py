@@ -81,3 +81,8 @@ XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
 # VLESS с REALITY не использует flow параметр
 XRAY_FP = os.getenv("XRAY_FP", "ios")  # По умолчанию ios согласно требованиям
 
+# Crypto Bot (Telegram Crypto Pay) Configuration
+CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
+CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "https://pay.crypt.bot/api")
+CRYPTOBOT_WEBHOOK_SECRET = os.getenv("CRYPTOBOT_WEBHOOK_SECRET", "")
+

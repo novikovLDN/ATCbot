@@ -1534,7 +1534,7 @@ async def callback_topup_balance(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("topup_amount:"))
 async def callback_topup_amount(callback: CallbackQuery):
-    """Обработка выбора суммы пополнения"""
+    """Обработка выбора суммы пополнения - показываем экран выбора способа оплаты"""
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
@@ -1555,31 +1555,31 @@ async def callback_topup_amount(callback: CallbackQuery):
         await callback.answer(localization.get_text(language, "error_invalid_amount", default="Неверная сумма"), show_alert=True)
         return
     
-    # Создаем invoice через Telegram Payments
-    import time
-    timestamp = int(time.time())
-    payload = f"balance_topup_{telegram_id}_{amount}_{timestamp}"
+    # Показываем экран выбора способа оплаты
+    text = localization.get_text(
+        language,
+        "topup_select_payment_method",
+        amount=amount,
+        default=f"Пополнение баланса на {amount} ₽\n\nВыберите способ оплаты:"
+    )
     
-    # Конвертируем рубли в копейки для Telegram Payments
-    amount_kopecks = amount * 100
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
+            callback_data=f"topup_card:{amount}"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "crypto_payment", default="Оплата криптовалютой"),
+            callback_data=f"crypto_pay:balance:{amount}"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back", default="← Назад"),
+            callback_data="topup_balance"
+        )],
+    ])
     
-    try:
-        await callback.bot.send_invoice(
-            chat_id=telegram_id,
-            title=localization.get_text(language, "topup_invoice_title", default="Пополнение баланса Atlas Secure"),
-            description=localization.get_text(language, "topup_invoice_description", amount=amount, default=f"Пополнение баланса на {amount} ₽"),
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=[LabeledPrice(label=localization.get_text(language, "topup_invoice_label", default="Пополнение баланса"), amount=amount_kopecks)]
-        )
-        await callback.answer()
-    except Exception as e:
-        logger.exception(f"Error sending invoice for balance topup: {e}")
-        await callback.answer(
-            localization.get_text(language, "error_payment_create", default="Ошибка создания платежа. Попробуйте позже."),
-            show_alert=True
-        )
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "topup_custom")
@@ -1610,7 +1610,7 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TopUpStates.waiting_for_amount)
 async def process_topup_amount(message: Message, state: FSMContext):
-    """Обработка введенной суммы пополнения"""
+    """Обработка введенной суммы пополнения - показываем экран выбора способа оплаты"""
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_message(message):
         await state.clear()
@@ -1655,51 +1655,30 @@ async def process_topup_amount(message: Message, state: FSMContext):
     # Очищаем FSM состояние
     await state.clear()
     
-    # Создаем invoice через Telegram Payments
-    import time
-    timestamp = int(time.time())
-    payload = f"balance_topup_{telegram_id}_{amount}_{timestamp}"
+    # Показываем экран выбора способа оплаты
+    text = localization.get_text(
+        language,
+        "topup_select_payment_method",
+        amount=amount,
+        default=f"Пополнение баланса на {amount} ₽\n\nВыберите способ оплаты:"
+    )
     
-    # Конвертируем рубли в копейки для Telegram Payments
-    amount_kopecks = amount * 100
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
+            callback_data=f"topup_card:{amount}"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "crypto_payment", default="Оплата криптовалютой"),
+            callback_data=f"crypto_pay:balance:{amount}"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back", default="← Назад"),
+            callback_data="topup_balance"
+        )],
+    ])
     
-    try:
-        title = localization.get_text(language, "topup_invoice_title")
-    except KeyError:
-        logger.error(f"Missing localization key 'topup_invoice_title' for language '{language}'")
-        title = "Пополнение баланса Atlas Secure"
-    
-    try:
-        description = localization.get_text(language, "topup_invoice_description", amount=amount)
-    except KeyError:
-        logger.error(f"Missing localization key 'topup_invoice_description' for language '{language}'")
-        description = f"Пополнение баланса на {amount} ₽"
-    
-    try:
-        label = localization.get_text(language, "topup_invoice_label")
-    except KeyError:
-        logger.error(f"Missing localization key 'topup_invoice_label' for language '{language}'")
-        label = "Пополнение баланса"
-    
-    try:
-        await message.bot.send_invoice(
-            chat_id=telegram_id,
-            title=title,
-            description=description,
-            payload=payload,
-            provider_token=config.TG_PROVIDER_TOKEN,
-            currency="RUB",
-            prices=[LabeledPrice(label=label, amount=amount_kopecks)]
-        )
-        logger.info(f"Sent invoice for custom topup: user={telegram_id}, amount={amount} RUB")
-    except Exception as e:
-        logger.exception(f"Error sending invoice for custom balance topup: {e}")
-        try:
-            error_text = localization.get_text(language, "error_payment_create")
-        except KeyError:
-            logger.error(f"Missing localization key 'error_payment_create' for language '{language}'")
-            error_text = "Ошибка создания платежа. Попробуйте позже."
-        await message.answer(error_text)
+    await message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "copy_key")
@@ -2288,23 +2267,15 @@ async def process_tariff_purchase_selection(
                 text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
                 callback_data=f"pay_tariff_card:{tariff_type}:{period_days}:{purchase_id}"
             )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "crypto_payment", default="Оплата криптовалютой"),
+                callback_data=f"crypto_pay:tariff:{tariff_type}:{period_days}:{purchase_id}"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="← Назад"),
+                callback_data="menu_buy_vpn"
+            )],
         ]
-        
-        # Add crypto payment option if enabled
-        try:
-            import cryptobot_service
-            if cryptobot_service.is_enabled():
-                keyboard_buttons.append([InlineKeyboardButton(
-                    text=localization.get_text(language, "pay_with_crypto", default="💎 Оплатить криптой"),
-                    callback_data=f"pay_tariff_crypto:{tariff_type}:{period_days}:{purchase_id}"
-                )])
-        except ImportError:
-            pass
-        
-        keyboard_buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "back", default="← Назад"),
-            callback_data="menu_buy_vpn"
-        )])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
@@ -2458,8 +2429,51 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
 
 
-@router.callback_query(F.data.startswith("pay_tariff_crypto:"))
-async def callback_pay_tariff_crypto(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("topup_card:"))
+async def callback_topup_card(callback: CallbackQuery):
+    """Оплата пополнения баланса картой"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    amount_str = callback.data.split(":")[1]
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await callback.answer(localization.get_text(language, "error_invalid_amount", default="Неверная сумма"), show_alert=True)
+        return
+    
+    if amount <= 0 or amount > 100000:
+        await callback.answer(localization.get_text(language, "error_invalid_amount", default="Неверная сумма"), show_alert=True)
+        return
+    
+    # Создаем invoice через Telegram Payments
+    import time
+    timestamp = int(time.time())
+    payload = f"balance_topup_{telegram_id}_{amount}_{timestamp}"
+    amount_kopecks = amount * 100
+    
+    try:
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title=localization.get_text(language, "topup_invoice_title", default="Пополнение баланса Atlas Secure"),
+            description=localization.get_text(language, "topup_invoice_description", amount=amount, default=f"Пополнение баланса на {amount} ₽"),
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label=localization.get_text(language, "topup_invoice_label", default="Пополнение баланса"), amount=amount_kopecks)]
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error sending invoice for balance topup: {e}")
+        await callback.answer(
+            localization.get_text(language, "error_payment_create", default="Ошибка создания платежа. Попробуйте позже."),
+            show_alert=True
+        )
+
+
+@router.callback_query(F.data.startswith("crypto_pay:tariff:"))
+async def callback_crypto_pay_tariff(callback: CallbackQuery, state: FSMContext):
     """Оплата тарифа криптой через Crypto Bot"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
@@ -2474,10 +2488,19 @@ async def callback_pay_tariff_crypto(callback: CallbackQuery, state: FSMContext)
         await callback.answer(localization.get_text(language, "error_payments_unavailable", default="Оплата криптой недоступна"), show_alert=True)
         return
     
+    # Format: crypto_pay:tariff:<tariff_type>:<period_days>:<purchase_id>
     parts = callback.data.split(":")
-    tariff_type = parts[1] if len(parts) > 1 else None
-    period_days = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
-    purchase_id = parts[3] if len(parts) > 3 else None
+    if len(parts) < 5:
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    tariff_type = parts[2]
+    try:
+        period_days = int(parts[3])
+    except (ValueError, IndexError):
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    purchase_id = parts[4] if len(parts) > 4 else None
     
     if not tariff_type or not period_days:
         await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
@@ -2535,33 +2558,44 @@ async def callback_pay_tariff_crypto(callback: CallbackQuery, state: FSMContext)
     tariff_name = "Basic" if tariff_type == "basic" else "Plus"
     description = f"Atlas Secure VPN {tariff_name} {months} мес."
     
-    # Show asset selection
+    try:
+        invoice = await cryptobot_service.create_invoice(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            amount_rubles=amount_rubles,
+            purchase_id=purchase_id,
+            asset="USDT",
+            description=description
+        )
+    except Exception as e:
+        logger.exception(f"Crypto invoice creation failed: user={telegram_id}, error={e}")
+        await callback.answer(localization.get_text(language, "error_payment_create", default="Ошибка создания счета"), show_alert=True)
+        return
+    
+    pay_url = invoice.get("pay_url")
+    if not pay_url:
+        logger.error(f"Crypto invoice missing pay_url: user={telegram_id}, purchase_id={purchase_id}")
+        await callback.answer(localization.get_text(language, "error_payment_create", default="Ошибка создания счета"), show_alert=True)
+        return
+    
+    logger.info(f"Crypto invoice created: user={telegram_id}, invoice_id={invoice.get('invoice_id')}, purchase_id={purchase_id}")
+    
     text = localization.get_text(
         language,
-        "crypto_payment_choose_asset",
-        default="Выберите валюту для оплаты:"
+        "crypto_payment_redirect",
+        default="Оплата через Telegram Crypto Bot\n\nВы будете перенаправлены в Crypto Bot для оплаты."
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="USDT",
-            callback_data=f"pay_crypto_asset:USDT:{tariff_type}:{period_days}:{purchase_id}"
-        )],
-        [InlineKeyboardButton(
-            text="TON",
-            callback_data=f"pay_crypto_asset:TON:{tariff_type}:{period_days}:{purchase_id}"
-        )],
-        [InlineKeyboardButton(
-            text="BTC",
-            callback_data=f"pay_crypto_asset:BTC:{tariff_type}:{period_days}:{purchase_id}"
-        )],
+        [InlineKeyboardButton(text="🔗 Оплатить", url=pay_url)],
         [InlineKeyboardButton(
             text=localization.get_text(language, "back", default="← Назад"),
             callback_data="menu_buy_vpn"
         )],
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
     await callback.answer()
 
 

@@ -131,6 +131,69 @@ async def create_invoice(
     return result
 
 
+async def create_balance_invoice(
+    telegram_id: int,
+    amount_rubles: float,
+    description: str = ""
+) -> Dict[str, Any]:
+    """
+    Create balance top-up invoice via Crypto Bot API
+    
+    Args:
+        telegram_id: User Telegram ID
+        amount_rubles: Amount in rubles
+        description: Invoice description
+        
+    Returns:
+        Invoice data with invoice_id and pay_url
+        
+    Raises:
+        Exception on API errors
+    """
+    if not is_enabled():
+        raise Exception("Crypto Bot not configured")
+    
+    import time
+    timestamp = int(time.time())
+    payload_data = {
+        "telegram_user_id": telegram_id,
+        "amount": amount_rubles,
+        "type": "balance_topup",
+        "timestamp": timestamp,
+    }
+    
+    request_body = {
+        "amount": round(float(amount_rubles), 2),
+        "fiat": "RUB",
+        "asset": "USDT",
+        "payload": json.dumps(payload_data, ensure_ascii=False),
+        "description": description[:250] if description else f"Пополнение баланса {amount_rubles} RUB",
+        "allow_comments": False,
+        "allow_anonymous": False,
+    }
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            f"{CRYPTOBOT_API_URL}/createInvoice",
+            headers=_get_auth_headers(),
+            json=request_body
+        )
+    
+    if response.status_code != 200:
+        raise Exception(f"Crypto Bot API error: {response.status_code} - {response.text}")
+    
+    data = response.json()
+    if not data.get("ok"):
+        error_msg = data.get("error", {}).get("name", "Unknown error")
+        raise Exception(f"Crypto Bot API error: {error_msg}")
+    
+    result = data.get("result", {})
+    if not result.get("invoice_id") or not result.get("pay_url"):
+        raise Exception("Invalid response from Crypto Bot API: missing invoice_id or pay_url")
+    
+    return result
+
+
 async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
     """
     Handle Crypto Bot webhook
