@@ -24,6 +24,43 @@ _bot_start_time = time.time()
 # ====================================================================================
 # SAFE STARTUP GUARD: Helper функции для проверки готовности БД
 # ====================================================================================
+
+async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = None):
+    """
+    Безопасное редактирование текста сообщения с обработкой ошибки "message is not modified"
+    
+    Args:
+        message: Message объект для редактирования
+        text: Новый текст сообщения
+        reply_markup: Новая клавиатура (опционально)
+        parse_mode: Режим парсинга (HTML, Markdown и т.д.)
+    """
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+        # Игнорируем ошибку "message is not modified" - сообщение уже имеет нужное содержимое
+        logger.debug(f"Message not modified (expected): {e}")
+
+
+async def safe_edit_reply_markup(message: Message, reply_markup: InlineKeyboardMarkup = None):
+    """
+    Безопасное редактирование клавиатуры сообщения с обработкой ошибки "message is not modified"
+    
+    Args:
+        message: Message объект для редактирования
+        reply_markup: Новая клавиатура (или None для удаления)
+    """
+    try:
+        await message.edit_reply_markup(reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+        # Игнорируем ошибку "message is not modified" - клавиатура уже имеет нужное содержимое
+        logger.debug(f"Reply markup not modified (expected): {e}")
+
+# ====================================================================================
 async def ensure_db_ready_message(message_or_query) -> bool:
     """
     Проверка готовности базы данных с отправкой сообщения пользователю
@@ -1156,7 +1193,7 @@ async def callback_toggle_auto_renew(callback: CallbackQuery):
 async def callback_change_language(callback: CallbackQuery):
     """Изменить язык"""
     text = localization.get_text("ru", "language_select")
-    await callback.message.edit_text(text, reply_markup=get_language_keyboard())
+    await safe_edit_text(callback.message, text, reply_markup=get_language_keyboard())
     await callback.answer()
 
 
@@ -1174,7 +1211,7 @@ async def callback_language(callback: CallbackQuery):
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
-    await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
 
 
@@ -1190,7 +1227,7 @@ async def callback_main_menu(callback: CallbackQuery):
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
-    await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
 
 
@@ -1272,34 +1309,15 @@ async def callback_vip_access(callback: CallbackQuery):
         )]
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
 
 
-@router.callback_query(F.data == "renew_same_period")
-async def callback_renew_same_period(callback: CallbackQuery):
-    """Продление подписки на тот же период - ОТКЛЮЧЕНО
-    
-    ВРЕМЕННО ОТКЛЮЧЕНО: Этот handler использует устаревшую модель (months)
-    и не соответствует новой двухшаговой логике покупки.
-    
-    Для продления подписки используйте стандартный flow:
-    /buy -> выбор тарифа -> выбор периода -> выбор способа оплаты
-    """
-    telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
-    await callback.answer(
-        localization.get_text(
-            language,
-            "error_session_expired",
-            default="Функция временно недоступна. Используйте /buy для покупки/продления подписки."
-        ),
-        show_alert=True
-    )
-    logger.warning(f"callback_renew_same_period called but disabled: user={telegram_id}")
-    return
+# callback_renew_same_period - УДАЛЕН
+# Этот handler был отключен, так как использует устаревшую модель (months)
+# и не соответствует новой двухшаговой логике покупки.
+# Для продления подписки используется стандартный flow:
+# /buy -> выбор тарифа -> выбор периода -> выбор способа оплаты
     
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
@@ -1542,7 +1560,7 @@ async def callback_topup_balance(callback: CallbackQuery):
         )],
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -1592,7 +1610,7 @@ async def callback_topup_amount(callback: CallbackQuery):
         )],
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -1852,7 +1870,7 @@ async def callback_back_to_main(callback: CallbackQuery):
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
-    await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
 
 
@@ -1951,7 +1969,7 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
         )],
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -2066,7 +2084,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     )])
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     
     # КРИТИЧНО: Переходим в состояние choose_period
     await state.set_state(PurchaseState.choose_period)
@@ -2244,7 +2262,7 @@ async def show_payment_method_selection(
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error showing payment method selection: {e}")
@@ -3577,7 +3595,7 @@ async def callback_payment_test(callback: CallbackQuery):
     # Тестовая оплата не работает - возвращаем назад
     await callback.answer("Эта функция не работает", show_alert=True)
     text = localization.get_text(language, "select_payment")
-    await callback.message.edit_text(text, reply_markup=get_payment_method_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_payment_method_keyboard(language))
 
 
 @router.callback_query(F.data == "payment_sbp")
@@ -3630,7 +3648,7 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
         amount=amount
     )
     
-    await callback.message.edit_text(text, reply_markup=get_sbp_payment_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_sbp_payment_keyboard(language))
     await callback.answer()
 
 
@@ -3648,7 +3666,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     existing_payment = await database.get_pending_payment_by_user(telegram_id)
     if existing_payment:
         text = localization.get_text(language, "payment_pending")
-        await callback.message.edit_text(text, reply_markup=get_pending_payment_keyboard(language))
+        await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
         await callback.answer("У вас уже есть ожидающий платеж", show_alert=True)
         await state.clear()
         return
@@ -3659,7 +3677,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     if payment_id is None:
         # Это не должно произойти, так как мы проверили выше, но на всякий случай
         text = localization.get_text(language, "payment_pending")
-        await callback.message.edit_text(text, reply_markup=get_pending_payment_keyboard(language))
+        await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
         await callback.answer("Не удалось создать платеж. Попробуйте позже.", show_alert=True)
         await state.clear()
         return
@@ -3677,7 +3695,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     
     # Отправляем сообщение пользователю
     text = localization.get_text(language, "payment_pending")
-    await callback.message.edit_text(text, reply_markup=get_pending_payment_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
     await callback.answer()
     
     # Уведомляем администратора с реальной суммой платежа
@@ -3724,7 +3742,7 @@ async def callback_about(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "about_text")
-    await callback.message.edit_text(text, reply_markup=get_about_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language))
     await callback.answer()
 
 
@@ -3744,7 +3762,7 @@ async def callback_service_status(callback: CallbackQuery):
         warning = localization.get_text(language, "incident_status_warning", incident_text=incident_text)
         text = text + warning
     
-    await callback.message.edit_text(text, reply_markup=get_service_status_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_service_status_keyboard(language))
     await callback.answer()
 
 
@@ -3756,12 +3774,7 @@ async def callback_privacy(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "privacy_policy_text")
-    try:
-        await callback.message.edit_text(text, reply_markup=get_about_keyboard(language))
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
-        # Игнорируем ошибку "message is not modified" - сообщение уже имеет нужное содержимое
+    await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language))
     await callback.answer()
 
 
@@ -3776,7 +3789,7 @@ async def callback_instruction(callback: CallbackQuery):
     platform = detect_platform(callback)
     
     text = localization.get_text(language, "instruction_text")
-    await callback.message.edit_text(text, reply_markup=get_instruction_keyboard(language, platform))
+    await safe_edit_text(callback.message, text, reply_markup=get_instruction_keyboard(language, platform))
     await callback.answer()
 
 
@@ -3912,7 +3925,7 @@ async def callback_referral(callback: CallbackQuery):
         ])
         
         try:
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
             await callback.answer()
             
             logger.debug(
@@ -4029,7 +4042,7 @@ async def callback_referral_how_it_works(callback: CallbackQuery):
             )],
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
         
     except Exception as e:
@@ -4050,7 +4063,7 @@ async def callback_support(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "support_text")
-    await callback.message.edit_text(text, reply_markup=get_support_keyboard(language))
+    await safe_edit_text(callback.message, text, reply_markup=get_support_keyboard(language))
     await callback.answer()
 
 
@@ -4083,7 +4096,7 @@ async def approve_payment(callback: CallbackQuery):
             )
             await callback.answer("Платеж уже обработан", show_alert=True)
             # Удаляем кнопки даже если платеж уже обработан
-            await callback.message.edit_reply_markup(reply_markup=None)
+            await safe_edit_reply_markup(callback.message, reply_markup=None)
             return
         
         telegram_id = payment["telegram_id"]
@@ -4166,9 +4179,9 @@ async def approve_payment(callback: CallbackQuery):
         except Exception as e:
             logging.error(f"Error sending approval message to user {telegram_id}: {e}")
         
-        await callback.message.edit_text(f"✅ Платеж {payment_id} подтвержден")
+        await safe_edit_text(callback.message, f"✅ Платеж {payment_id} подтвержден")
         # Удаляем inline-кнопки после обработки
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await safe_edit_reply_markup(callback.message, reply_markup=None)
         
     except Exception as e:
         logging.exception(f"Error in approve_payment callback for payment_id={payment_id if 'payment_id' in locals() else 'unknown'}")
@@ -4195,7 +4208,7 @@ async def callback_admin_main(callback: CallbackQuery):
         return
     
     text = "🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:"
-    await callback.message.edit_text(text, reply_markup=get_admin_dashboard_keyboard())
+    await safe_edit_text(callback.message, text, reply_markup=get_admin_dashboard_keyboard())
     await callback.answer()
 
 
@@ -4213,7 +4226,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
         # Формируем текст ответа
         text = await format_promo_stats_text(stats)
         
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
@@ -4256,7 +4269,7 @@ async def callback_admin_metrics(callback: CallbackQuery):
         approval_rate = metrics.get('approval_rate_percent', 0.0)
         text += f"✅ Процент подтвержденных платежей: {approval_rate:.1f}%\n"
         
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
         
         # Логируем действие
@@ -4286,7 +4299,7 @@ async def callback_admin_stats(callback: CallbackQuery):
         text += f"❌ Отклонённых платежей: {stats['rejected_payments']}\n"
         text += f"🔓 Свободных VPN-ключей: {stats['free_vpn_keys']}"
         
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
         
         # Логируем просмотр статистики
@@ -4389,7 +4402,7 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
         # Логируем просмотр статистики
         try:
@@ -4438,7 +4451,7 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
             ])
             
-            await callback.message.edit_text(fallback_text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, fallback_text, reply_markup=keyboard)
         except Exception as fallback_error:
             logger.exception(f"Error in fallback admin referral stats: {fallback_error}")
             await callback.answer("Ошибка при получении реферальной статистики", show_alert=True)
@@ -4471,7 +4484,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
             ])
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
         
         # Формируем текст со статистикой
@@ -4515,7 +4528,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_sort: {e}")
@@ -4536,7 +4549,7 @@ async def callback_admin_referral_search(callback: CallbackQuery, state: FSMCont
         [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:referral_stats")]
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await state.set_state(AdminReferralSearch.waiting_for_search_query)
 
 
@@ -4666,7 +4679,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад к статистике", callback_data="admin:referral_stats")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
         # Логируем просмотр деталей
         await database._log_audit_event_atomic_standalone(
@@ -4707,7 +4720,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
             ])
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
         
         # Формируем текст с историей
@@ -4741,7 +4754,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
         ])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
         # Логируем просмотр истории
         await database._log_audit_event_atomic_standalone(
@@ -4788,7 +4801,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
             ])
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
         
         # Формируем текст
@@ -4822,7 +4835,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
         ])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_history_page: {e}")
@@ -4853,7 +4866,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
             ])
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
         
         # Формируем текст
@@ -4885,7 +4898,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
         # Логируем просмотр топа
         await database._log_audit_event_atomic_standalone(
@@ -4941,7 +4954,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
         
         # Логируем действие
@@ -5008,7 +5021,7 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад к аналитике", callback_data="admin:analytics")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
         
     except Exception as e:
@@ -5029,7 +5042,7 @@ async def callback_admin_audit(callback: CallbackQuery):
         
         if not audit_logs:
             text = "📜 Аудит\n\nАудит пуст. Действий не зафиксировано."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer()
             return
         
@@ -5118,7 +5131,7 @@ async def callback_admin_audit(callback: CallbackQuery):
             
             text = "\n".join(lines)
         
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
         
         # Логируем просмотр аудита
@@ -5149,7 +5162,7 @@ async def callback_admin_keys(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
         
     except Exception as e:
@@ -5189,7 +5202,8 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         failed_users = []
         
         if total_count == 0:
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 "❌ Нет активных подписок для перевыпуска",
                 reply_markup=get_admin_back_keyboard()
             )
@@ -5198,6 +5212,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         # Отправляем начальное сообщение
         status_text = f"🔄 Массовый перевыпуск ключей\n\nВсего пользователей: {total_count}\nОбработано: 0/{total_count}\nУспешно: 0\nОшибок: 0"
         status_message = await callback.message.edit_text(status_text, reply_markup=None)
+        # Примечание: status_message используется для динамического обновления, защита не нужна
         
         # Обрабатываем каждую подписку
         for idx, sub_row in enumerate(subscriptions, 1):
@@ -5247,7 +5262,11 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                         f"❌ Ошибок: {failed_count}"
                     )
                     try:
-                        await status_message.edit_text(status_text)
+                        try:
+                            await status_message.edit_text(status_text)
+                        except TelegramBadRequest as e:
+                            if "message is not modified" not in str(e):
+                                raise
                     except Exception:
                         pass
                 
@@ -5280,7 +5299,11 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:keys")]
         ])
         
-        await status_message.edit_text(final_text, reply_markup=keyboard)
+        try:
+            await status_message.edit_text(final_text, reply_markup=keyboard)
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
         
         # Логируем в audit_log
         await database._log_audit_event_atomic_standalone(
@@ -5369,7 +5392,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
         text += f"Срок действия: до {expires_str}\n\n"
         text += f"Новый VPN-ключ:\n<code>{vless_url}</code>"
         
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
         await callback.answer("Ключ успешно перевыпущен")
         
         # Логируем в audit_log
@@ -5408,7 +5431,8 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         failed_subscriptions = []
         
         if total_count == 0:
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 "❌ Нет активных подписок для перевыпуска",
                 reply_markup=get_admin_back_keyboard()
             )
@@ -5417,6 +5441,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         # Отправляем начальное сообщение
         status_text = f"🔄 Массовый перевыпуск ключей\n\nВсего подписок: {total_count}\nОбработано: 0/{total_count}\nУспешно: 0\nОшибок: 0"
         status_message = await callback.message.edit_text(status_text, reply_markup=None)
+        # Примечание: status_message используется для динамического обновления, защита не нужна
         
         # Обрабатываем каждую подписку ИТЕРАТИВНО (НЕ параллельно)
         for idx, subscription in enumerate(subscriptions, 1):
@@ -5444,7 +5469,11 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
                         f"❌ Ошибок: {failed_count}"
                     )
                     try:
-                        await status_message.edit_text(status_text)
+                        try:
+                            await status_message.edit_text(status_text)
+                        except TelegramBadRequest as e:
+                            if "message is not modified" not in str(e):
+                                raise
                     except Exception:
                         pass
                 
@@ -5477,7 +5506,11 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:keys")]
         ])
         
-        await status_message.edit_text(final_text, reply_markup=keyboard)
+        try:
+            await status_message.edit_text(final_text, reply_markup=keyboard)
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e):
+                raise
         
         # Логируем в audit_log
         await database._log_audit_event_atomic_standalone(
@@ -5515,7 +5548,7 @@ async def callback_admin_keys_legacy(callback: CallbackQuery):
         else:
             text += f"Свободных: {stats['free']}"
         
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
         
         # Логируем просмотр статистики ключей
@@ -5813,7 +5846,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
         except Exception as e:
             logger.exception(f"CRITICAL: Failed to grant admin access for user {user_id}, days={days}, admin={callback.from_user.id}: {e}")
             text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка создания ключа", show_alert=True)
             await state.clear()
             return
@@ -5821,7 +5854,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
             # Успешно
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             text = f"✅ Доступ выдан на {days} дней\nПользователь уведомлён."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
             # Уведомляем пользователя
             try:
@@ -5876,7 +5909,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         except Exception as e:
             logger.exception(f"CRITICAL: Failed to grant admin access (minutes) for user {user_id}, minutes={minutes}, admin={callback.from_user.id}: {e}")
             text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка создания ключа", show_alert=True)
             await state.clear()
             return
@@ -5884,7 +5917,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
             # Успешно
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             text = f"✅ Доступ выдан на {minutes} минут\nПользователь уведомлён."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
             # Уведомляем пользователя
             try:
@@ -5943,7 +5976,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
         except Exception as e:
             logger.exception(f"CRITICAL: Failed to grant admin access (1 year) for user {user_id}, admin={callback.from_user.id}: {e}")
             text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка создания ключа", show_alert=True)
             await state.clear()
             return
@@ -5951,7 +5984,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
             # Успешно
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             text = f"✅ Доступ на 1 год выдан\n\nПользователь: {user_id}\nСрок действия обновлён."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
             # Логируем действие
             logging.info(f"Admin {callback.from_user.id} granted 1 year access to user {user_id}")
@@ -6002,12 +6035,12 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
         if not revoked:
             # Нет активной подписки
             text = "❌ У пользователя нет активной подписки"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
             # Успешно
             text = "✅ Доступ отозван\nПользователь уведомлён."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
             # Уведомляем пользователя
             try:
@@ -6045,12 +6078,12 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
         if not revoked:
             # Нет активной подписки
             text = "❌ У пользователя нет активной подписки"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
             # Успешно
             text = "✅ Доступ отозван\nПользователь уведомлён."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
             # Уведомляем пользователя
             try:
@@ -6116,7 +6149,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
         if existing_discount:
             discount_percent = existing_discount["discount_percent"]
             text = f"❌ У пользователя уже есть персональная скидка {discount_percent}%.\n\nСначала удалите существующую скидку."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Скидка уже существует", show_alert=True)
             return
         
@@ -6164,7 +6197,7 @@ async def callback_admin_discount_percent_manual(callback: CallbackQuery, state:
         await state.set_state(AdminDiscountCreate.waiting_for_percent)
         
         text = "🎯 Назначить скидку\n\nВведите процент скидки (число от 1 до 99):"
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
         
     except Exception as e:
@@ -6234,11 +6267,11 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
         if success:
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
             text = f"✅ Персональная скидка {discount_percent}% назначена\n\nСрок действия: {expires_str}"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Скидка назначена", show_alert=True)
         else:
             text = "❌ Ошибка при создании скидки"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка", show_alert=True)
         
     except Exception as e:
@@ -6262,7 +6295,7 @@ async def callback_admin_discount_expires_manual(callback: CallbackQuery, state:
         await state.set_state(AdminDiscountCreate.waiting_for_expires)
         
         text = "🎯 Назначить скидку\n\nВведите количество дней действия скидки (или 0 для бессрочной):"
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
         
     except Exception as e:
@@ -6339,11 +6372,11 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
         
         if success:
             text = "✅ Персональная скидка удалена"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Скидка удалена", show_alert=True)
         else:
             text = "❌ Скидка не найдена или уже удалена"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Скидка не найдена", show_alert=True)
         
     except Exception as e:
@@ -6487,7 +6520,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
             await callback.answer("✅ VIP-статус выдан", show_alert=True)
         else:
             text = "❌ Ошибка при назначении VIP-статуса"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Ошибка", show_alert=True)
         
     except Exception as e:
@@ -6517,7 +6550,7 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
             await callback.answer("✅ VIP-статус снят", show_alert=True)
         else:
             text = "❌ VIP-статус не найден или уже снят"
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("VIP не найден", show_alert=True)
         
     except Exception as e:
@@ -6629,7 +6662,7 @@ async def callback_admin_system(callback: CallbackQuery):
         text += f"Активных соединений: {db_connections}\n"
         text += f"Время работы бота: {uptime_str}"
         
-        await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         await callback.answer()
         
         # Логируем просмотр системной информации
@@ -6785,7 +6818,7 @@ async def callback_admin_incident(callback: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     
     # Логируем действие
     await database._log_audit_event_atomic_standalone("admin_view_incident", callback.from_user.id, None, f"Viewed incident settings (active: {is_active})")
@@ -6834,7 +6867,7 @@ async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContex
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:incident")],
     ])
     
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await state.set_state(IncidentEdit.waiting_for_text)
 
 
@@ -6880,7 +6913,7 @@ async def callback_admin_broadcast(callback: CallbackQuery):
         [InlineKeyboardButton(text="📊 A/B статистика", callback_data="broadcast:ab_stats")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
     ])
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
     
     # Логируем действие
@@ -7206,12 +7239,12 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
         
         if not ab_tests:
             text = "📊 A/B статистика\n\nA/B тестов не найдено."
-            await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             return
         
         text = "📊 A/B статистика\n\nВыберите уведомление для просмотра статистики:"
         keyboard = get_ab_test_list_keyboard(ab_tests)
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
         # Логируем действие
         await database._log_audit_event_atomic_standalone("admin_view_ab_stats_list", callback.from_user.id, None, f"Viewed {len(ab_tests)} A/B tests")
@@ -7247,7 +7280,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:ab_stats")],
             ])
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
         
         # Формируем текст статистики
@@ -7278,7 +7311,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
             [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:ab_stats")],
         ])
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
         # Логируем действие
         await database._log_audit_event_atomic_standalone("admin_view_ab_stat_detail", callback.from_user.id, None, f"Viewed A/B stats for broadcast {broadcast_id}")
@@ -7483,7 +7516,7 @@ async def reject_payment(callback: CallbackQuery):
             )
             await callback.answer("Платеж уже обработан", show_alert=True)
             # Удаляем кнопки даже если платеж уже обработан
-            await callback.message.edit_reply_markup(reply_markup=None)
+            await safe_edit_reply_markup(callback.message, reply_markup=None)
             return
         
         telegram_id = payment["telegram_id"]
@@ -7507,7 +7540,7 @@ async def reject_payment(callback: CallbackQuery):
         
         await callback.message.edit_text(f"❌ Платеж {payment_id} отклонен")
         # Удаляем inline-кнопки после обработки
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await safe_edit_reply_markup(callback.message, reply_markup=None)
         
     except Exception as e:
         logging.exception(f"Error in reject_payment callback for payment_id={payment_id if 'payment_id' in locals() else 'unknown'}")
@@ -7542,7 +7575,7 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:user")]
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await state.set_state(AdminCreditBalance.waiting_for_amount)
         await callback.answer()
     except Exception as e:
@@ -7701,7 +7734,7 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
             ])
             
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
             await state.clear()
             await callback.answer("✅ Средства начислены", show_alert=True)
         else:

@@ -298,6 +298,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Платежи временно недоступны",
         "error_access_denied": "Доступ запрещён.",
         "error_start_command": "Пожалуйста, начните с команды /start",
+        "error_session_expired": "⏳ Сессия устарела. Пожалуйста, попробуйте ещё раз.",
         "service_unavailable": "⚠️ Сервис временно недоступен. Попробуйте позже.",
 
     },
@@ -566,6 +567,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Payments temporarily unavailable",
         "error_access_denied": "Access denied.",
         "error_start_command": "Please start with /start command",
+        "error_session_expired": "⏳ Session expired. Please try again.",
         "service_unavailable": "⚠️ Service temporarily unavailable. Please try again later.",
         
         # Auto-renewal
@@ -806,6 +808,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "To'lovlar vaqtincha mavjud emas",
         "error_access_denied": "Kirish rad etildi.",
         "error_start_command": "Iltimos, /start buyrug'i bilan boshlang",
+        "error_session_expired": "⏳ Sessiya muddati tugadi. Iltimos, qayta urinib ko'ring.",
         "service_unavailable": "⚠️ Xizmat vaqtincha mavjud emas. Keyinroq urinib ko'ring.",
         
         # Auto-renewal
@@ -1074,6 +1077,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Пардохтҳо барои муддати муайян дастрас нестанд",
         "error_access_denied": "Дастрасӣ рад карда шуд.",
         "error_start_command": "Лутфан, бо фармони /start оғоз кунед",
+        "error_session_expired": "⏳ Маҷлис қатъ шуд. Лутфан, бори дигар кӯшиш кунед.",
         "service_unavailable": "⚠️ Хизмат барои муддати муайян дастрас нест. Лутфан, баъдтар такрор кунед.",
         
         # Auto-renewal
@@ -1118,9 +1122,9 @@ def get_text(language: str, key: str, default: str = None, **kwargs) -> str:
         logger.warning(f"Localization key '{key}' not found for language '{lang}', falling back to 'ru'")
         text = TEXTS["ru"].get(key)
         
-        # Если ключ не найден даже в русском - критическая ошибка
+        # Если ключ не найден даже в русском - ошибка (не критическая, используем fallback)
         if text is None:
-            logger.error(f"CRITICAL: Localization key '{key}' not found even in 'ru'! Missing key must be added to localization.py")
+            logger.error(f"Localization key '{key}' not found even in 'ru'! Missing key must be added to localization.py")
             text = default if default is not None else key
     
     try:
