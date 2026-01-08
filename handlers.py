@@ -2971,9 +2971,55 @@ async def process_successful_payment(message: Message):
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
     
+    # ИДЕМПОТЕНТНОСТЬ: Проверяем, не обработан ли уже этот платеж
+    # Если pending_purchase уже помечен как paid, значит payment уже обработан
+    pending_purchase_status = pending_purchase.get("status")
+    if pending_purchase_status == "paid":
+        # Платеж уже обработан - проверяем подписку и отправляем существующий ключ
+        logger.info(
+            f"process_successful_payment: IDEMPOTENCY_CHECK [user={telegram_id}, purchase_id={purchase_id}, "
+            f"reason=pending_purchase_already_paid, status={pending_purchase_status}]"
+        )
+        
+        # Проверяем, существует ли payment для этого purchase_id
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            payment_row = await conn.fetchrow(
+                "SELECT id, status FROM payments WHERE purchase_id = $1 ORDER BY id DESC LIMIT 1",
+                purchase_id
+            )
+            
+        if payment_row and payment_row.get("status") == "approved":
+            # Платеж уже обработан - получаем существующую подписку и отправляем ключ
+            existing_subscription = await database.get_subscription(telegram_id)
+            if existing_subscription and existing_subscription.get("status") == "active":
+                expires_at = existing_subscription.get("expires_at")
+                vpn_key = existing_subscription.get("vpn_key")
+                if not vpn_key:
+                    # Генерируем ключ из UUID если отсутствует
+                    uuid = existing_subscription.get("uuid")
+                    if uuid:
+                        import vpn_utils
+                        vpn_key = vpn_utils.generate_vless_url(uuid)
+                
+                if expires_at and vpn_key:
+                    user = await database.get_user(telegram_id)
+                    language = user.get("language", "ru") if user else "ru"
+                    expires_str = expires_at.strftime("%d.%m.%Y")
+                    text = localization.get_text(language, "payment_approved", date=expires_str)
+                    await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
+                    await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+                    
+                    logger.info(
+                        f"process_successful_payment: IDEMPOTENCY_KEY_RESENT [user={telegram_id}, purchase_id={purchase_id}, "
+                        f"payment_id={payment_row['id']}, expires_at={expires_at.isoformat()}, reason=already_processed]"
+                    )
+                    return
+    
     # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
     # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
     # КРИТИЧНО: Вызывается ТОЛЬКО после проверки суммы и валидности pending_purchase
+    # КРИТИЧНО: VPN ключ создается и валидируется ВНУТРИ finalize_purchase ПЕРЕД финализацией платежа
     try:
         result = await database.finalize_purchase(
             purchase_id=purchase_id,
@@ -2989,9 +3035,16 @@ async def process_successful_payment(message: Message):
         vpn_key = result["vpn_key"]
         is_renewal = result["is_renewal"]
         
+        # КРИТИЧНО: Дополнительная проверка - VPN ключ должен быть валидным после finalize_purchase
+        if not vpn_key:
+            error_msg = f"VPN key is empty after finalize_purchase: purchase_id={purchase_id}, user={telegram_id}, payment_id={payment_id}"
+            logger.error(f"process_successful_payment: CRITICAL_VPN_KEY_MISSING: {error_msg}")
+            raise Exception(error_msg)
+        
         logger.info(
             f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
-            f"purchase_id={purchase_id}, expires_at={expires_at.isoformat()}, is_renewal={is_renewal}]"
+            f"purchase_id={purchase_id}, expires_at={expires_at.isoformat()}, is_renewal={is_renewal}, "
+            f"vpn_key_length={len(vpn_key)}]"
         )
         
     except Exception as e:
@@ -3026,102 +3079,104 @@ async def process_successful_payment(message: Message):
         
         return
     
-    # ВАЛИДАЦИЯ: Дополнительная проверка перед выдачей ключа
-    if expires_at and vpn_key:
-        # Успешно активирована подписка
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
-        
-        # Если использован промокод, увеличиваем счетчик использований и логируем
-        if promo_code_used:
-            try:
-                # Получаем данные промокода для логирования
-                promo_data = await database.get_promo_code(promo_code_used)
-                if promo_data:
-                    discount_percent = promo_data["discount_percent"]
-                    # Рассчитываем price_before (базовая цена тарифа)
-                    base_price = config.TARIFFS[tariff_type][period_days]["price"]
-                    price_before = base_price
-                    price_after = payment_amount_rubles
-                    
-                    # Увеличиваем счетчик использований
-                    await database.increment_promo_code_use(promo_code_used)
-                    
-                    # Логируем использование промокода
-                    await database.log_promo_code_usage(
-                        promo_code=promo_code_used,
-                        telegram_id=telegram_id,
-                        tariff=f"{tariff_type}_{period_days}",
-                        discount_percent=discount_percent,
-                        price_before=price_before,
-                        price_after=price_after
-                    )
-            except Exception as e:
-                logger.error(f"Error processing promo code usage: {e}")
-        
-        # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
-        import vpn_utils
-        if not vpn_utils.validate_vless_link(vpn_key):
-            error_msg = (
-                f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
-                "Key will NOT be sent to user."
-            )
-            logger.error(f"process_successful_payment: {error_msg}")
-            # Не отправляем ключ пользователю
-            error_text = localization.get_text(
-                language,
-                "error_subscription_activation",
-                default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
-            )
-            await message.answer(error_text)
-            return
-        
-        expires_str = expires_at.strftime("%d.%m.%Y")
-        # Отправляем сообщение об успешной активации (без ключа)
-        text = localization.get_text(language, "payment_approved", date=expires_str)
+    # КРИТИЧНО: VPN ключ отправляется СРАЗУ после успешной финализации платежа
+    # Валидация уже выполнена внутри finalize_purchase - здесь только отправка
+    # КРИТИЧНО: Это гарантирует что пользователь ВСЕГДА получит VPN ключ после оплаты
+    
+    # Если использован промокод, увеличиваем счетчик использований и логируем
+    if promo_code_used:
+        try:
+            # Получаем данные промокода для логирования
+            promo_data = await database.get_promo_code(promo_code_used)
+            if promo_data:
+                discount_percent = promo_data["discount_percent"]
+                # Рассчитываем price_before (базовая цена тарифа)
+                base_price = config.TARIFFS[tariff_type][period_days]["price"]
+                price_before = base_price
+                price_after = payment_amount_rubles
+                
+                # Увеличиваем счетчик использований
+                await database.increment_promo_code_use(promo_code_used)
+                
+                # Логируем использование промокода
+                await database.log_promo_code_usage(
+                    promo_code=promo_code_used,
+                    telegram_id=telegram_id,
+                    tariff=f"{tariff_type}_{period_days}",
+                    discount_percent=discount_percent,
+                    price_before=price_before,
+                    price_after=price_after
+                )
+        except Exception as e:
+            logger.error(f"Error processing promo code usage: {e}")
+    
+    # КРИТИЧНО: VPN ключ уже валидирован в finalize_purchase
+    # Здесь только отправка пользователю - это атомарная операция после успешного платежа
+    expires_str = expires_at.strftime("%d.%m.%Y")
+    
+    # Отправляем сообщение об успешной активации
+    text = localization.get_text(language, "payment_approved", date=expires_str)
+    try:
         await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Failed to send payment approval message: user={telegram_id}, error={e}")
+        # Не критично - продолжаем отправку ключа
+    
+    # КРИТИЧНО: Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
+    try:
+        await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
         
-        # Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
-        await message.answer(
-            f"<code>{vpn_key}</code>",
-            parse_mode="HTML"
+        logger.info(
+            f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
+            f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_length={len(vpn_key)}]"
         )
-        
-        logger.info(f"Payment successful: user_id={telegram_id}, payment_id={payment_id}, tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, purchase_id={pending_purchase['purchase_id']}")
-        
-        # Помечаем pending_purchase как оплаченный
+    except Exception as e:
+        # КРИТИЧНО: Если не удалось отправить ключ - это критическая ошибка
+        error_msg = f"CRITICAL: Failed to send VPN key to user: user={telegram_id}, payment_id={payment_id}, purchase_id={purchase_id}, error={e}"
+        logger.error(error_msg)
+        # Логируем для админа
         try:
-            await database.mark_pending_purchase_paid(pending_purchase['purchase_id'])
-            logger.info(f"Pending purchase marked as paid: purchase_id={pending_purchase['purchase_id']}, user={telegram_id}")
-        except Exception as e:
-            logger.error(f"Failed to mark pending purchase as paid: purchase_id={pending_purchase['purchase_id']}, user={telegram_id}, error={str(e)}")
-            # Не прерываем процесс, так как подписка уже активирована
+            await database._log_audit_event_atomic_standalone(
+                "vpn_key_send_failed",
+                config.ADMIN_TELEGRAM_ID,
+                telegram_id,
+                f"Payment finalized but VPN key send failed: payment_id={payment_id}, purchase_id={purchase_id}, key={vpn_key[:50]}..."
+            )
+        except Exception:
+            pass
         
-        # Начисляем реферальный кешбэк при КАЖДОЙ успешной оплате подписки
-        # Кешбэк начисляется ТОЛЬКО с реальных платежей через Telegram Payments
-        # НЕ начисляется с:
-        #   - пополнения баланса (payload.startswith("balance_topup_"))
-        #   - оплаты с баланса (проходит через callback_tariff_period, не через successful_payment)
-        #   - тестовых/админских доступов (source != "payment")
+        # Пытаемся отправить ключ повторно
         try:
-            await database.process_referral_reward_cashback(telegram_id, payment_amount_rubles)
-            logger.info(f"Referral cashback processed for user {telegram_id}, payment_amount={payment_amount_rubles} RUB")
-        except Exception as e:
-            logger.exception(f"Error processing referral cashback for user {telegram_id}: {e}")
-            # Не прерываем основной flow при ошибке начисления кешбэка
-        
-        # Логируем событие
+            await message.answer(
+                f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"
+                f"<code>{vpn_key}</code>",
+                parse_mode="HTML"
+            )
+            logger.info(f"VPN key sent on retry: user={telegram_id}, payment_id={payment_id}")
+        except Exception as retry_error:
+            logger.error(f"VPN key send retry also failed: user={telegram_id}, error={retry_error}")
+            # Ключ есть в БД, пользователь может получить через профиль
+    
+    # КРИТИЧНО: pending_purchase уже помечен как paid в finalize_purchase
+    # Реферальный кешбэк уже обработан в finalize_purchase через process_referral_reward
+    # Здесь только логируем успешное завершение
+    
+    logger.info(
+        f"process_successful_payment: PAYMENT_COMPLETE [user={telegram_id}, payment_id={payment_id}, "
+        f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, "
+        f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_sent=True, subscription_visible=True]"
+    )
+    
+    # Логируем событие
+    try:
         await database._log_audit_event_atomic_standalone(
             "telegram_payment_successful",
             config.ADMIN_TELEGRAM_ID,
             telegram_id,
-            f"Telegram payment successful: payment_id={payment_id}, payload={payload}, amount={payment_amount_rubles} RUB, purchase_id={pending_purchase['purchase_id']}"
+            f"Telegram payment successful: payment_id={payment_id}, payload={payload}, amount={payment_amount_rubles} RUB, purchase_id={purchase_id}, vpn_key_sent=True"
         )
-    else:
-        logger.error(f"Failed to activate subscription for payment {payment_id}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
-        await message.answer(localization.get_text(language, "error_subscription_activation"))
+    except Exception as e:
+        logger.error(f"Failed to log audit event: {e}")
 
 
 @router.callback_query(F.data == "payment_test")

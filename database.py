@@ -2454,60 +2454,103 @@ async def grant_access(
                     "Continuing with new UUID creation."
                 )
         
-        # Создаем новый UUID через Xray API
+        # Создаем новый UUID через Xray API с retry логикой
         logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, source={source}]")
-        try:
-            vless_result = await vpn_utils.add_vless_user()
-            new_uuid = vless_result.get("uuid")
-            vless_url = vless_result.get("vless_url")
-            
-            # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены
-            if not new_uuid:
-                error_msg = f"VPN API returned empty UUID for user {telegram_id}"
-                logger.error(f"grant_access: ERROR_VPN_API_RESPONSE [user={telegram_id}, error={error_msg}]")
-                # VPN AUDIT LOG: Логируем ошибку создания UUID
-                try:
-                    await _log_vpn_lifecycle_audit_async(
-                        action="vpn_add_user",
-                        telegram_id=telegram_id,
-                        uuid=None,
-                        source=source,
-                        result="error",
-                        details=f"VPN API returned empty UUID: {error_msg}"
-                    )
-                except Exception:
-                    pass  # Не блокируем при ошибке логирования
-                raise Exception(error_msg)
-            
-            if not vless_url:
-                error_msg = f"VPN API returned empty vless_url for user {telegram_id}"
-                logger.error(f"grant_access: ERROR_VPN_API_RESPONSE [user={telegram_id}, error={error_msg}]")
-                raise Exception(error_msg)
-            
-            # Безопасное логирование UUID (только первые 8 символов)
-            uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
-            logger.info(
-                f"grant_access: VPN_API_SUCCESS [action=add_user, user={telegram_id}, uuid={uuid_preview}, "
-                f"source={source}, vless_url_length={len(vless_url) if vless_url else 0}]"
-            )
-        except Exception as e:
-            logger.error(
-                f"grant_access: VPN_API_FAILED [action=add_user_failed, user={telegram_id}, "
-                f"source={source}, error={str(e)}]"
-            )
-            # VPN AUDIT LOG: Логируем ошибку создания UUID
-            try:
-                await _log_vpn_lifecycle_audit_async(
-                    action="vpn_add_user",
-                    telegram_id=telegram_id,
-                    uuid=None,
-                    source=source,
-                    result="error",
-                    details=f"VPN API call failed: {str(e)}"
+        
+        # КРИТИЧНО: Retry логика для VPN API (2 попытки = 3 всего с задержкой)
+        import asyncio
+        MAX_VPN_RETRIES = 2
+        RETRY_DELAY_SECONDS = 1.0
+        
+        last_exception = None
+        vless_result = None
+        new_uuid = None
+        vless_url = None
+        
+        for attempt in range(MAX_VPN_RETRIES + 1):
+            if attempt > 0:
+                delay = RETRY_DELAY_SECONDS * attempt
+                logger.info(
+                    f"grant_access: VPN_API_RETRY [user={telegram_id}, attempt={attempt + 1}/{MAX_VPN_RETRIES + 1}, "
+                    f"delay={delay}s, previous_error={str(last_exception)}]"
                 )
-            except Exception:
-                pass  # Не блокируем при ошибке логирования
-            raise Exception(f"Failed to create VPN access: {e}") from e
+                await asyncio.sleep(delay)
+            
+            try:
+                vless_result = await vpn_utils.add_vless_user()
+                new_uuid = vless_result.get("uuid")
+                vless_url = vless_result.get("vless_url")
+                
+                # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены
+                if not new_uuid:
+                    error_msg = f"VPN API returned empty UUID for user {telegram_id}"
+                    logger.error(f"grant_access: ERROR_VPN_API_RESPONSE [user={telegram_id}, attempt={attempt + 1}, error={error_msg}]")
+                    last_exception = Exception(error_msg)
+                    if attempt < MAX_VPN_RETRIES:
+                        continue
+                    raise last_exception
+                
+                if not vless_url:
+                    error_msg = f"VPN API returned empty vless_url for user {telegram_id}"
+                    logger.error(f"grant_access: ERROR_VPN_API_RESPONSE [user={telegram_id}, attempt={attempt + 1}, error={error_msg}]")
+                    last_exception = Exception(error_msg)
+                    if attempt < MAX_VPN_RETRIES:
+                        continue
+                    raise last_exception
+                
+                # КРИТИЧНО: Валидация VLESS ссылки ПЕРЕД финализацией платежа
+                if not vpn_utils.validate_vless_link(vless_url):
+                    error_msg = f"VPN API returned invalid vless_url (contains flow=) for user {telegram_id}"
+                    logger.error(f"grant_access: ERROR_INVALID_VLESS_URL [user={telegram_id}, attempt={attempt + 1}, error={error_msg}]")
+                    last_exception = Exception(error_msg)
+                    if attempt < MAX_VPN_RETRIES:
+                        continue
+                    raise last_exception
+                
+                # Успешно получен валидный UUID и VLESS URL
+                uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+                logger.info(
+                    f"grant_access: VPN_API_SUCCESS [action=add_user, user={telegram_id}, uuid={uuid_preview}, "
+                    f"source={source}, attempt={attempt + 1}, vless_url_length={len(vless_url) if vless_url else 0}]"
+                )
+                break  # Успех - выходим из цикла retry
+                
+            except Exception as e:
+                last_exception = e
+                logger.error(
+                    f"grant_access: VPN_API_FAILED [action=add_user_failed, user={telegram_id}, "
+                    f"source={source}, attempt={attempt + 1}/{MAX_VPN_RETRIES + 1}, error={str(e)}]"
+                )
+                
+                if attempt < MAX_VPN_RETRIES:
+                    # Продолжаем retry
+                    continue
+                else:
+                    # Все попытки исчерпаны - логируем и выбрасываем исключение
+                    error_msg = f"Failed to create VPN access after {MAX_VPN_RETRIES + 1} attempts: {e}"
+                    logger.error(
+                        f"grant_access: VPN_API_ALL_RETRIES_FAILED [user={telegram_id}, source={source}, "
+                        f"attempts={MAX_VPN_RETRIES + 1}, final_error={str(e)}]"
+                    )
+                    # VPN AUDIT LOG: Логируем ошибку создания UUID
+                    try:
+                        await _log_vpn_lifecycle_audit_async(
+                            action="vpn_add_user",
+                            telegram_id=telegram_id,
+                            uuid=None,
+                            source=source,
+                            result="error",
+                            details=f"VPN API call failed after {MAX_VPN_RETRIES + 1} attempts: {str(e)}"
+                        )
+                    except Exception:
+                        pass  # Не блокируем при ошибке логирования
+                    raise Exception(error_msg) from e
+        
+        # Проверяем что UUID и VLESS URL получены после retry
+        if not new_uuid or not vless_url:
+            error_msg = f"VPN API failed to return UUID/vless_url after retries for user {telegram_id}"
+            logger.error(f"grant_access: CRITICAL_VPN_API_FAILURE [user={telegram_id}, error={error_msg}]")
+            raise Exception(error_msg)
         
         # Вычисляем даты
         subscription_start = now
@@ -3919,6 +3962,16 @@ async def finalize_purchase(
             if not vpn_key:
                 error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
                 logger.error(f"finalize_purchase: {error_msg}")
+                raise Exception(error_msg)
+            
+            # КРИТИЧНО: Валидация VPN ключа ПЕРЕД финализацией платежа
+            import vpn_utils
+            if not vpn_utils.validate_vless_link(vpn_key):
+                error_msg = (
+                    f"VPN key validation failed (contains forbidden flow= parameter): "
+                    f"purchase_id={purchase_id}, user={telegram_id}"
+                )
+                logger.error(f"finalize_purchase: VPN_KEY_VALIDATION_FAILED: {error_msg}")
                 raise Exception(error_msg)
             
             # STEP 6: Обновляем payment → approved
