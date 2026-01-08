@@ -7,8 +7,9 @@ Endpoint does NOT depend on database - always responds.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from aiohttp import web
+from aiogram import Bot
 import database
 
 logger = logging.getLogger(__name__)
@@ -66,8 +67,8 @@ async def health_handler(request: web.Request) -> web.Response:
         return web.json_response(response_data, status=200)
 
 
-async def create_health_app() -> web.Application:
-    """Создать aiohttp приложение с health endpoint"""
+async def create_health_app(bot: Optional[Bot] = None) -> web.Application:
+    """Создать aiohttp приложение с health endpoint и Crypto Bot webhook"""
     app = web.Application()
     
     # Регистрируем health endpoint
@@ -79,21 +80,33 @@ async def create_health_app() -> web.Application:
     
     app.router.add_get("/", root_handler)
     
+    # Register Crypto Bot webhook if enabled
+    if bot:
+        try:
+            import cryptobot_service
+            if cryptobot_service.is_enabled():
+                await cryptobot_service.register_webhook_route(app, bot)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.error(f"Failed to register Crypto Bot webhook: {e}")
+    
     return app
 
 
-async def start_health_server(host: str = "0.0.0.0", port: int = 8080) -> web.AppRunner:
+async def start_health_server(host: str = "0.0.0.0", port: int = 8080, bot: Optional[Bot] = None) -> web.AppRunner:
     """
     Запустить HTTP сервер для health checks
     
     Args:
         host: Хост для прослушивания (по умолчанию 0.0.0.0 для Railway)
         port: Порт для прослушивания (по умолчанию 8080)
+        bot: Bot instance for webhook registration (optional)
     
     Returns:
         AppRunner для управления сервером
     """
-    app = await create_health_app()
+    app = await create_health_app(bot)
     runner = web.AppRunner(app)
     await runner.setup()
     
@@ -105,17 +118,18 @@ async def start_health_server(host: str = "0.0.0.0", port: int = 8080) -> web.Ap
     return runner
 
 
-async def health_server_task(host: str = "0.0.0.0", port: int = 8080):
+async def health_server_task(host: str = "0.0.0.0", port: int = 8080, bot: Optional[Bot] = None):
     """
     Фоновая задача для запуска health check сервера
     
     Args:
         host: Хост для прослушивания
         port: Порт для прослушивания
+        bot: Bot instance for webhook registration (optional)
     """
     runner = None
     try:
-        runner = await start_health_server(host, port)
+        runner = await start_health_server(host, port, bot)
         
         # Ждём бесконечно (сервер работает в фоне)
         # Задача будет отменена при остановке бота

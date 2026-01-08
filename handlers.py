@@ -2279,7 +2279,7 @@ async def process_tariff_purchase_selection(
         except KeyError:
             text = f"Недостаточно средств на балансе.\n\nСтоимость: {amount_rubles:.2f} ₽\nНа балансе: {balance_rubles:.2f} ₽\nНе хватает: {shortage:.2f} ₽"
         
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        keyboard_buttons = [
             [InlineKeyboardButton(
                 text=localization.get_text(language, "topup_balance", default="➕ Пополнить баланс"),
                 callback_data="topup_balance"
@@ -2288,11 +2288,25 @@ async def process_tariff_purchase_selection(
                 text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
                 callback_data=f"pay_tariff_card:{tariff_type}:{period_days}:{purchase_id}"
             )],
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="← Назад"),
-                callback_data="menu_buy_vpn"
-            )],
-        ])
+        ]
+        
+        # Add crypto payment option if enabled
+        try:
+            import cryptobot_service
+            if cryptobot_service.is_enabled():
+                keyboard_buttons.append([InlineKeyboardButton(
+                    text=localization.get_text(language, "pay_with_crypto", default="💎 Оплатить криптой"),
+                    callback_data=f"pay_tariff_crypto:{tariff_type}:{period_days}:{purchase_id}"
+                )])
+        except ImportError:
+            pass
+        
+        keyboard_buttons.append([InlineKeyboardButton(
+            text=localization.get_text(language, "back", default="← Назад"),
+            callback_data="menu_buy_vpn"
+        )])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
         
         await callback.message.edit_text(text, reply_markup=keyboard)
 
@@ -2442,6 +2456,194 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.exception(f"Error sending invoice: {e}")
         await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
+
+
+@router.callback_query(F.data.startswith("pay_tariff_crypto:"))
+async def callback_pay_tariff_crypto(callback: CallbackQuery, state: FSMContext):
+    """Оплата тарифа криптой через Crypto Bot"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    try:
+        import cryptobot_service
+        if not cryptobot_service.is_enabled():
+            await callback.answer(localization.get_text(language, "error_payments_unavailable", default="Оплата криптой недоступна"), show_alert=True)
+            return
+    except ImportError:
+        await callback.answer(localization.get_text(language, "error_payments_unavailable", default="Оплата криптой недоступна"), show_alert=True)
+        return
+    
+    parts = callback.data.split(":")
+    tariff_type = parts[1] if len(parts) > 1 else None
+    period_days = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+    purchase_id = parts[3] if len(parts) > 3 else None
+    
+    if not tariff_type or not period_days:
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    # Get or recreate pending purchase
+    pending_purchase = None
+    if purchase_id:
+        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+        if pending_purchase:
+            if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
+                pending_purchase = None
+    
+    if not pending_purchase:
+        base_price = config.TARIFFS[tariff_type][period_days]["price"]
+        fsm_data = await state.get_data()
+        promo_code = fsm_data.get("promo_code")
+        promo_data = None
+        if promo_code:
+            promo_data = await database.check_promo_code_valid(promo_code.upper())
+        
+        has_promo = promo_data is not None
+        is_vip = await database.is_vip_user(telegram_id) if not has_promo else False
+        personal_discount = await database.get_user_discount(telegram_id) if not has_promo and not is_vip else None
+        
+        if has_promo:
+            discount_percent = promo_data["discount_percent"]
+            price_kopecks = int(base_price * (100 - discount_percent) / 100) * 100
+        elif is_vip:
+            price_kopecks = int(base_price * 0.70) * 100
+        elif personal_discount:
+            discount_percent = personal_discount["discount_percent"]
+            price_kopecks = int(base_price * (1 - discount_percent / 100)) * 100
+        else:
+            price_kopecks = base_price * 100
+        
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            promo_code=promo_code
+        )
+        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+        if not pending_purchase:
+            await callback.answer(localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа"), show_alert=True)
+            return
+    
+    amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    months = period_days // 30
+    tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+    description = f"Atlas Secure VPN {tariff_name} {months} мес."
+    
+    # Show asset selection
+    text = localization.get_text(
+        language,
+        "crypto_payment_choose_asset",
+        default="Выберите валюту для оплаты:"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="USDT",
+            callback_data=f"pay_crypto_asset:USDT:{tariff_type}:{period_days}:{purchase_id}"
+        )],
+        [InlineKeyboardButton(
+            text="TON",
+            callback_data=f"pay_crypto_asset:TON:{tariff_type}:{period_days}:{purchase_id}"
+        )],
+        [InlineKeyboardButton(
+            text="BTC",
+            callback_data=f"pay_crypto_asset:BTC:{tariff_type}:{period_days}:{purchase_id}"
+        )],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back", default="← Назад"),
+            callback_data="menu_buy_vpn"
+        )],
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pay_crypto_asset:"))
+async def callback_pay_crypto_asset(callback: CallbackQuery, state: FSMContext):
+    """Создание invoice в Crypto Bot для выбранного актива"""
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    try:
+        import cryptobot_service
+        if not cryptobot_service.is_enabled():
+            await callback.answer(localization.get_text(language, "error_payments_unavailable", default="Оплата криптой недоступна"), show_alert=True)
+            return
+    except ImportError:
+        await callback.answer(localization.get_text(language, "error_payments_unavailable", default="Оплата криптой недоступна"), show_alert=True)
+        return
+    
+    parts = callback.data.split(":")
+    asset = parts[1] if len(parts) > 1 else None
+    tariff_type = parts[2] if len(parts) > 2 else None
+    period_days = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else None
+    purchase_id = parts[4] if len(parts) > 4 else None
+    
+    if not asset or asset not in cryptobot_service.ALLOWED_ASSETS:
+        await callback.answer("Невалидная валюта", show_alert=True)
+        return
+    
+    if not tariff_type or not period_days or not purchase_id:
+        await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
+        return
+    
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    if not pending_purchase:
+        await callback.answer(localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа"), show_alert=True)
+        return
+    
+    amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    months = period_days // 30
+    tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+    description = f"Atlas Secure VPN {tariff_name} {months} мес."
+    
+    try:
+        invoice = await cryptobot_service.create_invoice(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            amount_rubles=amount_rubles,
+            purchase_id=purchase_id,
+            asset=asset,
+            description=description
+        )
+    except Exception as e:
+        logger.exception(f"Crypto invoice creation failed: user={telegram_id}, error={e}")
+        await callback.answer(localization.get_text(language, "error_payment_create", default="Ошибка создания счета"), show_alert=True)
+        return
+    
+    pay_url = invoice.get("pay_url")
+    if not pay_url:
+        logger.error(f"Crypto invoice missing pay_url: user={telegram_id}, purchase_id={purchase_id}")
+        await callback.answer(localization.get_text(language, "error_payment_create", default="Ошибка создания счета"), show_alert=True)
+        return
+    
+    logger.info(f"Crypto invoice created: user={telegram_id}, invoice_id={invoice.get('invoice_id')}, purchase_id={purchase_id}, asset={asset}")
+    
+    text = localization.get_text(
+        language,
+        "crypto_payment_invoice",
+        default="Оплатите счёт через Crypto Bot. После оплаты подписка активируется автоматически."
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔗 Оплатить", url=pay_url)],
+        [InlineKeyboardButton(
+            text=localization.get_text(language, "back", default="← Назад"),
+            callback_data="menu_buy_vpn"
+        )],
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+    await callback.answer()
 
 
 @router.message(PromoCodeInput.waiting_for_promo)
