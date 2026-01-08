@@ -1937,11 +1937,11 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🟦 Basic",
+            text="🪙 Basic", 
             callback_data="tariff:basic"
         )],
         [InlineKeyboardButton(
-            text="🟪 Plus",
+            text="🔑 Plus",
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
@@ -2119,8 +2119,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             localization.get_text(language, "select_tariff", default="Выберите тариф:"),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🟦 Basic", callback_data="tariff:basic")],
-                [InlineKeyboardButton(text="🟪 Plus", callback_data="tariff:plus")],
+                [InlineKeyboardButton(text="🪙 Basic", callback_data="tariff:basic")],
+                [InlineKeyboardButton(text="🔑 Plus", callback_data="tariff:plus")],
                 [InlineKeyboardButton(text=localization.get_text(language, "back", default="⬅️ Назад"), callback_data="menu_main")],
             ])
         )
@@ -2997,11 +2997,11 @@ async def process_promo_code(message: Message, state: FSMContext):
         tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🟦 Basic",
+            text="🪙 Basic", 
             callback_data="tariff:basic"
         )],
         [InlineKeyboardButton(
-            text="🟪 Plus",
+            text="🔑 Plus",
             callback_data="tariff:plus"
         )],
             [InlineKeyboardButton(
