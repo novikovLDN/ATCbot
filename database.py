@@ -1710,6 +1710,142 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
+    """Получить активную подписку по ID
+    
+    Args:
+        subscription_id: ID подписки
+    
+    Returns:
+        Словарь с данными подписки или None, если:
+        - подписка не найдена
+        - статус != "active"
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        row = await conn.fetchrow(
+            """SELECT * FROM subscriptions 
+               WHERE id = $1 
+               AND status = 'active' 
+               AND expires_at > $2""",
+            subscription_id, now
+        )
+        return dict(row) if row else None
+
+
+async def update_subscription_uuid(subscription_id: int, new_uuid: str) -> None:
+    """Обновить UUID подписки
+    
+    Args:
+        subscription_id: ID подписки
+        new_uuid: Новый UUID
+    
+    Note:
+        НЕ меняет статус
+        НЕ трогает даты
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET uuid = $1 WHERE id = $2",
+            new_uuid, subscription_id
+        )
+        logger.info(f"Subscription UUID updated: subscription_id={subscription_id}, new_uuid={new_uuid[:8]}...")
+
+
+async def get_all_active_subscriptions() -> List[Dict[str, Any]]:
+    """Получить все активные подписки
+    
+    Returns:
+        Список подписок со статусом 'active' и expires_at > now
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        rows = await conn.fetch(
+            """SELECT * FROM subscriptions 
+               WHERE status = 'active' 
+               AND expires_at > $1
+               ORDER BY id ASC""",
+            now
+        )
+        return [dict(row) for row in rows]
+
+
+async def reissue_subscription_key(subscription_id: int) -> str:
+    """Перевыпустить VPN ключ для подписки (сервисная функция)
+    
+    Алгоритм:
+    1) Получить подписку через get_active_subscription
+    2) Если None → выбросить бизнес-ошибку
+    3) Сохранить old_uuid
+    4) Вызвать reissue_vpn_access(old_uuid)
+    5) Получить new_uuid
+    6) Обновить uuid в БД через update_subscription_uuid
+    7) Вернуть new_uuid
+    
+    Args:
+        subscription_id: ID подписки
+    
+    Returns:
+        Новый UUID (str)
+    
+    Raises:
+        ValueError: Если подписка не найдена или не активна
+        VPNAPIError: При ошибках VPN API
+    """
+    # 1. Получаем активную подписку
+    subscription = await get_active_subscription(subscription_id)
+    if not subscription:
+        error_msg = f"Subscription {subscription_id} not found or not active"
+        logger.error(f"reissue_subscription_key: {error_msg}")
+        raise ValueError(error_msg)
+    
+    old_uuid = subscription.get("uuid")
+    if not old_uuid:
+        error_msg = f"Subscription {subscription_id} has no UUID"
+        logger.error(f"reissue_subscription_key: {error_msg}")
+        raise ValueError(error_msg)
+    
+    telegram_id = subscription.get("telegram_id")
+    uuid_preview = f"{old_uuid[:8]}..." if old_uuid and len(old_uuid) > 8 else (old_uuid or "N/A")
+    logger.info(
+        f"reissue_subscription_key: START [subscription_id={subscription_id}, "
+        f"telegram_id={telegram_id}, old_uuid={uuid_preview}]"
+    )
+    
+    # 2. Перевыпускаем VPN доступ
+    try:
+        new_uuid = await vpn_utils.reissue_vpn_access(old_uuid)
+    except Exception as e:
+        logger.error(
+            f"reissue_subscription_key: VPN_API_FAILED [subscription_id={subscription_id}, "
+            f"telegram_id={telegram_id}, error={str(e)}]"
+        )
+        raise
+    
+    # 3. Обновляем UUID в БД
+    try:
+        await update_subscription_uuid(subscription_id, new_uuid)
+    except Exception as e:
+        logger.error(
+            f"reissue_subscription_key: DB_UPDATE_FAILED [subscription_id={subscription_id}, "
+            f"telegram_id={telegram_id}, new_uuid={new_uuid[:8]}..., error={str(e)}]"
+        )
+        # КРИТИЧНО: UUID в VPN API уже обновлён, но БД не обновлена
+        # Это несоответствие, но мы не можем откатить VPN API
+        raise
+    
+    new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+    logger.info(
+        f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "
+        f"telegram_id={telegram_id}, old_uuid={uuid_preview}, new_uuid={new_uuid_preview}]"
+    )
+    
+    return new_uuid
+
+
 async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tuple[datetime, bool]:
     """
     DEPRECATED: Эта функция обходит grant_access() и НЕ должна использоваться.

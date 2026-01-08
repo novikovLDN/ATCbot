@@ -545,6 +545,68 @@ async def remove_vless_user(uuid: str) -> None:
     raise VPNAPIError(f"Failed to remove VLESS user uuid={uuid_preview}: all retries exhausted")
 
 
+async def reissue_vpn_access(old_uuid: str) -> str:
+    """
+    Перевыпустить VPN доступ: удалить старый UUID и создать новый.
+    
+    КРИТИЧЕСКИ ВАЖНО:
+    - Если add-user упал → НЕ удалять старый UUID (он уже удалён)
+    - Если remove-user упал → прервать операцию, старый UUID остаётся
+    - Все шаги логируются
+    
+    Args:
+        old_uuid: Старый UUID для удаления
+    
+    Returns:
+        Новый UUID (str)
+    
+    Raises:
+        VPNAPIError: При ошибках VPN API
+        ValueError: При некорректных параметрах
+    """
+    if not old_uuid or not old_uuid.strip():
+        error_msg = "Invalid old_uuid provided for reissue"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    old_uuid_clean = old_uuid.strip()
+    uuid_preview = f"{old_uuid_clean[:8]}..." if old_uuid_clean and len(old_uuid_clean) > 8 else (old_uuid_clean or "N/A")
+    
+    logger.info(f"VPN key reissue: START [action=reissue, old_uuid={uuid_preview}]")
+    
+    # ШАГ 1: Удаляем старый UUID
+    try:
+        await remove_vless_user(old_uuid_clean)
+        logger.info(f"VPN key reissue: OLD_UUID_REMOVED [old_uuid={uuid_preview}]")
+    except Exception as e:
+        error_msg = f"Failed to remove old UUID during reissue: {str(e)}"
+        logger.error(f"VPN key reissue: REMOVE_FAILED [old_uuid={uuid_preview}, error={error_msg}]")
+        # КРИТИЧНО: Если не удалось удалить старый UUID - прерываем операцию
+        raise VPNAPIError(error_msg) from e
+    
+    # ШАГ 2: Создаём новый UUID
+    try:
+        vless_result = await add_vless_user()
+        new_uuid = vless_result.get("uuid")
+        
+        if not new_uuid:
+            error_msg = "VPN API returned empty UUID during reissue"
+            logger.error(f"VPN key reissue: ADD_FAILED [error={error_msg}]")
+            raise VPNAPIError(error_msg)
+        
+        new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+        logger.info(f"VPN key reissue: SUCCESS [old_uuid={uuid_preview}, new_uuid={new_uuid_preview}]")
+        
+        return new_uuid
+        
+    except Exception as e:
+        error_msg = f"Failed to create new UUID during reissue: {str(e)}"
+        logger.error(f"VPN key reissue: ADD_FAILED [error={error_msg}]")
+        # КРИТИЧНО: Если не удалось создать новый UUID - старый уже удалён
+        # Это критическая ситуация, но мы не можем восстановить старый UUID
+        raise VPNAPIError(error_msg) from e
+
+
 # ============================================================================
 # DEPRECATED: Legacy file-based functions (kept for backward compatibility)
 # ============================================================================
