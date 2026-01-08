@@ -3654,29 +3654,39 @@ async def create_pending_purchase(
         return purchase_id
 
 
-async def get_pending_purchase(purchase_id: str, telegram_id: int) -> Optional[Dict[str, Any]]:
+async def get_pending_purchase(purchase_id: str, telegram_id: int, check_expiry: bool = True) -> Optional[Dict[str, Any]]:
     """
     Получить pending покупку по purchase_id с валидацией
     
     Args:
         purchase_id: ID покупки
         telegram_id: Telegram ID пользователя
+        check_expiry: Проверять ли срок действия (по умолчанию True, False для оплаты)
     
     Returns:
         Словарь с данными покупки, если валидна, иначе None
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        purchase = await conn.fetchrow(
-            """SELECT * FROM pending_purchases 
-               WHERE purchase_id = $1 AND telegram_id = $2 AND status = 'pending' AND expires_at > NOW()""",
-            purchase_id, telegram_id
-        )
+        if check_expiry:
+            # При обычной проверке (создание покупки) проверяем срок действия
+            purchase = await conn.fetchrow(
+                """SELECT * FROM pending_purchases 
+                   WHERE purchase_id = $1 AND telegram_id = $2 AND status = 'pending' AND expires_at > NOW()""",
+                purchase_id, telegram_id
+            )
+        else:
+            # При оплате (webhook) не проверяем срок - покупка может быть оплачена после expires_at
+            purchase = await conn.fetchrow(
+                """SELECT * FROM pending_purchases 
+                   WHERE purchase_id = $1 AND telegram_id = $2 AND status = 'pending'""",
+                purchase_id, telegram_id
+            )
         
         if purchase:
             return dict(purchase)
         else:
-            logger.warning(f"Invalid pending purchase: purchase_id={purchase_id}, telegram_id={telegram_id}")
+            logger.warning(f"Invalid pending purchase: purchase_id={purchase_id}, telegram_id={telegram_id}, check_expiry={check_expiry}")
             return None
 
 
@@ -3898,14 +3908,15 @@ async def finalize_purchase(
                     purchase_id=purchase_id,
                     amount_rubles=amount_rubles
                 )
+                logger.info(f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, user={telegram_id}")
             except Exception as e:
                 # Реферальный кешбэк не критичен - логируем и продолжаем
                 logger.warning(f"finalize_purchase: referral reward failed: purchase_id={purchase_id}, error={e}")
             
             logger.info(
-                f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, "
+                f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, provider={payment_provider}, "
                 f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
-                f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}]"
+                f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}, subscription_activated=True, vpn_key_issued=True]"
             )
             
             return {

@@ -2599,8 +2599,13 @@ async def callback_crypto_pay_tariff(callback: CallbackQuery, state: FSMContext)
         )],
     ])
     
+    # Очищаем FSM после создания crypto invoice
+    await state.clear()
+    
     await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
     await callback.answer()
+    
+    logger.info(f"Crypto invoice created and FSM cleared: user={telegram_id}, invoice_id={invoice.get('invoice_id')}, purchase_id={purchase_id}, tariff={tariff_type}, period_days={period_days}")
 
 
 @router.callback_query(F.data.startswith("pay_crypto_asset:"))
@@ -2680,8 +2685,13 @@ async def callback_pay_crypto_asset(callback: CallbackQuery, state: FSMContext):
         )],
     ])
     
+    # Очищаем FSM после создания crypto invoice для выбранного актива
+    await state.clear()
+    
     await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
     await callback.answer()
+    
+    logger.info(f"Crypto invoice created for asset {asset} and FSM cleared: user={telegram_id}, invoice_id={invoice.get('invoice_id')}, purchase_id={purchase_id}")
 
 
 @router.message(PromoCodeInput.waiting_for_promo)

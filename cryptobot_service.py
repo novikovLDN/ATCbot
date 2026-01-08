@@ -271,16 +271,20 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
         logger.error(f"Crypto Bot webhook: invalid telegram_id or period_days: {e}")
         return web.json_response({"status": "invalid"}, status=200)
     
-    # Get pending purchase
+    # Get pending purchase (без проверки expires_at - оплата может прийти после истечения)
     import database
-    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    logger.info(f"Crypto Bot webhook: looking for purchase: purchase_id={purchase_id}, user={telegram_id}")
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     if not pending_purchase:
         logger.warning(f"Crypto Bot webhook: pending purchase not found: purchase_id={purchase_id}, user={telegram_id}")
         return web.json_response({"status": "not_found"}, status=200)
     
-    if pending_purchase.get("status") != "pending":
-        logger.info(f"Crypto Bot webhook: purchase already processed: purchase_id={purchase_id}, status={pending_purchase.get('status')}")
+    purchase_status = pending_purchase.get("status")
+    if purchase_status != "pending":
+        logger.info(f"Crypto Bot webhook: purchase already processed: purchase_id={purchase_id}, status={purchase_status}")
         return web.json_response({"status": "already_processed"}, status=200)
+    
+    logger.info(f"Crypto Bot webhook: valid pending purchase found: purchase_id={purchase_id}, user={telegram_id}, tariff={pending_purchase.get('tariff')}, period_days={pending_purchase.get('period_days')}")
     
     # Get payment amount from invoice
     amount_rubles = float(invoice.get("amount", {}).get("fiat", {}).get("value", 0))
@@ -292,6 +296,7 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
     # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
     # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
     try:
+        logger.info(f"Crypto Bot webhook: calling finalize_purchase: purchase_id={purchase_id}, provider=cryptobot, amount={amount_rubles} RUB")
         result = await database.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider="cryptobot",
@@ -300,11 +305,15 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
         )
         
         if not result or not result.get("success"):
-            raise Exception(f"finalize_purchase returned invalid result: {result}")
+            error_msg = f"finalize_purchase returned invalid result: {result}"
+            logger.error(f"Crypto Bot webhook: {error_msg}")
+            raise Exception(error_msg)
         
         payment_id = result["payment_id"]
         expires_at = result["expires_at"]
         vpn_key = result["vpn_key"]
+        
+        logger.info(f"Crypto Bot webhook: purchase_finalized: purchase_id={purchase_id}, payment_id={payment_id}, expires_at={expires_at.isoformat()}, vpn_key_length={len(vpn_key)}")
         
         # Send confirmation to user
         import localization
@@ -318,8 +327,12 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
         await bot.send_message(telegram_id, text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
         await bot.send_message(telegram_id, f"<code>{vpn_key}</code>", parse_mode="HTML")
         
-        logger.info(f"Crypto Bot payment processed successfully: user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, purchase_id={purchase_id}")
+        logger.info(f"Crypto Bot payment processed successfully: user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, purchase_id={purchase_id}, subscription_activated=True, vpn_key_issued=True")
         
+    except ValueError as e:
+        # Pending purchase уже обработан или не найден - это нормально при повторных callback
+        logger.info(f"Crypto Bot webhook: purchase already processed (ValueError): purchase_id={purchase_id}, error={e}")
+        return web.json_response({"status": "already_processed"}, status=200)
     except Exception as e:
         logger.exception(f"Crypto Bot webhook: finalize_purchase failed: user={telegram_id}, purchase_id={purchase_id}, error={e}")
         # Payment remains in 'pending' status for manual review
