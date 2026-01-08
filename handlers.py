@@ -1,5 +1,6 @@
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, LabeledPrice, PreCheckoutQuery
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
@@ -3755,7 +3756,12 @@ async def callback_privacy(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "privacy_policy_text")
-    await callback.message.edit_text(text, reply_markup=get_about_keyboard(language))
+    try:
+        await callback.message.edit_text(text, reply_markup=get_about_keyboard(language))
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+        # Игнорируем ошибку "message is not modified" - сообщение уже имеет нужное содержимое
     await callback.answer()
 
 
