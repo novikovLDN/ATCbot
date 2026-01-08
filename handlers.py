@@ -574,7 +574,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         buttons.append([
             InlineKeyboardButton(
                 text="📱 Скачать v2RayTun (iOS)",
-                url="https://apps.apple.com/app/id6444584972"
+                url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
             )
         ])
     elif platform == "android":
@@ -590,7 +590,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         buttons.append([
             InlineKeyboardButton(
                 text="📱 Скачать v2RayTun (iOS)",
-                url="https://apps.apple.com/app/id6444584972"
+                url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
             ),
             InlineKeyboardButton(
                 text="🤖 Скачать v2RayTun (Android)",
