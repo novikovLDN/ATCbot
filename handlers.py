@@ -1452,9 +1452,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "copy_key")
 async def callback_copy_key(callback: CallbackQuery):
-    """Копировать VPN-ключ (обновленная версия)"""
-    await callback.answer()
-    
+    """Копировать VPN-ключ (one-tap copy via callback)"""
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1466,12 +1464,12 @@ async def callback_copy_key(callback: CallbackQuery):
     subscription = await database.get_subscription(telegram_id)
     
     if not subscription or not subscription.get("vpn_key"):
-        error_text = localization.get_text(language, "error_no_active_subscription", default="Активная подписка не найдена.")
-        logger.warning(f"copy_key: No active subscription or vpn_key for user {telegram_id}")
-        await callback.message.answer(error_text)
+        error_text = localization.get_text(language, "error_no_active_subscription", default="❌ Активная подписка не найдена")
+        logging.warning(f"copy_key: No active subscription or vpn_key for user {telegram_id}")
+        await callback.answer(error_text, show_alert=True)
         return
     
-    # Отправляем VPN-ключ отдельным сообщением
+    # Получаем VPN-ключ
     vpn_key = subscription["vpn_key"]
     
     # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
@@ -1481,24 +1479,49 @@ async def callback_copy_key(callback: CallbackQuery):
             f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
             "Key will NOT be sent to user."
         )
-        logger.error(f"copy_key: {error_msg}")
+        logging.error(f"copy_key: {error_msg}")
         error_text = localization.get_text(
             language,
             "error_subscription_activation",
             default="❌ Ошибка получения ключа. Пожалуйста, обратитесь в поддержку."
         )
-        await callback.message.answer(error_text)
+        await callback.answer(error_text, show_alert=True)
         return
     
-    key_text = localization.get_text(language, "access_key_label", default="Ключ доступа:") + f"\n\n<code>{vpn_key}</code>"
-    await callback.message.answer(key_text, parse_mode="HTML")
+    # Используем временное сообщение с ключом для однотапного копирования
+    # Сообщение автоматически удаляется через 2 секунды для чистоты чата
+    success_text = localization.get_text(
+        language,
+        "vpn_key_copied",
+        default="✅ VPN-ключ скопирован"
+    )
+    
+    # Отправляем временное сообщение с ключом (<code> формат позволяет одно нажатие для копирования)
+    sent_message = await callback.message.answer(
+        f"<code>{vpn_key}</code>",
+        parse_mode="HTML"
+    )
+    
+    # Удаляем сообщение через 2 секунды (достаточно для копирования, но не засоряет чат)
+    import asyncio
+    async def delete_message():
+        await asyncio.sleep(2)
+        try:
+            await sent_message.delete()
+        except Exception as e:
+            logging.debug(f"Could not delete copy message: {e}")
+    
+    asyncio.create_task(delete_message())
+    
+    # Показываем toast уведомление
+    await callback.answer(success_text, show_alert=False)
 
 @router.callback_query(F.data == "copy_vpn_key")
 async def callback_copy_vpn_key(callback: CallbackQuery):
-    """Скопировать VPN-ключ (для экрана выдачи ключа или перевыпуска)"""
-    await callback.answer()
-    
+    """Скопировать VPN-ключ (one-tap copy via callback)"""
     telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
     
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
@@ -1507,14 +1530,12 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     subscription = await database.get_subscription(telegram_id)
     
     if not subscription or not subscription.get("vpn_key"):
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
-        error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
-        logger.warning(f"copy_vpn_key: No active subscription or vpn_key for user {telegram_id}")
-        await callback.message.answer(error_text)
+        error_text = localization.get_text(language, "error_no_active_subscription", default="❌ Активная подписка не найдена")
+        logging.warning(f"copy_vpn_key: No active subscription or vpn_key for user {telegram_id}")
+        await callback.answer(error_text, show_alert=True)
         return
     
-    # Отправляем VPN-ключ отдельным сообщением в формате HTML для копирования
+    # Получаем VPN-ключ
     vpn_key = subscription["vpn_key"]
     
     # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
@@ -1524,21 +1545,42 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
             f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
             "Key will NOT be sent to user."
         )
-        logger.error(f"copy_vpn_key: {error_msg}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        logging.error(f"copy_vpn_key: {error_msg}")
         error_text = localization.get_text(
             language,
             "error_subscription_activation",
             default="❌ Ошибка получения ключа. Пожалуйста, обратитесь в поддержку."
         )
-        await callback.message.answer(error_text)
+        await callback.answer(error_text, show_alert=True)
         return
     
-    await callback.message.answer(
+    # Используем временное сообщение с ключом для однотапного копирования
+    # Сообщение автоматически удаляется через 2 секунды для чистоты чата
+    success_text = localization.get_text(
+        language,
+        "vpn_key_copied",
+        default="✅ VPN-ключ скопирован"
+    )
+    
+    # Отправляем временное сообщение с ключом (<code> формат позволяет одно нажатие для копирования)
+    sent_message = await callback.message.answer(
         f"<code>{vpn_key}</code>",
         parse_mode="HTML"
     )
+    
+    # Удаляем сообщение через 2 секунды (достаточно для копирования, но не засоряет чат)
+    import asyncio
+    async def delete_message():
+        await asyncio.sleep(2)
+        try:
+            await sent_message.delete()
+        except Exception as e:
+            logging.debug(f"Could not delete copy message: {e}")
+    
+    asyncio.create_task(delete_message())
+    
+    # Показываем toast уведомление
+    await callback.answer(success_text, show_alert=False)
 
 
 @router.callback_query(F.data == "go_profile", StateFilter(default_state))
