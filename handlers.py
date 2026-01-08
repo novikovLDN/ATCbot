@@ -520,6 +520,10 @@ def get_about_keyboard(language: str):
             callback_data="about_privacy"
         )],
         [InlineKeyboardButton(
+            text=localization.get_text(language, "our_channel", default="Наш канал"),
+            url="https://t.me/atlas_secure"
+        )],
+        [InlineKeyboardButton(
             text=localization.get_text(language, "back"),
             callback_data="menu_main"
         )],
