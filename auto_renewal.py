@@ -1,6 +1,7 @@
 """Модуль для автопродления подписок с баланса"""
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from aiogram import Bot
 import database
@@ -9,36 +10,60 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Конфигурация интервала проверки автопродления (5-15 минут, по умолчанию 10 минут)
+AUTO_RENEWAL_INTERVAL_SECONDS = int(os.getenv("AUTO_RENEWAL_INTERVAL_SECONDS", "600"))  # 10 минут
+if AUTO_RENEWAL_INTERVAL_SECONDS < 300:  # Минимум 5 минут
+    AUTO_RENEWAL_INTERVAL_SECONDS = 300
+if AUTO_RENEWAL_INTERVAL_SECONDS > 900:  # Максимум 15 минут
+    AUTO_RENEWAL_INTERVAL_SECONDS = 900
+
+# Окно для автопродления: проверяем подписки, истекающие в течение этого времени (по умолчанию 6 часов)
+RENEWAL_WINDOW_HOURS = int(os.getenv("RENEWAL_WINDOW_HOURS", "6"))
+if RENEWAL_WINDOW_HOURS < 1:
+    RENEWAL_WINDOW_HOURS = 1
+RENEWAL_WINDOW = timedelta(hours=RENEWAL_WINDOW_HOURS)
+
 
 async def process_auto_renewals(bot: Bot):
     """
-    Обработать автопродление подписок, которые истекают в течение 24 часов
+    Обработать автопродление подписок, которые истекают в течение RENEWAL_WINDOW
+    
+    ТРЕБОВАНИЯ:
+    - Подписки со status='active' и auto_renew=TRUE
+    - subscription_end <= now + RENEWAL_WINDOW (по умолчанию 6 часов)
+    - Проверяем баланс >= цена подписки
+    - Если баланса хватает: продлеваем через grant_access() (без создания нового UUID)
+    - Если баланса не хватает: ничего не делаем (auto-expiry обработает)
     
     Защита от повторного списания:
     - Используется last_auto_renewal_at для отслеживания последнего автопродления
     - Одна подписка обрабатывается только один раз за цикл
     - Идемпотентность: при рестарте не будет двойного списания
+    - Атомарные транзакции для баланса и подписки
     """
     pool = await database.get_pool()
     async with pool.acquire() as conn:
-        # Находим подписки, которые истекают в течение 24 часов и имеют auto_renew = true
+        # Находим подписки, которые истекают в течение RENEWAL_WINDOW и имеют auto_renew = true
         # Исключаем подписки, которые уже были обработаны в этом цикле (защита от повторного списания)
         now = datetime.now()
-        expires_threshold = now + timedelta(hours=24)
+        renewal_threshold = now + RENEWAL_WINDOW
         
         subscriptions = await conn.fetch(
             """SELECT s.*, u.language, u.balance
                FROM subscriptions s
                JOIN users u ON s.telegram_id = u.telegram_id
                WHERE s.status = 'active'
+               AND s.auto_renew = TRUE
                AND s.expires_at <= $1 
                AND s.expires_at > $2
-               AND s.auto_renew = TRUE
-               AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '1 day')""",
-            expires_threshold, now
+               AND s.uuid IS NOT NULL
+               AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')""",
+            renewal_threshold, now
         )
         
-        logger.info(f"Found {len(subscriptions)} subscriptions for auto-renewal check")
+        logger.info(
+            f"Auto-renewal check: Found {len(subscriptions)} subscriptions expiring within {RENEWAL_WINDOW_HOURS} hours"
+        )
         
         for sub_row in subscriptions:
             subscription = dict(sub_row)
@@ -119,36 +144,51 @@ async def process_auto_renewals(bot: Bot):
                             continue
                         
                         # Продлеваем подписку через единую функцию grant_access
+                        # source="auto_renew" для корректного аудита и аналитики
+                        # grant_access() автоматически определит, что это продление (UUID не будет пересоздан)
                         result = await database.grant_access(
                             telegram_id=telegram_id,
                             duration=duration,
-                            source="payment",
+                            source="auto_renew",  # Используем source="auto_renew" для аудита
                             admin_telegram_id=None,
                             admin_grant_days=None,
                             conn=conn  # Используем существующее соединение для атомарности
                         )
                         
                         expires_at = result["subscription_end"]
-                        # Если vless_url есть - это новый UUID, используем его
-                        # Если vless_url нет - это продление, получаем vpn_key из подписки
-                        if result.get("vless_url"):
-                            vpn_key = result["vless_url"]
-                            is_renewal = False
-                        else:
-                            # Продление - получаем vpn_key из существующей подписки
-                            subscription_row = await conn.fetchrow(
-                                "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
-                                telegram_id
-                            )
-                            if subscription_row and subscription_row.get("vpn_key"):
-                                vpn_key = subscription_row["vpn_key"]
-                            else:
-                                # Fallback: используем UUID
-                                vpn_key = result.get("uuid", "")
-                            is_renewal = True
+                        action_type = result.get("action", "unknown")
                         
-                        if expires_at is None or vpn_key is None:
-                            logger.error(f"Failed to grant access for auto-renewal: user={telegram_id}")
+                        # ВАЛИДАЦИЯ: При автопродлении UUID НЕ должен пересоздаваться
+                        # grant_access() должен вернуть action="renewal" и vless_url=None
+                        if action_type != "renewal" or result.get("vless_url") is not None:
+                            logger.error(
+                                f"Auto-renewal ERROR: UUID was regenerated instead of renewal! "
+                                f"user={telegram_id}, action={action_type}, has_vless_url={result.get('vless_url') is not None}"
+                            )
+                            # Это критическая ошибка - UUID не должен был пересоздаться
+                            # Возвращаем деньги на баланс
+                            await database.increase_balance(
+                                telegram_id=telegram_id,
+                                amount=amount_rubles,
+                                source="refund",
+                                description=f"Возврат средств: ошибка автопродления (UUID пересоздан)"
+                            )
+                            continue
+                        
+                        # Получаем vpn_key из существующей подписки (UUID не менялся)
+                        subscription_row = await conn.fetchrow(
+                            "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                            telegram_id
+                        )
+                        vpn_key = None
+                        if subscription_row and subscription_row.get("vpn_key"):
+                            vpn_key = subscription_row["vpn_key"]
+                        else:
+                            # Fallback: используем UUID (не должно быть, но на всякий случай)
+                            vpn_key = result.get("uuid", "")
+                        
+                        if expires_at is None:
+                            logger.error(f"Failed to renew subscription for auto-renewal: user={telegram_id}, expires_at=None")
                             # Возвращаем деньги на баланс
                             await database.increase_balance(
                                 telegram_id=telegram_id,
@@ -170,16 +210,20 @@ async def process_auto_renewals(bot: Bot):
                             telegram_id, tariff_key, amount
                         )
                         
-                        # Отправляем уведомление пользователю (спокойный текст, без CTA)
+                        # Отправляем уведомление пользователю
                         expires_str = expires_at.strftime("%d.%m.%Y")
+                        duration_days = duration.days
                         try:
                             text = localization.get_text(
                                 language,
                                 "auto_renewal_success",
-                                default=f"✅ Подписка автоматически продлена до {expires_str}\n\nС баланса списано: {amount_rubles:.2f} ₽"
+                                days=duration_days,
+                                expires_date=expires_str,
+                                amount=amount_rubles
                             )
-                        except KeyError:
-                            text = f"✅ Подписка автоматически продлена до {expires_str}\n\nС баланса списано: {amount_rubles:.2f} ₽"
+                        except (KeyError, TypeError):
+                            # Fallback на старый формат, если локализация не обновлена
+                            text = f"✅ Подписка автоматически продлена на {duration_days} дней.\n\nДействует до: {expires_str}\nС баланса списано: {amount_rubles:.2f} ₽"
                         
                         await bot.send_message(telegram_id, text)
                         
@@ -200,13 +244,20 @@ async def auto_renewal_task(bot: Bot):
     """
     Фоновая задача для автопродления подписок
     
-    Запускается каждые 6 часов для проверки подписок, истекающих в течение 24 часов.
+    Запускается каждые AUTO_RENEWAL_INTERVAL_SECONDS (по умолчанию 10 минут, минимум 5, максимум 15)
+    для проверки подписок, истекающих в течение RENEWAL_WINDOW (по умолчанию 6 часов).
+    
     Это обеспечивает:
-    - Своевременное продление (не пропустим подписки)
+    - Своевременное продление (частые проверки, не пропустим подписки)
     - Безопасность при рестартах (не будет двойного списания благодаря last_auto_renewal_at)
     - Идемпотентность (повторные вызовы безопасны)
+    - Атомарность (баланс и подписка обновляются в одной транзакции)
+    - UUID стабильность (продление без пересоздания UUID через grant_access)
     """
-    logger.info("Auto-renewal task started")
+    logger.info(
+        f"Auto-renewal task started: interval={AUTO_RENEWAL_INTERVAL_SECONDS}s, "
+        f"renewal_window={RENEWAL_WINDOW_HOURS}h"
+    )
     
     # Первая проверка сразу при запуске
     try:
@@ -216,8 +267,8 @@ async def auto_renewal_task(bot: Bot):
     
     while True:
         try:
-            # Ждем 6 часов до следующей проверки (проверяем чаще, чем раз в сутки, для надежности)
-            await asyncio.sleep(21600)  # 6 часов в секундах
+            # Ждем до следующей проверки (5-15 минут, по умолчанию 10 минут)
+            await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS)
             
             await process_auto_renewals(bot)
             
@@ -226,6 +277,6 @@ async def auto_renewal_task(bot: Bot):
             break
         except Exception as e:
             logger.exception(f"Error in auto-renewal task: {e}")
-            # При ошибке ждем 1 час перед повтором
-            await asyncio.sleep(3600)
+            # При ошибке ждем половину интервала перед повтором (не блокируем надолго)
+            await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS // 2)
 
