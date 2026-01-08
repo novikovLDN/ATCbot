@@ -2346,6 +2346,16 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     tariff_name = "Basic" if tariff_type == "basic" else "Plus"
     
     try:
+        # КРИТИЧНО: Проверяем, была ли активная подписка ДО платежа
+        # Это нужно для определения сценария: первая покупка vs продление
+        existing_subscription = await database.get_subscription(telegram_id)
+        had_active_subscription_before_payment = (
+            existing_subscription is not None 
+            and existing_subscription.get("status") == "active"
+            and existing_subscription.get("expires_at")
+            and existing_subscription.get("expires_at") > datetime.now()
+        )
+        
         # КРИТИЧНО: Списываем баланс и активируем подписку в ОДНОЙ транзакции
         # Списываем баланс
         success = await database.decrease_balance(
@@ -2379,7 +2389,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             # Если vless_url нет - это продление, получаем vpn_key из подписки
             if result.get("vless_url"):
                 vpn_key = result["vless_url"]
-                is_renewal = False
+                is_renewal = had_active_subscription_before_payment  # Используем флаг ДО платежа
             else:
                 # Продление - получаем vpn_key из существующей подписки
                 subscription = await database.get_subscription(telegram_id)
@@ -2459,23 +2469,93 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
         await state.clear()
         
-        # Отправляем сообщение об успешной активации
+        # Формируем сообщение в зависимости от сценария: первая покупка vs продление
         expires_str = expires_at.strftime("%d.%m.%Y")
-        success_text = localization.get_text(
-            language,
-            "payment_approved",
-            date=expires_str,
-            default=f"✅ Подписка активирована\n\nДействует до: {expires_str}"
-        )
-        await callback.message.answer(success_text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
+        
+        if is_renewal:
+            # СЦЕНАРИЙ 2 — ПРОДЛЕНИЕ: подписка уже была активна
+            success_text = (
+                f"🔄 <b>Подписка продлена</b>\n\n"
+                f"📅 <b>Новый срок действия:</b> до {expires_str}\n\n"
+                f"🔐 <b>Ваш текущий ключ</b> (тот же UUID):\n"
+                f"<code>{vpn_key}</code>\n\n"
+                f"Вы можете продолжить использовать текущий ключ подключения."
+            )
+        else:
+            # СЦЕНАРИЙ 1 — ПЕРВАЯ ПОКУПКА: новая подписка
+            success_text = (
+                f"🎉 <b>Подписка успешно активирована</b>\n\n"
+                f"📅 <b>Срок действия:</b> до {expires_str}\n\n"
+                f"🔐 <b>Ваш ключ подключения:</b>\n"
+                f"<code>{vpn_key}</code>\n\n"
+                f"Вы можете использовать его в приложении VPN."
+            )
+        
+        # КРИТИЧНО: Отправляем сообщение с обработкой ошибок HTML parsing
+        try:
+            await callback.message.answer(
+                success_text,
+                reply_markup=get_vpn_key_keyboard(language),
+                parse_mode="HTML"
+            )
+            logger.info(
+                f"Success message sent for balance payment: user={telegram_id}, "
+                f"scenario={'renewal' if is_renewal else 'first_purchase'}, "
+                f"expires_at={expires_str}"
+            )
+        except Exception as e:
+            # Если HTML parsing упал - отправляем простой текст без HTML
+            logger.error(
+                f"Failed to send success message with HTML for user {telegram_id}: {e}. "
+                f"Falling back to plain text."
+            )
+            
+            # Fallback: отправляем простой текст без HTML
+            if is_renewal:
+                fallback_text = (
+                    f"🔄 Подписка продлена\n\n"
+                    f"📅 Новый срок действия: до {expires_str}\n\n"
+                    f"🔐 Ваш текущий ключ (тот же UUID) будет отправлен в следующем сообщении."
+                )
+            else:
+                fallback_text = (
+                    f"🎉 Подписка успешно активирована\n\n"
+                    f"📅 Срок действия: до {expires_str}\n\n"
+                    f"🔐 Ваш ключ подключения будет отправлен в следующем сообщении."
+                )
+            
+            try:
+                await callback.message.answer(
+                    fallback_text,
+                    reply_markup=get_vpn_key_keyboard(language)
+                    # Без parse_mode="HTML" - обычный текст
+                )
+                logger.info(f"Fallback success message sent (plain text): user={telegram_id}")
+            except Exception as fallback_error:
+                logger.exception(f"CRITICAL: Failed to send even fallback success message: {fallback_error}")
         
         # Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
-        await callback.message.answer(
-            f"<code>{vpn_key}</code>",
-            parse_mode="HTML"
-        )
+        try:
+            await callback.message.answer(
+                f"<code>{vpn_key}</code>",
+                parse_mode="HTML"
+            )
+            logger.info(f"VPN key sent separately: user={telegram_id}, key_length={len(vpn_key)}")
+        except Exception as e:
+            # Если HTML parsing упал - отправляем ключ без тегов
+            logger.error(f"Failed to send VPN key with HTML tags: {e}. Sending as plain text.")
+            try:
+                await callback.message.answer(f"🔑 {vpn_key}")
+                logger.info(f"VPN key sent as plain text: user={telegram_id}")
+            except Exception as key_error:
+                logger.exception(f"CRITICAL: Failed to send VPN key even as plain text: {key_error}")
         
-        logger.info(f"Subscription activated from balance: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={final_price_rubles:.2f} RUB")
+        logger.info(
+            f"Subscription activated from balance: user={telegram_id}, "
+            f"tariff={tariff_type}, period_days={period_days}, "
+            f"amount={final_price_rubles:.2f} RUB, "
+            f"scenario={'renewal' if is_renewal else 'first_purchase'}"
+        )
         
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
