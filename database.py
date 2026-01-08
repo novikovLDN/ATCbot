@@ -3789,7 +3789,7 @@ async def finalize_purchase(
             
             if not pending_row:
                 error_msg = f"Pending purchase not found: purchase_id={purchase_id}"
-                logger.error(f"finalize_purchase: {error_msg}")
+                logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found, {error_msg}")
                 raise ValueError(error_msg)
             
             pending_purchase = dict(pending_row)
@@ -3798,20 +3798,46 @@ async def finalize_purchase(
             
             if status != "pending":
                 error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
-                logger.warning(f"finalize_purchase: {error_msg}")
+                logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
                 raise ValueError(error_msg)
             
             tariff_type = pending_purchase["tariff"]
             period_days = pending_purchase["period_days"]
             price_kopecks = pending_purchase["price_kopecks"]
+            expected_amount_rubles = price_kopecks / 100.0
+            
+            # КРИТИЧНО: Проверка суммы платежа перед активацией подписки
+            # Разрешаем отклонение до 1 рубля (округление, комиссии)
+            amount_diff = abs(amount_rubles - expected_amount_rubles)
+            if amount_diff > 1.0:
+                error_msg = (
+                    f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
+                    f"expected={expected_amount_rubles:.2f} RUB, actual={amount_rubles:.2f} RUB, "
+                    f"diff={amount_diff:.2f} RUB"
+                )
+                logger.error(f"finalize_purchase: PAYMENT_AMOUNT_MISMATCH: {error_msg}")
+                raise ValueError(error_msg)
             
             logger.info(
                 f"finalize_purchase: START [purchase_id={purchase_id}, user={telegram_id}, "
-                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, "
+                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB (expected={expected_amount_rubles:.2f} RUB), "
                 f"tariff={tariff_type}, period_days={period_days}]"
             )
             
-            # STEP 2: Обновляем pending_purchase → paid
+            # Логируем событие получения платежа для аудита
+            logger.info(
+                f"payment_event_received: purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, invoice_id={invoice_id or 'N/A'}"
+            )
+            
+            # STEP 2: Проверка суммы пройдена - логируем верификацию
+            logger.info(
+                f"payment_verified: purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, "
+                f"amount_match=True, purchase_status=pending"
+            )
+            
+            # STEP 3: Обновляем pending_purchase → paid
             result = await conn.execute(
                 "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status = 'pending'",
                 purchase_id
@@ -3819,10 +3845,10 @@ async def finalize_purchase(
             
             if result != "UPDATE 1":
                 error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
-                logger.error(f"finalize_purchase: {error_msg}")
+                logger.error(f"finalize_purchase: payment_rejected: reason=db_update_failed, {error_msg}")
                 raise Exception(error_msg)
             
-            # STEP 3: Создаем payment record
+            # STEP 4: Создаем payment record
             payment_id = await conn.fetchval(
                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
                 telegram_id,
@@ -3835,7 +3861,7 @@ async def finalize_purchase(
                 logger.error(f"finalize_purchase: {error_msg}")
                 raise Exception(error_msg)
             
-            # STEP 4: Активируем подписку через grant_access
+            # STEP 5: Активируем подписку через grant_access
             duration = timedelta(days=period_days)
             grant_result = await grant_access(
                 telegram_id=telegram_id,
@@ -3895,13 +3921,13 @@ async def finalize_purchase(
                 logger.error(f"finalize_purchase: {error_msg}")
                 raise Exception(error_msg)
             
-            # STEP 5: Обновляем payment → approved
+            # STEP 6: Обновляем payment → approved
             await conn.execute(
                 "UPDATE payments SET status = 'approved' WHERE id = $1",
                 payment_id
             )
             
-            # STEP 6: Обрабатываем реферальный кешбэк
+            # STEP 7: Обрабатываем реферальный кешбэк
             try:
                 await process_referral_reward(
                     buyer_id=telegram_id,
@@ -3912,6 +3938,19 @@ async def finalize_purchase(
             except Exception as e:
                 # Реферальный кешбэк не критичен - логируем и продолжаем
                 logger.warning(f"finalize_purchase: referral reward failed: purchase_id={purchase_id}, error={e}")
+            
+            # КРИТИЧНО: Логируем активацию подписки и выдачу ключа для аудита
+            logger.info(
+                f"subscription_activated: purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, payment_id={payment_id}, "
+                f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}"
+            )
+            
+            logger.info(
+                f"vpn_key_issued: purchase_id={purchase_id}, user={telegram_id}, "
+                f"provider={payment_provider}, payment_id={payment_id}, "
+                f"vpn_key_length={len(vpn_key)}, is_renewal={is_renewal}"
+            )
             
             logger.info(
                 f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, provider={payment_provider}, "

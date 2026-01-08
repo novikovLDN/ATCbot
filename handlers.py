@@ -2795,6 +2795,13 @@ async def process_successful_payment(message: Message):
     payment = message.successful_payment
     payload = payment.invoice_payload
     
+    # КРИТИЧНО: Логируем получение события оплаты от Telegram
+    logger.info(
+        f"payment_event_received: provider=telegram_payment, user={telegram_id}, "
+        f"payload={payload}, amount={payment.total_amount / 100.0:.2f} RUB, "
+        f"currency={payment.currency}"
+    )
+    
     # Проверяем, является ли это пополнением баланса
     if payload.startswith("balance_topup_"):
         # Пополнение баланса
@@ -2885,12 +2892,32 @@ async def process_successful_payment(message: Message):
                 user = await database.get_user(telegram_id)
                 language = user.get("language", "ru") if user else "ru"
                 await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
-                logger.error(f"Invalid pending purchase in successful_payment: user={telegram_id}, purchase_id={purchase_id}")
+                logger.error(
+                    f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
+                    f"reason=pending_purchase_not_found_or_expired"
+                )
                 await database._log_audit_event_atomic_standalone(
                     "purchase_rejected_due_to_stale_context",
                     telegram_id,
                     None,
                     f"Payment received but pending purchase invalid: purchase_id={purchase_id}"
+                )
+                return
+            
+            # КРИТИЧНО: Проверка суммы платежа перед активацией
+            payment_amount_rubles = payment.total_amount / 100.0
+            expected_amount_rubles = pending_purchase["price_kopecks"] / 100.0
+            amount_diff = abs(payment_amount_rubles - expected_amount_rubles)
+            
+            if amount_diff > 1.0:
+                error_text = "Сумма платежа не совпадает с ожидаемой. Обратитесь в поддержку."
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
+                logger.error(
+                    f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
+                    f"reason=amount_mismatch, expected={expected_amount_rubles:.2f} RUB, "
+                    f"actual={payment_amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB"
                 )
                 return
             
@@ -2900,12 +2927,18 @@ async def process_successful_payment(message: Message):
             payment_amount = pending_purchase["price_kopecks"] / 100.0  # Конвертируем в рубли
             promo_code_used = pending_purchase.get("promo_code")
             
-            logger.info(f"Payment received with valid pending purchase: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_type}, period_days={period_days}, amount={payment_amount} RUB")
+            # КРИТИЧНО: Логируем верификацию платежа
+            logger.info(
+                f"payment_verified: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
+                f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles:.2f} RUB, "
+                f"amount_match=True, purchase_status=pending"
+            )
+            
             await database._log_audit_event_atomic_standalone(
                 "payment_received",
                 telegram_id,
                 None,
-                f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount} RUB"
+                f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount_rubles:.2f} RUB"
             )
         elif payload.startswith("renew:"):
             # Продление подписки (legacy формат, сохраняем для обратной совместимости)
@@ -2987,13 +3020,15 @@ async def process_successful_payment(message: Message):
         return
     
     purchase_id = pending_purchase["purchase_id"]
-    payment_amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    # Используем фактическую сумму из платежа (уже проверена выше)
+    payment_amount_rubles = payment.total_amount / 100.0
     tariff_type = pending_purchase["tariff"]
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
     
     # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
     # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
+    # КРИТИЧНО: Вызывается ТОЛЬКО после проверки суммы и валидности pending_purchase
     try:
         result = await database.finalize_purchase(
             purchase_id=purchase_id,

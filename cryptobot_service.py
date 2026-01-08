@@ -291,7 +291,29 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
     if amount_rubles <= 0:
         amount_rubles = pending_purchase["price_kopecks"] / 100.0
     
-    logger.info(f"Crypto Bot payment received: user={telegram_id}, invoice_id={invoice_id}, purchase_id={purchase_id}, amount={amount_rubles} RUB")
+    # КРИТИЧНО: Логируем получение события оплаты от Crypto Bot
+    logger.info(
+        f"payment_event_received: provider=cryptobot, user={telegram_id}, invoice_id={invoice_id}, "
+        f"purchase_id={purchase_id}, amount={amount_rubles:.2f} RUB, "
+        f"status=paid, update_type=invoice_paid"
+    )
+    
+    # КРИТИЧНО: Проверка суммы платежа перед активацией
+    expected_amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    amount_diff = abs(amount_rubles - expected_amount_rubles)
+    
+    if amount_diff > 1.0:
+        logger.error(
+            f"payment_rejected: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
+            f"reason=amount_mismatch, expected={expected_amount_rubles:.2f} RUB, "
+            f"actual={amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB"
+        )
+        return web.json_response({"status": "amount_mismatch"}, status=200)
+    
+    logger.info(
+        f"payment_verified: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
+        f"amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status=pending"
+    )
     
     # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
     # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
