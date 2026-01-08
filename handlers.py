@@ -490,22 +490,28 @@ def get_support_keyboard(language: str):
 
 
 def get_instruction_keyboard(language: str):
-    """Клавиатура экрана 'Инструкция'"""
+    """Клавиатура экрана 'Инструкция' для v2RayTun"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_device_ios"),
-                url="https://apps.apple.com/app/outline-app/id1356177741"
+                text="📱 Скачать v2RayTun (iOS)",
+                url="https://apps.apple.com/app/id6444584972"
             ),
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_device_android"),
-                url="https://play.google.com/store/apps/details?id=org.outline.android.client"
+                text="🤖 Скачать v2RayTun (Android)",
+                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
         ],
         [
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_device_desktop"),
-                url="https://getoutline.org/ru/get-started/"
+                text="💻 Скачать v2RayTun (ПК)",
+                url="https://v2raytun.com"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=localization.get_text(language, "copy_key", default="🔑 Скопировать VPN-ключ"),
+                callback_data="copy_vpn_key"
             ),
         ],
         [InlineKeyboardButton(
@@ -5253,6 +5259,7 @@ async def reject_payment(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in reject_payment callback for payment_id={payment_id if 'payment_id' in locals() else 'unknown'}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
 
 
 

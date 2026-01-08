@@ -176,7 +176,32 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "change_language": "🌍 Изменить язык",
         
         # Инструкция
-        "instruction_text": "🔌 Подключение\n\nДоступ работает через персональный ключ.\nНастройка занимает не более 1 минуты.\n\n1️⃣ 🔑 Получите ключ доступа\nКлюч появляется автоматически после активации подписки.\n\n2️⃣ 📥 Установите VPN-приложение\nСкачайте приложение из официального магазина\nдля вашей операционной системы.\n\n3️⃣ ➕ Подключитесь\nОткройте VPN-приложение, нажмите «+» и вставьте ключ.\nСоединение включится автоматически.\n\n✅ После подключения ничего настраивать не нужно.\nДоступ будет работать, пока активна подписка.",
+        "instruction_text": (
+            "🔑 Шаг 1. Добавьте VPN-ключ\n\n"
+            "1. Откройте приложение v2RayTun\n"
+            "2. Нажмите «➕ Добавить конфигурацию»\n"
+            "3. Выберите «Импорт по ссылке»\n"
+            "4. Вставьте VPN-ключ, полученный от бота\n"
+            "5. Подтвердите добавление\n\n"
+            "⚠️ Важно:\n"
+            "— Перед добавлением нового ключа удалите старый\n"
+            "— Один VPN-ключ работает только для одного пользователя\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🚀 Шаг 2. Подключитесь\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "1. Выберите добавленную конфигурацию\n"
+            "2. Нажмите кнопку «Подключить»\n"
+            "3. Дождитесь статуса «Подключено»\n\n"
+            "После подключения:\n"
+            "— Весь интернет-трафик защищён\n"
+            "— VPN работает автоматически\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "❓ Если не подключается\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "• Проверьте, что подписка активна\n"
+            "• Убедитесь, что используется именно v2RayTun\n"
+            "• Удалите старые VPN-конфигурации"
+        ),
         
         # Администратор (без изменений)
         "admin_payment_notification": "💰 Новая оплата\nПользователь: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} месяцев\nСтоимость: {price} ₽",
@@ -392,7 +417,32 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "change_language": "🌍 Change language",
         
         # Инструкция
-        "instruction_text": "🔌 Connection\n\nAccess works through a personal key.\nSetup takes no more than 1 minute.\n\n1️⃣ 🔑 Get access key\nKey appears automatically after subscription activation.\n\n2️⃣ 📥 Install VPN app\nDownload the app from official store\nfor your operating system.\n\n3️⃣ ➕ Connect\nOpen VPN app, press «+» and paste the key.\nConnection will activate automatically.\n\n✅ After connection, nothing needs to be configured.\nAccess will work while subscription is active.",
+        "instruction_text": (
+            "🔑 Step 1. Add VPN Key\n\n"
+            "1. Open v2RayTun app\n"
+            "2. Tap «➕ Add Configuration»\n"
+            "3. Select «Import by Link»\n"
+            "4. Paste the VPN key received from bot\n"
+            "5. Confirm addition\n\n"
+            "⚠️ Important:\n"
+            "— Delete old key before adding new one\n"
+            "— One VPN key works only for one user\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🚀 Step 2. Connect\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "1. Select the added configuration\n"
+            "2. Tap «Connect» button\n"
+            "3. Wait for «Connected» status\n\n"
+            "After connection:\n"
+            "— All internet traffic is protected\n"
+            "— VPN works automatically\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "❓ If not connecting\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "• Check that subscription is active\n"
+            "• Make sure you're using v2RayTun\n"
+            "• Delete old VPN configurations"
+        ),
         
         # Администратор
         "admin_payment_notification": "💰 New payment\nUser: @{username}\nTelegram ID: {telegram_id}\nTariff: {tariff} months\nPrice: {price} ₽",
@@ -585,7 +635,32 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "change_language": "🌍 Tilni o'zgartirish",
         
         # Инструкция
-        "instruction_text": "🔌 Ulanish\n\nKirish shaxsiy kalit orqali ishlaydi.\nSozlash 1 minutdan ko'p vaqt olmaydi.\n\n1️⃣ 🔑 Kirish kalitini oling\nKalit obuna faollashtirilgandan keyin avtomatik paydo bo'ladi.\n\n2️⃣ 📥 VPN ilovasini o'rnating\nRasmiy do'kondan ilovani yuklab oling\noperatsion tizimingiz uchun.\n\n3️⃣ ➕ Ulaning\nVPN ilovasini oching, «+» tugmasini bosing va kalitni qo'ying.\nUlanish avtomatik faollashtiriladi.\n\n✅ Ulanishdan keyin hech narsa sozlash shart emas.\nKirish obuna faol bo'lguncha ishlaydi.",
+        "instruction_text": (
+            "🔑 1-qadam. VPN kalitini qo'shing\n\n"
+            "1. v2RayTun ilovasini oching\n"
+            "2. «➕ Konfiguratsiya qo'shish» tugmasini bosing\n"
+            "3. «Havola orqali import» ni tanlang\n"
+            "4. Botdan olgan VPN kalitingizni qo'ying\n"
+            "5. Qo'shishni tasdiqlang\n\n"
+            "⚠️ Muhim:\n"
+            "— Yangi kalit qo'shishdan oldin eskisini o'chiring\n"
+            "— Bitta VPN kalit faqat bitta foydalanuvchi uchun ishlaydi\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🚀 2-qadam. Ulaning\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "1. Qo'shilgan konfiguratsiyani tanlang\n"
+            "2. «Ulanish» tugmasini bosing\n"
+            "3. «Ulangan» holatini kuting\n\n"
+            "Ulanishdan keyin:\n"
+            "— Barcha internet trafigi himoyalangan\n"
+            "— VPN avtomatik ishlaydi\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "❓ Agar ulanmasa\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "• Obuna faol ekanligini tekshiring\n"
+            "• v2RayTun ishlatilayotganiga ishonch hosil qiling\n"
+            "• Eski VPN konfiguratsiyalarini o'chiring"
+        ),
         "admin_payment_notification": "💰 Yangi to'lov\nFoydalanuvchi: @{username}\nTelegram ID: {telegram_id}\nTarif: {tariff} oy\nNarx: {price} ₽",
         "admin_approve": "Tasdiqlash",
         "admin_reject": "Rad etish",
@@ -790,7 +865,32 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "change_language": "🌍 Тағйири забон",
         
         # Инструкция
-        "instruction_text": "🔌 Пайвастшавӣ\n\nДастрасӣ тавассути калиди шахсӣ кор мекунад.\nТанзимот 1 дақиқа зиёд вақт намегирад.\n\n1️⃣ 🔑 Калиди дастрасиро гиред\nКалид пас аз фаъолсозии обуна ба таври худкор пайдо мешавад.\n\n2️⃣ 📥 Барномаи VPN-ро насб кунед\nБарномаро аз мағозаи расмӣ боргирӣ кунед\nбарои системаи оператсионии шумо.\n\n3️⃣ ➕ Пайванд шавед\nVPN-ро кушоед, «+» -ро пахш кунед ва калидро қошида кунед.\nПайванд ба таври худкор фаъол мешавад.\n\n✅ Пас аз пайванд ҳеч чиз танзим кардан лозим нест.\nДастрасӣ то обуна фаъол аст, кор мекунад.",
+        "instruction_text": (
+            "🔑 Қадами 1. Калиди VPN-ро илова кунед\n\n"
+            "1. Барномаи v2RayTun-ро кушоед\n"
+            "2. «➕ Конфигуратсия илова кардан»-ро пахш кунед\n"
+            "3. «Аз рӯи пайванд ворид кардан»-ро интихоб кунед\n"
+            "4. Калиди VPN-еро, ки аз бот гирифтаед, қошида кунед\n"
+            "5. Илова карданиро тасдиқ кунед\n\n"
+            "⚠️ Муҳим:\n"
+            "— Пеш аз илова кардани калиди нав, калиди кӯҳнаро нест кунед\n"
+            "— Як калиди VPN танҳо барои як корбар кор мекунад\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🚀 Қадами 2. Пайванд шавед\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "1. Конфигуратсияи иловашударо интихоб кунед\n"
+            "2. Тугмаи «Пайванд шавед»-ро пахш кунед\n"
+            "3. Ҳолати «Пайванд шуд»-ро интизор шавед\n\n"
+            "Пас аз пайванд:\n"
+            "— Ҳамаи трафики интернет ҳимоя мешавад\n"
+            "— VPN ба таври худкор кор мекунад\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "❓ Агар пайванд нашавад\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "• Обуна фаъол аст, чек кунед\n"
+            "• v2RayTun истифода мешавад, боварӣ ҳосил кунед\n"
+            "• Конфигуратсияҳои кӯҳнаи VPN-ро нест кунед"
+        ),
         "admin_payment_notification": "💰 Пардохти нав\nКорбар: @{username}\nTelegram ID: {telegram_id}\nТариф: {tariff} моҳ\nНарх: {price} ₽",
         "admin_approve": "Тасдиқ кардан",
         "admin_reject": "Рад кардан",
