@@ -16,6 +16,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ====================================================================================
+# SAFE STARTUP GUARD: Глобальный флаг готовности базы данных
+# ====================================================================================
+# Этот флаг отражает, инициализирована ли база данных и безопасна ли она для использования.
+# Если False, бот работает в деградированном режиме (degraded mode).
+# ====================================================================================
+DB_READY: bool = False
+
 # Получаем DATABASE_URL из переменных окружения
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -37,15 +45,42 @@ async def get_pool() -> asyncpg.Pool:
 
 async def close_pool():
     """Закрыть пул соединений"""
-    global _pool
+    global _pool, DB_READY
     if _pool:
         await _pool.close()
         _pool = None
+        DB_READY = False  # Помечаем БД как недоступную при закрытии пула
         logger.info("Database connection pool closed")
 
 
-async def init_db():
-    """Инициализация базы данных и создание таблиц"""
+def ensure_db_ready() -> bool:
+    """
+    Проверка готовности базы данных перед выполнением операций
+    
+    Returns:
+        True если БД готова, False если БД недоступна (деградированный режим)
+    
+    Usage:
+        if not ensure_db_ready():
+            return  # Операция отменена
+    """
+    if not DB_READY:
+        logger.warning("Database not ready - operation rejected (degraded mode)")
+        return False
+    return True
+
+
+async def init_db() -> bool:
+    """
+    Инициализация базы данных и создание таблиц
+    
+    Returns:
+        True если инициализация успешна, False если произошла ошибка
+        
+    Raises:
+        Любые исключения пробрасываются наверх для обработки в startup guard
+    """
+    global DB_READY
     pool = await get_pool()
     
     async with pool.acquire() as conn:
@@ -458,6 +493,9 @@ async def init_db():
         await _init_promo_codes(conn)
         
         logger.info("Database tables initialized")
+    # Успешная инициализация
+    DB_READY = True
+    return True
 
 
 async def _init_promo_codes(conn):

@@ -287,6 +287,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Платежи временно недоступны",
         "error_access_denied": "Доступ запрещён.",
         "error_start_command": "Пожалуйста, начните с команды /start",
+        "service_unavailable": "⚠️ Сервис временно недоступен. Попробуйте позже.",
 
     },
     "en": {
@@ -543,6 +544,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Payments temporarily unavailable",
         "error_access_denied": "Access denied.",
         "error_start_command": "Please start with /start command",
+        "service_unavailable": "⚠️ Service temporarily unavailable. Please try again later.",
         
         # Auto-renewal
         "auto_renewal_success": "✅ Subscription automatically renewed for {days} days.\n\nValid until: {expires_date}\nDeducted from balance: {amount:.2f} ₽",
@@ -772,6 +774,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "To'lovlar vaqtincha mavjud emas",
         "error_access_denied": "Kirish rad etildi.",
         "error_start_command": "Iltimos, /start buyrug'i bilan boshlang",
+        "service_unavailable": "⚠️ Xizmat vaqtincha mavjud emas. Keyinroq urinib ko'ring.",
         
         # Auto-renewal
         "auto_renewal_success": "✅ Obuna {days} kun uchun avtomatik ravishda uzaytirildi.\n\nAmal qilish muddati: {expires_date}\nBalansdan yechib olindi: {amount:.2f} ₽",
@@ -1029,6 +1032,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Пардохтҳо барои муддати муайян дастрас нестанд",
         "error_access_denied": "Дастрасӣ рад карда шуд.",
         "error_start_command": "Лутфан, бо фармони /start оғоз кунед",
+        "service_unavailable": "⚠️ Хизмат барои муддати муайян дастрас нест. Лутфан, баъдтар такрор кунед.",
         
         # Auto-renewal
         "auto_renewal_success": "✅ Обуна барои {days} рӯз ба таври худкор васеъ карда шуд.\n\nТо: {expires_date} амал мекунад\nАз баланс гирифта шуд: {amount:.2f} ₽",

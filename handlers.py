@@ -19,6 +19,60 @@ import random
 _bot_start_time = time.time()
 
 
+# ====================================================================================
+# SAFE STARTUP GUARD: Helper функции для проверки готовности БД
+# ====================================================================================
+async def ensure_db_ready_message(message_or_query) -> bool:
+    """
+    Проверка готовности базы данных с отправкой сообщения пользователю
+    
+    Args:
+        message_or_query: Message или CallbackQuery объект
+        
+    Returns:
+        True если БД готова, False если БД недоступна (сообщение отправлено)
+    """
+    if not database.DB_READY:
+        # Определяем язык пользователя (по умолчанию русский)
+        # ВАЖНО: Не обращаемся к БД если она не готова
+        language = "ru"
+        
+        # Получаем текст сообщения
+        error_text = localization.get_text(
+            language,
+            "service_unavailable",
+            default="⚠️ Сервис временно недоступен. Попробуйте позже."
+        )
+        
+        # Отправляем сообщение
+        try:
+            if hasattr(message_or_query, 'answer') and hasattr(message_or_query, 'text'):
+                # Это Message
+                await message_or_query.answer(error_text)
+            elif hasattr(message_or_query, 'message') and hasattr(message_or_query, 'answer'):
+                # Это CallbackQuery
+                await message_or_query.message.answer(error_text)
+                await message_or_query.answer()
+        except Exception as e:
+            logging.exception(f"Error sending degraded mode message: {e}")
+        
+        return False
+    return True
+
+
+async def ensure_db_ready_callback(callback: CallbackQuery) -> bool:
+    """
+    Проверка готовности базы данных для CallbackQuery (для удобства)
+    
+    Args:
+        callback: CallbackQuery объект
+        
+    Returns:
+        True если БД готова, False если БД недоступна (сообщение отправлено)
+    """
+    return await ensure_db_ready_message(callback)
+
+
 class AdminUserSearch(StatesGroup):
     waiting_for_user_id = State()
 
@@ -811,6 +865,16 @@ def get_admin_payment_keyboard(payment_id: int):
 
 @router.message(Command("start"))
 async def cmd_start(message: Message):
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    # /start может работать в деградированном режиме (только показ меню),
+    # но если БД недоступна, не пытаемся создавать пользователя
+    if not database.DB_READY:
+        # Показываем сообщение о недоступности и главное меню (read-only)
+        language = "ru"  # По умолчанию русский
+        text = localization.get_text(language, "welcome")
+        text += "\n\n" + localization.get_text(language, "service_unavailable")
+        await message.answer(text, reply_markup=get_main_menu_keyboard(language))
+        return
     """Обработчик команды /start"""
     telegram_id = message.from_user.id
     username = message.from_user.username
@@ -941,6 +1005,10 @@ async def cmd_promo_stats(message: Message):
 @router.message(Command("profile"))
 async def cmd_profile(message: Message):
     """Обработчик команды /profile"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_message(message):
+        return
+    
     telegram_id = message.from_user.id
     user = await database.get_user(telegram_id)
     
@@ -1102,6 +1170,10 @@ async def show_profile(message_or_query, language: str):
 @router.callback_query(F.data.startswith("toggle_auto_renew:"))
 async def callback_toggle_auto_renew(callback: CallbackQuery):
     """Включить/выключить автопродление"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     telegram_id = callback.from_user.id
     action = callback.data.split(":")[1]
     
@@ -1138,6 +1210,10 @@ async def callback_change_language(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("lang_"))
 async def callback_language(callback: CallbackQuery):
     """Обработчик выбора языка"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     language = callback.data.split("_")[1]
     telegram_id = callback.from_user.id
     
@@ -1152,9 +1228,12 @@ async def callback_language(callback: CallbackQuery):
 @router.callback_query(F.data == "menu_main")
 async def callback_main_menu(callback: CallbackQuery):
     """Главное меню"""
+    # SAFE STARTUP GUARD: Главное меню может работать в деградированном режиме
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = "ru"  # По умолчанию
+    if database.DB_READY:
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
     
     text = localization.get_text(language, "welcome")
     text = await format_text_with_incident(text, language)
@@ -1166,6 +1245,10 @@ async def callback_main_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "menu_profile")
 async def callback_profile(callback: CallbackQuery, state: FSMContext):
     """Мой профиль - работает независимо от FSM состояния"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
     await database.check_and_disable_expired_subscription(callback.from_user.id)
     telegram_id = callback.from_user.id
@@ -1383,6 +1466,10 @@ async def callback_renewal_pay(callback: CallbackQuery):
 @router.callback_query(F.data == "topup_balance")
 async def callback_topup_balance(callback: CallbackQuery):
     """Пополнить баланс"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1420,6 +1507,10 @@ async def callback_topup_balance(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("topup_amount:"))
 async def callback_topup_amount(callback: CallbackQuery):
     """Обработка выбора суммы пополнения"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1466,6 +1557,10 @@ async def callback_topup_amount(callback: CallbackQuery):
 @router.callback_query(F.data == "topup_custom")
 async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
     """Ввод произвольной суммы пополнения баланса"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1488,6 +1583,11 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
 @router.message(TopUpStates.waiting_for_amount)
 async def process_topup_amount(message: Message, state: FSMContext):
     """Обработка введенной суммы пополнения"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_message(message):
+        await state.clear()
+        return
+    
     telegram_id = message.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -1790,6 +1890,10 @@ async def callback_subscription_history(callback: CallbackQuery):
 @router.callback_query(F.data == "menu_buy_vpn")
 async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     """Купить VPN - выбор типа тарифа (Basic/Plus)"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -2314,6 +2418,11 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
 @router.message(PromoCodeInput.waiting_for_promo)
 async def process_promo_code(message: Message, state: FSMContext):
     """Обработчик ввода промокода"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_message(message):
+        await state.clear()
+        return
+    
     telegram_id = message.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -2391,6 +2500,18 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message):
     """Обработчик successful_payment - успешная оплата"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not database.DB_READY:
+        language = "ru"  # По умолчанию
+        error_text = localization.get_text(
+            language,
+            "service_unavailable",
+            default="⚠️ Сервис временно недоступен. Попробуйте позже."
+        )
+        await message.answer(error_text)
+        logger.error("Payment received but DB not ready - payment rejected")
+        return
+    
     telegram_id = message.from_user.id
     payment = message.successful_payment
     payload = payment.invoice_payload
