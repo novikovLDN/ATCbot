@@ -1,13 +1,18 @@
 """
-Fast Expiry Cleanup - быстрая очистка истёкших подписок
+Fast Expiry Cleanup - автоматическое отключение истёкших VPN подписок
 
-Фоновая задача для немедленного отключения VPN-ключей
-после окончания подписки (максимальная задержка 60 секунд).
+Фоновая задача для немедленного отзыва VPN-доступа после истечения подписки.
+Работает асинхронно, не блокирует основной event loop бота.
 
-Особенно важно для коротких доступов (10 минут, 1 день).
+Требования:
+- Запускается каждые 1-5 минут (настраивается через переменную окружения)
+- Использует UTC время для сравнения дат
+- Идемпотентна (безопасно запускать несколько раз)
+- Устойчива к сетевым ошибкам (повтор в следующем цикле)
 """
 import asyncio
 import logging
+import os
 from datetime import datetime
 import database
 import vpn_utils
@@ -15,38 +20,59 @@ from vpn_utils import VPNAPIError, TimeoutError, AuthError
 
 logger = logging.getLogger(__name__)
 
-# Интервал проверки: каждые 60 секунд
-FAST_CLEANUP_INTERVAL_SECONDS = 60
+# Интервал проверки: 1-5 минут (настраивается через переменную окружения)
+# По умолчанию: 60 секунд (1 минута)
+CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "60"))
+# Ограничиваем интервал от 60 секунд (1 минута) до 300 секунд (5 минут)
+CLEANUP_INTERVAL_SECONDS = max(60, min(300, CLEANUP_INTERVAL_SECONDS))
 
 
 async def fast_expiry_cleanup_task():
     """
     Fast Expiry Cleanup Task
     
-    Фоновая задача для быстрого отключения истёкших подписок.
-    Работает независимо от основного cleanup.
+    Автоматическая фоновая задача для отключения истёкших VPN подписок.
+    Работает асинхронно, не блокирует основной event loop бота.
     
     Логика:
-    1. Находит все подписки с status = 'active' и expires_at < now() и uuid IS NOT NULL
-    2. Для каждой: вызывает POST /remove-user/{uuid} (идемпотентно)
-    3. ТОЛЬКО при успехе - помечает статус как 'expired' и очищает UUID
-    4. Защита от повторного удаления: проверка что UUID всё ещё существует перед обновлением БД
-    5. При ошибке - НЕ чистит БД, повторит в следующем цикле
+    1. Находит все подписки где:
+       - status = 'active'
+       - expires_at (subscription_end) < текущее UTC время
+       - uuid IS NOT NULL
+    2. Для каждой подписки:
+       - Вызывает POST {XRAY_API_URL}/remove-user/{uuid} с заголовком X-API-Key
+       - Если API вызов успешен - обновляет статус на 'expired' и очищает uuid/vpn_key
+    3. Защита от повторного удаления: проверка что UUID всё ещё существует перед обновлением БД
+    4. При ошибке сети - НЕ очищает БД, повторит в следующем цикле
     
     Идемпотентность:
     - remove-user идемпотентен (отсутствие UUID на сервере не считается ошибкой)
     - Повторное удаление одного UUID безопасно
+    - Защита от race condition через processing_uuids множество
+    
+    Не блокирует event loop:
+    - Использует async/await для всех операций
+    - Сетевые запросы выполняются асинхронно
+    - База данных операции выполняются через asyncpg
     """
-    logger.info("Fast expiry cleanup task started (interval: 60 seconds)")
+    logger.info(
+        f"Fast expiry cleanup task started (interval: {CLEANUP_INTERVAL_SECONDS} seconds, "
+        f"range: 60-300 seconds, using UTC time)"
+    )
     
     # Множество для отслеживания UUID, которые мы уже обрабатываем (защита от race condition)
     processing_uuids = set()
     
     while True:
         try:
-            await asyncio.sleep(FAST_CLEANUP_INTERVAL_SECONDS)
+            await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+            
+            # Получаем текущее UTC время для сравнения
+            # PostgreSQL TIMESTAMP хранит без timezone, поэтому используем naive datetime
+            now_utc = datetime.utcnow()
             
             # Получаем истёкшие подписки с активными UUID
+            # Используем expires_at (в БД) - это и есть subscription_end
             pool = await database.get_pool()
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
@@ -54,8 +80,9 @@ async def fast_expiry_cleanup_task():
                        FROM subscriptions 
                        WHERE status = 'active'
                        AND expires_at < $1
-                       AND uuid IS NOT NULL""",
-                    datetime.now()
+                       AND uuid IS NOT NULL
+                       ORDER BY expires_at ASC""",
+                    now_utc
                 )
             
             if not rows:
@@ -68,9 +95,8 @@ async def fast_expiry_cleanup_task():
                 uuid = row["uuid"]
                 expires_at = row["expires_at"]
                 
-                # ЗАЩИТА: Проверяем что подписка действительно истекла
-                now = datetime.now()
-                if expires_at >= now:
+                # ЗАЩИТА: Проверяем что подписка действительно истекла (используем UTC)
+                if expires_at >= now_utc:
                     logger.warning(
                         f"cleanup: SKIP_NOT_EXPIRED [user={telegram_id}, expires_at={expires_at.isoformat()}, "
                         f"now={now.isoformat()}]"
@@ -101,6 +127,19 @@ async def fast_expiry_cleanup_task():
                     await vpn_utils.remove_vless_user(uuid)
                     logger.info(f"cleanup: VPN_API_REMOVED [user={telegram_id}, uuid={uuid_preview}]")
                     
+                    # VPN AUDIT LOG: Логируем успешное удаление UUID при автоматическом истечении
+                    try:
+                        await database._log_vpn_lifecycle_audit_async(
+                            action="vpn_expire",
+                            telegram_id=telegram_id,
+                            uuid=uuid,
+                            source="auto-expiry",
+                            result="success",
+                            details=f"Auto-expired subscription, expires_at={expires_at.isoformat()}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
+                    
                     # ТОЛЬКО если API ответил успехом - очищаем БД
                     pool = await database.get_pool()
                     async with pool.acquire() as conn:
@@ -117,9 +156,9 @@ async def fast_expiry_cleanup_task():
                             )
                             
                             if check_row:
-                                # Дополнительная проверка: убеждаемся что подписка действительно истекла
+                                # Дополнительная проверка: убеждаемся что подписка действительно истекла (UTC)
                                 check_expires_at = check_row["expires_at"]
-                                if check_expires_at >= datetime.now():
+                                if check_expires_at >= now_utc:
                                     logger.warning(
                                         f"cleanup: SKIP_RENEWED [user={telegram_id}, uuid={uuid_preview}, "
                                         f"expires_at={check_expires_at.isoformat()}] - subscription was renewed"
@@ -143,7 +182,7 @@ async def fast_expiry_cleanup_task():
                                         f"expires_at={expires_at.isoformat()}]"
                                     )
                                     
-                                    # Логируем действие в audit_log
+                                    # Логируем действие в audit_log (legacy, для совместимости)
                                     import config
                                     await database._log_audit_event_atomic(
                                         conn, 
@@ -152,6 +191,19 @@ async def fast_expiry_cleanup_task():
                                         telegram_id, 
                                         f"Fast-deleted expired UUID {uuid_preview}, expired_at={expires_at.isoformat()}"
                                     )
+                                    
+                                    # VPN AUDIT LOG: Логируем успешное истечение подписки (non-blocking)
+                                    try:
+                                        await database._log_vpn_lifecycle_audit_async(
+                                            action="vpn_expire",
+                                            telegram_id=telegram_id,
+                                            uuid=uuid,
+                                            source="auto-expiry",
+                                            result="success",
+                                            details=f"Subscription expired and UUID removed, expires_at={expires_at.isoformat()}"
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
                                     
                                     logger.info(
                                         f"cleanup: SUCCESS [user={telegram_id}, uuid={uuid_preview}, "
@@ -183,6 +235,18 @@ async def fast_expiry_cleanup_task():
                         f"cleanup: VPN_API_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}, "
                         f"error_type={type(e).__name__}] - will retry in next cycle"
                     )
+                    # VPN AUDIT LOG: Логируем ошибку удаления UUID при автоматическом истечении
+                    try:
+                        await database._log_vpn_lifecycle_audit_async(
+                            action="vpn_expire",
+                            telegram_id=telegram_id,
+                            uuid=uuid,
+                            source="auto-expiry",
+                            result="error",
+                            details=f"Failed to remove UUID via VPN API: {str(e)}, will retry"
+                        )
+                    except Exception:
+                        pass  # Не блокируем при ошибке логирования
                     
                 except ValueError as e:
                     # VPN API не настроен - пропускаем
