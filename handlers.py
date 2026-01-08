@@ -3140,15 +3140,30 @@ async def callback_referral(callback: CallbackQuery):
     
     try:
         # Получаем информацию об уровне и прогрессе (на основе ОПЛАТИВШИХ рефералов)
+        # БЕЗОПАСНО: get_referral_level_info всегда возвращает валидный словарь
         level_info = await database.get_referral_level_info(telegram_id)
-        current_percent = level_info["current_level"]
-        referrals_count = level_info["referrals_count"]  # Всего приглашённых
-        paid_referrals_count = level_info.get("paid_referrals_count", 0)  # Оплативших
-        next_level = level_info["next_level"]
-        referrals_to_next = level_info["referrals_to_next"]
+        if not level_info:
+            # Дополнительная защита: если функция вернула None (не должно быть)
+            logger.error(f"get_referral_level_info returned None for telegram_id={telegram_id}")
+            level_info = {
+                "current_level": 10,
+                "referrals_count": 0,
+                "paid_referrals_count": 0,
+                "next_level": 25,
+                "referrals_to_next": 25
+            }
         
-        # Получаем общую сумму заработанного кешбэка
+        # Безопасное извлечение значений с дефолтами
+        current_percent = level_info.get("current_level", 10)
+        referrals_count = database.safe_int(level_info.get("referrals_count", 0))
+        paid_referrals_count = database.safe_int(level_info.get("paid_referrals_count", 0))
+        next_level = level_info.get("next_level")
+        referrals_to_next = level_info.get("referrals_to_next")
+        
+        # Получаем общую сумму заработанного кешбэка (всегда возвращает float >= 0)
         total_cashback = await database.get_total_cashback_earned(telegram_id)
+        if total_cashback is None:
+            total_cashback = 0.0
         
         # Получаем username бота для реферальной ссылки
         bot_info = await callback.bot.get_me()
@@ -3235,7 +3250,7 @@ async def callback_referral(callback: CallbackQuery):
             await callback.message.edit_text(text, reply_markup=keyboard)
             await callback.answer()
             
-            logger.info(
+            logger.debug(
                 f"Referral screen opened: user={telegram_id}, "
                 f"invited={referrals_count}, paid={paid_referrals_count}, "
                 f"percent={current_percent}%, cashback={total_cashback:.2f} RUB"
@@ -3612,31 +3627,56 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
             offset=0
         )
         
+        # Безопасная обработка статистики с дефолтами
+        if not overall_stats:
+            overall_stats = {
+                "total_referrers": 0,
+                "total_referrals": 0,
+                "total_paid_referrals": 0,
+                "total_revenue": 0.0,
+                "total_cashback_paid": 0.0,
+                "avg_cashback_per_referrer": 0.0
+            }
+        
+        # Безопасное извлечение значений с дефолтами
+        total_referrers = database.safe_int(overall_stats.get("total_referrers", 0))
+        total_referrals = database.safe_int(overall_stats.get("total_referrals", 0))
+        total_paid_referrals = database.safe_int(overall_stats.get("total_paid_referrals", 0))
+        total_revenue = database.safe_float(overall_stats.get("total_revenue", 0.0))
+        total_cashback_paid = database.safe_float(overall_stats.get("total_cashback_paid", 0.0))
+        avg_cashback_per_referrer = database.safe_float(overall_stats.get("avg_cashback_per_referrer", 0.0))
+        
         # Формируем текст с общей статистикой
         text = "📈 Реферальная статистика\n\n"
         text += "📊 Общая статистика:\n"
-        text += f"• Всего рефереров: {overall_stats['total_referrers']}\n"
-        text += f"• Всего приглашённых: {overall_stats['total_referrals']}\n"
-        text += f"• Всего оплат: {overall_stats['total_paid_referrals']}\n"
-        text += f"• Общий доход: {overall_stats['total_revenue']:.2f} ₽\n"
-        text += f"• Выплачено кешбэка: {overall_stats['total_cashback_paid']:.2f} ₽\n"
-        text += f"• Средний кешбэк на реферера: {overall_stats['avg_cashback_per_referrer']:.2f} ₽\n\n"
+        text += f"• Всего рефереров: {total_referrers}\n"
+        text += f"• Всего приглашённых: {total_referrals}\n"
+        text += f"• Всего оплат: {total_paid_referrals}\n"
+        text += f"• Общий доход: {total_revenue:.2f} ₽\n"
+        text += f"• Выплачено кешбэка: {total_cashback_paid:.2f} ₽\n"
+        text += f"• Средний кешбэк на реферера: {avg_cashback_per_referrer:.2f} ₽\n\n"
         
-        # Топ рефереров
+        # Топ рефереров (безопасная обработка)
         if top_referrers:
             text += "🏆 Топ рефереров:\n\n"
             for idx, stat in enumerate(top_referrers[:10], 1):
-                username = stat["username"]
-                invited_count = stat["invited_count"]
-                paid_count = stat["paid_count"]
-                conversion = stat["conversion_percent"]
-                revenue = stat["total_invited_revenue"]
-                cashback = stat["total_cashback_paid"]
-                cashback_percent = stat["current_cashback_percent"]
-                
-                text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
-                text += f"   Оплативших: {paid_count} | Уровень: {cashback_percent}%\n"
-                text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽\n\n"
+                try:
+                    # Безопасное извлечение значений
+                    referrer_id = stat.get("referrer_id", "N/A")
+                    username = stat.get("username") or f"ID{referrer_id}"
+                    invited_count = database.safe_int(stat.get("invited_count", 0))
+                    paid_count = database.safe_int(stat.get("paid_count", 0))
+                    conversion = database.safe_float(stat.get("conversion_percent", 0.0))
+                    revenue = database.safe_float(stat.get("total_invited_revenue", 0.0))
+                    cashback = database.safe_float(stat.get("total_cashback_paid", 0.0))
+                    cashback_percent = database.safe_int(stat.get("current_cashback_percent", 10))
+                    
+                    text += f"{idx}. @{username} (ID: {referrer_id})\n"
+                    text += f"   Оплативших: {paid_count} | Уровень: {cashback_percent}%\n"
+                    text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽\n\n"
+                except Exception as e:
+                    logger.warning(f"Error processing referrer stat in admin dashboard: {e}, stat={stat}")
+                    continue  # Пропускаем проблемную строку
         else:
             text += "🏆 Топ рефереров:\nРефереры не найдены.\n\n"
         
@@ -3660,16 +3700,56 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
         await callback.message.edit_text(text, reply_markup=keyboard)
         
         # Логируем просмотр статистики
-        await database._log_audit_event_atomic_standalone(
-            "admin_view_referral_stats", 
-            callback.from_user.id, 
-            None, 
-            f"Admin viewed referral stats: {overall_stats['total_referrers']} referrers"
-        )
+        try:
+            await database._log_audit_event_atomic_standalone(
+                "admin_view_referral_stats", 
+                callback.from_user.id, 
+                None, 
+                f"Admin viewed referral stats: {total_referrers} referrers"
+            )
+        except Exception as log_error:
+            logger.warning(f"Error logging admin referral stats view: {log_error}")
         
     except Exception as e:
-        logging.exception(f"Error in callback_admin_referral_stats: {e}")
-        await callback.answer("Ошибка при получении реферальной статистики", show_alert=True)
+        # Структурированное логирование для разработчиков
+        logger.exception(
+            f"admin_referral_stats_failed: telegram_id={callback.from_user.id}, handler=callback_admin_referral_stats, error={type(e).__name__}: {e}"
+        )
+        
+        # Graceful fallback: показываем пустую статистику, а не ошибку
+        try:
+            fallback_text = (
+                "📈 Реферальная статистика\n\n"
+                "📊 Общая статистика:\n"
+                "• Всего рефереров: 0\n"
+                "• Всего приглашённых: 0\n"
+                "• Всего оплат: 0\n"
+                "• Общий доход: 0.00 ₽\n"
+                "• Выплачено кешбэка: 0.00 ₽\n"
+                "• Средний кешбэк на реферера: 0.00 ₽\n\n"
+                "🏆 Топ рефереров:\nРефереры не найдены.\n\n"
+            )
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="📋 История начислений", callback_data="admin:referral_history"),
+                    InlineKeyboardButton(text="📈 Топ рефереров", callback_data="admin:referral_top")
+                ],
+                [
+                    InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
+                    InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+                ],
+                [
+                    InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
+                    InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+                ],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            ])
+            
+            await callback.message.edit_text(fallback_text, reply_markup=keyboard)
+        except Exception as fallback_error:
+            logger.exception(f"Error in fallback admin referral stats: {fallback_error}")
+            await callback.answer("Ошибка при получении реферальной статистики", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin:referral_sort:"))

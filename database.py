@@ -24,6 +24,63 @@ logger = logging.getLogger(__name__)
 # ====================================================================================
 DB_READY: bool = False
 
+
+# ====================================================================================
+# SAFE DATA HELPERS: Утилиты для безопасной обработки NULL значений
+# ====================================================================================
+
+def safe_int(value: Any) -> int:
+    """
+    Безопасное преобразование значения в int с обработкой None
+    
+    Args:
+        value: Значение для преобразования (может быть None, int, str, Decimal)
+    
+    Returns:
+        int: Преобразованное значение или 0 если None
+    """
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
+
+
+def safe_float(value: Any) -> float:
+    """
+    Безопасное преобразование значения в float с обработкой None
+    
+    Args:
+        value: Значение для преобразования (может быть None, int, float, str, Decimal)
+    
+    Returns:
+        float: Преобразованное значение или 0.0 если None
+    """
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def safe_get(dictionary: Dict[str, Any], key: str, default: Any = None) -> Any:
+    """
+    Безопасное получение значения из словаря с обработкой отсутствующих ключей
+    
+    Args:
+        dictionary: Словарь
+        key: Ключ
+        default: Значение по умолчанию
+    
+    Returns:
+        Значение из словаря или default
+    """
+    if dictionary is None:
+        return default
+    return dictionary.get(key, default)
+
 # Получаем DATABASE_URL из переменных окружения
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -977,34 +1034,44 @@ async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
 
 async def get_referral_cashback_percent(partner_id: int) -> int:
     """
-    Определить процент кешбэка на основе количества приглашённых рефералов
+    Определить процент кешбэка на основе количества оплативших рефералов
     
-    Прогрессивная шкала (вычисляется динамически):
-    - 0-24 приглашённых → 10%
-    - 25-49 приглашённых → 25%
-    - 50+ приглашённых → 45%
+    Прогрессивная шкала (вычисляется динамически на основе ОПЛАТИВШИХ):
+    - 0-24 оплативших → 10%
+    - 25-49 оплативших → 25%
+    - 50+ оплативших → 45%
     
     Args:
         partner_id: Telegram ID партнёра
     
     Returns:
         Процент кешбэка (10, 25 или 45)
+    
+    SAFE: Всегда возвращает валидный процент, даже если данных нет
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Считаем количество приглашённых пользователей (динамически, без хранения в БД)
-        referrals_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
-            partner_id
-        ) or 0
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Считаем количество РЕФЕРАЛОВ, КОТОРЫЕ ОПЛАТИЛИ (из referral_rewards)
+            paid_referrals_count_val = await conn.fetchval(
+                """SELECT COUNT(DISTINCT rr.buyer_id)
+                   FROM referral_rewards rr
+                   WHERE rr.referrer_id = $1""",
+                partner_id
+            )
+            paid_referrals_count = safe_int(paid_referrals_count_val)
         
         # Определяем процент по прогрессивной шкале
-        if referrals_count >= 50:
+        if paid_referrals_count >= 50:
             return 45
-        elif referrals_count >= 25:
+        elif paid_referrals_count >= 25:
             return 25
         else:
             return 10
+    except Exception as e:
+        logger.exception(f"Error in get_referral_cashback_percent for partner_id={partner_id}: {e}")
+        # Возвращаем безопасное значение по умолчанию
+        return 10
 
 
 def calculate_referral_percent(invited_count: int) -> int:
@@ -1047,44 +1114,60 @@ async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
         - paid_referrals_count: количество рефералов, которые оплатили подписку (из referral_rewards)
         - next_level: следующий процент (25, 45 или None)
         - referrals_to_next: сколько нужно оплативших рефералов до следующего уровня (или None)
+    
+    SAFE: Всегда возвращает валидный словарь с безопасными значениями по умолчанию
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Считаем количество приглашённых пользователей (из таблицы referrals)
-        referrals_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
-            partner_id
-        ) or 0
-        
-        # Считаем количество РЕФЕРАЛОВ, КОТОРЫЕ ОПЛАТИЛИ подписку (из referral_rewards)
-        # Это важное отличие: уровень определяется по оплатившим, а не по приглашённым
-        paid_referrals_count = await conn.fetchval(
-            """SELECT COUNT(DISTINCT rr.buyer_id)
-               FROM referral_rewards rr
-               WHERE rr.referrer_id = $1""",
-            partner_id
-        ) or 0
-        
-        # Определяем текущий уровень и следующий НА ОСНОВЕ ОПЛАТИВШИХ
-        if paid_referrals_count >= 50:
-            current_level = 45
-            next_level = None
-            referrals_to_next = None
-        elif paid_referrals_count >= 25:
-            current_level = 25
-            next_level = 45
-            referrals_to_next = 50 - paid_referrals_count
-        else:
-            current_level = 10
-            next_level = 25
-            referrals_to_next = 25 - paid_referrals_count
-        
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Считаем количество приглашённых пользователей (из таблицы referrals)
+            # Безопасная обработка NULL
+            referrals_count_val = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
+                partner_id
+            )
+            referrals_count = safe_int(referrals_count_val)
+            
+            # Считаем количество РЕФЕРАЛОВ, КОТОРЫЕ ОПЛАТИЛИ подписку (из referral_rewards)
+            # Это важное отличие: уровень определяется по оплатившим, а не по приглашённым
+            paid_referrals_count_val = await conn.fetchval(
+                """SELECT COUNT(DISTINCT rr.buyer_id)
+                   FROM referral_rewards rr
+                   WHERE rr.referrer_id = $1""",
+                partner_id
+            )
+            paid_referrals_count = safe_int(paid_referrals_count_val)
+            
+            # Определяем текущий уровень и следующий НА ОСНОВЕ ОПЛАТИВШИХ
+            if paid_referrals_count >= 50:
+                current_level = 45
+                next_level = None
+                referrals_to_next = None
+            elif paid_referrals_count >= 25:
+                current_level = 25
+                next_level = 45
+                referrals_to_next = 50 - paid_referrals_count
+            else:
+                current_level = 10
+                next_level = 25
+                referrals_to_next = 25 - paid_referrals_count
+            
+            return {
+                "current_level": current_level,
+                "referrals_count": referrals_count,
+                "paid_referrals_count": paid_referrals_count,
+                "next_level": next_level,
+                "referrals_to_next": referrals_to_next
+            }
+    except Exception as e:
+        logger.exception(f"Error in get_referral_level_info for partner_id={partner_id}: {e}")
+        # Возвращаем безопасные значения по умолчанию
         return {
-            "current_level": current_level,
-            "referrals_count": referrals_count,
-            "paid_referrals_count": paid_referrals_count,
-            "next_level": next_level,
-            "referrals_to_next": referrals_to_next
+            "current_level": 10,
+            "referrals_count": 0,
+            "paid_referrals_count": 0,
+            "next_level": 25,
+            "referrals_to_next": 25
         }
 
 
@@ -1096,19 +1179,27 @@ async def get_total_cashback_earned(partner_id: int) -> float:
         partner_id: Telegram ID партнёра
     
     Returns:
-        Сумма кешбэка в рублях
+        Сумма кешбэка в рублях (0.0 если данных нет)
+    
+    SAFE: Всегда возвращает float, даже если данных нет
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Суммируем все транзакции типа 'cashback' для партнёра
-        total_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM balance_transactions 
-               WHERE user_id = $1 AND type = 'cashback'""",
-            partner_id
-        ) or 0
-        
-        return total_kopecks / 100.0  # Конвертируем из копеек в рубли
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Суммируем все транзакции типа 'cashback' для партнёра
+            # COALESCE гарантирует, что NULL станет 0
+            total_kopecks_val = await conn.fetchval(
+                """SELECT COALESCE(SUM(amount), 0) 
+                   FROM balance_transactions 
+                   WHERE user_id = $1 AND type = 'cashback'""",
+                partner_id
+            )
+            total_kopecks = safe_int(total_kopecks_val)
+            
+            return total_kopecks / 100.0  # Конвертируем из копеек в рубли
+    except Exception as e:
+        logger.exception(f"Error in get_total_cashback_earned for partner_id={partner_id}: {e}")
+        return 0.0
 
 
 async def process_referral_reward_cashback(referred_user_id: int, payment_amount_rubles: float) -> bool:
@@ -3025,34 +3116,48 @@ async def get_admin_referral_stats(
         
         rows = await conn.fetch(full_query, *params)
         
-        # Обрабатываем результаты
+        # Обрабатываем результаты с безопасной обработкой NULL
         result = []
         for row in rows:
-            referrer_id = row["referrer_id"]
-            invited_count = row["invited_count"] or 0
-            paid_count = row["paid_count"] or 0
-            
-            # Вычисляем процент конверсии
-            conversion_percent = (paid_count / invited_count * 100) if invited_count > 0 else 0.0
-            
-            # Конвертируем из копеек в рубли
-            total_invited_revenue = (row["total_invited_revenue_kopecks"] or 0) / 100.0
-            total_cashback_paid = (row["total_cashback_paid_kopecks"] or 0) / 100.0
-            
-            # Определяем текущий процент кешбэка
-            current_cashback_percent = await get_referral_cashback_percent(referrer_id)
-            
-            result.append({
-                "referrer_id": referrer_id,
-                "username": row["username"] or f"ID{referrer_id}",
-                "invited_count": invited_count,
-                "paid_count": paid_count,
-                "conversion_percent": round(conversion_percent, 2),
-                "total_invited_revenue": round(total_invited_revenue, 2),
-                "total_cashback_paid": round(total_cashback_paid, 2),
-                "current_cashback_percent": current_cashback_percent,
-                "first_referral_date": row["first_referral_date"]
-            })
+            try:
+                referrer_id = row["referrer_id"]
+                if referrer_id is None:
+                    continue  # Пропускаем строки без referrer_id
+                
+                # Безопасное извлечение значений с обработкой NULL
+                invited_count = safe_int(row.get("invited_count"))
+                paid_count = safe_int(row.get("paid_count"))
+                
+                # Вычисляем процент конверсии (защита от деления на 0)
+                conversion_percent = (paid_count / invited_count * 100) if invited_count > 0 else 0.0
+                
+                # Конвертируем из копеек в рубли с безопасной обработкой NULL
+                total_invited_revenue_kopecks = safe_int(row.get("total_invited_revenue_kopecks"))
+                total_cashback_paid_kopecks = safe_int(row.get("total_cashback_paid_kopecks"))
+                total_invited_revenue = total_invited_revenue_kopecks / 100.0
+                total_cashback_paid = total_cashback_paid_kopecks / 100.0
+                
+                # Определяем текущий процент кешбэка (безопасно)
+                try:
+                    current_cashback_percent = await get_referral_cashback_percent(referrer_id)
+                except Exception as e:
+                    logger.warning(f"Error getting cashback percent for referrer_id={referrer_id}: {e}")
+                    current_cashback_percent = 10  # Значение по умолчанию
+                
+                result.append({
+                    "referrer_id": referrer_id,
+                    "username": row.get("username") or f"ID{referrer_id}",
+                    "invited_count": invited_count,
+                    "paid_count": paid_count,
+                    "conversion_percent": round(conversion_percent, 2),
+                    "total_invited_revenue": round(total_invited_revenue, 2),
+                    "total_cashback_paid": round(total_cashback_paid, 2),
+                    "current_cashback_percent": current_cashback_percent,
+                    "first_referral_date": row.get("first_referral_date")
+                })
+            except Exception as e:
+                logger.exception(f"Error processing row in get_admin_referral_stats: {e}, row={dict(row)}")
+                continue  # Пропускаем проблемные строки, но продолжаем обработку
         
         return result
 
@@ -3173,15 +3278,17 @@ async def get_referral_overall_stats(
             date_filter = "WHERE " + " AND ".join(conditions)
         
         # Всего рефереров (уникальных)
+        # Безопасная обработка NULL через COALESCE
         total_referrers_query = f"""
-            SELECT COUNT(DISTINCT rr.referrer_id)
+            SELECT COALESCE(COUNT(DISTINCT rr.referrer_id), 0)
             FROM referral_rewards rr
             {date_filter}
         """
-        total_referrers = await conn.fetchval(total_referrers_query, *params) or 0
+        total_referrers_val = await conn.fetchval(total_referrers_query, *params)
+        total_referrers = safe_int(total_referrers_val)
         
         # Всего приглашённых (из таблицы referrals)
-        total_referrals_query = "SELECT COUNT(DISTINCT referred_user_id) FROM referrals"
+        total_referrals_query = "SELECT COALESCE(COUNT(DISTINCT referred_user_id), 0) FROM referrals"
         if date_from or date_to:
             # Если есть фильтр по дате, применяем его к referrals
             if date_from:
@@ -3189,15 +3296,17 @@ async def get_referral_overall_stats(
             if date_to:
                 param_idx = len([date_from]) + 1
                 total_referrals_query += f" {'AND' if date_from else 'WHERE'} created_at <= ${param_idx}"
-        total_referrals = await conn.fetchval(total_referrals_query, *params) or 0
+        total_referrals_val = await conn.fetchval(total_referrals_query, *params)
+        total_referrals = safe_int(total_referrals_val)
         
         # Всего оплативших рефералов (уникальных buyer_id из referral_rewards)
         total_paid_referrals_query = f"""
-            SELECT COUNT(DISTINCT rr.buyer_id)
+            SELECT COALESCE(COUNT(DISTINCT rr.buyer_id), 0)
             FROM referral_rewards rr
             {date_filter}
         """
-        total_paid_referrals = await conn.fetchval(total_paid_referrals_query, *params) or 0
+        total_paid_referrals_val = await conn.fetchval(total_paid_referrals_query, *params)
+        total_paid_referrals = safe_int(total_paid_referrals_val)
         
         # Общий доход от рефералов (сумма purchase_amount из referral_rewards)
         total_revenue_query = f"""
@@ -3205,7 +3314,8 @@ async def get_referral_overall_stats(
             FROM referral_rewards rr
             {date_filter}
         """
-        total_revenue_kopecks = await conn.fetchval(total_revenue_query, *params) or 0
+        total_revenue_kopecks_val = await conn.fetchval(total_revenue_query, *params)
+        total_revenue_kopecks = safe_int(total_revenue_kopecks_val)
         total_revenue = total_revenue_kopecks / 100.0
         
         # Общий выплаченный кешбэк (сумма reward_amount из referral_rewards)
@@ -3214,10 +3324,11 @@ async def get_referral_overall_stats(
             FROM referral_rewards rr
             {date_filter}
         """
-        total_cashback_kopecks = await conn.fetchval(total_cashback_query, *params) or 0
+        total_cashback_kopecks_val = await conn.fetchval(total_cashback_query, *params)
+        total_cashback_kopecks = safe_int(total_cashback_kopecks_val)
         total_cashback_paid = total_cashback_kopecks / 100.0
         
-        # Средний кешбэк на реферера
+        # Средний кешбэк на реферера (защита от деления на 0)
         avg_cashback_per_referrer = total_cashback_paid / total_referrers if total_referrers > 0 else 0.0
         
         return {
