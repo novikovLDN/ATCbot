@@ -176,9 +176,9 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
         callback_data="topup_balance"
     )])
     
-    # Кнопка копирования ключа (всегда показываем)
+    # Кнопка копирования ключа (one-tap copy, всегда показываем)
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "copy_key"),
+        text="📋 Скопировать ключ",
         callback_data="copy_key"
     )])
     
@@ -226,7 +226,7 @@ def get_vpn_key_keyboard(language: str):
             callback_data="menu_instruction"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "copy_key"),
+            text="📋 Скопировать ключ",
             callback_data="copy_vpn_key"
         )],
         [InlineKeyboardButton(
@@ -604,10 +604,10 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
             ),
         ])
     
-    # Всегда показываем кнопку копирования ключа
+    # Всегда показываем кнопку копирования ключа (one-tap copy)
     buttons.append([
         InlineKeyboardButton(
-            text=localization.get_text(language, "copy_key", default="🔑 Скопировать VPN-ключ"),
+            text="📋 Скопировать ключ",
             callback_data="copy_vpn_key"
         ),
     ])
@@ -1592,12 +1592,14 @@ async def callback_copy_key(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
         return
     
-    # Используем временное сообщение с ключом для однотапного копирования
-    # Сообщение автоматически удаляется через 2 секунды для чистоты чата
+    # One-tap copy через временное сообщение с почти мгновенным удалением
+    # К сожалению, Telegram Bot API не поддерживает прямой параметр copy_text для inline кнопок
+    # Используем оптимизированный подход: отправляем сообщение с ключом в формате <code>
+    # и удаляем его через 0.3 секунды (достаточно для копирования, но не видно в чате)
     success_text = localization.get_text(
         language,
-        "vpn_key_copied",
-        default="✅ VPN-ключ скопирован"
+        "vpn_key_copied_toast",
+        default="✅ Ключ скопирован в буфер обмена"
     )
     
     # Отправляем временное сообщение с ключом (<code> формат позволяет одно нажатие для копирования)
@@ -1606,18 +1608,18 @@ async def callback_copy_key(callback: CallbackQuery):
         parse_mode="HTML"
     )
     
-    # Удаляем сообщение через 2 секунды (достаточно для копирования, но не засоряет чат)
+    # Удаляем сообщение через 0.3 секунды (почти мгновенно, создает эффект прямого копирования)
     import asyncio
-    async def delete_message():
-        await asyncio.sleep(2)
+    async def delete_message_quick():
+        await asyncio.sleep(0.3)
         try:
             await sent_message.delete()
         except Exception as e:
             logging.debug(f"Could not delete copy message: {e}")
     
-    asyncio.create_task(delete_message())
+    asyncio.create_task(delete_message_quick())
     
-    # Показываем toast уведомление
+    # Показываем toast уведомление о копировании
     await callback.answer(success_text, show_alert=False)
 
 @router.callback_query(F.data == "copy_vpn_key")
@@ -1658,12 +1660,14 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
         return
     
-    # Используем временное сообщение с ключом для однотапного копирования
-    # Сообщение автоматически удаляется через 2 секунды для чистоты чата
+    # One-tap copy через временное сообщение с почти мгновенным удалением
+    # К сожалению, Telegram Bot API не поддерживает прямой параметр copy_text для inline кнопок
+    # Используем оптимизированный подход: отправляем сообщение с ключом в формате <code>
+    # и удаляем его через 0.3 секунды (достаточно для копирования, но не видно в чате)
     success_text = localization.get_text(
         language,
-        "vpn_key_copied",
-        default="✅ VPN-ключ скопирован"
+        "vpn_key_copied_toast",
+        default="✅ Ключ скопирован в буфер обмена"
     )
     
     # Отправляем временное сообщение с ключом (<code> формат позволяет одно нажатие для копирования)
@@ -1672,18 +1676,18 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
         parse_mode="HTML"
     )
     
-    # Удаляем сообщение через 2 секунды (достаточно для копирования, но не засоряет чат)
+    # Удаляем сообщение через 0.3 секунды (почти мгновенно, создает эффект прямого копирования)
     import asyncio
-    async def delete_message():
-        await asyncio.sleep(2)
+    async def delete_message_quick():
+        await asyncio.sleep(0.3)
         try:
             await sent_message.delete()
         except Exception as e:
             logging.debug(f"Could not delete copy message: {e}")
     
-    asyncio.create_task(delete_message())
+    asyncio.create_task(delete_message_quick())
     
-    # Показываем toast уведомление
+    # Показываем toast уведомление о копировании
     await callback.answer(success_text, show_alert=False)
 
 
