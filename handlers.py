@@ -3,7 +3,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
-from aiogram.fsm.filter import StateFilter
+from aiogram.filters import StateFilter
 from datetime import datetime, timedelta
 import logging
 import database
