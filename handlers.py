@@ -1,8 +1,9 @@
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, LabeledPrice, PreCheckoutQuery
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
+from aiogram.fsm.filter import StateFilter
 from datetime import datetime, timedelta
 import logging
 import database
@@ -117,6 +118,13 @@ class AdminCreditBalance(StatesGroup):
     waiting_for_user_search = State()
     waiting_for_amount = State()
     waiting_for_confirmation = State()
+
+
+class PurchaseState(StatesGroup):
+    """FSM состояния для процесса покупки"""
+    choose_tariff = State()      # Выбор тарифа (Basic/Plus)
+    choose_period = State()      # Выбор периода (1/3/6/12 месяцев)
+    awaiting_payment = State()   # Ожидание оплаты (invoice отправлен)
 
 router = Router()
 
@@ -1866,7 +1874,14 @@ async def callback_subscription_history(callback: CallbackQuery):
 
 @router.callback_query(F.data == "menu_buy_vpn")
 async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
-    """Купить VPN - выбор типа тарифа (Basic/Plus)"""
+    """
+    Купить VPN - выбор типа тарифа (Basic/Plus)
+    
+    КРИТИЧНО:
+    - НЕ создает pending_purchase
+    - Только показывает кнопки выбора тарифа
+    - Устанавливает FSM state в choose_tariff
+    """
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
@@ -1875,11 +1890,14 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Очищаем промокод из состояния при входе в меню
-    await state.update_data(promo_code=None)
+    # КРИТИЧНО: Очищаем все данные покупки и устанавливаем начальное состояние
+    await state.update_data(promo_code=None, purchase_id=None, tariff_type=None, period_days=None)
     
-    # Отменяем старые pending покупки при показе нового экрана
-    await database.cancel_pending_purchases(telegram_id, "tariff_selection_shown")
+    # КРИТИЧНО: Отменяем все старые pending покупки при начале новой покупки
+    await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
+    
+    # КРИТИЧНО: Устанавливаем FSM state в choose_tariff
+    await state.set_state(PurchaseState.choose_tariff)
     
     text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1903,23 +1921,45 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("tariff_type:"))
 async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
-    """Обработчик выбора типа тарифа (Basic/Plus)"""
-    tariff_type = callback.data.split(":")[1]  # "basic" или "plus"
+    """Обработчик выбора типа тарифа (Basic/Plus)
+    
+    КРИТИЧНО:
+    - Работает ТОЛЬКО в состоянии choose_tariff
+    - НЕ создает pending_purchase (только показывает цены)
+    - pending_purchase создается ТОЛЬКО при клике на период
+    """
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Отменяем старые pending покупки при выборе нового тарифа
-    await database.cancel_pending_purchases(telegram_id, "tariff_type_selected")
+    # Парсим callback_data безопасно
+    try:
+        parts = callback.data.split(":")
+        if len(parts) < 2:
+            await callback.answer("Ошибка тарифа", show_alert=True)
+            return
+        tariff_type = parts[1]  # "basic" или "plus"
+    except (IndexError, ValueError) as e:
+        logger.error(f"Invalid tariff_type callback_data: {callback.data}, error={e}")
+        await callback.answer("Ошибка тарифа", show_alert=True)
+        return
     
+    # Валидация тарифа
+    if tariff_type not in config.TARIFFS:
+        logger.error(f"Invalid tariff_type: {tariff_type}")
+        await callback.answer("Ошибка тарифа", show_alert=True)
+        return
+    
+    # КРИТИЧНО: Сохраняем tariff_type в FSM state
+    await state.update_data(tariff_type=tariff_type)
+    
+    # КРИТИЧНО: НЕ создаем pending_purchase - только показываем кнопки периодов
     # Определяем текст в зависимости от типа тарифа
     if tariff_type == "basic":
         text = localization.get_text(language, "tariff_basic_selected", default="🔐 Выбран тариф Basic\nНа какой срок интересно?")
     else:
         text = localization.get_text(language, "tariff_plus_selected", default="🔐 Выбран тариф Plus\nНа какой срок интересно?")
     
-    # Создаем pending purchase для этого тарифа (без периода пока)
-    # Период будет выбран на следующем экране
     buttons = []
     
     # Получаем цены для выбранного тарифа с учетом скидок
@@ -1930,13 +1970,17 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     promo_code = fsm_data.get("promo_code")
     
     for period_days, period_data in periods.items():
-        # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
-        price_info = await database.calculate_final_price(
-            telegram_id=telegram_id,
-            tariff=tariff_type,
-            period_days=period_days,
-            promo_code=promo_code
-        )
+        # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены для отображения
+        try:
+            price_info = await database.calculate_final_price(
+                telegram_id=telegram_id,
+                tariff=tariff_type,
+                period_days=period_days,
+                promo_code=promo_code
+            )
+        except ValueError as e:
+            logger.error(f"Error calculating price: tariff={tariff_type}, period={period_days}, error={e}")
+            continue  # Пропускаем этот период если ошибка расчета
         
         base_price_rubles = price_info["base_price_kopecks"] / 100.0
         final_price_rubles = price_info["final_price_kopecks"] / 100.0
@@ -1952,24 +1996,17 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         else:
             period_text = f"{months} месяцев"
         
-        # Создаем pending purchase для каждого периода с финальной ценой
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=tariff_type,
-            period_days=period_days,
-            price_kopecks=price_info["final_price_kopecks"],
-            promo_code=promo_code
-        )
-        
+        # КРИТИЧНО: НЕ создаем pending_purchase - только показываем цену
         # Формируем текст кнопки с зачеркнутой ценой (если есть скидка)
         if has_discount:
             button_text = f"{int(base_price_rubles)} ₽ → {int(final_price_rubles)} ₽ — {period_text}"
         else:
             button_text = f"{int(final_price_rubles)} ₽ — {period_text}"
         
+        # КРИТИЧНО: callback_data БЕЗ purchase_id - только tariff и period
         buttons.append([InlineKeyboardButton(
             text=button_text,
-            callback_data=f"tariff_period:{tariff_type}:{period_days}:{purchase_id}"
+            callback_data=f"tariff_period:{tariff_type}:{period_days}"
         )])
     
     buttons.append([InlineKeyboardButton(
@@ -1979,6 +2016,9 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text(text, reply_markup=keyboard)
+    
+    # КРИТИЧНО: Переходим в состояние choose_period
+    await state.set_state(PurchaseState.choose_period)
     await callback.answer()
 
 
@@ -1988,126 +2028,136 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     Обработчик выбора периода тарифа
     
     КРИТИЧЕСКИ ВАЖНО:
-    - Кнопки ВСЕГДА работают, даже если сообщение старое
-    - Если purchase_id отсутствует или устарел - создаётся новый автоматически
-    - Тариф и период берутся из callback_data
-    - Цена рассчитывается актуальная (с учётом текущих скидок)
+    - Работает ТОЛЬКО в состоянии choose_period
+    - Создает pending_purchase ОДИН раз при клике на период
+    - Сразу создает invoice
+    - Сохраняет purchase_id в FSM state
     """
-    # Формат: "tariff_period:basic:30:purchase_abc123" (purchase_id опционален)
-    parts = callback.data.split(":")
-    tariff_type = parts[1]  # "basic" или "plus"
-    period_days = int(parts[2])
-    purchase_id = parts[3] if len(parts) > 3 else None
-    
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # AUTO-RECOVER: Если purchase_id отсутствует или устарел - создаём новый
-    pending_purchase = None
-    if purchase_id:
-        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
-        # Проверяем, что purchase соответствует тарифу и периоду
-        if pending_purchase:
-            if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
-                # Несоответствие - считаем purchase устаревшим
-                pending_purchase = None
-                logger.info(f"Purchase mismatch, creating new: user={telegram_id}, old_purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}")
-    
-    # Если purchase отсутствует или устарел - создаём новый с актуальной ценой
-    if not pending_purchase:
-        # КРИТИЧНО: Получаем промокод из FSM state
-        fsm_data = await state.get_data()
-        promo_code = fsm_data.get("promo_code")
-        
-        # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
-        try:
-            price_info = await database.calculate_final_price(
-                telegram_id=telegram_id,
-                tariff=tariff_type,
-                period_days=period_days,
-                promo_code=promo_code
-            )
-        except ValueError as e:
+    # КРИТИЧНО: Парсим callback_data безопасно (формат: "tariff_period:basic:30")
+    try:
+        parts = callback.data.split(":")
+        if len(parts) < 3:
             error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
             await callback.answer(error_text, show_alert=True)
-            logger.warning(f"Invalid tariff/period: user={telegram_id}, tariff={tariff_type}, period={period_days}, error={e}")
+            logger.error(f"Invalid tariff_period callback_data format: {callback.data}")
             return
         
-        # Создаём новый pending purchase с финальной ценой
-        purchase_id = await database.create_pending_purchase(
+        tariff_type = parts[1]  # "basic" или "plus"
+        period_days = int(parts[2])
+    except (IndexError, ValueError) as e:
+        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Invalid tariff_period callback_data: {callback.data}, error={e}")
+        return
+    
+    # Валидация тарифа и периода
+    if tariff_type not in config.TARIFFS:
+        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Invalid tariff_type: {tariff_type}")
+        return
+    
+    if period_days not in config.TARIFFS[tariff_type]:
+        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Invalid period_days: {period_days} for tariff {tariff_type}")
+        return
+    
+    # КРИТИЧНО: Проверяем FSM state - должен быть choose_period
+    current_state = await state.get_state()
+    if current_state != PurchaseState.choose_period:
+        error_text = localization.get_text(
+            language,
+            "error_session_expired",
+            default="Сессия покупки устарела. Начните заново."
+        )
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid FSM state for tariff_period: user={telegram_id}, state={current_state}, expected=PurchaseState.choose_period")
+        # Сбрасываем состояние и возвращаем к выбору тарифа
+        await state.set_state(PurchaseState.choose_tariff)
+        await callback.message.answer(
+            localization.get_text(language, "select_tariff", default="Выберите тариф:"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🪙 Тариф Basic", callback_data="tariff_type:basic")],
+                [InlineKeyboardButton(text="🔑 Тариф Plus", callback_data="tariff_type:plus")],
+                [InlineKeyboardButton(text=localization.get_text(language, "back", default="← Назад"), callback_data="menu_main")],
+            ])
+        )
+        return
+    
+    # КРИТИЧНО: Отменяем ВСЕ предыдущие pending покупки этого пользователя
+    await database.cancel_pending_purchases(telegram_id, "period_selected")
+    
+    # КРИТИЧНО: Получаем промокод из FSM state
+    fsm_data = await state.get_data()
+    promo_code = fsm_data.get("promo_code")
+    
+    # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
+    try:
+        price_info = await database.calculate_final_price(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
-            price_kopecks=price_info["final_price_kopecks"],
             promo_code=promo_code
         )
-        
-        logger.info(
-            f"Auto-created purchase session: user={telegram_id}, purchase_id={purchase_id}, "
-            f"tariff={tariff_type}, period={period_days}, "
-            f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
-            f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}, "
-            f"promo_code={promo_code or 'N/A'}"
-        )
-        
-        # Получаем созданный purchase
-        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
-        if not pending_purchase:
-            logger.error(f"CRITICAL: Failed to retrieve created purchase: user={telegram_id}, purchase_id={purchase_id}")
-            error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Пожалуйста, попробуйте ещё раз.")
-            await callback.answer(error_text, show_alert=True)
-            return
-    else:
-        # Purchase валиден - проверяем соответствие цены
-        purchase_id = pending_purchase["purchase_id"]
-        logger.info(f"Using existing purchase session: user={telegram_id}, purchase_id={purchase_id}")
-        
-        # КРИТИЧНО: Проверяем, что цена в pending_purchase соответствует актуальной цене
-        fsm_data = await state.get_data()
-        promo_code = fsm_data.get("promo_code")
-        
-        try:
-            current_price_info = await database.calculate_final_price(
-                telegram_id=telegram_id,
-                tariff=tariff_type,
-                period_days=period_days,
-                promo_code=promo_code
-            )
-            
-            # Сравниваем цены с допуском 1 копейка (округление)
-            price_diff = abs(pending_purchase["price_kopecks"] - current_price_info["final_price_kopecks"])
-            if price_diff > 1:
-                # Цена изменилась - отменяем старый purchase
-                logger.error(
-                    f"PRICE_MISMATCH: user={telegram_id}, purchase_id={purchase_id}, "
-                    f"stored_price={pending_purchase['price_kopecks']}, current_price={current_price_info['final_price_kopecks']}, "
-                    f"diff={price_diff} kopecks"
-                )
-                await database.cancel_pending_purchases(telegram_id, "price_mismatch")
-                
-                error_text = localization.get_text(
-                    language,
-                    "error_price_updated",
-                    default="Цена обновилась, пожалуйста выберите тариф ещё раз"
-                )
-                await callback.answer(error_text, show_alert=True)
-                return
-        except ValueError as e:
-            logger.error(f"Invalid tariff/period in price validation: user={telegram_id}, error={e}")
-            error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
-            await callback.answer(error_text, show_alert=True)
-            return
+    except ValueError as e:
+        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Invalid tariff/period in calculate_final_price: user={telegram_id}, tariff={tariff_type}, period={period_days}, error={e}")
+        return
     
-    # Отменяем остальные pending покупки этого пользователя (оставляем только выбранную)
-    pool = await database.get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending' AND purchase_id != $2",
-            telegram_id, purchase_id
+    # КРИТИЧНО: Валидация минимальной цены ПЕРЕД созданием purchase
+    if not price_info["is_valid"]:
+        error_text = localization.get_text(
+            language,
+            "error_payment_min_amount",
+            default=f"Сумма после скидки ниже минимальной для оплаты картой (64 ₽).\nПожалуйста, выберите другой тариф."
         )
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(
+            f"payment_blocked_min_amount: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, "
+            f"final_price_kopecks={price_info['final_price_kopecks']}, min_required=6400"
+        )
+        return
     
-    # Переходим к проверке баланса и оплате
+    # КРИТИЧНО: Создаем pending_purchase ОДИН раз при клике на период
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff=tariff_type,
+        period_days=period_days,
+        price_kopecks=price_info["final_price_kopecks"],
+        promo_code=promo_code
+    )
+    
+    # КРИТИЧНО: Сохраняем данные в FSM state
+    await state.update_data(
+        purchase_id=purchase_id,
+        tariff_type=tariff_type,
+        period_days=period_days
+    )
+    
+    logger.info(
+        f"Purchase created on period click: user={telegram_id}, purchase_id={purchase_id}, "
+        f"tariff={tariff_type}, period={period_days}, "
+        f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
+        f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}, "
+        f"promo_code={promo_code or 'N/A'}"
+    )
+    
+    # КРИТИЧНО: Получаем созданный purchase для валидации
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
+    if not pending_purchase:
+        logger.error(f"CRITICAL: Failed to retrieve created purchase: user={telegram_id}, purchase_id={purchase_id}")
+        error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Пожалуйста, попробуйте ещё раз.")
+        await callback.answer(error_text, show_alert=True)
+        return
+    
+    # КРИТИЧНО: Переходим к проверке баланса и оплате
+    await state.set_state(PurchaseState.awaiting_payment)
     await process_tariff_purchase_selection(callback, state, purchase_id, tariff_type, period_days)
 
 
@@ -2123,18 +2173,25 @@ async def process_tariff_purchase_selection(
     
     КРИТИЧЕСКИ ВАЖНО:
     - purchase_id должен быть валидным (создан в callback_tariff_period)
-    - Если purchase отсутствует - это критическая ошибка (не должно происходить)
+    - FSM state должен быть awaiting_payment
+    - Если баланса хватает - списываем и активируем подписку
+    - Если баланса не хватает - СРАЗУ создаем invoice
     """
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Получаем pending purchase (должен существовать, т.к. создан в callback_tariff_period)
-    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
+    # КРИТИЧНО: Получаем pending purchase (должен существовать, т.к. создан в callback_tariff_period)
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     if not pending_purchase:
         # Критическая ошибка - purchase должен существовать
         logger.error(f"CRITICAL: Purchase not found in process_tariff_purchase_selection: user={telegram_id}, purchase_id={purchase_id}")
-        error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Пожалуйста, попробуйте ещё раз.")
+        await state.set_state(None)  # Сбрасываем FSM state
+        error_text = localization.get_text(
+            language,
+            "error_session_expired",
+            default="Сессия покупки устарела. Начните заново."
+        )
         await callback.answer(error_text, show_alert=True)
         return
     
@@ -2148,11 +2205,6 @@ async def process_tariff_purchase_selection(
     
     # Получаем баланс пользователя
     balance_rubles = await database.get_user_balance(telegram_id)
-    
-    # Формируем описание тарифа
-    months = period_days // 30
-    tariff_name = "Basic" if tariff_type == "basic" else "Plus"
-    description = f"Atlas Secure VPN тариф {tariff_name}, подписка на {months} месяц" + ("а" if months % 10 in [2, 3, 4] and months % 100 not in [12, 13, 14] else "ев" if months % 10 in [5, 6, 7, 8, 9, 0] or months % 100 in [11, 12, 13, 14] else "")
     
     # Проверяем, хватает ли баланса
     if balance_rubles >= amount_rubles:
@@ -2282,43 +2334,50 @@ async def process_tariff_purchase_selection(
         logger.info(f"Subscription activated from balance: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, purchase_id={purchase_id}")
         
     else:
-        # Баланса не хватает - показываем экран с опциями
+        # Баланса не хватает - СРАЗУ создаем invoice для оплаты картой
         await callback.answer()
         
-        shortage = amount_rubles - balance_rubles
+        # КРИТИЧНО: Создаем invoice сразу после выбора периода
+        # Используем данные из pending_purchase (единственный источник правды)
+        final_price_kopecks = pending_purchase["price_kopecks"]
+        
+        # Формируем payload
+        payload = f"purchase:{purchase_id}"
+        
+        # Формируем описание тарифа
+        months = period_days // 30
+        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+        description = f"Atlas Secure VPN тариф {tariff_name}, подписка на {months} месяц" + ("а" if months % 10 in [2, 3, 4] and months % 100 not in [12, 13, 14] else "ев" if months % 10 in [5, 6, 7, 8, 9, 0] or months % 100 in [11, 12, 13, 14] else "")
+        
+        # Формируем prices (цена в копейках из pending_purchase)
+        prices = [LabeledPrice(label="К оплате", amount=final_price_kopecks)]
+        
+        logger.info(
+            f"invoice_created: user={telegram_id}, purchase_id={purchase_id}, "
+            f"tariff={tariff_type}, period_days={period_days}, "
+            f"final_price_kopecks={final_price_kopecks}, amount_rubles={amount_rubles:.2f}, balance={balance_rubles:.2f}"
+        )
+        
         try:
-            text = localization.get_text(
-                language,
-                "insufficient_balance_for_subscription",
-                amount=amount_rubles,
-                balance=balance_rubles,
-                shortage=shortage
+            # Отправляем invoice
+            await callback.bot.send_invoice(
+                chat_id=telegram_id,
+                title="Atlas Secure VPN",
+                description=description,
+                payload=payload,
+                provider_token=config.TG_PROVIDER_TOKEN,
+                currency="RUB",
+                prices=prices
             )
-        except KeyError:
-            text = f"Недостаточно средств на балансе.\n\nСтоимость: {amount_rubles:.2f} ₽\nНа балансе: {balance_rubles:.2f} ₽\nНе хватает: {shortage:.2f} ₽"
-        
-        keyboard_buttons = [
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "topup_balance", default="➕ Пополнить баланс"),
-                callback_data="topup_balance"
-            )],
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
-                callback_data=f"pay_tariff_card:{tariff_type}:{period_days}:{purchase_id}"
-            )],
-            [InlineKeyboardButton(
-                text="Crypto (Скоро добавим)",
-                callback_data="crypto_disabled"  # Неактивная кнопка - только для показа
-            )],
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="← Назад"),
-                callback_data="menu_buy_vpn"
-            )],
-        ]
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-        
-        await callback.message.edit_text(text, reply_markup=keyboard)
+            
+            # КРИТИЧНО: FSM state уже установлен в awaiting_payment в callback_tariff_period
+            logger.info(f"Invoice sent (insufficient balance): user={telegram_id}, purchase_id={purchase_id}, amount={amount_rubles:.2f} RUB, balance={balance_rubles:.2f} RUB")
+        except Exception as e:
+            logger.exception(f"Error sending invoice: {e}")
+            # Сбрасываем FSM state при ошибке
+            await state.set_state(None)
+            await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
+            return
 
 
 @router.callback_query(F.data == "enter_promo")
@@ -2342,129 +2401,81 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     """
     Оплата тарифа картой (когда баланса не хватает)
     
-    КРИТИЧЕСКИ ВАЖНО:
-    - Кнопки ВСЕГДА работают, даже если сообщение старое
-    - Если purchase_id отсутствует или устарел - создаётся новый автоматически
-    - Тариф и период берутся из callback_data
-    - Цена рассчитывается актуальная (с учётом текущих скидок)
+    DEPRECATED: Эта функция больше не должна вызываться напрямую.
+    Invoice создается автоматически в process_tariff_purchase_selection.
+    
+    Оставлена для обратной совместимости со старыми кнопками.
     """
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Извлекаем tariff_type, period_days и purchase_id из callback_data
-    # Формат: "pay_tariff_card:basic:30:purchase_abc123" (purchase_id опционален)
-    callback_data_parts = callback.data.split(":")
-    tariff_type = callback_data_parts[1] if len(callback_data_parts) > 1 else None
-    period_days = int(callback_data_parts[2]) if len(callback_data_parts) > 2 and callback_data_parts[2].isdigit() else None
-    purchase_id = callback_data_parts[3] if len(callback_data_parts) > 3 else None
+    # КРИТИЧНО: Получаем данные из FSM state (единственный источник правды)
+    fsm_data = await state.get_data()
+    purchase_id = fsm_data.get("purchase_id")
+    tariff_type = fsm_data.get("tariff_type")
+    period_days = fsm_data.get("period_days")
     
-    # Валидация tariff_type и period_days
-    if not tariff_type or not period_days:
-        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
+    # Если данных нет в FSM - пытаемся извлечь из callback_data (fallback)
+    if not purchase_id or not tariff_type or not period_days:
+        try:
+            callback_data_parts = callback.data.split(":")
+            if len(callback_data_parts) >= 4:
+                tariff_type = callback_data_parts[1]
+                period_days = int(callback_data_parts[2])
+                purchase_id = callback_data_parts[3]
+        except (IndexError, ValueError) as e:
+            logger.error(f"Invalid pay_tariff_card callback_data: {callback.data}, error={e}")
+            error_text = localization.get_text(
+                language,
+                "error_session_expired",
+                default="Сессия покупки устарела. Начните заново."
+            )
+            await callback.answer(error_text, show_alert=True)
+            return
+    
+    if not purchase_id or not tariff_type or not period_days:
+        error_text = localization.get_text(
+            language,
+            "error_session_expired",
+            default="Сессия покупки устарела. Начните заново."
+        )
         await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid tariff/period in pay_tariff_card: user={telegram_id}, callback_data={callback.data}")
+        logger.warning(f"Missing purchase data in FSM: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}")
         return
     
-    if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
-        error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
-        await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid tariff/period combination: user={telegram_id}, tariff={tariff_type}, period={period_days}")
-        return
+    # КРИТИЧНО: Получаем pending_purchase (единственный источник правды о цене)
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     
-    # AUTO-RECOVER: Если purchase_id отсутствует или устарел - создаём новый
-    pending_purchase = None
-    if purchase_id:
-        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
-        # Проверяем, что purchase соответствует тарифу и периоду
-        if pending_purchase:
-            if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
-                # Несоответствие - считаем purchase устаревшим
-                pending_purchase = None
-                logger.info(f"Purchase mismatch in pay_tariff_card, creating new: user={telegram_id}, old_purchase_id={purchase_id}, tariff={tariff_type}, period={period_days}")
-    
-    # Если purchase отсутствует или устарел - создаём новый с актуальной ценой
     if not pending_purchase:
-        # КРИТИЧНО: Получаем промокод из FSM state
-        fsm_data = await state.get_data()
-        promo_code = fsm_data.get("promo_code")
-        
-        # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
-        try:
-            price_info = await database.calculate_final_price(
-                telegram_id=telegram_id,
-                tariff=tariff_type,
-                period_days=period_days,
-                promo_code=promo_code
-            )
-        except ValueError as e:
-            logger.error(f"Invalid tariff/period in pay_tariff_card: user={telegram_id}, error={e}")
-            error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
-            await callback.answer(error_text, show_alert=True)
-            return
-        
-        # Создаём новый pending purchase с финальной ценой
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=tariff_type,
-            period_days=period_days,
-            price_kopecks=price_info["final_price_kopecks"],
-            promo_code=promo_code
+        # Purchase отсутствует - сессия устарела
+        error_text = localization.get_text(
+            language,
+            "error_session_expired",
+            default="Сессия покупки устарела. Начните заново."
         )
-        
-        logger.info(
-            f"Auto-created purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, "
-            f"tariff={tariff_type}, period={period_days}, "
-            f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
-            f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}, "
-            f"promo_code={promo_code or 'N/A'}"
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Purchase not found in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
+        return
+    
+    # КРИТИЧНО: Проверяем соответствие тарифа и периода
+    if pending_purchase["tariff"] != tariff_type or pending_purchase["period_days"] != period_days:
+        # Несоответствие - сессия устарела
+        logger.error(
+            f"Purchase mismatch in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, "
+            f"stored_tariff={pending_purchase['tariff']}, stored_period={pending_purchase['period_days']}, "
+            f"expected_tariff={tariff_type}, expected_period={period_days}"
         )
-        
-        # Получаем созданный purchase
-        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
-        if not pending_purchase:
-            logger.error(f"CRITICAL: Failed to retrieve created purchase: user={telegram_id}, purchase_id={purchase_id}")
-            error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Пожалуйста, попробуйте ещё раз.")
-            await callback.answer(error_text, show_alert=True)
-            return
-    else:
-        logger.info(f"Using existing purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
-        
-        # КРИТИЧНО: Проверяем, что цена в pending_purchase соответствует актуальной цене
-        fsm_data = await state.get_data()
-        promo_code = fsm_data.get("promo_code")
-        
-        try:
-            current_price_info = await database.calculate_final_price(
-                telegram_id=telegram_id,
-                tariff=tariff_type,
-                period_days=period_days,
-                promo_code=promo_code
-            )
-            
-            # Сравниваем цены с допуском 1 копейка (округление)
-            price_diff = abs(pending_purchase["price_kopecks"] - current_price_info["final_price_kopecks"])
-            if price_diff > 1:
-                # Цена изменилась - отменяем старый purchase
-                logger.error(
-                    f"PRICE_MISMATCH: user={telegram_id}, purchase_id={purchase_id}, "
-                    f"stored_price={pending_purchase['price_kopecks']}, current_price={current_price_info['final_price_kopecks']}, "
-                    f"diff={price_diff} kopecks"
-                )
-                await database.cancel_pending_purchases(telegram_id, "price_mismatch")
-                
-                error_text = localization.get_text(
-                    language,
-                    "error_price_updated",
-                    default="Цена обновилась, пожалуйста выберите тариф ещё раз"
-                )
-                await callback.answer(error_text, show_alert=True)
-                return
-        except ValueError as e:
-            logger.error(f"Invalid tariff/period in price validation: user={telegram_id}, error={e}")
-            error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
-            await callback.answer(error_text, show_alert=True)
-            return
+        error_text = localization.get_text(
+            language,
+            "error_session_expired",
+            default="Сессия покупки устарела. Начните заново."
+        )
+        await callback.answer(error_text, show_alert=True)
+        return
+    
+    # КРИТИЧНО: Purchase валиден - используем его цену для invoice
+    logger.info(f"Using existing purchase in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
     
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
@@ -2647,17 +2658,20 @@ async def process_promo_code(message: Message, state: FSMContext):
             f"discount_percent={discount_percent}%"
         )
         
+        # КРИТИЧНО: Сохраняем промокод в FSM state
         await state.update_data(promo_code=promo_code)  # Сохраняем в верхнем регистре
-        await state.set_state(None)  # Сбрасываем состояние
+        
+        # КРИТИЧНО: Отменяем все старые pending покупки при применении промокода
+        await database.cancel_pending_purchases(telegram_id, "promo_code_applied")
+        
+        # КРИТИЧНО: Возвращаем пользователя к выбору тарифа с обновленными ценами
+        await state.set_state(PurchaseState.choose_tariff)
         
         text = localization.get_text(language, "promo_applied", default="✅ Промокод применён")
         await message.answer(text)
         
-        # Обновляем экран выбора тарифа (отменяем старые pending покупки при применении промокода)
-        await database.cancel_pending_purchases(telegram_id, "promo_code_applied")
-        
         logger.info(
-            f"tariff_price_updated: user={telegram_id}, promo_code={promo_code}, "
+            f"promo_applied: user={telegram_id}, promo_code={promo_code}, "
             f"discount_percent={discount_percent}%, old_purchases_cancelled=True"
         )
         
