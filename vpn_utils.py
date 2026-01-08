@@ -43,16 +43,15 @@ def generate_vless_url(uuid: str) -> str:
     """
     Генерирует VLESS URL для подключения к Xray Core серверу.
     
-    Формат:
+    Формат (БЕЗ flow параметра):
     vless://UUID@SERVER_IP:PORT
     ?encryption=none
-    &flow=xtls-rprx-vision
     &security=reality
+    &type=tcp
     &sni=www.cloudflare.com
-    &fp=chrome
+    &fp=ios
     &pbk=PUBLIC_KEY
     &sid=SHORT_ID
-    &type=tcp
     #AtlasSecure
     
     Args:
@@ -64,16 +63,15 @@ def generate_vless_url(uuid: str) -> str:
     # Кодируем параметры для URL
     server_address = f"{uuid}@{config.XRAY_SERVER_IP}:{config.XRAY_PORT}"
     
-    # Параметры запроса
+    # Параметры запроса (БЕЗ flow - согласно требованиям)
     params = {
         "encryption": "none",
-        "flow": config.XRAY_FLOW,
         "security": "reality",
+        "type": "tcp",
         "sni": config.XRAY_SNI,
         "fp": config.XRAY_FP,
         "pbk": config.XRAY_PUBLIC_KEY,
-        "sid": config.XRAY_SHORT_ID,
-        "type": "tcp"
+        "sid": config.XRAY_SHORT_ID
     }
     
     # Формируем query string
