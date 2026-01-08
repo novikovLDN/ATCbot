@@ -2976,179 +2976,43 @@ async def process_successful_payment(message: Message):
         logger.error(f"No pending purchase found: user={telegram_id}, payload={payload}")
         return
     
+    purchase_id = pending_purchase["purchase_id"]
     payment_amount_rubles = pending_purchase["price_kopecks"] / 100.0
     tariff_type = pending_purchase["tariff"]
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
     
-    # Создаем платеж в БД
-    # КРИТИЧНО: Если INSERT payment упал → лог показать и ОСТАНОВИТЬ процесс
-    payment_id = None
+    # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
+    # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
     try:
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            # Создаем новый платеж с фактической суммой из платежа
-            # КРИТИЧНО: Используем ТОЛЬКО существующие поля таблицы payments (без purchase_id)
-            payment_id = await conn.fetchval(
-                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
-                telegram_id, f"{tariff_type}_{period_days}", int(payment_amount_rubles * 100)  # Сохраняем в копейках
-            )
-    except Exception as e:
-        error_msg = f"CRITICAL: Failed to INSERT payment record for user {telegram_id}, tariff={tariff_type}, period_days={period_days}, error={str(e)}, error_type={type(e).__name__}"
-        logger.error(error_msg)
-        logger.exception(f"process_successful_payment: PAYMENT_INSERT_FAILED [user={telegram_id}]")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
-        await message.answer(localization.get_text(language, "error_payment_processing"))
-        return
-    
-    if not payment_id:
-        error_msg = f"CRITICAL: payment_id is None after INSERT for user {telegram_id}, tariff={tariff_type}, period_days={period_days}"
-        logger.error(error_msg)
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
-        await message.answer(localization.get_text(language, "error_payment_processing"))
-        return
-    
-    # Получаем период в днях из pending purchase
-    duration = timedelta(days=period_days)
-    
-    logger.info(
-        f"process_successful_payment: ACTIVATING_SUBSCRIPTION [user={telegram_id}, payment_id={payment_id}, "
-        f"tariff={tariff_type}, period_days={period_days}, purchase_id={pending_purchase['purchase_id']}]"
-    )
-    
-    # КРИТИЧНО: Если VPN API упал → подписку НЕ активировать
-    expires_at = None
-    vpn_key = None
-    is_renewal = False
-    
-    try:
-        # Активируем подписку через grant_access
-        result = await database.grant_access(
-            telegram_id=telegram_id,
-            duration=duration,
-            source="payment",
-            admin_telegram_id=None,
-            admin_grant_days=None
+        result = await database.finalize_purchase(
+            purchase_id=purchase_id,
+            payment_provider="telegram_payment",
+            amount_rubles=payment_amount_rubles
         )
         
-        if not result:
-            error_msg = f"CRITICAL: grant_access returned None for user {telegram_id}, payment_id={payment_id}"
-            logger.error(f"process_successful_payment: ERROR_GRANT_ACCESS_NONE [user={telegram_id}, payment_id={payment_id}]")
-            raise Exception(error_msg)
+        if not result or not result.get("success"):
+            raise Exception(f"finalize_purchase returned invalid result: {result}")
         
-        expires_at = result.get("subscription_end")
-        # Если vless_url есть - это новый UUID
-        if result.get("vless_url"):
-            vpn_key = result["vless_url"]
-            is_renewal = False
-        else:
-            # Продление - получаем vpn_key из существующей подписки
-            subscription = await database.get_subscription(telegram_id)
-            if subscription and subscription.get("vpn_key"):
-                vpn_key = subscription["vpn_key"]
-            else:
-                # Fallback: используем UUID для генерации VLESS URL
-                uuid = result.get("uuid")
-                if uuid:
-                    import vpn_utils
-                    vpn_key = vpn_utils.generate_vless_url(uuid)
-                else:
-                    vpn_key = ""
-            is_renewal = True
-        
-        # ВАЛИДАЦИЯ: Запрещено выдавать ключ без записи в БД и subscription_end
-        if not expires_at:
-            error_msg = f"CRITICAL: grant_access returned None expires_at for user {telegram_id}, payment_id={payment_id}"
-            logger.error(f"process_successful_payment: ERROR_NO_EXPIRES_AT [user={telegram_id}, payment_id={payment_id}]")
-            raise Exception(error_msg)
-        
-        if not vpn_key:
-            error_msg = f"CRITICAL: grant_access returned None vpn_key for user {telegram_id}, payment_id={payment_id}"
-            logger.error(f"process_successful_payment: ERROR_NO_VPN_KEY [user={telegram_id}, payment_id={payment_id}]")
-            raise Exception(error_msg)
-        
-        # Обновляем статус платежа на approved
-        # КРИТИЧНО: Обновляем статус ТОЛЬКО после успешной активации подписки
-        try:
-            pool = await database.get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE payments SET status = 'approved' WHERE id = $1",
-                    payment_id
-                )
-        except Exception as e:
-            error_msg = f"CRITICAL: Failed to UPDATE payment status to 'approved' for payment_id={payment_id}, user={telegram_id}, error={str(e)}"
-            logger.error(error_msg)
-            logger.exception(f"process_successful_payment: PAYMENT_UPDATE_FAILED [user={telegram_id}, payment_id={payment_id}]")
-            # Не прерываем процесс, так как подписка уже активирована
+        payment_id = result["payment_id"]
+        expires_at = result["expires_at"]
+        vpn_key = result["vpn_key"]
+        is_renewal = result["is_renewal"]
         
         logger.info(
             f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
-            f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}]"
+            f"purchase_id={purchase_id}, expires_at={expires_at.isoformat()}, is_renewal={is_renewal}]"
         )
         
-        # Начисляем реферальный кешбэк при успешной активации подписки
-        try:
-            reward_result = await database.process_referral_reward(
-                buyer_id=telegram_id,
-                purchase_id=pending_purchase.get("purchase_id"),
-                amount_rubles=payment_amount_rubles
-            )
-            
-            if reward_result.get("success"):
-                referrer_id = reward_result.get("referrer_id")
-                reward_amount = reward_result.get("reward_amount")
-                percent = reward_result.get("percent")
-                
-                logger.info(
-                    f"Referral reward processed successfully: buyer={telegram_id}, "
-                    f"referrer={referrer_id}, percent={percent}%, amount={reward_amount:.2f} RUB"
-                )
-                
-                # Отправляем уведомление рефереру
-                if referrer_id:
-                    try:
-                        referrer_user = await database.get_user(referrer_id)
-                        referrer_language = referrer_user.get("language", "ru") if referrer_user else "ru"
-                        referrer_balance = await database.get_user_balance(referrer_id)
-                        
-                        notification_text = localization.get_text(
-                            referrer_language,
-                            "referral_reward_notification",
-                            amount=reward_amount,
-                            balance=referrer_balance,
-                            default=f"🔥 Вам начислен реферальный кешбэк!\n\nВаш друг оформил подписку.\n💰 Начислено: {reward_amount:.2f} ₽\nБаланс: {referrer_balance:.2f} ₽"
-                        )
-                        
-                        # Получаем bot из message
-                        bot = message.bot
-                        await bot.send_message(referrer_id, notification_text)
-                        logger.info(f"Referral reward notification sent to referrer: {referrer_id}")
-                    except Exception as e:
-                        logger.exception(f"Error sending referral reward notification to referrer {referrer_id}: {e}")
-                        # Не блокируем процесс, если уведомление не отправлено
-            else:
-                logger.debug(
-                    f"Referral reward not processed: buyer={telegram_id}, "
-                    f"message={reward_result.get('message')}"
-                )
-        except Exception as e:
-            logger.exception(f"Error processing referral reward: buyer={telegram_id}: {e}")
-            # Не блокируем процесс активации подписки при ошибке начисления кешбэка
     except Exception as e:
         # КРИТИЧНО: Логируем все ошибки с полным контекстом
         error_msg = (
-            f"CRITICAL: process_successful_payment FAILED [user={telegram_id}, payment_id={payment_id}, "
+            f"CRITICAL: finalize_purchase FAILED [user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period_days={period_days}, "
             f"error={str(e)}, error_type={type(e).__name__}]"
         )
         logger.error(error_msg)
-        logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, payment_id={payment_id}]")
-        
-        # НЕ обновляем статус платежа на approved, так как подписка НЕ активирована
-        # Платеж остаётся в статусе 'pending' для ручной обработки админом
+        logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, purchase_id={purchase_id}]")
         
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
@@ -3165,7 +3029,7 @@ async def process_successful_payment(message: Message):
                 "payment_subscription_activation_failed",
                 config.ADMIN_TELEGRAM_ID,
                 telegram_id,
-                f"Payment {payment_id} received but subscription activation failed: {str(e)}"
+                f"Payment received but finalize_purchase failed: purchase_id={purchase_id}, error={str(e)}"
             )
         except Exception as log_error:
             logger.error(f"Failed to log audit event: {log_error}")

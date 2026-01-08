@@ -287,65 +287,24 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
     if amount_rubles <= 0:
         amount_rubles = pending_purchase["price_kopecks"] / 100.0
     
-    # Create payment record and activate subscription
-    pool = await database.get_pool()
-    payment_id = None
+    logger.info(f"Crypto Bot payment received: user={telegram_id}, invoice_id={invoice_id}, purchase_id={purchase_id}, amount={amount_rubles} RUB")
     
-    async with pool.acquire() as conn:
-        payment_id = await conn.fetchval(
-            "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
-            telegram_id, f"{tariff}_{period_days}", int(amount_rubles * 100)
-        )
-    
-    if not payment_id:
-        logger.error(f"Crypto Bot webhook: failed to create payment record: user={telegram_id}, purchase_id={purchase_id}")
-        return web.json_response({"status": "error"}, status=200)
-    
-    logger.info(f"Crypto Bot payment received: user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, purchase_id={purchase_id}, amount={amount_rubles} RUB")
-    
-    # Activate subscription
-    from datetime import timedelta
-    duration = timedelta(days=period_days)
-    
+    # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
+    # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
     try:
-        result = await database.grant_access(
-            telegram_id=telegram_id,
-            duration=duration,
-            source="payment",
-            admin_telegram_id=None,
-            admin_grant_days=None
+        result = await database.finalize_purchase(
+            purchase_id=purchase_id,
+            payment_provider="cryptobot",
+            amount_rubles=amount_rubles,
+            invoice_id=invoice_id
         )
         
-        if not result:
-            raise Exception("grant_access returned None")
+        if not result or not result.get("success"):
+            raise Exception(f"finalize_purchase returned invalid result: {result}")
         
-        expires_at = result.get("subscription_end")
-        if result.get("vless_url"):
-            vpn_key = result["vless_url"]
-        else:
-            subscription = await database.get_subscription(telegram_id)
-            if subscription and subscription.get("vpn_key"):
-                vpn_key = subscription["vpn_key"]
-            else:
-                uuid = result.get("uuid")
-                if uuid:
-                    import vpn_utils
-                    vpn_key = vpn_utils.generate_vless_url(uuid)
-                else:
-                    vpn_key = ""
-        
-        if not expires_at or not vpn_key:
-            raise Exception(f"Invalid grant_access result: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
-        
-        # Mark payment as approved
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE payments SET status = 'approved' WHERE id = $1",
-                payment_id
-            )
-        
-        # Mark pending purchase as paid
-        await database.mark_pending_purchase_paid(purchase_id)
+        payment_id = result["payment_id"]
+        expires_at = result["expires_at"]
+        vpn_key = result["vpn_key"]
         
         # Send confirmation to user
         import localization
@@ -359,10 +318,10 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
         await bot.send_message(telegram_id, text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
         await bot.send_message(telegram_id, f"<code>{vpn_key}</code>", parse_mode="HTML")
         
-        logger.info(f"Crypto Bot payment processed successfully: user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}")
+        logger.info(f"Crypto Bot payment processed successfully: user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, purchase_id={purchase_id}")
         
     except Exception as e:
-        logger.exception(f"Crypto Bot webhook: failed to activate subscription: user={telegram_id}, payment_id={payment_id}, error={e}")
+        logger.exception(f"Crypto Bot webhook: finalize_purchase failed: user={telegram_id}, purchase_id={purchase_id}, error={e}")
         # Payment remains in 'pending' status for manual review
         return web.json_response({"status": "error"}, status=200)
     
