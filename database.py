@@ -66,29 +66,30 @@ async def init_db():
         except Exception:
             pass
         
-        # Таблица purchases - контекст покупки для защиты от устаревших кнопок
+        # Таблица pending_purchases - контекст покупки для защиты от устаревших кнопок
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS purchases (
+            CREATE TABLE IF NOT EXISTS pending_purchases (
                 id SERIAL PRIMARY KEY,
                 purchase_id TEXT UNIQUE NOT NULL,
                 telegram_id BIGINT NOT NULL,
-                tariff TEXT NOT NULL,
-                months INTEGER NOT NULL,
+                tariff TEXT NOT NULL CHECK (tariff IN ('basic', 'plus')),
+                period_days INTEGER NOT NULL,
                 price_kopecks INTEGER NOT NULL,
                 promo_code TEXT,
-                status TEXT DEFAULT 'pending',
+                status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'expired')),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP
+                expires_at TIMESTAMP NOT NULL
             )
         """)
         
         # Создаем индексы для быстрого поиска
         try:
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_purchases_status ON purchases(status)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_purchases_telegram_id ON purchases(telegram_id)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_purchases_purchase_id ON purchases(purchase_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_purchases_status ON pending_purchases(status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_purchases_telegram_id ON pending_purchases(telegram_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_purchases_purchase_id ON pending_purchases(purchase_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_purchases_expires_at ON pending_purchases(expires_at)")
         except Exception:
-            # Индексы уже существуют или PostgreSQL не поддерживает IF NOT EXISTS для индексов
+            # Индексы уже существуют
             pass
         
         # Таблица payments
@@ -2899,18 +2900,20 @@ async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]
             }
 
 
-async def create_purchase_context(
+async def create_pending_purchase(
     telegram_id: int,
-    tariff_key: str,
+    tariff: str,  # "basic" или "plus"
+    period_days: int,
     price_kopecks: int,
     promo_code: Optional[str] = None
 ) -> str:
     """
-    Создать контекст покупки с уникальным purchase_id
+    Создать pending покупку с уникальным purchase_id
     
     Args:
         telegram_id: Telegram ID пользователя
-        tariff_key: Ключ тарифа (например, "1", "3", "6", "12")
+        tariff: Тип тарифа ("basic" или "plus")
+        period_days: Период в днях (30, 90, 180, 365)
         price_kopecks: Цена в копейках
         promo_code: Промокод (опционально)
     
@@ -2921,13 +2924,9 @@ async def create_purchase_context(
     async with pool.acquire() as conn:
         # Отменяем все предыдущие pending покупки этого пользователя
         await conn.execute(
-            "UPDATE purchases SET status = 'cancelled' WHERE telegram_id = $1 AND status = 'pending'",
+            "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending'",
             telegram_id
         )
-        
-        # Получаем данные тарифа
-        tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
-        months = tariff_data["months"]
         
         # Генерируем уникальный purchase_id
         purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
@@ -2937,19 +2936,19 @@ async def create_purchase_context(
         
         # Создаем запись о покупке
         await conn.execute(
-            """INSERT INTO purchases (purchase_id, telegram_id, tariff, months, price_kopecks, promo_code, status, expires_at)
+            """INSERT INTO pending_purchases (purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, status, expires_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
-            purchase_id, telegram_id, tariff_key, months, price_kopecks, promo_code, "pending", expires_at
+            purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", expires_at
         )
         
-        logger.info(f"Purchase context created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff_key}, price={price_kopecks} kopecks")
+        logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks")
         
         return purchase_id
 
 
-async def validate_purchase_context(purchase_id: str, telegram_id: int) -> Optional[Dict[str, Any]]:
+async def get_pending_purchase(purchase_id: str, telegram_id: int) -> Optional[Dict[str, Any]]:
     """
-    Валидировать контекст покупки
+    Получить pending покупку по purchase_id с валидацией
     
     Args:
         purchase_id: ID покупки
@@ -2961,7 +2960,7 @@ async def validate_purchase_context(purchase_id: str, telegram_id: int) -> Optio
     pool = await get_pool()
     async with pool.acquire() as conn:
         purchase = await conn.fetchrow(
-            """SELECT * FROM purchases 
+            """SELECT * FROM pending_purchases 
                WHERE purchase_id = $1 AND telegram_id = $2 AND status = 'pending' AND expires_at > NOW()""",
             purchase_id, telegram_id
         )
@@ -2969,11 +2968,11 @@ async def validate_purchase_context(purchase_id: str, telegram_id: int) -> Optio
         if purchase:
             return dict(purchase)
         else:
-            logger.warning(f"Invalid purchase context: purchase_id={purchase_id}, telegram_id={telegram_id}")
+            logger.warning(f"Invalid pending purchase: purchase_id={purchase_id}, telegram_id={telegram_id}")
             return None
 
 
-async def cancel_purchase_context(telegram_id: int, reason: str = "user_action") -> None:
+async def cancel_pending_purchases(telegram_id: int, reason: str = "user_action") -> None:
     """
     Отменить все pending покупки пользователя
     
@@ -2984,37 +2983,60 @@ async def cancel_purchase_context(telegram_id: int, reason: str = "user_action")
     pool = await get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "UPDATE purchases SET status = 'cancelled' WHERE telegram_id = $1 AND status = 'pending'",
+            "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending'",
             telegram_id
         )
         
         if result != "UPDATE 0":
-            logger.info(f"Purchase contexts cancelled: telegram_id={telegram_id}, reason={reason}")
+            logger.info(f"Pending purchases cancelled: telegram_id={telegram_id}, reason={reason}")
 
 
-async def mark_purchase_completed(purchase_id: str) -> bool:
+async def mark_pending_purchase_paid(purchase_id: str) -> bool:
     """
-    Пометить покупку как выполненную
+    Пометить pending покупку как оплаченную
     
     Args:
         purchase_id: ID покупки
     
     Returns:
-        True если успешно, False если покупка не найдена или уже выполнена
+        True если успешно, False если покупка не найдена или уже оплачена
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "UPDATE purchases SET status = 'completed' WHERE purchase_id = $1 AND status = 'pending'",
+            "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status = 'pending'",
             purchase_id
         )
         
         if result == "UPDATE 1":
-            logger.info(f"Purchase marked as completed: purchase_id={purchase_id}")
+            logger.info(f"Pending purchase marked as paid: purchase_id={purchase_id}")
             return True
         else:
-            logger.warning(f"Failed to mark purchase as completed: purchase_id={purchase_id}, result={result}")
+            logger.warning(f"Failed to mark pending purchase as paid: purchase_id={purchase_id}, result={result}")
             return False
+
+
+async def expire_old_pending_purchases() -> int:
+    """
+    Автоматически помечает истёкшие pending покупки как expired
+    
+    Returns:
+        Количество истёкших покупок
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE pending_purchases SET status = 'expired' WHERE status = 'pending' AND expires_at <= NOW()"
+        )
+        
+        # Извлекаем количество обновлённых строк из результата
+        # Формат результата: "UPDATE N"
+        if result and result.startswith("UPDATE "):
+            count = int(result.split()[1])
+            if count > 0:
+                logger.info(f"Expired {count} old pending purchases")
+            return count
+        return 0
 
 
 async def get_all_users_for_export() -> list:

@@ -99,28 +99,51 @@ async def process_auto_renewals(bot: Bot):
                     # Получаем последний утвержденный платеж для определения тарифа
                     last_payment = await database.get_last_approved_payment(telegram_id)
                     
+                    # Парсим тариф из последнего платежа
+                    # Формат может быть: "basic_30", "plus_90" или legacy "1", "3", "6", "12"
                     if not last_payment:
-                        # Если нет платежа, используем дефолтный тариф "1" (1 месяц)
-                        tariff_key = "1"
+                        # Если нет платежа, используем дефолтный тариф Basic на 30 дней (1 месяц)
+                        tariff_type = "basic"
+                        period_days = 30
                     else:
-                        tariff_key = last_payment.get("tariff", "1")
+                        tariff_str = last_payment.get("tariff", "basic_30")
+                        # Парсим формат "basic_30" или "plus_90"
+                        if "_" in tariff_str:
+                            parts = tariff_str.split("_")
+                            tariff_type = parts[0] if len(parts) > 0 else "basic"
+                            try:
+                                period_days = int(parts[1]) if len(parts) > 1 else 30
+                            except (ValueError, IndexError):
+                                period_days = 30
+                        else:
+                            # Legacy формат: "1", "3", "6", "12" -> конвертируем в новый формат
+                            # По умолчанию используем Basic
+                            tariff_type = "basic"
+                            try:
+                                months = int(tariff_str)
+                                period_days = months * 30
+                            except ValueError:
+                                period_days = 30
                     
-                    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
-                    base_price = tariff_data["price"]
+                    # Получаем базовую цену из новой структуры тарифов
+                    if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
+                        # Если тариф не найден, используем Basic 30 дней
+                        tariff_type = "basic"
+                        period_days = 30
+                    
+                    base_price = config.TARIFFS[tariff_type][period_days]["price"]
                     
                     # Применяем скидки (VIP, персональная) - та же логика, что при покупке
                     is_vip = await database.is_vip_user(telegram_id)
                     if is_vip:
-                        amount = int(base_price * 0.70)  # 30% скидка
+                        amount_rubles = float(int(base_price * 0.70))  # 30% скидка
                     else:
                         personal_discount = await database.get_user_discount(telegram_id)
                         if personal_discount:
                             discount_percent = personal_discount["discount_percent"]
-                            amount = int(base_price * (1 - discount_percent / 100))
+                            amount_rubles = float(int(base_price * (1 - discount_percent / 100)))
                         else:
-                            amount = base_price
-                    
-                    amount_rubles = float(amount)
+                            amount_rubles = float(base_price)
                     
                     # Получаем баланс пользователя (в копейках из БД, конвертируем в рубли)
                     user_balance_kopecks = subscription.get("balance", 0) or 0
@@ -128,15 +151,16 @@ async def process_auto_renewals(bot: Bot):
                     
                     if balance_rubles >= amount_rubles:
                         # Баланса хватает - продлеваем подписку
-                        months = tariff_data["months"]
-                        duration = timedelta(days=months * 30)
+                        duration = timedelta(days=period_days)
                         
                         # Списываем баланс (source = auto_renew для идентификации)
+                        months = period_days // 30
+                        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
                         success = await database.decrease_balance(
                             telegram_id=telegram_id,
                             amount=amount_rubles,
                             source="auto_renew",
-                            description=f"Автопродление подписки на {months} месяц(ев)"
+                            description=f"Автопродление подписки {tariff_name} на {months} месяц(ев)"
                         )
                         
                         if not success:
@@ -205,9 +229,10 @@ async def process_auto_renewals(bot: Bot):
                         )
                         
                         # Создаем запись о платеже для аналитики
+                        tariff_str = f"{tariff_type}_{period_days}"
                         await conn.execute(
                             "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved')",
-                            telegram_id, tariff_key, amount
+                            telegram_id, tariff_str, int(amount_rubles * 100)  # Сохраняем в копейках
                         )
                         
                         # Отправляем уведомление пользователю
@@ -227,7 +252,7 @@ async def process_auto_renewals(bot: Bot):
                         
                         await bot.send_message(telegram_id, text)
                         
-                        logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_key}, amount={amount_rubles} RUB, expires_at={expires_str}")
+                        logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
                         
                     else:
                         # Баланса не хватает - ничего не делаем (как указано в требованиях)

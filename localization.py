@@ -46,8 +46,11 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "subscription_history_action_reissue": "Выдача нового ключа",
         "subscription_history_action_manual_reissue": "Перевыпуск ключа",
         
-        # Выбор тарифа
-        "select_tariff": "🕒 Выберите срок подписки\n\nAtlas Secure — это стабильный доступ,\nкоторый просто работает.\n\nВ любой подписке:\n🔑 Персональный ключ — только для вас\n⚡️ Стабильная скорость без ограничений\n📱💻 Работает на всех устройствах\n💬 Поддержка в Telegram в любой момент\n\nЧем дольше срок — тем меньше вы думаете\nо продлении и проблемах с доступом.\n\nБольшинство пользователей выбирают подписку от 3 месяцев.",
+        # Выбор тарифа (новый флоу)
+        "select_tariff": "🪙 Тариф Basic\n- Для Wi-Fi и домашнего интернета\n- Базовое использование\n- Доступ: Instagram, YouTube, TikTok и др\n\n🔑 Тариф Plus\n- Приоритетный сервер\n- Работает в LTE/5G\n- Усиленная защита\n- Обход белых списков",
+        "select_tariff_type": "Выберите тариф:",
+        "tariff_basic_selected": "🔐 Выбран тариф Basic\nНа какой срок интересно?",
+        "tariff_plus_selected": "🔐 Выбран тариф Plus\nНа какой срок интересно?",
         "enter_promo_button": "🎟 Ввести промокод",
         "enter_promo_text": "Введите промокод:",
         "invalid_promo": "❌ Неверный промокод",
@@ -75,7 +78,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_pending": "Подтверждение в процессе\n\nПлатёж зафиксирован.\nВерификация занимает до 5 минут.\nАктивация доступа выполняется автоматически.",
         
         # Успешная активация
-        "payment_approved": "✅ Доступ активирован\n\nВаш персональный ключ доступа готов.\nВы можете подключиться и начать пользоваться.\n\nПерсональный ключ доступа:\n\n{vpn_key}\n\nСрок действия доступа:\nдо {date}\n\nКлюч закреплён за вами\nи будет доступен в профиле.\n\nПодключение занимает не более 1 минуты.\nЕсли понадобится помощь — мы на связи.",
+        "payment_approved": "✅ Доступ активирован\n\nВаш персональный ключ доступа готов.\n\n🔑 Персональный ключ доступа:\n<KEY WILL BE SENT IN NEXT MESSAGE>\n\n🟢 Срок действия доступа:\nдо {date}\n\nКлюч закреплён за вами\nи будет доступен в профиле.\n\n👉 Подключение занимает не более 1 минуты.\nЕсли понадобится помощь — мы на связи.",
         
         # Отклонение
         "payment_rejected": "❌ Платёж не подтверждён.\n\nЕсли вы уверены, что оплатили —\nобратитесь в поддержку.",
@@ -331,7 +334,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "payment_pending": "Confirmation in process\n\nPayment registered.\nVerification takes up to 5 minutes.\nAccess activation is performed automatically.",
         
         # Успешная активация
-        "payment_approved": "✅ Access activated\n\nYour personal access key is ready.\nYou can connect and start using it.\n\nPersonal access key:\n\n{vpn_key}\n\nAccess valid until:\nuntil {date}\n\nThe key is assigned to you\nand will be available in your profile.\n\nConnection takes no more than 1 minute.\nIf you need help — we're here.",
+        "payment_approved": "✅ Access activated\n\nYour personal access key is ready.\n\n🔑 Personal access key:\n<KEY WILL BE SENT IN NEXT MESSAGE>\n\n🟢 Access valid until:\nuntil {date}\n\nThe key is assigned to you\nand will be available in your profile.\n\n👉 Connection takes no more than 1 minute.\nIf you need help — we're here.",
         
         # Отклонение
         "payment_rejected": "❌ Payment not confirmed.\n\nIf you are sure you paid —\ncontact support.",
@@ -588,7 +591,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "sbp_payment_text": "O'tkazmadan keyin to'lovni tasdiqlang.\n\n⸻\n\nO'tkazma ma'lumotlari\n\nBank: Ozon\nKarta hisobi: 2204321075030551\n\nTasdiqlash uchun summa: {amount} ₽",
         "paid_button": "To'lovni tasdiqlash",
         "payment_pending": "Tasdiqlash jarayonda\n\nTo'lov ro'yxatga olingan.\nTekshiruv 5 minutgacha davom etadi.\nKirish faollashtirish avtomatik ravishda amalga oshiriladi.",
-        "payment_approved": "✅ Kirish faollashtirildi\n\nSizning shaxsiy kirish kalitingiz tayyor.\nUlanish va foydalanishni boshlashingiz mumkin.\n\nShaxsiy kirish kaliti:\n\n{vpn_key}\n\nKirish amal qilish muddati:\n{date} gacha\n\nKalit sizga biriktirilgan\nva profilingizda mavjud bo'ladi.\n\nUlanish 1 minutdan ko'p vaqt olmaydi.\nAgar yordam kerak bo'lsa — biz yonadasiz.",
+        "payment_approved": "✅ Kirish faollashtirildi\n\nSizning shaxsiy kirish kalitingiz tayyor.\n\n🔑 Shaxsiy kirish kaliti:\n<KALIT KEYINGI XABARDA YUBORILADI>\n\n🟢 Kirish amal qilish muddati:\n{date} gacha\n\nKalit sizga biriktirilgan\nva profilingizda mavjud bo'ladi.\n\n👉 Ulanish 1 minutdan ko'p vaqt olmaydi.\nAgar yordam kerak bo'lsa — biz yonadasiz.",
         "payment_rejected": "❌ To'lov tasdiqlanmadi.\n\nAgar to'laganingizga ishonchingiz komil bo'lsa — qo'llab-quvvatlashga murojaat qiling.",
         "profile_active": "👤 Kirish profili\n\nKirish holati: Faol\nKirish {date} gacha to'langan\n\nSiz ulangansiz. Kirish barqaror ishlaydi.\n\nShaxsiy kirish kaliti\nVPN ilovasida ulanish uchun ishlatiladi.\nUlanish kirish faol bo'lguncha saqlanadi.\n\n{vpn_key}\n\nUzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.\n\nMuddat tugaguncha siz\nsozlashlar va to'lovga qaytishingiz shart emas.",
         "profile_renewal_hint": "",
@@ -817,7 +820,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "renewal_pay_button": "💳 Пардохт кардан",
         
         "payment_pending": "Тасдиқ дар раванд аст\n\nПардохт ба қайд гирифта шуд.\nСанҷиш то 5 дақиқа давом мекунад.\nФаъолсозии дастрасӣ ба таври худкор иҷро мешавад.",
-        "payment_approved": "✅ Дастрасӣ фаъол шуд\n\nКалиди шахсии дастрасии шумо омода аст.\nШумо метавонед пайванд шавед ва истифода бурданро оғоз кунед.\n\nКалиди шахсии дастрасӣ:\n\n{vpn_key}\n\nМуддати амали дастрасӣ:\nто {date}\n\nКалид ба шумо закреп шудааст\nва дар профили шумо дастрас хоҳад буд.\n\nПайванд 1 дақиқа зиёд вақт намегирад.\nАгар кӯмак лозим бошад — мо дар дастрасем.",
+        "payment_approved": "✅ Дастрасӣ фаъол шуд\n\nКалиди шахсии дастрасии шумо омода аст.\n\n🔑 Калиди шахсии дастрасӣ:\n<КАЛИД ДАР ПАЙВАНДАКИ ОМАДОРА РАСОНИДА МЕШАВАД>\n\n🟢 Муддати амали дастрасӣ:\nто {date}\n\nКалид ба шумо закреп шудааст\nва дар профили шумо дастрас хоҳад буд.\n\n👉 Пайванд 1 дақиқа зиёд вақт намегирад.\nАгар кӯмак лозим бошад — мо дар дастрасем.",
         "payment_rejected": "❌ Пардохт тасдиқ нашуд.\n\nАгар мӯътақид ҳастед, ки пардохт кардед — ба дастгирӣ муроҷиат кунед.",
         "profile_active": "👤 Профили дастрасӣ\n\nҲолати дастрасӣ: Фаъол\nДастрасӣ то {date} пардохт шудааст\n\nШумо пайванд шудед. Дастрасӣ устувор кор мекунад.\n\nКалиди шахсии дастрасӣ\nБарои пайванд дар барномаи VPN истифода мешавад.\nПайванд то дастрасӣ фаъол аст, нигоҳ дошта мешавад.\n\n{vpn_key}\n\nҲангоми васеъ кардан муддати интихобшуда\nба дастрасии ҷорӣ ба таври худкор илова карда мешавад.\n\nТо муддат анҷом наёбад, шумо\nба танзимот ва пардохт бозгашт кардан лозим нест.",
         "profile_renewal_hint": "",

@@ -19,13 +19,25 @@ except ValueError:
     print(f"ERROR: ADMIN_TELEGRAM_ID must be a number, got: {ADMIN_TELEGRAM_ID_STR}", file=sys.stderr)
     sys.exit(1)
 
-# Тарифы (в месяцах и их стоимость в рублях)
+# Тарифы Basic и Plus с периодами
+# Структура: tariff_type -> period_days -> price
 TARIFFS = {
-    "1": {"months": 1, "price": 149},
-    "3": {"months": 3, "price": 399},
-    "6": {"months": 6, "price": 599},
-    "12": {"months": 12, "price": 899},
+    "basic": {
+        30: {"price": 149},      # 1 месяц
+        90: {"price": 399},      # 3 месяца
+        180: {"price": 749},     # 6 месяцев
+        365: {"price": 1399},    # 12 месяцев
+    },
+    "plus": {
+        30: {"price": 299},      # 1 месяц
+        90: {"price": 699},      # 3 месяца
+        180: {"price": 1199},    # 6 месяцев
+        365: {"price": 2299},    # 12 месяцев
+    }
 }
+
+# Суммы пополнения баланса (в рублях)
+BALANCE_TOPUP_AMOUNTS = [250, 750, 999]
 
 # Реквизиты СБП (для оплаты)
 SBP_DETAILS = {
