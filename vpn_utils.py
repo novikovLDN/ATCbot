@@ -257,6 +257,26 @@ async def add_vless_user() -> Dict[str, str]:
                 uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
                 logger.info(f"vpn_api add_user: SUCCESS [uuid={uuid_preview}, attempt={attempt + 1}]")
                 
+                # VPN AUDIT LOG: Логируем успешное создание UUID (non-blocking)
+                try:
+                    import database
+                    # Создаём async task для логирования (не блокируем основной flow)
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(
+                            database._log_vpn_lifecycle_audit_async(
+                                action="vpn_add_user",
+                                telegram_id=0,  # Будет обновлено вызывающей стороной с реальным telegram_id
+                                uuid=str(uuid),
+                                source=None,  # Будет обновлено вызывающей стороной
+                                result="success",
+                                details=f"UUID created via VPN API, attempt={attempt + 1}"
+                            )
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to log VPN add_user audit (non-blocking): {e}")
+                
                 return {
                     "uuid": str(uuid),
                     "vless_url": vless_url
@@ -426,12 +446,52 @@ async def remove_vless_user(uuid: str) -> None:
                         "UUID already removed or never existed (idempotent operation)"
                     )
                     # UUID уже удалён - это успешная операция (идемпотентность)
+                    # VPN AUDIT LOG: Логируем успешное удаление (UUID уже был удалён)
+                    # Примечание: Полный audit log будет записан в вызывающей функции с корректными telegram_id и source
+                    try:
+                        import database
+                        import asyncio
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.create_task(
+                                database._log_vpn_lifecycle_audit_async(
+                                    action="vpn_remove_user",
+                                    telegram_id=0,  # Будет обновлено вызывающей стороной
+                                    uuid=uuid_clean,
+                                    source=None,  # Будет обновлено вызывающей стороной
+                                    result="success",
+                                    details=f"UUID already removed (idempotent), attempt={attempt + 1}"
+                                )
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to log VPN remove_user audit (non-blocking): {e}")
                     return
                 
                 # Для всех остальных ошибок - вызываем raise_for_status
                 response.raise_for_status()
                 
                 logger.info(f"vpn_api remove_user: SUCCESS [uuid={uuid_preview}, attempt={attempt + 1}]")
+                
+                # VPN AUDIT LOG: Логируем успешное удаление UUID (non-blocking)
+                # Примечание: Полный audit log будет записан в вызывающей функции с корректными telegram_id и source
+                try:
+                    import database
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(
+                            database._log_vpn_lifecycle_audit_async(
+                                action="vpn_remove_user",
+                                telegram_id=0,  # Будет обновлено вызывающей стороной
+                                uuid=uuid_clean,
+                                source=None,  # Будет обновлено вызывающей стороной
+                                result="success",
+                                details=f"UUID removed via VPN API, attempt={attempt + 1}"
+                            )
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to log VPN remove_user audit (non-blocking): {e}")
+                
                 return
                 
         except httpx.TimeoutException as e:

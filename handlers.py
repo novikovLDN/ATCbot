@@ -3069,6 +3069,175 @@ async def callback_admin_audit(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin:keys")
 async def callback_admin_keys(callback: CallbackQuery):
+    """Раздел VPN-ключи в админ-дашборде"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        # Показываем меню управления ключами
+        text = "🔑 Управление VPN-ключами\n\n"
+        text += "Доступные действия:\n"
+        text += "• Перевыпустить ключ для одного пользователя\n"
+        text += "• Перевыпустить ключи для всех активных пользователей\n"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Перевыпустить для пользователя", callback_data="admin:user")],
+            [InlineKeyboardButton(text="🔄 Перевыпустить все ключи", callback_data="admin:keys:reissue_all")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+        ])
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.answer()
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_keys: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+
+
+@router.callback_query(F.data == "admin:keys:reissue_all")
+async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
+    """Массовый перевыпуск ключей для всех активных пользователей"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer("Начинаю массовый перевыпуск...")
+    
+    try:
+        admin_telegram_id = callback.from_user.id
+        
+        # Получаем все активные подписки
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            now = datetime.now()
+            subscriptions = await conn.fetch(
+                """SELECT telegram_id, uuid, vpn_key, expires_at 
+                   FROM subscriptions 
+                   WHERE status = 'active' 
+                   AND expires_at > $1 
+                   AND uuid IS NOT NULL
+                   ORDER BY telegram_id""",
+                now
+            )
+        
+        total_count = len(subscriptions)
+        success_count = 0
+        failed_count = 0
+        failed_users = []
+        
+        if total_count == 0:
+            await callback.message.edit_text(
+                "❌ Нет активных подписок для перевыпуска",
+                reply_markup=get_admin_back_keyboard()
+            )
+            return
+        
+        # Отправляем начальное сообщение
+        status_text = f"🔄 Массовый перевыпуск ключей\n\nВсего пользователей: {total_count}\nОбработано: 0/{total_count}\nУспешно: 0\nОшибок: 0"
+        status_message = await callback.message.edit_text(status_text, reply_markup=None)
+        
+        # Обрабатываем каждую подписку
+        for idx, sub_row in enumerate(subscriptions, 1):
+            subscription = dict(sub_row)
+            telegram_id = subscription["telegram_id"]
+            
+            try:
+                # Перевыпускаем ключ
+                result = await database.reissue_vpn_key_atomic(telegram_id, admin_telegram_id)
+                new_vpn_key, old_vpn_key = result
+                
+                if new_vpn_key is None:
+                    failed_count += 1
+                    failed_users.append(telegram_id)
+                    logging.error(f"Failed to reissue key for user {telegram_id} in bulk operation")
+                    continue
+                
+                success_count += 1
+                
+                # Отправляем уведомление пользователю
+                try:
+                    user_lang = await database.get_user(telegram_id)
+                    language = user_lang.get("language", "ru") if user_lang else "ru"
+                    
+                    try:
+                        user_text = localization.get_text(
+                            language,
+                            "admin_reissue_user_notification",
+                            vpn_key=f"<code>{new_vpn_key}</code>"
+                        )
+                    except (KeyError, TypeError):
+                        # Fallback to default if localization not found
+                        user_text = get_reissue_notification_text(new_vpn_key)
+                    
+                    keyboard = get_reissue_notification_keyboard()
+                    await bot.send_message(telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
+                except Exception as e:
+                    logging.warning(f"Failed to send reissue notification to user {telegram_id}: {e}")
+                
+                # Обновляем статус каждые 10 пользователей или в конце
+                if idx % 10 == 0 or idx == total_count:
+                    status_text = (
+                        f"🔄 Массовый перевыпуск ключей\n\n"
+                        f"Всего пользователей: {total_count}\n"
+                        f"Обработано: {idx}/{total_count}\n"
+                        f"✅ Успешно: {success_count}\n"
+                        f"❌ Ошибок: {failed_count}"
+                    )
+                    try:
+                        await status_message.edit_text(status_text)
+                    except Exception:
+                        pass
+                
+                # Rate limiting: 1-2 секунды между запросами
+                if idx < total_count:
+                    import asyncio
+                    await asyncio.sleep(1.5)
+                    
+            except Exception as e:
+                failed_count += 1
+                failed_users.append(telegram_id)
+                logging.exception(f"Error reissuing key for user {telegram_id} in bulk operation: {e}")
+                continue
+        
+        # Финальное сообщение
+        final_text = (
+            f"✅ Массовый перевыпуск завершён\n\n"
+            f"Всего пользователей: {total_count}\n"
+            f"✅ Успешно: {success_count}\n"
+            f"❌ Ошибок: {failed_count}"
+        )
+        
+        if failed_users:
+            failed_list = ", ".join(map(str, failed_users[:10]))
+            if len(failed_users) > 10:
+                failed_list += f" и ещё {len(failed_users) - 10}"
+            final_text += f"\n\nОшибки у пользователей: {failed_list}"
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:keys")]
+        ])
+        
+        await status_message.edit_text(final_text, reply_markup=keyboard)
+        
+        # Логируем в audit_log
+        await database._log_audit_event_atomic_standalone(
+            "admin_reissue_all",
+            admin_telegram_id,
+            None,
+            f"Bulk reissue: total={total_count}, success={success_count}, failed={failed_count}"
+        )
+        
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_keys_reissue_all: {e}")
+        await callback.message.edit_text(
+            f"❌ Ошибка при массовом перевыпуске: {str(e)}",
+            reply_markup=get_admin_back_keyboard()
+        )
+
+
+@router.callback_query(F.data.startswith("admin:keys:"))
+async def callback_admin_keys_legacy(callback: CallbackQuery):
     """Раздел VPN-ключи"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)

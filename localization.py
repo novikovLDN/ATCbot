@@ -104,7 +104,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_profile_load": "Ошибка загрузки профиля. Попробуйте позже.",
         "insufficient_balance_for_subscription": "Недостаточно средств на балансе.\n\nСтоимость: {amount:.2f} ₽\nНа балансе: {balance:.2f} ₽\nНе хватает: {shortage:.2f} ₽",
         "pay_with_card": "💳 Оплатить картой",
-        "auto_renewal_success": "✅ Подписка автоматически продлена до {expires_str}\n\nС баланса списано: {amount:.2f} ₽",
+        "auto_renewal_success": "✅ Подписка автоматически продлена на {days} дней.\n\nДействует до: {expires_date}\nС баланса списано: {amount:.2f} ₽",
         "auto_renewal_insufficient_balance": "⚠️ Недостаточно средств для автопродления подписки.\n\nТребуется: {amount:.2f} ₽\nНа балансе: {balance:.2f} ₽\nНе хватает: {shortage:.2f} ₽\n\nПополните баланс для автоматического продления.",
         "auto_renew_enable": "🔄 Включить автопродление",
         "auto_renew_disable": "⏸ Отключить автопродление",
@@ -210,6 +210,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "По окончании доступ будет приостановлен автоматически."
         ),
         "admin_revoke_user_notification": "⛔ Ваш доступ к Atlas Secure был отозван администратором.",
+        "admin_reissue_user_notification": (
+            "🔐 Обновление VPN-ключа\n\n"
+            "Ваш VPN-ключ обновлён администратором\n"
+            "и переведён на новую версию сервера.\n\n"
+            "Для корректной работы:\n"
+            "— удалите старый ключ из VPN-приложения\n"
+            "— добавьте новый ключ доступа\n\n"
+            "Ключ:\n\n"
+            "{vpn_key}\n\n"
+            "Обновление необходимо для сохранения\n"
+            "стабильности и производительности соединения."
+        ),
         
         # Ошибки (для пользователей)
         "error_payment_processing": "Ошибка обработки платежа. Обратитесь в поддержку.",
@@ -424,6 +436,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Payments temporarily unavailable",
         "error_access_denied": "Access denied.",
         "error_start_command": "Please start with /start command",
+        
+        # Auto-renewal
+        "auto_renewal_success": "✅ Subscription automatically renewed for {days} days.\n\nValid until: {expires_date}\nDeducted from balance: {amount:.2f} ₽",
+        "auto_renewal_insufficient_balance": "⚠️ Insufficient funds for auto-renewal.\n\nRequired: {amount:.2f} ₽\nBalance: {balance:.2f} ₽\nShortage: {shortage:.2f} ₽\n\nPlease top up your balance for automatic renewal.",
+        "auto_renew_enable": "🔄 Enable auto-renewal",
+        "auto_renew_disable": "⏸ Disable auto-renewal",
+        "auto_renew_enabled": "✅ Auto-renewal enabled",
+        "auto_renew_disabled": "⏸ Auto-renewal disabled",
 
         "incident_banner": "⚠️ Technical work in progress",
         "incident_status_warning": "\n\n⚠️ WARNING: Incident mode active\n{incident_text}",
@@ -597,6 +617,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "Muddati tugagach, kirish avtomatik ravishda to'xtatiladi."
         ),
         "admin_revoke_user_notification": "⛔ Atlas Secure ga kirishingiz administrator tomonidan bekor qilindi.",
+        "admin_reissue_user_notification": (
+            "🔐 VPN kalit yangilandi\n\n"
+            "VPN kalitingiz administrator tomonidan yangilandi\n"
+            "va yangi server versiyasiga ko'chirildi.\n\n"
+            "To'g'ri ishlashi uchun:\n"
+            "— eski kalitni VPN ilovasidan olib tashlang\n"
+            "— yangi kirish kalitini qo'shing\n\n"
+            "Kalit:\n\n"
+            "{vpn_key}\n\n"
+            "Yangilanish barqarorlik va\n"
+            "ulanish samaradorligini saqlash uchun zarur."
+        ),
         
         # Ошибки (для пользователей)
         "error_payment_processing": "To'lovni qayta ishlash xatosi. Iltimos, qo'llab-quvvatlashga murojaat qiling.",
@@ -607,6 +639,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "To'lovlar vaqtincha mavjud emas",
         "error_access_denied": "Kirish rad etildi.",
         "error_start_command": "Iltimos, /start buyrug'i bilan boshlang",
+        
+        # Auto-renewal
+        "auto_renewal_success": "✅ Obuna {days} kun uchun avtomatik ravishda uzaytirildi.\n\nAmal qilish muddati: {expires_date}\nBalansdan yechib olindi: {amount:.2f} ₽",
+        "auto_renewal_insufficient_balance": "⚠️ Avtomatik uzaytirish uchun mablag' yetarli emas.\n\nKerak: {amount:.2f} ₽\nBalansda: {balance:.2f} ₽\nYetishmovchilik: {shortage:.2f} ₽\n\nAvtomatik uzaytirish uchun balansni to'ldiring.",
+        "auto_renew_enable": "🔄 Avtomatik uzaytirishni yoqish",
+        "auto_renew_disable": "⏸ Avtomatik uzaytirishni o'chirish",
+        "auto_renew_enabled": "✅ Avtomatik uzaytirish yoqilgan",
+        "auto_renew_disabled": "⏸ Avtomatik uzaytirish o'chirilgan",
 
         "incident_banner": "⚠️ Texnik ishlar olib borilmoqda",
         "incident_status_warning": "\n\n⚠️ E'TIBOR: Inson hodisa rejimi faol\n{incident_text}",
@@ -782,6 +822,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "Пас аз анҷом, дастрасӣ ба таври худкор боздошта мешавад."
         ),
         "admin_revoke_user_notification": "⛔ Дастрасии шумо ба Atlas Secure аз ҷониби мудир бекор карда шуд.",
+        "admin_reissue_user_notification": (
+            "🔐 Калиди VPN нав карда шуд\n\n"
+            "Калиди VPN-и шумо аз ҷониби мудир нав карда шуд\n"
+            "ва ба версияи нави сервер гузаронида шуд.\n\n"
+            "Барои коркарди дуруст:\n"
+            "— калиди кӯҳнаро аз барномаи VPN нест кунед\n"
+            "— калиди нави дастрасиро илова кунед\n\n"
+            "Калид:\n\n"
+            "{vpn_key}\n\n"
+            "Навсозии зарурӣ барои нигоҳ доштани\n"
+            "устувории ва самаранокии пайванд аст."
+        ),
         
         # Ошибки (для пользователей)
         "error_payment_processing": "Хатогии коркарди пардохт. Лутфан, ба дастгирӣ муроҷиат кунед.",
@@ -792,6 +844,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "error_payments_unavailable": "Пардохтҳо барои муддати муайян дастрас нестанд",
         "error_access_denied": "Дастрасӣ рад карда шуд.",
         "error_start_command": "Лутфан, бо фармони /start оғоз кунед",
+        
+        # Auto-renewal
+        "auto_renewal_success": "✅ Обуна барои {days} рӯз ба таври худкор васеъ карда шуд.\n\nТо: {expires_date} амал мекунад\nАз баланс гирифта шуд: {amount:.2f} ₽",
+        "auto_renewal_insufficient_balance": "⚠️ Барои васеъ кардани худкор маблағ кофӣ нест.\n\nЛозим аст: {amount:.2f} ₽\nДар баланс: {balance:.2f} ₽\nКамӣ: {shortage:.2f} ₽\n\nБарои васеъ кардани худкор балансро пур кунед.",
+        "auto_renew_enable": "🔄 Васеъ кардани худкорро фаъол кардан",
+        "auto_renew_disable": "⏸ Васеъ кардани худкорро хомӯш кардан",
+        "auto_renew_enabled": "✅ Васеъ кардани худкор фаъол аст",
+        "auto_renew_disabled": "⏸ Васеъ кардани худкор хомӯш аст",
 
         "incident_banner": "⚠️ Корҳои техникӣ иҷро карда мешавад",
         "incident_status_warning": "⚠️ ЭЪТИБОР: Реҷаи ҳодиса фаъол аст\n{incident_text}",
