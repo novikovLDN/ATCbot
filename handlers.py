@@ -875,7 +875,7 @@ async def cmd_start(message: Message):
     if not database.DB_READY:
         # Показываем сообщение о недоступности и главное меню (read-only)
         language = "ru"  # По умолчанию русский
-        text = localization.get_text(language, "welcome")
+        text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
         text += "\n\n" + localization.get_text(language, "service_unavailable")
         await message.answer(text, reply_markup=get_main_menu_keyboard(language))
         return
@@ -1223,7 +1223,7 @@ async def callback_language(callback: CallbackQuery):
     
     await database.update_user_language(telegram_id, language)
     
-    text = localization.get_text(language, "welcome")
+    text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
     await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
@@ -1239,7 +1239,7 @@ async def callback_main_menu(callback: CallbackQuery):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(language, "welcome")
+    text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
     await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
@@ -1840,7 +1840,7 @@ async def callback_back_to_main(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(language, "welcome")
+    text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
     await callback.message.edit_text(text, reply_markup=get_main_menu_keyboard(language))
     await callback.answer()
