@@ -241,8 +241,19 @@ def get_vpn_key_keyboard(language: str):
     return keyboard
 
 
-async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None):
-    """Клавиатура выбора тарифа с учетом скидок (промокод имеет высший приоритет)"""
+async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):
+    """Клавиатура выбора тарифа с учетом скидок (промокод имеет высший приоритет)
+    
+    Args:
+        language: Язык пользователя
+        telegram_id: Telegram ID пользователя
+        promo_code: Промокод (опционально)
+        purchase_id: ID покупки (опционально, будет создан если не указан)
+    """
+    # Отменяем старые покупки пользователя при показе нового экрана
+    if not purchase_id:
+        await database.cancel_purchase_context(telegram_id, "new_tariff_selection")
+    
     buttons = []
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
@@ -379,7 +390,17 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
             # Если нет скидки - используем полный формат с названием уровня доступа
             text = base_text
         
-        buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}")])
+        # Генерируем purchase_id для каждого тарифа (с учетом текущих скидок)
+        # ВАЖНО: Каждый тариф получает свой purchase_id, так как цены могут отличаться
+        tariff_purchase_id = await database.create_purchase_context(
+            telegram_id=telegram_id,
+            tariff_key=tariff_key,
+            price_kopecks=price * 100,
+            promo_code=promo_code.upper() if promo_code else None
+        )
+        
+        # Включаем purchase_id в callback_data
+        buttons.append([InlineKeyboardButton(text=text, callback_data=f"tariff_{tariff_key}:{tariff_purchase_id}")])
     
     # Кнопка ввода промокода
     buttons.append([InlineKeyboardButton(
@@ -1820,6 +1841,8 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     await state.update_data(promo_code=None)
     
     text = localization.get_text(language, "select_tariff")
+    # Отменяем старые покупки при показе нового экрана выбора тарифа
+    await database.cancel_purchase_context(telegram_id, "tariff_selection_shown")
     await callback.message.edit_text(text, reply_markup=await get_tariff_keyboard(language, telegram_id, None))
     await callback.answer()
 
@@ -1843,50 +1866,73 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("pay_tariff_card:"))
 async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     """Оплата тарифа картой (когда баланса не хватает)"""
-    tariff_key = callback.data.split(":")[1]
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
+    
+    # Извлекаем tariff_key и purchase_id из callback_data
+    # Формат: "pay_tariff_card:1:purchase_abc123" или "pay_tariff_card:1" (legacy)
+    callback_data_parts = callback.data.split(":")
+    tariff_key = callback_data_parts[1] if len(callback_data_parts) > 1 else None
+    purchase_id = callback_data_parts[2] if len(callback_data_parts) > 2 else None
+    
+    # ВАЛИДАЦИЯ: Проверяем наличие purchase_id (обязательно для новых покупок)
+    if not purchase_id:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Purchase context missing in pay_tariff_card: user={telegram_id}, callback_data={callback.data}")
+        await database._log_audit_event_atomic_standalone(
+            "purchase_context_invalid",
+            telegram_id,
+            None,
+            f"Missing purchase_id in pay_tariff_card callback: {callback.data}"
+        )
+        return
+    
+    # ВАЛИДАЦИЯ: Проверяем валидность purchase context
+    purchase_context = await database.validate_purchase_context(purchase_id, telegram_id)
+    if not purchase_context:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid purchase context in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}")
+        await database._log_audit_event_atomic_standalone(
+            "purchase_context_invalid",
+            telegram_id,
+            None,
+            f"Invalid or expired purchase_id in pay_tariff_card: {purchase_id}"
+        )
+        return
+    
+    # Проверяем, что tariff_key из callback соответствует purchase context
+    if purchase_context["tariff"] != tariff_key:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Tariff mismatch in pay_tariff_card: user={telegram_id}, purchase_id={purchase_id}, expected={purchase_context['tariff']}, got={tariff_key}")
+        return
     
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
         await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
         return
     
-    # Получаем промокод из состояния
-    state_data = await state.get_data()
-    promo_code = state_data.get("promo_code")
+    # Используем данные из purchase context (а не из FSM)
+    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
+    amount = purchase_context["price_kopecks"] // 100  # Конвертируем из копеек в рубли
+    promo_code_from_context = purchase_context.get("promo_code")
     
-    # Проверяем промокод через базу данных
+    # Проверяем промокод (для обратной совместимости)
     promo_data = None
-    if promo_code:
-        promo_data = await database.check_promo_code_valid(promo_code.upper())
+    if promo_code_from_context:
+        promo_data = await database.check_promo_code_valid(promo_code_from_context.upper())
     
     has_promo = promo_data is not None
     
-    tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
-    base_price = tariff_data["price"]
+    # Используем purchase_id в payload
+    payload = f"purchase:{purchase_id}"
     
-    # Рассчитываем цену с учетом скидок
+    # Очищаем промокод из состояния после использования
     if has_promo:
-        discount_percent = promo_data["discount_percent"]
-        amount = int(base_price * (100 - discount_percent) / 100)
-        payload = f"purchase:promo:{promo_code.upper()}:{telegram_id}:{tariff_key}:{int(time.time())}"
         await state.update_data(promo_code=None)
-    else:
-        is_vip = await database.is_vip_user(telegram_id)
-        if is_vip:
-            amount = int(base_price * 0.70)
-            payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
-        else:
-            personal_discount = await database.get_user_discount(telegram_id)
-            if personal_discount:
-                discount_percent = personal_discount["discount_percent"]
-                amount = int(base_price * (1 - discount_percent / 100))
-                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
-            else:
-                amount = base_price
-                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
     
     # Формируем описание тарифа
     months = tariff_data["months"]
@@ -1940,7 +1986,8 @@ async def process_promo_code(message: Message, state: FSMContext):
         text = localization.get_text(language, "promo_applied", default="✅ Промокод применён")
         await message.answer(text)
         
-        # Обновляем экран выбора тарифа
+        # Обновляем экран выбора тарифа (отменяем старые покупки при применении промокода)
+        await database.cancel_purchase_context(telegram_id, "promo_code_applied")
         tariff_text = localization.get_text(language, "select_tariff")
         await message.answer(tariff_text, reply_markup=await get_tariff_keyboard(language, telegram_id, promo_code))
     else:
@@ -1952,57 +1999,85 @@ async def process_promo_code(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("tariff_"))
 async def callback_tariff(callback: CallbackQuery, state: FSMContext):
     """Обработчик выбора тарифа - отправляет invoice через Telegram Payments"""
-    tariff_key = callback.data.split("_")[1]
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
+    # Извлекаем tariff_key и purchase_id из callback_data
+    # Формат: "tariff_1:purchase_abc123" или "tariff_1" (для обратной совместимости)
+    callback_data_parts = callback.data.split(":")
+    tariff_key_part = callback_data_parts[0]
+    tariff_key = tariff_key_part.split("_")[1] if "_" in tariff_key_part else None
+    purchase_id_from_callback = callback_data_parts[1] if len(callback_data_parts) > 1 else None
+    purchase_id = purchase_id_from_callback  # Для использования в дальнейшем коде
+    
+    # ВАЛИДАЦИЯ: Проверяем наличие purchase_id (обязательно для новых покупок)
+    if not purchase_id:
+        # Старая кнопка без purchase_id - отклоняем
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Purchase context missing: user={telegram_id}, callback_data={callback.data}")
+        await database._log_audit_event_atomic_standalone(
+            "purchase_context_invalid",
+            telegram_id,
+            None,
+            f"Missing purchase_id in callback: {callback.data}"
+        )
+        return
+    
+    # ВАЛИДАЦИЯ: Проверяем валидность purchase context
+    purchase_context = await database.validate_purchase_context(purchase_id, telegram_id)
+    if not purchase_context:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid purchase context: user={telegram_id}, purchase_id={purchase_id}")
+        await database._log_audit_event_atomic_standalone(
+            "purchase_context_invalid",
+            telegram_id,
+            None,
+            f"Invalid or expired purchase_id: {purchase_id}"
+        )
+        return
+    
+    # Проверяем, что tariff_key из callback соответствует purchase context
+    if purchase_context["tariff"] != tariff_key:
+        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Tariff mismatch: user={telegram_id}, purchase_id={purchase_id}, expected={purchase_context['tariff']}, got={tariff_key}")
+        await database._log_audit_event_atomic_standalone(
+            "purchase_context_invalid",
+            telegram_id,
+            None,
+            f"Tariff mismatch for purchase_id={purchase_id}"
+        )
+        return
+    
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
         return
     
-    # Получаем промокод из состояния
-    state_data = await state.get_data()
-    promo_code = state_data.get("promo_code")
-    
-    # Проверяем промокод через базу данных
-    promo_data = None
-    if promo_code:
-        promo_data = await database.check_promo_code_valid(promo_code.upper())
-    
-    has_promo = promo_data is not None
-    
+    # Используем данные из purchase context (а не из FSM)
     tariff_data = config.TARIFFS.get(tariff_key, config.TARIFFS["1"])
     base_price = tariff_data["price"]
     
-    # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
+    # Используем цену и промокод из purchase context
+    amount = purchase_context["price_kopecks"] // 100  # Конвертируем из копеек в рубли
+    promo_code_from_context = purchase_context.get("promo_code")
+    
+    # Проверяем промокод (для обратной совместимости, но приоритет у purchase context)
+    promo_data = None
+    if promo_code_from_context:
+        promo_data = await database.check_promo_code_valid(promo_code_from_context.upper())
+    
+    has_promo = promo_data is not None
+    
+    # Используем purchase_id в payload (цена уже из purchase context)
+    payload = f"purchase:{purchase_id}"
+    
+    # Очищаем промокод из состояния после использования (если был)
     if has_promo:
-        discount_percent = promo_data["discount_percent"]
-        amount = int(base_price * (100 - discount_percent) / 100)
-        payload = f"purchase:promo:{promo_code.upper()}:{telegram_id}:{tariff_key}:{int(time.time())}"
-        # Очищаем промокод из состояния после использования
         await state.update_data(promo_code=None)
-    else:
-        # ПРИОРИТЕТ 1: VIP-статус
-        is_vip = await database.is_vip_user(telegram_id)
-        
-        if is_vip:
-            amount = int(base_price * 0.70)  # 30% скидка
-            payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
-        else:
-            # ПРИОРИТЕТ 2: Персональная скидка
-            personal_discount = await database.get_user_discount(telegram_id)
-            if personal_discount:
-                discount_percent = personal_discount["discount_percent"]
-                amount = int(base_price * (1 - discount_percent / 100))
-                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
-            else:
-                # Без скидки
-                amount = base_price
-                payload = f"{telegram_id}_{tariff_key}_{int(time.time())}"
     
     # Формируем описание тарифа
     months = tariff_data["months"]
@@ -2037,6 +2112,11 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
             logger.error(f"Failed to decrease balance for subscription payment: user={telegram_id}, amount={amount_rubles}")
             await callback.message.answer(localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Обратитесь в поддержку."))
             return
+        
+        # ВАЛИДАЦИЯ: Помечаем purchase как выполненный после успешного списания баланса
+        success_mark = await database.mark_purchase_completed(purchase_id)
+        if not success_mark:
+            logger.warning(f"Failed to mark purchase as completed: user={telegram_id}, purchase_id={purchase_id}")
         
         # Активируем подписку через grant_access
         months = tariff_data["months"]
@@ -2081,12 +2161,12 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
             await callback.message.answer(localization.get_text(language, "error_subscription_activation", default="Ошибка активации подписки. Средства возвращены на баланс."))
             return
         
-        # Создаем запись о платеже для аналитики
+        # Создаем запись о платеже для аналитики (с purchase_id если используется)
         pool = await database.get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved')",
-                telegram_id, tariff_key, amount
+                "INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id) VALUES ($1, $2, $3, 'approved', $4)",
+                telegram_id, tariff_key, amount, purchase_id
             )
         
         # Начисляем реферальный кешбэк при оплате с баланса
@@ -2149,7 +2229,7 @@ async def callback_tariff(callback: CallbackQuery, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
-                callback_data=f"pay_tariff_card:{tariff_key}"
+                callback_data=f"pay_tariff_card:{tariff_key}:{purchase_id}"
             )],
             [InlineKeyboardButton(
                 text=localization.get_text(language, "back", default="← Назад"),
@@ -2262,15 +2342,47 @@ async def process_successful_payment(message: Message):
             await message.answer(localization.get_text(language, "error_payment_processing"))
             return
     
-    # Обработка платежей за подписку (существующая логика)
-    # Извлекаем данные из payload
-    # Формат для обычной покупки: user_id_tariff_timestamp
-    # Формат для покупки с промокодом: purchase:promo:CODE:user_id:tariff:timestamp
-    # Формат для продления: renew:user_id:tariff:timestamp
-    promo_code_used = None  # Инициализируем переменную для промокода
+    # Обработка платежей за подписку с валидацией purchase context
+    purchase_context = None
+    promo_code_used = None
+    tariff_key = None
+    payment_amount = None
+    
     try:
-        if payload.startswith("renew:"):
-            # Продление подписки
+        # Новый формат: "purchase:purchase_id"
+        if payload.startswith("purchase:"):
+            purchase_id = payload.split(":", 1)[1]
+            
+            # ВАЛИДАЦИЯ: Проверяем валидность purchase context
+            purchase_context = await database.validate_purchase_context(purchase_id, telegram_id)
+            if not purchase_context:
+                error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
+                logger.warning(f"Invalid purchase context in successful_payment: user={telegram_id}, purchase_id={purchase_id}")
+                await database._log_audit_event_atomic_standalone(
+                    "purchase_rejected_due_to_stale_context",
+                    telegram_id,
+                    None,
+                    f"Payment received but purchase context invalid: purchase_id={purchase_id}"
+                )
+                return
+            
+            # Используем данные из purchase context
+            tariff_key = purchase_context["tariff"]
+            payment_amount = purchase_context["price_kopecks"] / 100.0  # Конвертируем в рубли
+            promo_code_used = purchase_context.get("promo_code")
+            
+            logger.info(f"Payment received with valid purchase context: user={telegram_id}, purchase_id={purchase_id}, tariff={tariff_key}, amount={payment_amount} RUB")
+            await database._log_audit_event_atomic_standalone(
+                "payment_received",
+                telegram_id,
+                None,
+                f"Payment received with valid purchase context: purchase_id={purchase_id}, amount={payment_amount} RUB"
+            )
+        elif payload.startswith("renew:"):
+            # Продление подписки (legacy формат, сохраняем для обратной совместимости)
             parts = payload.split(":")
             if len(parts) < 3:
                 logger.error(f"Invalid renewal payload format: {payload}")
@@ -2281,8 +2393,16 @@ async def process_successful_payment(message: Message):
             
             payload_user_id = int(parts[1])
             tariff_key = parts[2]
+            
+            # Проверяем, что платеж для этого пользователя
+            if payload_user_id != telegram_id:
+                logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
+                return
         elif payload.startswith("purchase:promo:"):
-            # Покупка с промокодом
+            # Старый формат с промокодом (legacy, сохраняем для обратной совместимости)
             parts = payload.split(":")
             if len(parts) < 5:
                 logger.error(f"Invalid promo purchase payload format: {payload}")
@@ -2291,11 +2411,19 @@ async def process_successful_payment(message: Message):
                 await message.answer(localization.get_text(language, "error_payment_processing"))
                 return
             
-            promo_code_used = parts[2]  # Код промокода
+            promo_code_used = parts[2]
             payload_user_id = int(parts[3])
             tariff_key = parts[4]
+            
+            # Проверяем, что платеж для этого пользователя
+            if payload_user_id != telegram_id:
+                logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
+                return
         else:
-            # Обычная покупка (старый формат)
+            # Старый формат (legacy, сохраняем для обратной совместимости)
             parts = payload.split("_")
             if len(parts) < 2:
                 logger.error(f"Invalid payload format: {payload}")
@@ -2306,14 +2434,14 @@ async def process_successful_payment(message: Message):
             
             payload_user_id = int(parts[0])
             tariff_key = parts[1]
-        
-        # Проверяем, что платеж для этого пользователя
-        if payload_user_id != telegram_id:
-            logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
-            user = await database.get_user(telegram_id)
-            language = user.get("language", "ru") if user else "ru"
-            await message.answer(localization.get_text(language, "error_payment_processing"))
-            return
+            
+            # Проверяем, что платеж для этого пользователя
+            if payload_user_id != telegram_id:
+                logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
+                user = await database.get_user(telegram_id)
+                language = user.get("language", "ru") if user else "ru"
+                await message.answer(localization.get_text(language, "error_payment_processing"))
+                return
         
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing payload {payload}: {e}")
@@ -2322,7 +2450,14 @@ async def process_successful_payment(message: Message):
         await message.answer(localization.get_text(language, "error_payment_processing"))
         return
     
-    payment_amount = payment.total_amount // 100  # Конвертируем из копеек
+    # Определяем payment_amount и tariff_key из purchase context или legacy формата
+    if purchase_context:
+        payment_amount = purchase_context["price_kopecks"] / 100.0  # Конвертируем из копеек в рубли
+        tariff_key = purchase_context["tariff"]
+        promo_code_used = purchase_context.get("promo_code")
+    else:
+        # Legacy: вычисляем из payload
+        payment_amount = payment.total_amount / 100.0  # Конвертируем из копеек в рубли
     
     # Создаем платеж в БД
     # Для Telegram Payments создаем платеж при successful_payment
@@ -2360,9 +2495,27 @@ async def process_successful_payment(message: Message):
     months = tariff_data["months"]
     
     # Активируем подписку через grant_access
+    # ВАЛИДАЦИЯ: Если используется purchase context, проверяем что он еще валиден
+    if purchase_context:
+        # Проверяем, что purchase context не был отменен после создания платежа
+        recheck_context = await database.validate_purchase_context(purchase_context["purchase_id"], telegram_id)
+        if not recheck_context:
+            error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
+            user = await database.get_user(telegram_id)
+            language = user.get("language", "ru") if user else "ru"
+            await message.answer(localization.get_text(language, "error_subscription_activation", default=error_text))
+            logger.error(f"Purchase context became invalid during payment processing: user={telegram_id}, purchase_id={purchase_context['purchase_id']}")
+            await database._log_audit_event_atomic_standalone(
+                "purchase_rejected_due_to_stale_context",
+                telegram_id,
+                None,
+                f"Purchase context invalidated during processing: purchase_id={purchase_context['purchase_id']}"
+            )
+            return
+    
     logger.info(
         f"process_successful_payment: ACTIVATING_SUBSCRIPTION [user={telegram_id}, payment_id={payment_id}, "
-        f"tariff={tariff_key}, months={months}]"
+        f"tariff={tariff_key}, months={months}, purchase_id={purchase_context['purchase_id'] if purchase_context else 'legacy'}]"
     )
     try:
         expires_at, is_renewal, vpn_key = await database.approve_payment_atomic(
@@ -2419,7 +2572,7 @@ async def process_successful_payment(message: Message):
                     # Рассчитываем price_before (базовая цена тарифа)
                     base_price = tariff_data["price"]
                     price_before = base_price
-                    price_after = payment_amount
+                    price_after = payment_amount if payment_amount else payment.total_amount / 100.0
                     
                     # Увеличиваем счетчик использований
                     await database.increment_promo_code_use(promo_code_used)
