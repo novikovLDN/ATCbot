@@ -88,7 +88,7 @@ async def main():
     health_server_host = os.getenv("HEALTH_SERVER_HOST", "0.0.0.0")
     health_server_port = int(os.getenv("HEALTH_SERVER_PORT", "8080"))
     health_server_task = asyncio.create_task(
-        health_server.health_server_task(host=health_server_host, port=health_server_port)
+        health_server.health_server_task(host=health_server_host, port=health_server_port, bot=bot)
     )
     logger.info(f"Health check HTTP server started on http://{health_server_host}:{health_server_port}/health")
     
