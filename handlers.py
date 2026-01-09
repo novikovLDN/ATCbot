@@ -4391,9 +4391,19 @@ async def callback_copy_referral_link(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
 
 
+def _pluralize_friends(count: int) -> str:
+    """Правильное склонение слова 'друг' для русского языка"""
+    if count % 10 == 1 and count % 100 != 11:
+        return "друг"
+    elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+        return "друга"
+    else:
+        return "друзей"
+
+
 @router.callback_query(F.data == "referral_stats")
 async def callback_referral_stats(callback: CallbackQuery):
-    """Экран статистики приглашений"""
+    """Экран статистики приглашений с расчётом до следующего уровня"""
     telegram_id = callback.from_user.id
     language = "ru"
     
@@ -4416,26 +4426,48 @@ async def callback_referral_stats(callback: CallbackQuery):
                 "referrals_to_next": 25
             }
         
-        current_percent = level_info.get("current_level", 10)
-        referrals_count = database.safe_int(level_info.get("referrals_count", 0))
+        # Получаем количество приглашённых пользователей (для определения уровня)
+        current_referrals = database.safe_int(level_info.get("referrals_count", 0))
+        
+        # Определяем текущий уровень кешбэка на основе количества приглашённых
+        if current_referrals < 25:
+            current_percent = 10
+            next_threshold = 25
+            is_max_level = False
+        elif current_referrals < 50:
+            current_percent = 25
+            next_threshold = 50
+            is_max_level = False
+        else:
+            current_percent = 45
+            next_threshold = None
+            is_max_level = True
+        
+        # Вычисляем оставшихся друзей до следующего уровня
+        if is_max_level:
+            remaining_count = None
+        else:
+            remaining_count = next_threshold - current_referrals
+        
+        # Получаем общий кешбэк
         total_cashback = await database.get_total_cashback_earned(telegram_id)
         if total_cashback is None:
             total_cashback = 0.0
         
-        # Формируем текст статистики
-        text = localization.get_text(
-            language,
-            "referral_stats_screen",
-            invited_count=referrals_count,
-            total_cashback=total_cashback,
-            cashback_percent=current_percent,
-            default=(
-                f"📊 <b>Статистика приглашений</b>\n\n"
-                f"👤 Приглашено друзей: {referrals_count}\n"
-                f"💰 Общий кешбэк: {total_cashback:.2f} ₽\n\n"
-                f"🎁 Твой уровень кешбэка: {current_percent}%"
-            )
+        # Формируем текст статистики (без жирного форматирования)
+        text = (
+            f"📊 Статистика приглашений\n\n"
+            f"👤 Приглашено друзей: {current_referrals}\n"
+            f"💰 Общий кешбэк: {total_cashback:.2f} ₽\n\n"
+            f"🎁 Твой уровень кешбэка: {current_percent}%"
         )
+        
+        # Добавляем информацию о прогрессе до следующего уровня
+        if is_max_level:
+            text += "\n💎 Максимальный уровень достигнут"
+        else:
+            friends_word = _pluralize_friends(remaining_count)
+            text += f"\n🔥 До следующего уровня осталось: {remaining_count} {friends_word}"
         
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -4445,7 +4477,7 @@ async def callback_referral_stats(callback: CallbackQuery):
             )]
         ])
         
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
         
     except Exception as e:
