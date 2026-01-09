@@ -356,21 +356,27 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     
     Args:
         language: Язык пользователя
-        telegram_id: Telegram ID пользователя (опционально, для проверки trial eligibility)
+        telegram_id: Telegram ID пользователя (обязательно для проверки trial availability)
+    
+    Кнопка "Пробный период 3 дня" показывается ТОЛЬКО если:
+    - trial_used_at IS NULL
+    - Нет активной подписки
+    - Нет платных подписок в истории (source='payment')
     """
     buttons = []
     
     # КРИТИЧНО: Кнопка "Пробный период 3 дня" только для новых пользователей
+    # Используем is_trial_available() для строгой проверки всех условий
     if telegram_id and database.DB_READY:
         try:
-            is_eligible = await database.is_eligible_for_trial(telegram_id)
-            if is_eligible:
+            is_available = await database.is_trial_available(telegram_id)
+            if is_available:
                 buttons.append([InlineKeyboardButton(
                     text=localization.get_text(language, "trial_button", default="🎁 Пробный период 3 дня"),
                     callback_data="activate_trial"
                 )])
         except Exception as e:
-            logger.warning(f"Error checking trial eligibility for user {telegram_id}: {e}")
+            logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
     
     buttons.append([InlineKeyboardButton(
         text=localization.get_text(language, "profile"),

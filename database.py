@@ -1885,6 +1885,58 @@ async def is_eligible_for_trial(telegram_id: int) -> bool:
     return not trial_used
 
 
+async def is_trial_available(telegram_id: int) -> bool:
+    """Проверить, доступна ли кнопка "Пробный период 3 дня" в главном меню
+    
+    Кнопка показывается ТОЛЬКО если ВСЕ условия выполнены:
+    1. trial_used_at IS NULL (trial ещё не использован)
+    2. Нет активной подписки (status='active' AND expires_at > now)
+    3. Нет платных подписок в истории (source='payment')
+    
+    Returns:
+        True если кнопка должна быть показана, False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        
+        # Проверка 1: trial_used_at IS NULL
+        user_row = await conn.fetchrow(
+            "SELECT trial_used_at FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+        if not user_row:
+            return False
+        
+        if user_row["trial_used_at"] is not None:
+            return False
+        
+        # Проверка 2: Нет активной подписки
+        active_subscription = await conn.fetchrow(
+            """SELECT 1 FROM subscriptions 
+               WHERE telegram_id = $1 
+               AND status = 'active' 
+               AND expires_at > $2
+               LIMIT 1""",
+            telegram_id, now
+        )
+        if active_subscription:
+            return False
+        
+        # Проверка 3: Нет платных подписок в истории (source='payment')
+        paid_subscription = await conn.fetchrow(
+            """SELECT 1 FROM subscriptions 
+               WHERE telegram_id = $1 
+               AND source = 'payment'
+               LIMIT 1""",
+            telegram_id
+        )
+        if paid_subscription:
+            return False
+        
+        return True
+
+
 async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
     """Получить активную подписку по ID
     
