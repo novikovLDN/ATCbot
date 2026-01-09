@@ -1108,8 +1108,8 @@ async def cmd_start(message: Message):
                             existing_referrer = user.get("referrer_id") or user.get("referred_by")
                             logger.debug(f"REFERRAL FRAUD PREVENTION: User {telegram_id} already has a referrer (referrer_id={existing_referrer}), skipping registration. Attempted referral_code={referral_code}")
     
-    text = localization.get_text("ru", "language_select")
-    await message.answer(text, reply_markup=get_language_keyboard())
+    # Экран выбора языка - только кнопки, без текста
+    await message.answer("", reply_markup=get_language_keyboard())
 
 
 async def format_promo_stats_text(stats: list) -> str:
@@ -1390,8 +1390,8 @@ async def callback_change_language(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
-    await safe_edit_text(callback.message, text, reply_markup=get_language_keyboard())
+    # Экран выбора языка - только кнопки, без текста
+    await safe_edit_text(callback.message, "", reply_markup=get_language_keyboard())
     await callback.answer()
 
 
@@ -2262,7 +2262,7 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             callback_data="tariff:basic"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "tariff_select_plus_button", default="🔝 Выбрать Plus"),
+            text=localization.get_text(language, "tariff_select_plus_button", default="🔑 Выбрать Plus"),
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
@@ -4267,25 +4267,12 @@ async def callback_referral(callback: CallbackQuery):
                 )
             )
             
-            # Добавляем информацию о прогрессе до следующего уровня
+            # Добавляем информацию о прогрессе до следующего уровня (формат согласно требованиям)
             if next_level and referrals_to_next:
-                progress_text = localization.get_text(
-                    language,
-                    "referral_level_progress",
-                    current_level=current_percent,
-                    next_level=next_level,
-                    referrals_to_next=referrals_to_next,
-                    default=f"\n\n📈 Ваш уровень: {current_percent}% кешбэка\nДо уровня {next_level}% осталось {referrals_to_next} рефералов"
-                )
-                text += progress_text
+                text += f"\n\n📈 Ваш уровень: {current_percent}%\nДо уровня {next_level}% осталось {referrals_to_next} рефералов"
             elif next_level is None:
-                max_level_text = localization.get_text(
-                    language,
-                    "referral_max_level",
-                    current_level=current_percent,
-                    default=f"\n\n🎉 Вы достигли максимального уровня {current_percent}%!"
-                )
-                text += max_level_text
+                # Максимальный уровень достигнут
+                text += f"\n\n📈 Ваш уровень: {current_percent}%"
         except (KeyError, TypeError) as e:
             logger.warning(f"Error using localization for referral screen: {e}, using fallback")
             # Fallback текст
