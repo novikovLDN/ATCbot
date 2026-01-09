@@ -2028,6 +2028,10 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
+            text=localization.get_text(language, "enter_promo_button", default="🎟 Ввести промокод"),
+            callback_data="enter_promo"
+        )],
+        [InlineKeyboardButton(
             text=localization.get_text(language, "back", default="⬅️ Назад"),
             callback_data="menu_main"
         )],
@@ -2084,6 +2088,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         return
     
     # КРИТИЧНО: Сохраняем tariff_type в FSM state
+    # Промокод НЕ сбрасываем при выборе тарифа - он применяется к выбранному тарифу
     await state.update_data(tariff_type=tariff_type)
     
     # КРИТИЧНО: НЕ создаем pending_purchase - только показываем кнопки периодов
@@ -2790,6 +2795,19 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
+    # КРИТИЧНО: Проверяем, не применён ли уже промокод
+    fsm_data = await state.get_data()
+    existing_promo = fsm_data.get("promo_code")
+    if existing_promo:
+        # Промокод уже применён - показываем сообщение
+        text = localization.get_text(
+            language,
+            "promo_applied",
+            default="🎁 Промокод применён. Скидка уже учтена в цене."
+        )
+        await callback.message.answer(text)
+        return
+    
     # Устанавливаем состояние ожидания промокода
     await state.set_state(PromoCodeInput.waiting_for_promo)
     
@@ -3047,6 +3065,35 @@ async def process_promo_code(message: Message, state: FSMContext):
 
     promo_code = message.text.strip().upper()
     
+    # КРИТИЧНО: Проверяем, не применён ли уже промокод в этой сессии
+    fsm_data = await state.get_data()
+    existing_promo = fsm_data.get("promo_code")
+    if existing_promo and existing_promo.upper() == promo_code:
+        # Промокод уже применён - показываем сообщение
+        text = localization.get_text(
+            language, 
+            "promo_applied", 
+            default="🎁 Промокод применён. Скидка уже учтена в цене."
+        )
+        await message.answer(text)
+        # Возвращаемся к выбору тарифа
+        await state.set_state(PurchaseState.choose_tariff)
+        tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🪙 Basic", callback_data="tariff:basic")],
+            [InlineKeyboardButton(text="🔑 Plus", callback_data="tariff:plus")],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "enter_promo_button", default="🎟 Ввести промокод"),
+                callback_data="enter_promo"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                callback_data="menu_main"
+            )],
+        ])
+        await message.answer(tariff_text, reply_markup=keyboard)
+        return
+    
     # Проверяем промокод через базу данных
     promo_data = await database.check_promo_code_valid(promo_code)
     if promo_data:
@@ -3079,20 +3126,25 @@ async def process_promo_code(message: Message, state: FSMContext):
         # Возвращаемся к выбору типа тарифа (Basic/Plus) - цены будут пересчитаны с промокодом
         tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🪙 Basic", 
-            callback_data="tariff:basic"
-        )],
-        [InlineKeyboardButton(
-            text="🔑 Plus",
-            callback_data="tariff:plus"
-        )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="← Назад"),
+                text="🪙 Basic", 
+                callback_data="tariff:basic"
+            )],
+            [InlineKeyboardButton(
+                text="🔑 Plus",
+                callback_data="tariff:plus"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "enter_promo_button", default="🎟 Ввести промокод"),
+                callback_data="enter_promo"
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="⬅️ Назад"),
                 callback_data="menu_main"
             )],
         ])
         await message.answer(tariff_text, reply_markup=keyboard)
+        await state.set_state(PurchaseState.choose_tariff)
     else:
         # Промокод невалиден
         text = localization.get_text(language, "invalid_promo", default="❌ Промокод недействителен")
