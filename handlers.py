@@ -1108,8 +1108,8 @@ async def cmd_start(message: Message):
                             existing_referrer = user.get("referrer_id") or user.get("referred_by")
                             logger.debug(f"REFERRAL FRAUD PREVENTION: User {telegram_id} already has a referrer (referrer_id={existing_referrer}), skipping registration. Attempted referral_code={referral_code}")
     
-    # Экран выбора языка - только кнопки, без текста
-    await message.answer("", reply_markup=get_language_keyboard())
+    # Экран выбора языка - только кнопки, без текста (один пробел как placeholder для Telegram API)
+    await message.answer(" ", reply_markup=get_language_keyboard())
 
 
 async def format_promo_stats_text(stats: list) -> str:
@@ -1390,8 +1390,8 @@ async def callback_change_language(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Экран выбора языка - только кнопки, без текста
-    await safe_edit_text(callback.message, "", reply_markup=get_language_keyboard())
+    # Экран выбора языка - только кнопки, без текста (один пробел как placeholder для Telegram API)
+    await safe_edit_text(callback.message, " ", reply_markup=get_language_keyboard())
     await callback.answer()
 
 
