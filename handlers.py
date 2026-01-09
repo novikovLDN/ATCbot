@@ -1108,8 +1108,11 @@ async def cmd_start(message: Message):
                             existing_referrer = user.get("referrer_id") or user.get("referred_by")
                             logger.debug(f"REFERRAL FRAUD PREVENTION: User {telegram_id} already has a referrer (referrer_id={existing_referrer}), skipping registration. Attempted referral_code={referral_code}")
     
-    # Экран выбора языка - только кнопки, без текста (один пробел как placeholder для Telegram API)
-    await message.answer(" ", reply_markup=get_language_keyboard())
+    # Экран выбора языка
+    await message.answer(
+        "🌍 Выбери язык:",
+        reply_markup=get_language_keyboard()
+    )
 
 
 async def format_promo_stats_text(stats: list) -> str:
