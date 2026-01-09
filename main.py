@@ -13,6 +13,7 @@ import fast_expiry_cleanup
 import auto_renewal
 import health_server
 import admin_notifications
+import trial_notifications
 
 # Настройка логирования
 logging.basicConfig(
@@ -74,6 +75,14 @@ async def main():
         logger.info("Reminders task started")
     else:
         logger.warning("Reminders task skipped (DB not ready)")
+    
+    # Запуск фоновой задачи для trial-уведомлений (только если БД готова)
+    trial_notifications_task = None
+    if database.DB_READY:
+        trial_notifications_task = asyncio.create_task(trial_notifications.run_trial_scheduler(bot))
+        logger.info("Trial notifications scheduler started")
+    else:
+        logger.warning("Trial notifications scheduler skipped (DB not ready)")
     
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))

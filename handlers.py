@@ -35,9 +35,12 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
     Args:
         message: Message объект для редактирования
         text: Новый текст сообщения
-        reply_markup: Новая клавиатура (опционально)
+        reply_markup: Новая клавиатура (опционально) - MUST be InlineKeyboardMarkup, NOT coroutine
         parse_mode: Режим парсинга (HTML, Markdown и т.д.)
     """
+    # Защита от передачи coroutine вместо InlineKeyboardMarkup
+    if asyncio.iscoroutine(reply_markup):
+        raise RuntimeError("reply_markup coroutine passed without await. Must await keyboard builder before passing to safe_edit_text.")
     # Сравниваем текущий текст с новым
     if message.text == text or (message.caption and message.caption == text):
         # Текст совпадает - проверяем клавиатуру
@@ -1378,7 +1381,8 @@ async def callback_language(callback: CallbackQuery):
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
-    await safe_edit_text(callback.message, text, reply_markup=get_main_menu_keyboard(language))
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -2128,7 +2132,8 @@ async def callback_back_to_main(callback: CallbackQuery):
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
-    await safe_edit_text(callback.message, text, reply_markup=get_main_menu_keyboard(language))
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
 
 

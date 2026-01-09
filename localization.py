@@ -90,6 +90,40 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "tariff_button_6": "6 месяцев · Реже продлевать · 599 ₽",
         "tariff_button_12": "12 месяцев · Не думать о доступе · 899 ₽",
         
+        # Пробный период
+        "trial_button": "🎁 Пробный период 3 дня",
+        "trial_activated_text": (
+            "🔒 <b>Пробный доступ активирован</b>\n\n"
+            "Вы под защитой на 3 дня.\n\n"
+            "🔑 <b>Ваш ключ подключения:</b>\n"
+            "<code>{vpn_key}</code>\n\n"
+            "Используйте его в приложении VPN.\n\n"
+            "⏰ <b>Срок действия:</b> до {expires_date}"
+        ),
+        "trial_not_available": "❌ Пробный период недоступен. Вы уже использовали его ранее или имеете активную подписку.",
+        "trial_activation_error": "❌ Ошибка активации пробного периода. Попробуйте позже или обратитесь в поддержку.",
+        "trial_notification_6h": "✨ Просто напоминание\n\nVPN лучше включать всегда, чтобы защитить ваши данные.",
+        "trial_notification_18h": "🚀 Стабильное и быстрое соединение\n\nВаш VPN работает надёжно.",
+        "trial_notification_30h": "☕ Привет! VPN активен\n\nПродолжайте пользоваться защищённым доступом.",
+        "trial_notification_42h": "⚠️ Осталось 30 часов пробного доступа\n\nИспользуйте время с пользой.",
+        "trial_notification_54h": "⌛ Последние 18 часов\n\nПробный период скоро закончится.",
+        "trial_notification_60h": (
+            "🛡 VPN скоро отключится\n\n"
+            "Осталось 12 часов пробного доступа.\n\n"
+            "Продолжите пользоваться защитой — оформите подписку."
+        ),
+        "trial_notification_71h": (
+            "🚨 Последний час пробного доступа\n\n"
+            "Через час VPN будет отключён.\n\n"
+            "Оформите подписку, чтобы продолжить пользоваться защитой."
+        ),
+        "trial_expired_text": (
+            "🔓 <b>Пробный доступ завершён</b>\n\n"
+            "Ваш пробный период истёк.\n\n"
+            "🎟 Используйте промокод <b>YAbx30</b> для скидки 30% на первую подписку.\n\n"
+            "Оформите подписку, чтобы продолжить пользоваться защищённым доступом."
+        ),
+        
         # Выбор способа оплаты
         "select_payment": "Выберите способ оплаты.",
         "select_payment_method": "Выберите способ оплаты:\n\nСумма: {price:.2f} ₽",
@@ -386,6 +420,40 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "tariff_button_6": "6 months · Renew less often · 599 ₽",
         "tariff_button_12": "12 months · Don't think about access · 899 ₽",
         
+        # Trial period
+        "trial_button": "🎁 3-Day Trial Period",
+        "trial_activated_text": (
+            "🔒 <b>Trial access activated</b>\n\n"
+            "You are protected for 3 days.\n\n"
+            "🔑 <b>Your connection key:</b>\n"
+            "<code>{vpn_key}</code>\n\n"
+            "Use it in your VPN app.\n\n"
+            "⏰ <b>Valid until:</b> {expires_date}"
+        ),
+        "trial_not_available": "❌ Trial period is not available. You have already used it or have an active subscription.",
+        "trial_activation_error": "❌ Error activating trial period. Please try again later or contact support.",
+        "trial_notification_6h": "✨ Just a reminder\n\nVPN is better to keep on all the time to protect your data.",
+        "trial_notification_18h": "🚀 Stable and fast connection\n\nYour VPN is working reliably.",
+        "trial_notification_30h": "☕ Hello! VPN is active\n\nContinue using secure access.",
+        "trial_notification_42h": "⚠️ 30 hours of trial access remaining\n\nMake the most of your time.",
+        "trial_notification_54h": "⌛ Last 18 hours\n\nTrial period will end soon.",
+        "trial_notification_60h": (
+            "🛡 VPN will be disabled soon\n\n"
+            "12 hours of trial access remaining.\n\n"
+            "Continue using protection — subscribe now."
+        ),
+        "trial_notification_71h": (
+            "🚨 Last hour of trial access\n\n"
+            "VPN will be disabled in one hour.\n\n"
+            "Subscribe now to continue using secure access."
+        ),
+        "trial_expired_text": (
+            "🔓 <b>Trial access ended</b>\n\n"
+            "Your trial period has expired.\n\n"
+            "🎟 Use promo code <b>YAbx30</b> for 30% discount on your first subscription.\n\n"
+            "Subscribe now to continue using secure access."
+        ),
+        
         # Выбор способа оплаты
         "select_payment": "Choose payment method.",
         "select_payment_method": "Choose payment method:\n\nAmount: {price:.2f} ₽",
@@ -668,6 +736,41 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "tariff_button_3": "3 oy · Eng ko'p tanlanadi · 399 ₽ ⭐",
         "tariff_button_6": "6 oy · Kamroq uzaytirish · 599 ₽",
         "tariff_button_12": "12 oy · Kirish haqida o'ylamaslik · 899 ₽",
+        
+        # Sinov muddati
+        "trial_button": "🎁 3 kunlik sinov muddati",
+        "trial_activated_text": (
+            "🔒 <b>Sinov kirishi faollashtirildi</b>\n\n"
+            "Siz 3 kun davomida himoyalansiz.\n\n"
+            "🔑 <b>Ulanish kalitingiz:</b>\n"
+            "<code>{vpn_key}</code>\n\n"
+            "VPN ilovasida ishlating.\n\n"
+            "⏰ <b>Amal qilish muddati:</b> {expires_date}"
+        ),
+        "trial_not_available": "❌ Sinov muddati mavjud emas. Siz allaqachon foydalangansiz yoki faol obunangiz bor.",
+        "trial_activation_error": "❌ Sinov muddatini faollashtirishda xatolik. Keyinroq qayta urinib ko'ring yoki qo'llab-quvvatlash bilan bog'laning.",
+        "trial_notification_6h": "✨ Faqat eslatma\n\nVPN ma'lumotlaringizni himoya qilish uchun doim yoqilgan bo'lishi kerak.",
+        "trial_notification_18h": "🚀 Barqaror va tez ulanish\n\nVPNingiz ishonchli ishlayapti.",
+        "trial_notification_30h": "☕ Salom! VPN faol\n\nXavfsiz kirishdan foydalanishni davom eting.",
+        "trial_notification_42h": "⚠️ Sinov kirishidan 30 soat qoldi\n\nVaqtingizdan foydalaning.",
+        "trial_notification_54h": "⌛ So'nggi 18 soat\n\nSinov muddati tez orada tugaydi.",
+        "trial_notification_60h": (
+            "🛡 VPN tez orada o'chiriladi\n\n"
+            "Sinov kirishidan 12 soat qoldi.\n\n"
+            "Himoyadan foydalanishni davom eting — obuna bo'ling."
+        ),
+        "trial_notification_71h": (
+            "🚨 Sinov kirishining so'nggi soati\n\n"
+            "Bir soatdan keyin VPN o'chiriladi.\n\n"
+            "Xavfsiz kirishdan foydalanishni davom etish uchun obuna bo'ling."
+        ),
+        "trial_expired_text": (
+            "🔓 <b>Sinov kirishi tugadi</b>\n\n"
+            "Sinov muddatingiz tugadi.\n\n"
+            "🎟 Birinchi obunangiz uchun 30% chegirma olish uchun <b>YAbx30</b> promo kodidan foydalaning.\n\n"
+            "Xavfsiz kirishdan foydalanishni davom etish uchun obuna bo'ling."
+        ),
+        
         "select_payment": "To'lov usulini tanlang.",
         "select_payment_method": "To'lov usulini tanlang:\n\nSumma: {price:.2f} ₽",
         "pay_balance": "💰 Balans (mavjud: {balance:.2f} ₽)",
@@ -935,6 +1038,41 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "tariff_button_3": "3 моҳ · Бештар интихоб карда мешавад · 399 ₽ ⭐",
         "tariff_button_6": "6 моҳ · Камтар васеъ кардан · 599 ₽",
         "tariff_button_12": "12 моҳ · Дар бораи дастрасӣ фикр накардан · 899 ₽",
+        
+        # Давраи санҷишӣ
+        "trial_button": "🎁 Давраи санҷишӣ 3 рӯз",
+        "trial_activated_text": (
+            "🔒 <b>Дастрасии санҷишӣ фаъол шуд</b>\n\n"
+            "Шумо барои 3 рӯз ҳимоя мешавед.\n\n"
+            "🔑 <b>Калиди пайвастшавии шумо:</b>\n"
+            "<code>{vpn_key}</code>\n\n"
+            "Дар барномаи VPN истифода баред.\n\n"
+            "⏰ <b>Мӯҳлати амал:</b> то {expires_date}"
+        ),
+        "trial_not_available": "❌ Давраи санҷишӣ дастрас нест. Шумо аллакай истифода кардаед ё обунаи фаъол доред.",
+        "trial_activation_error": "❌ Хато дар фаъолкунии давраи санҷишӣ. Лутфан, бори дигар кӯшиш кунед ё бо дастгирӣ тамос гиред.",
+        "trial_notification_6h": "✨ Танҳо ёддошт\n\nVPN барои ҳимояи маълумоти шумо ҳамеша фаъол бошад.",
+        "trial_notification_18h": "🚀 Пайвастшавии устувор ва зуд\n\nVPN-и шумо боэътимод кор мекунад.",
+        "trial_notification_30h": "☕ Салом! VPN фаъол аст\n\nИстифодаи дастрасии ҳимояшударо идома диҳед.",
+        "trial_notification_42h": "⚠️ 30 соати дастрасии санҷишӣ боқӣ мондааст\n\nВақти худро ба таври самаранок истифода баред.",
+        "trial_notification_54h": "⌛ Охирин 18 соат\n\nДавраи санҷишӣ ба зудӣ ба охир мерасад.",
+        "trial_notification_60h": (
+            "🛡 VPN ба зудӣ хомӯш мешавад\n\n"
+            "12 соати дастрасии санҷишӣ боқӣ мондааст.\n\n"
+            "Истифодаи ҳимояро идома диҳед — обуна шавед."
+        ),
+        "trial_notification_71h": (
+            "🚨 Охирин соати дастрасии санҷишӣ\n\n"
+            "Дар як соат VPN хомӯш мешавад.\n\n"
+            "Барои идомаи истифодаи дастрасии ҳимояшуда обуна шавед."
+        ),
+        "trial_expired_text": (
+            "🔓 <b>Дастрасии санҷишӣ ба охир расид</b>\n\n"
+            "Давраи санҷишии шумо ба охир расид.\n\n"
+            "🎟 Барои 30% тахфиф дар аввалин обунаи худ рамзи <b>YAbx30</b> истифода баред.\n\n"
+            "Барои идомаи истифодаи дастрасии ҳимояшуда обуна шавед."
+        ),
+        
         "select_payment": "Усули пардохтро интихоб кунед.",
         "select_payment_method": "Усули пардохтро интихоб кунед:\n\nМаблағ: {price:.2f} ₽",
         "pay_balance": "💰 Балланс (дастрас: {balance:.2f} ₽)",
