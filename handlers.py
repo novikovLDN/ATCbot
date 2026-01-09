@@ -325,15 +325,15 @@ logger = logging.getLogger(__name__)
 # VPN-ключи теперь создаются динамически через Xray API, лимита нет
 
 def get_language_keyboard():
-    """Клавиатура для выбора языка"""
+    """Клавиатура для выбора языка (канонический вид)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="Русский", callback_data="lang_ru"),
-            InlineKeyboardButton(text="English", callback_data="lang_en"),
+            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
+            InlineKeyboardButton(text="🇺🇸 English", callback_data="lang_en"),
         ],
         [
-            InlineKeyboardButton(text="O'zbek", callback_data="lang_uz"),
-            InlineKeyboardButton(text="Тоҷикӣ", callback_data="lang_tj"),
+            InlineKeyboardButton(text="🇺🇿 O'zbek", callback_data="lang_uz"),
+            InlineKeyboardButton(text="🇹🇯 Тоҷикӣ", callback_data="lang_tj"),
         ],
     ])
     return keyboard
@@ -1393,8 +1393,12 @@ async def callback_change_language(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # Экран выбора языка - только кнопки, без текста (один пробел как placeholder для Telegram API)
-    await safe_edit_text(callback.message, " ", reply_markup=get_language_keyboard())
+    # Экран выбора языка (канонический вид)
+    await safe_edit_text(
+        callback.message,
+        "🌍 Выбери язык:",
+        reply_markup=get_language_keyboard()
+    )
     await callback.answer()
 
 
