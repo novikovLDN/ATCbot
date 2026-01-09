@@ -16,6 +16,7 @@ import tempfile
 import os
 import asyncio
 import random
+from typing import Optional, Dict, Any
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
@@ -123,6 +124,89 @@ async def safe_edit_reply_markup(message: Message, reply_markup: InlineKeyboardM
             raise
         # Игнорируем ошибку "message is not modified" - клавиатура уже имеет нужное содержимое
         logger.debug(f"Reply markup not modified (expected): {e}")
+
+# ====================================================================================
+# PROMO SESSION MANAGEMENT (In-memory, 5-minute TTL)
+# ====================================================================================
+
+async def get_promo_session(state: FSMContext) -> Optional[Dict[str, Any]]:
+    """
+    Получить активную промо-сессию из FSM state
+    
+    Returns:
+        {
+            "promo_code": str,
+            "discount_percent": int,
+            "expires_at": float (unix timestamp)
+        } или None если сессия отсутствует или истекла
+    """
+    fsm_data = await state.get_data()
+    promo_session = fsm_data.get("promo_session")
+    
+    if not promo_session:
+        return None
+    
+    # Проверяем срок действия
+    expires_at = promo_session.get("expires_at")
+    current_time = time.time()
+    
+    if expires_at and current_time > expires_at:
+        # Сессия истекла - удаляем её
+        await state.update_data(promo_session=None)
+        telegram_id = fsm_data.get("_telegram_id", "unknown")
+        logger.info(
+            f"promo_session_expired: user={telegram_id}, "
+            f"promo_code={promo_session.get('promo_code')}"
+        )
+        return None
+    
+    return promo_session
+
+
+async def create_promo_session(
+    state: FSMContext,
+    promo_code: str,
+    discount_percent: int,
+    telegram_id: int,
+    ttl_seconds: int = 300
+) -> Dict[str, Any]:
+    """
+    Создать промо-сессию с TTL
+    
+    Args:
+        state: FSM context
+        promo_code: Код промокода
+        discount_percent: Процент скидки
+        telegram_id: Telegram ID пользователя (для логирования)
+        ttl_seconds: Время жизни в секундах (по умолчанию 300 = 5 минут)
+    
+    Returns:
+        Созданная промо-сессия
+    """
+    current_time = time.time()
+    expires_at = current_time + ttl_seconds
+    
+    promo_session = {
+        "promo_code": promo_code.upper(),
+        "discount_percent": discount_percent,
+        "expires_at": expires_at
+    }
+    
+    await state.update_data(promo_session=promo_session, _telegram_id=telegram_id)
+    
+    expires_in = int(expires_at - current_time)
+    logger.info(
+        f"promo_session_created: user={telegram_id}, promo_code={promo_code.upper()}, "
+        f"discount_percent={discount_percent}%, expires_in={expires_in}s"
+    )
+    
+    return promo_session
+
+
+async def clear_promo_session(state: FSMContext):
+    """Удалить промо-сессию"""
+    await state.update_data(promo_session=None)
+
 
 # ====================================================================================
 async def ensure_db_ready_message(message_or_query) -> bool:
@@ -2009,7 +2093,8 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     language = user.get("language", "ru") if user else "ru"
     
     # КРИТИЧНО: Очищаем все данные покупки и устанавливаем начальное состояние
-    await state.update_data(promo_code=None, purchase_id=None, tariff_type=None, period_days=None)
+    # Промо-сессия НЕ очищается - она независима от покупки и имеет свой TTL
+    await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
     
     # КРИТИЧНО: Отменяем все старые pending покупки при начале новой покупки
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
@@ -2088,16 +2173,12 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         return
     
     # КРИТИЧНО: Сохраняем tariff_type в FSM state
-    # Промокод НЕ сбрасываем при выборе тарифа - он применяется к выбранному тарифу
-    # КРИТИЧНО: Получаем промокод ДО обновления, чтобы сохранить его
-    fsm_data_before = await state.get_data()
-    promo_code = fsm_data_before.get("promo_code")
+    # Промо-сессия НЕ сбрасывается при выборе тарифа - она независима от покупки
+    await state.update_data(tariff_type=tariff_type)
     
-    # Обновляем tariff_type, сохраняя промокод явно
-    update_data = {"tariff_type": tariff_type}
-    if promo_code:
-        update_data["promo_code"] = promo_code
-    await state.update_data(**update_data)
+    # КРИТИЧНО: Получаем промо-сессию (проверяет срок действия автоматически)
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
     
     # КРИТИЧНО: НЕ создаем pending_purchase - только показываем кнопки периодов
     # Определяем текст в зависимости от типа тарифа
@@ -2111,11 +2192,14 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     # Получаем цены для выбранного тарифа с учетом скидок
     periods = config.TARIFFS[tariff_type]
     
-    # КРИТИЧНО: Логируем контекст промокода для диагностики
-    if promo_code:
+    # КРИТИЧНО: Логируем контекст промо-сессии для диагностики
+    if promo_session:
+        expires_at = promo_session.get("expires_at", 0)
+        expires_in = max(0, int(expires_at - time.time()))
         logger.info(
-            f"Price calculation with promo: user={telegram_id}, tariff={tariff_type}, "
-            f"promo_code={promo_code}"
+            f"Price calculation with promo session: user={telegram_id}, tariff={tariff_type}, "
+            f"promo_code={promo_code}, discount={promo_session.get('discount_percent')}%, "
+            f"expires_in={expires_in}s"
         )
     
     for period_days, period_data in periods.items():
@@ -2248,32 +2332,24 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Проверяем, что tariff_type в FSM соответствует выбранному
     fsm_data = await state.get_data()
     stored_tariff = fsm_data.get("tariff_type")
-    promo_code_before_update = fsm_data.get("promo_code")  # Сохраняем промокод ДО обновления
     if stored_tariff != tariff_type:
         logger.warning(f"Tariff mismatch: FSM={stored_tariff}, callback={tariff_type}, user={telegram_id}")
-        # Обновляем tariff_type в FSM, сохраняя промокод
+        # Обновляем tariff_type в FSM
         await state.update_data(tariff_type=tariff_type)
-        # КРИТИЧНО: Проверяем, что промокод сохранился после обновления
-        fsm_data_after = await state.get_data()
-        if promo_code_before_update and not fsm_data_after.get("promo_code"):
-            # Если промокод был потерян - восстанавливаем его
-            logger.warning(
-                f"Promo code lost during tariff update, restoring: user={telegram_id}, "
-                f"tariff={tariff_type}, promo_code={promo_code_before_update}"
-            )
-            await state.update_data(promo_code=promo_code_before_update)
-            promo_code = promo_code_before_update
-        else:
-            promo_code = fsm_data_after.get("promo_code")
-    else:
-        # Если тариф не изменился, просто получаем промокод из FSM
-        promo_code = promo_code_before_update
     
-    # КРИТИЧНО: Логируем контекст промокода для диагностики
-    if promo_code:
+    # КРИТИЧНО: Получаем промо-сессию (проверяет срок действия автоматически)
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+    
+    # КРИТИЧНО: Логируем контекст промо-сессии для диагностики
+    if promo_session:
+        expires_at = promo_session.get("expires_at", 0)
+        expires_in = max(0, int(expires_at - time.time()))
+        discount_percent = promo_session.get("discount_percent", 0)
         logger.info(
-            f"Period selection with promo: user={telegram_id}, tariff={tariff_type}, "
-            f"period={period_days}, promo_code={promo_code}"
+            f"Period selection with promo session: user={telegram_id}, tariff={tariff_type}, "
+            f"period={period_days}, promo_code={promo_code}, discount={discount_percent}%, "
+            f"expires_in={expires_in}s"
         )
     
     # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
@@ -2291,12 +2367,12 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         return
     
     # КРИТИЧНО: Сохраняем данные в FSM state (БЕЗ создания pending_purchase)
+    # Промо-сессия НЕ сохраняется здесь - она уже в FSM и независима от покупки
     await state.update_data(
         tariff_type=tariff_type,
         period_days=period_days,
         final_price_kopecks=price_info["final_price_kopecks"],
-        discount_percent=price_info["discount_percent"],
-        promo_code=promo_code
+        discount_percent=price_info["discount_percent"]
     )
     
     logger.info(
@@ -2592,6 +2668,9 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             await state.set_state(None)
             return
         
+        # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
+        await clear_promo_session(state)
+        
         # КРИТИЧНО: Очищаем FSM после успешной активации
         await state.set_state(None)
         await state.clear()
@@ -2727,7 +2806,10 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    promo_code = fsm_data.get("promo_code")
+    
+    # КРИТИЧНО: Получаем промо-сессию для сохранения в pending_purchase
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
     
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = localization.get_text(
@@ -2834,10 +2916,9 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # КРИТИЧНО: Проверяем, не применён ли уже промокод
-    fsm_data = await state.get_data()
-    existing_promo = fsm_data.get("promo_code")
-    if existing_promo:
+    # КРИТИЧНО: Проверяем активную промо-сессию
+    promo_session = await get_promo_session(state)
+    if promo_session:
         # Промокод уже применён - показываем сообщение
         text = localization.get_text(
             language,
@@ -3104,15 +3185,16 @@ async def process_promo_code(message: Message, state: FSMContext):
 
     promo_code = message.text.strip().upper()
     
-    # КРИТИЧНО: Проверяем, не применён ли уже промокод в этой сессии
-    fsm_data = await state.get_data()
-    existing_promo = fsm_data.get("promo_code")
-    if existing_promo and existing_promo.upper() == promo_code:
-        # Промокод уже применён - показываем сообщение
+    # КРИТИЧНО: Проверяем активную промо-сессию
+    promo_session = await get_promo_session(state)
+    if promo_session and promo_session.get("promo_code") == promo_code:
+        # Промокод уже применён в активной сессии - показываем сообщение
+        expires_at = promo_session.get("expires_at", 0)
+        expires_in = max(0, int(expires_at - time.time()))
         text = localization.get_text(
             language, 
             "promo_applied", 
-            default="🎁 Промокод применён. Скидка уже учтена в цене."
+            default=f"🎁 Промокод применён. Скидка уже учтена в цене. Действителен ещё {expires_in // 60} мин."
         )
         await message.answer(text)
         # Возвращаемся к выбору тарифа
@@ -3139,17 +3221,16 @@ async def process_promo_code(message: Message, state: FSMContext):
         # Промокод валиден
         discount_percent = promo_data["discount_percent"]
         
-        # Логируем применение промокода
-        logger.info(
-            f"promo_applied: user={telegram_id}, promo_code={promo_code}, "
-            f"discount_percent={discount_percent}%"
+        # КРИТИЧНО: Создаём промо-сессию с TTL 5 минут
+        await create_promo_session(
+            state=state,
+            promo_code=promo_code,
+            discount_percent=discount_percent,
+            telegram_id=telegram_id,
+            ttl_seconds=300
         )
         
-        # КРИТИЧНО: Сохраняем промокод в FSM state
-        await state.update_data(promo_code=promo_code)  # Сохраняем в верхнем регистре
-        
-        # КРИТИЧНО: Отменяем все старые pending покупки при применении промокода
-        await database.cancel_pending_purchases(telegram_id, "promo_code_applied")
+        # КРИТИЧНО: НЕ отменяем pending покупки - промо-сессия независима от покупки
         
         # КРИТИЧНО: Возвращаем пользователя к выбору тарифа с обновленными ценами
         await state.set_state(PurchaseState.choose_tariff)
@@ -3718,6 +3799,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
         f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, "
         f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_sent=True, subscription_visible=True]"
     )
+    
+    # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
+    await clear_promo_session(state)
     
     # КРИТИЧНО: Очищаем FSM state после успешной активации подписки
     try:
