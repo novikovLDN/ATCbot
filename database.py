@@ -256,6 +256,15 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE subscriptions ALTER COLUMN vpn_key DROP NOT NULL")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_3h_sent BOOLEAN DEFAULT FALSE")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS reminder_6h_sent BOOLEAN DEFAULT FALSE")
+            
+            # Trial notification flags (без миграции - используем существующую структуру)
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_notif_6h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_notif_18h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_notif_30h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_notif_42h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_notif_54h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_notif_60h_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_notif_71h_sent BOOLEAN DEFAULT FALSE")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS admin_grant_days INTEGER DEFAULT NULL")
             # Поля для умных уведомлений
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP")
@@ -587,11 +596,14 @@ async def _init_promo_codes(conn):
     await conn.execute("""
         INSERT INTO promo_codes (code, discount_percent, max_uses, is_active)
         VALUES
-            ('ELVIRA064', 50, 50, TRUE),
+            ('ELVIRA064', 64, 50, TRUE),
             ('YAbx30', 30, NULL, TRUE),
             ('FAM50', 50, 50, TRUE),
             ('COURIER30', 30, 40, TRUE)
-        ON CONFLICT (code) DO NOTHING
+        ON CONFLICT (code) DO UPDATE SET
+            discount_percent = EXCLUDED.discount_percent,
+            max_uses = EXCLUDED.max_uses,
+            is_active = EXCLUDED.is_active
     """)
 
 
@@ -1751,6 +1763,79 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def has_any_subscription(telegram_id: int) -> bool:
+    """Проверить, есть ли у пользователя хотя бы одна подписка (любого статуса)
+    
+    Returns:
+        True если есть хотя бы одна запись в subscriptions, False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM subscriptions WHERE telegram_id = $1 LIMIT 1",
+            telegram_id
+        )
+        return row is not None
+
+
+async def has_any_payment(telegram_id: int) -> bool:
+    """Проверить, есть ли у пользователя хотя бы один платёж (любого статуса)
+    
+    Returns:
+        True если есть хотя бы одна запись в payments, False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM payments WHERE telegram_id = $1 LIMIT 1",
+            telegram_id
+        )
+        return row is not None
+
+
+async def has_trial_used(telegram_id: int) -> bool:
+    """Проверить, использовал ли пользователь trial-период
+    
+    Trial считается использованным, если есть подписка с source='trial'
+    
+    Returns:
+        True если trial уже использован, False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM subscriptions WHERE telegram_id = $1 AND source = 'trial' LIMIT 1",
+            telegram_id
+        )
+        return row is not None
+
+
+async def is_eligible_for_trial(telegram_id: int) -> bool:
+    """Проверить, может ли пользователь активировать trial-период
+    
+    Пользователь может активировать trial, если:
+    - нет ни одной подписки (любого статуса)
+    - нет записей об оплатах
+    - trial ещё не использован
+    
+    Returns:
+        True если пользователь может активировать trial, False иначе
+    """
+    # Проверяем наличие подписок
+    if await has_any_subscription(telegram_id):
+        return False
+    
+    # Проверяем наличие платежей
+    if await has_any_payment(telegram_id):
+        return False
+    
+    # Проверяем, использован ли уже trial
+    if await has_trial_used(telegram_id):
+        return False
+    
+    return True
+
+
 async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
     """Получить активную подписку по ID
     
@@ -2630,9 +2715,13 @@ async def grant_access(
                        telegram_id, uuid, vpn_key, expires_at, status, source,
                        reminder_sent, reminder_3d_sent, reminder_24h_sent,
                        reminder_3h_sent, reminder_6h_sent, admin_grant_days,
-                       activated_at, last_bytes
+                       activated_at, last_bytes,
+                       trial_notif_6h_sent, trial_notif_18h_sent, trial_notif_30h_sent,
+                       trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
+                       trial_notif_71h_sent
                    )
-                   VALUES ($1, $2, $3, $4, 'active', $5, FALSE, FALSE, FALSE, FALSE, FALSE, $6, $7, 0)
+                   VALUES ($1, $2, $3, $4, 'active', $5, FALSE, FALSE, FALSE, FALSE, FALSE, $6, $7, 0,
+                           FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE)
                    ON CONFLICT (telegram_id) 
                    DO UPDATE SET 
                        uuid = $2,
@@ -2647,7 +2736,14 @@ async def grant_access(
                        reminder_6h_sent = FALSE,
                        admin_grant_days = $6,
                        activated_at = $7,
-                       last_bytes = 0""",
+                       last_bytes = 0,
+                       trial_notif_6h_sent = FALSE,
+                       trial_notif_18h_sent = FALSE,
+                       trial_notif_30h_sent = FALSE,
+                       trial_notif_42h_sent = FALSE,
+                       trial_notif_54h_sent = FALSE,
+                       trial_notif_60h_sent = FALSE,
+                       trial_notif_71h_sent = FALSE""",
                 telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start
             )
             
@@ -3763,8 +3859,12 @@ async def calculate_final_price(
     
     if has_promo:
         discount_percent = promo_data["discount_percent"]
+        # КРИТИЧНО: Защита от скидки > 100% - ограничиваем до 100%
+        discount_percent = min(discount_percent, 100)
         discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
         final_price_kopecks = base_price_kopecks - discount_amount_kopecks
+        # КРИТИЧНО: Гарантируем, что финальная цена >= 0
+        final_price_kopecks = max(final_price_kopecks, 0)
         discount_type = "promo"
         applied_promo_code = promo_code.upper()
     elif is_vip:

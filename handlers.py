@@ -348,37 +348,55 @@ async def format_text_with_incident(text: str, language: str) -> str:
     return text
 
 
-def get_main_menu_keyboard(language: str):
-    """Клавиатура главного меню"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "profile"),
-            callback_data="menu_profile"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "buy_vpn"),
-            callback_data="menu_buy_vpn"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "instruction"),
-            callback_data="menu_instruction"
-        )],
-        [InlineKeyboardButton(
-            text=localization.get_text(language, "referral_program"),
-            callback_data="menu_referral"
-        )],
-        [
-            InlineKeyboardButton(
-                text=localization.get_text(language, "about"),
-                callback_data="menu_about"
-            ),
-            InlineKeyboardButton(
-                text=localization.get_text(language, "support"),
-                callback_data="menu_support"
-            ),
-        ],
+async def get_main_menu_keyboard(language: str, telegram_id: int = None):
+    """Клавиатура главного меню
+    
+    Args:
+        language: Язык пользователя
+        telegram_id: Telegram ID пользователя (опционально, для проверки trial eligibility)
+    """
+    buttons = []
+    
+    # КРИТИЧНО: Кнопка "Пробный период 3 дня" только для новых пользователей
+    if telegram_id and database.DB_READY:
+        try:
+            is_eligible = await database.is_eligible_for_trial(telegram_id)
+            if is_eligible:
+                buttons.append([InlineKeyboardButton(
+                    text=localization.get_text(language, "trial_button", default="🎁 Пробный период 3 дня"),
+                    callback_data="activate_trial"
+                )])
+        except Exception as e:
+            logger.warning(f"Error checking trial eligibility for user {telegram_id}: {e}")
+    
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "profile"),
+        callback_data="menu_profile"
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "buy_vpn"),
+        callback_data="menu_buy_vpn"
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "instruction"),
+        callback_data="menu_instruction"
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "referral_program"),
+        callback_data="menu_referral"
+    )])
+    buttons.append([
+        InlineKeyboardButton(
+            text=localization.get_text(language, "about"),
+            callback_data="menu_about"
+        ),
+        InlineKeyboardButton(
+            text=localization.get_text(language, "support"),
+            callback_data="menu_support"
+        ),
     ])
-    return keyboard
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_back_keyboard(language: str):
@@ -1011,7 +1029,8 @@ async def cmd_start(message: Message):
         language = "ru"  # По умолчанию русский
         text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
         text += "\n\n" + localization.get_text(language, "service_unavailable")
-        await message.answer(text, reply_markup=get_main_menu_keyboard(language))
+        keyboard = await get_main_menu_keyboard(language, message.from_user.id)
+        await message.answer(text, reply_markup=keyboard)
         return
     """Обработчик команды /start"""
     telegram_id = message.from_user.id
@@ -1375,8 +1394,99 @@ async def callback_main_menu(callback: CallbackQuery):
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
-    await safe_edit_text(callback.message, text, reply_markup=get_main_menu_keyboard(language))
+    keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
+
+
+@router.callback_query(F.data == "activate_trial")
+async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
+    """Активация пробного периода на 3 дня"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # КРИТИЧНО: Проверяем eligibility перед активацией
+    is_eligible = await database.is_eligible_for_trial(telegram_id)
+    if not is_eligible:
+        error_text = localization.get_text(
+            language,
+            "trial_not_available",
+            default="❌ Пробный период недоступен. Вы уже использовали его ранее или имеете активную подписку."
+        )
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Trial activation attempted by ineligible user: {telegram_id}")
+        return
+    
+    await callback.answer()
+    
+    try:
+        # КРИТИЧНО: Создаём подписку на 3 дня с source='trial'
+        duration = timedelta(days=3)
+        result = await database.grant_access(
+            telegram_id=telegram_id,
+            duration=duration,
+            source="trial",
+            admin_telegram_id=None
+        )
+        
+        uuid = result.get("uuid")
+        vpn_key = result.get("vless_url")
+        subscription_end = result.get("subscription_end")
+        
+        if not uuid or not vpn_key:
+            raise Exception("Failed to create VPN access for trial")
+        
+        # Логируем активацию trial
+        logger.info(
+            f"trial_activated: user={telegram_id}, expires_at={subscription_end.isoformat()}, "
+            f"uuid={uuid[:8]}..."
+        )
+        
+        # Отправляем сообщение об активации
+        success_text = localization.get_text(
+            language,
+            "trial_activated_text",
+            default=(
+                "🔒 <b>Пробный доступ активирован</b>\n\n"
+                "Вы под защитой на 3 дня.\n\n"
+                "🔑 <b>Ваш ключ подключения:</b>\n"
+                "<code>{vpn_key}</code>\n\n"
+                "Используйте его в приложении VPN.\n\n"
+                "⏰ <b>Срок действия:</b> до {expires_date}"
+            )
+        ).format(
+            vpn_key=vpn_key,
+            expires_date=subscription_end.strftime("%d.%m.%Y %H:%M")
+        )
+        
+        await callback.message.answer(success_text, parse_mode="HTML")
+        
+        # Отправляем VPN-ключ отдельным сообщением
+        try:
+            await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"Failed to send VPN key with HTML tags: {e}. Sending as plain text.")
+            await callback.message.answer(f"🔑 {vpn_key}")
+        
+        # Обновляем главное меню (кнопка trial должна исчезнуть)
+        text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
+        text = await format_text_with_incident(text, language)
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logger.exception(f"Error activating trial for user {telegram_id}: {e}")
+        error_text = localization.get_text(
+            language,
+            "trial_activation_error",
+            default="❌ Ошибка активации пробного периода. Попробуйте позже или обратитесь в поддержку."
+        )
+        await callback.message.answer(error_text)
 
 
 @router.callback_query(F.data == "menu_profile", StateFilter(default_state))
