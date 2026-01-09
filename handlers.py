@@ -1266,21 +1266,45 @@ async def show_profile(message_or_query, language: str):
                 # Подписка активна
                 try:
                     expires_str = expires_at.strftime("%d.%m.%Y")
-                    text += "\n\n" + localization.get_text(language, "profile_subscription_active", date=expires_str)
+                    text += "\n" + localization.get_text(language, "profile_subscription_active", date=expires_str)
                 except (KeyError, TypeError):
-                    text += f"\n\nПодписка:\n— 🟢 Активна до {expires_at.strftime('%d.%m.%Y')}"
+                    text += f"\n📆 Подписка: активна до {expires_at.strftime('%d.%m.%Y')}"
             else:
                 # Подписка неактивна (истекла)
                 try:
-                    text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
+                    text += "\n" + localization.get_text(language, "profile_subscription_inactive")
                 except (KeyError, TypeError):
-                    text += "\n\nПодписка:\n— 🔴 Неактивна"
+                    text += "\n📆 Подписка: неактивна"
         else:
             # Подписки нет
             try:
-                text += "\n\n" + localization.get_text(language, "profile_subscription_inactive")
+                text += "\n" + localization.get_text(language, "profile_subscription_inactive")
             except (KeyError, TypeError):
-                text += "\n\nПодписка:\n— 🔴 Неактивна"
+                text += "\n📆 Подписка: неактивна"
+        
+        # Получаем статус автопродления и добавляем информацию
+        auto_renew = False
+        if subscription:
+            auto_renew = subscription.get("auto_renew", False)
+        
+        # Добавляем информацию об автопродлении (только для активных подписок)
+        if has_active_subscription:
+            if auto_renew:
+                # Автопродление включено - next_billing_date = expires_at
+                expires_at = subscription["expires_at"]
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at)
+                next_billing_str = expires_at.strftime("%d.%m.%Y")
+                try:
+                    text += "\n" + localization.get_text(language, "profile_auto_renew_enabled", next_billing_date=next_billing_str)
+                except (KeyError, TypeError):
+                    text += f"\n🔁 Автопродление: {next_billing_str}"
+            else:
+                # Автопродление выключено
+                try:
+                    text += "\n" + localization.get_text(language, "profile_auto_renew_disabled")
+                except (KeyError, TypeError):
+                    text += "\n🔁 Автопродление: выключено"
         
         # Добавляем подсказку о продлении (для активных и истекших подписок - по требованиям)
         if has_any_subscription:
@@ -1295,12 +1319,6 @@ async def show_profile(message_or_query, language: str):
                 text += "\n\n" + localization.get_text(language, "profile_buy_hint")
             except (KeyError, TypeError):
                 text += "\n\nНажмите «Купить подписку» в меню, чтобы получить доступ."
-        
-        # Получаем клавиатуру
-        # Получаем статус автопродления
-        auto_renew = False
-        if subscription:
-            auto_renew = subscription.get("auto_renew", False)
         
         # Показываем кнопку "Продлить доступ" если есть подписка (активная или истекшая) - по требованиям
         keyboard = get_profile_keyboard(language, has_any_subscription, auto_renew)
@@ -1368,7 +1386,11 @@ async def callback_toggle_auto_renew(callback: CallbackQuery):
 @router.callback_query(F.data == "change_language")
 async def callback_change_language(callback: CallbackQuery):
     """Изменить язык"""
-    text = localization.get_text("ru", "language_select")
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
     await safe_edit_text(callback.message, text, reply_markup=get_language_keyboard())
     await callback.answer()
 
@@ -2233,14 +2255,14 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Устанавливаем FSM state в choose_tariff
     await state.set_state(PurchaseState.choose_tariff)
     
-    text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
+    text = localization.get_text(language, "select_tariff", default="📊 Тарифы")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🪙 Basic", 
+            text=localization.get_text(language, "tariff_select_basic_button", default="✅ Выбрать Basic"), 
             callback_data="tariff:basic"
         )],
         [InlineKeyboardButton(
-            text="🔑 Plus",
+            text=localization.get_text(language, "tariff_select_plus_button", default="🔝 Выбрать Plus"),
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
@@ -2248,7 +2270,7 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             callback_data="enter_promo"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back", default="⬅️ Назад"),
+            text=localization.get_text(language, "back", default="⬅️ Назад в меню"),
             callback_data="menu_main"
         )],
     ])
@@ -2312,11 +2334,11 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     promo_code = promo_session.get("promo_code") if promo_session else None
     
     # КРИТИЧНО: НЕ создаем pending_purchase - только показываем кнопки периодов
-    # Определяем текст в зависимости от типа тарифа
+    # Определяем описание тарифа в зависимости от типа
     if tariff_type == "basic":
-        text = localization.get_text(language, "tariff_basic_selected", default="🔐 Выбран тариф Basic\nНа какой срок интересно?")
+        text = localization.get_text(language, "tariff_basic_description", default="🪙 Тариф: Basic\n\nДля повседневного использования")
     else:
-        text = localization.get_text(language, "tariff_plus_selected", default="🔐 Выбран тариф Plus\nНа какой срок интересно?")
+        text = localization.get_text(language, "tariff_plus_description", default="🔑 Тариф: Plus\n\nПриоритетный доступ к серверам")
     
     buttons = []
     
@@ -4111,8 +4133,12 @@ async def callback_about(callback: CallbackQuery):
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
+    # Получаем заголовок и текст
+    title = localization.get_text(language, "about_title", default="🔎 О сервисе Atlas Secure")
     text = localization.get_text(language, "about_text")
-    await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language))
+    full_text = f"{title}\n\n{text}"
+    
+    await safe_edit_text(callback.message, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML")
     await callback.answer()
 
 
@@ -4281,12 +4307,12 @@ async def callback_referral(callback: CallbackQuery):
         # Клавиатура согласно требованиям
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=localization.get_text(language, "copy_referral_link", default="🔗 Скопировать реферальную ссылку"),
-                callback_data="copy_referral_link"
+                text=localization.get_text(language, "referral_share_link_button", default="📤 Поделиться ссылкой"),
+                callback_data="share_referral_link"
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "referral_how_it_works", default="📊 Как работает программа"),
-                callback_data="referral_how_it_works"
+                text=localization.get_text(language, "referral_stats_button", default="📊 Статистика приглашений"),
+                callback_data="referral_stats"
             )],
             [InlineKeyboardButton(
                 text=localization.get_text(language, "back", default="⬅️ Назад"),
@@ -4324,9 +4350,10 @@ async def callback_referral(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
 
 
+@router.callback_query(F.data == "share_referral_link")
 @router.callback_query(F.data == "copy_referral_link")
 async def callback_copy_referral_link(callback: CallbackQuery):
-    """Копировать реферальную ссылку - отправляет ссылку отдельным сообщением"""
+    """Поделиться реферальной ссылкой - отправляет ссылку отдельным сообщением"""
     telegram_id = callback.from_user.id
     language = "ru"
     
@@ -4335,7 +4362,7 @@ async def callback_copy_referral_link(callback: CallbackQuery):
         if user:
             language = user.get("language", "ru")
     except Exception as e:
-        logger.warning(f"Error getting user in copy_referral_link: {e}")
+        logger.warning(f"Error getting user in share_referral_link: {e}")
     
     try:
         # Получаем username бота для реферальной ссылки
@@ -4361,7 +4388,74 @@ async def callback_copy_referral_link(callback: CallbackQuery):
         logger.info(f"Referral link sent to user: {telegram_id}")
         
     except Exception as e:
-        logger.exception(f"Error in copy_referral_link handler: user={telegram_id}: {e}")
+        logger.exception(f"Error in share_referral_link handler: user={telegram_id}: {e}")
+        error_text = localization.get_text(
+            language,
+            "error_profile_load",
+            default="Ошибка загрузки данных. Попробуйте позже."
+        )
+        await callback.answer(error_text, show_alert=True)
+
+
+@router.callback_query(F.data == "referral_stats")
+async def callback_referral_stats(callback: CallbackQuery):
+    """Экран статистики приглашений"""
+    telegram_id = callback.from_user.id
+    language = "ru"
+    
+    try:
+        user = await database.get_user(telegram_id)
+        if user:
+            language = user.get("language", "ru")
+    except Exception as e:
+        logger.warning(f"Error getting user in referral_stats: {e}")
+    
+    try:
+        # Получаем информацию об уровне и прогрессе
+        level_info = await database.get_referral_level_info(telegram_id)
+        if not level_info:
+            level_info = {
+                "current_level": 10,
+                "referrals_count": 0,
+                "paid_referrals_count": 0,
+                "next_level": 25,
+                "referrals_to_next": 25
+            }
+        
+        current_percent = level_info.get("current_level", 10)
+        referrals_count = database.safe_int(level_info.get("referrals_count", 0))
+        total_cashback = await database.get_total_cashback_earned(telegram_id)
+        if total_cashback is None:
+            total_cashback = 0.0
+        
+        # Формируем текст статистики
+        text = localization.get_text(
+            language,
+            "referral_stats_screen",
+            invited_count=referrals_count,
+            total_cashback=total_cashback,
+            cashback_percent=current_percent,
+            default=(
+                f"📊 <b>Статистика приглашений</b>\n\n"
+                f"👤 Приглашено друзей: {referrals_count}\n"
+                f"💰 Общий кешбэк: {total_cashback:.2f} ₽\n\n"
+                f"🎁 Твой уровень кешбэка: {current_percent}%"
+            )
+        )
+        
+        # Клавиатура
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                callback_data="menu_referral"
+            )]
+        ])
+        
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+        
+    except Exception as e:
+        logger.exception(f"Error in referral_stats handler: user={telegram_id}: {e}")
         error_text = localization.get_text(
             language,
             "error_profile_load",
