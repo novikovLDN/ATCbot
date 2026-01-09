@@ -181,6 +181,8 @@ async def expire_trial_subscriptions(bot: Bot):
             
             # Получаем всех пользователей с истёкшим trial (trial_expires_at <= now)
             # и их trial-подписки для отзыва доступа
+            # ВАЖНО: Выбираем только тех, у кого trial_expires_at в пределах последних 24 часов
+            # Это предотвращает повторную обработку и отправку умного предложения
             rows = await conn.fetch("""
                 SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
                        s.uuid, s.expires_at as subscription_expires_at
@@ -189,6 +191,7 @@ async def expire_trial_subscriptions(bot: Bot):
                 WHERE u.trial_used_at IS NOT NULL
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at <= $1
+                  AND u.trial_expires_at > $1 - INTERVAL '24 hours'
             """, now)
             
             for row in rows:
@@ -218,21 +221,81 @@ async def expire_trial_subscriptions(bot: Bot):
                         WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
                     """, telegram_id)
                     
-                    # Отправляем финальное сообщение
+                    # Проверяем, есть ли у пользователя платная подписка
+                    # Если есть - пропускаем умное предложение
+                    paid_subscription = await conn.fetchrow(
+                        """SELECT 1 FROM subscriptions 
+                           WHERE telegram_id = $1 
+                           AND source = 'payment'
+                           LIMIT 1""",
+                        telegram_id
+                    )
+                    
                     user = await database.get_user(telegram_id)
                     language = user.get("language", "ru") if user else "ru"
                     
-                    expired_text = localization.get_text(language, "trial_expired_text")
-                    
-                    try:
-                        await bot.send_message(telegram_id, expired_text, parse_mode="HTML")
-                        logger.info(
-                            f"trial_expired: notification sent: user={telegram_id}, "
-                            f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
-                            f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}"
+                    # Если нет платной подписки - отправляем умное предложение
+                    if not paid_subscription and trial_used_at:
+                        # Вычисляем длительность использования trial
+                        # usage_hours = now - trial_used_at (время с момента активации до истечения)
+                        usage_duration = now - trial_used_at
+                        usage_hours = usage_duration.total_seconds() / 3600
+                        
+                        # Определяем рекомендуемый тариф
+                        if usage_hours < 24:
+                            recommended_tariff = "basic"
+                            tariff_name = "Basic"
+                        elif usage_hours < 48:
+                            recommended_tariff = "plus"
+                            tariff_name = "Plus"
+                        else:
+                            recommended_tariff = "plus"
+                            tariff_name = "Plus"
+                        
+                        # Формируем текст умного предложения
+                        smart_offer_text = (
+                            "🔓 <b>Пробный доступ завершён</b>\n\n"
+                            "Вы активно пользовались VPN — защита и стабильность были с вами эти 3 дня.\n\n"
+                            f"🔍 <b>Рекомендуем тариф: {tariff_name}</b>\n"
+                            "Он лучше подойдёт под ваш стиль использования.\n\n"
+                            "🎁 <b>Для вас промокод -30%: YABX30</b>\n"
+                            "Введите его на экране выбора тарифа.\n\n"
+                            "Один клик — и защита вернётся."
                         )
-                    except Exception as e:
-                        logger.warning(f"Failed to send trial expiration notification to user {telegram_id}: {e}")
+                        
+                        # Создаём клавиатуру с кнопками
+                        smart_offer_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(
+                                text=localization.get_text(language, "buy_vpn", default="🔐 Купить доступ"),
+                                callback_data="menu_buy_vpn"
+                            )],
+                            [InlineKeyboardButton(
+                                text=localization.get_text(language, "profile", default="👤 Мой профиль"),
+                                callback_data="menu_profile"
+                            )]
+                        ])
+                        
+                        try:
+                            await bot.send_message(telegram_id, smart_offer_text, parse_mode="HTML", reply_markup=smart_offer_keyboard)
+                            logger.info(
+                                f"smart_offer_sent: user={telegram_id}, usage_hours={usage_hours:.1f}, "
+                                f"recommended_tariff={recommended_tariff}, trial_used_at={trial_used_at.isoformat()}, "
+                                f"trial_expires_at={trial_expires_at.isoformat()}"
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to send smart offer to user {telegram_id}: {e}")
+                    else:
+                        # Если есть платная подписка - отправляем стандартное сообщение
+                        expired_text = localization.get_text(language, "trial_expired_text")
+                        try:
+                            await bot.send_message(telegram_id, expired_text, parse_mode="HTML")
+                            logger.info(
+                                f"trial_expired: notification sent (paid subscription exists): user={telegram_id}, "
+                                f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
+                                f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}"
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to send trial expiration notification to user {telegram_id}: {e}")
                     
                     logger.info(
                         f"trial_completed: user={telegram_id}, "
