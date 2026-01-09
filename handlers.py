@@ -2089,7 +2089,15 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     
     # КРИТИЧНО: Сохраняем tariff_type в FSM state
     # Промокод НЕ сбрасываем при выборе тарифа - он применяется к выбранному тарифу
-    await state.update_data(tariff_type=tariff_type)
+    # КРИТИЧНО: Получаем промокод ДО обновления, чтобы сохранить его
+    fsm_data_before = await state.get_data()
+    promo_code = fsm_data_before.get("promo_code")
+    
+    # Обновляем tariff_type, сохраняя промокод явно
+    update_data = {"tariff_type": tariff_type}
+    if promo_code:
+        update_data["promo_code"] = promo_code
+    await state.update_data(**update_data)
     
     # КРИТИЧНО: НЕ создаем pending_purchase - только показываем кнопки периодов
     # Определяем текст в зависимости от типа тарифа
@@ -2103,9 +2111,12 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     # Получаем цены для выбранного тарифа с учетом скидок
     periods = config.TARIFFS[tariff_type]
     
-    # Получаем промокод из FSM state (если есть)
-    fsm_data = await state.get_data()
-    promo_code = fsm_data.get("promo_code")
+    # КРИТИЧНО: Логируем контекст промокода для диагностики
+    if promo_code:
+        logger.info(
+            f"Price calculation with promo: user={telegram_id}, tariff={tariff_type}, "
+            f"promo_code={promo_code}"
+        )
     
     for period_days, period_data in periods.items():
         # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены для отображения
@@ -2123,6 +2134,13 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         base_price_rubles = price_info["base_price_kopecks"] / 100.0
         final_price_rubles = price_info["final_price_kopecks"] / 100.0
         has_discount = price_info["discount_percent"] > 0
+        
+        # КРИТИЧНО: Логируем расчет цены для диагностики
+        logger.debug(
+            f"Price recalculated: tariff={tariff_type}, period={period_days}, "
+            f"base={price_info['base_price_kopecks']}, discount={price_info['discount_percent']}%, "
+            f"final={price_info['final_price_kopecks']}, promo_code={promo_code or 'none'}"
+        )
         
         months = period_days // 30
         
@@ -2230,13 +2248,33 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Проверяем, что tariff_type в FSM соответствует выбранному
     fsm_data = await state.get_data()
     stored_tariff = fsm_data.get("tariff_type")
+    promo_code_before_update = fsm_data.get("promo_code")  # Сохраняем промокод ДО обновления
     if stored_tariff != tariff_type:
         logger.warning(f"Tariff mismatch: FSM={stored_tariff}, callback={tariff_type}, user={telegram_id}")
-        # Обновляем tariff_type в FSM
+        # Обновляем tariff_type в FSM, сохраняя промокод
         await state.update_data(tariff_type=tariff_type)
+        # КРИТИЧНО: Проверяем, что промокод сохранился после обновления
+        fsm_data_after = await state.get_data()
+        if promo_code_before_update and not fsm_data_after.get("promo_code"):
+            # Если промокод был потерян - восстанавливаем его
+            logger.warning(
+                f"Promo code lost during tariff update, restoring: user={telegram_id}, "
+                f"tariff={tariff_type}, promo_code={promo_code_before_update}"
+            )
+            await state.update_data(promo_code=promo_code_before_update)
+            promo_code = promo_code_before_update
+        else:
+            promo_code = fsm_data_after.get("promo_code")
+    else:
+        # Если тариф не изменился, просто получаем промокод из FSM
+        promo_code = promo_code_before_update
     
-    # КРИТИЧНО: Получаем промокод из FSM state
-    promo_code = fsm_data.get("promo_code")
+    # КРИТИЧНО: Логируем контекст промокода для диагностики
+    if promo_code:
+        logger.info(
+            f"Period selection with promo: user={telegram_id}, tariff={tariff_type}, "
+            f"period={period_days}, promo_code={promo_code}"
+        )
     
     # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
     try:
@@ -2264,7 +2302,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     logger.info(
         f"Period selected: user={telegram_id}, tariff={tariff_type}, period={period_days}, "
         f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
-        f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}"
+        f"discount_percent={price_info['discount_percent']}%, discount_type={price_info['discount_type']}, "
+        f"promo_code={promo_code or 'none'}"
     )
     
     # КРИТИЧНО: Переходим к выбору способа оплаты (НЕ создаем pending_purchase и invoice)
