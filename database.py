@@ -292,6 +292,15 @@ async def init_db() -> bool:
         # Миграция: добавляем поле balance в users (хранится в копейках как INTEGER)
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        
+        # Trial usage tracking (без миграций - используем ALTER TABLE IF NOT EXISTS)
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_used_at TIMESTAMP")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMP")
+        except Exception:
+            pass
             # Если колонка уже существует как NUMERIC, конвертируем в INTEGER (копейки)
             # Это безопасно, так как мы всегда работаем с копейками
         except Exception:
@@ -1796,7 +1805,7 @@ async def has_any_payment(telegram_id: int) -> bool:
 async def has_trial_used(telegram_id: int) -> bool:
     """Проверить, использовал ли пользователь trial-период
     
-    Trial считается использованным, если есть подписка с source='trial'
+    Trial считается использованным, если trial_used_at IS NOT NULL
     
     Returns:
         True если trial уже использован, False иначе
@@ -1804,36 +1813,76 @@ async def has_trial_used(telegram_id: int) -> bool:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT 1 FROM subscriptions WHERE telegram_id = $1 AND source = 'trial' LIMIT 1",
+            "SELECT trial_used_at FROM users WHERE telegram_id = $1",
             telegram_id
         )
-        return row is not None
+        if not row:
+            return False
+        return row["trial_used_at"] is not None
+
+
+async def get_trial_info(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Получить информацию о trial для пользователя
+    
+    Returns:
+        Dict с trial_used_at и trial_expires_at или None если пользователь не найден
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT trial_used_at, trial_expires_at FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+        if not row:
+            return None
+        return {
+            "trial_used_at": row["trial_used_at"],
+            "trial_expires_at": row["trial_expires_at"]
+        }
+
+
+async def mark_trial_used(telegram_id: int, trial_expires_at: datetime) -> bool:
+    """Пометить trial как использованный
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        trial_expires_at: Время окончания trial (now + 72 hours)
+    
+    Returns:
+        True если успешно, False иначе
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute("""
+                UPDATE users 
+                SET trial_used_at = CURRENT_TIMESTAMP,
+                    trial_expires_at = $1
+                WHERE telegram_id = $2
+            """, trial_expires_at, telegram_id)
+            logger.info(f"Trial marked as used: user={telegram_id}, expires_at={trial_expires_at.isoformat()}")
+            return True
+        except Exception as e:
+            logger.error(f"Error marking trial as used for user {telegram_id}: {e}")
+            return False
 
 
 async def is_eligible_for_trial(telegram_id: int) -> bool:
     """Проверить, может ли пользователь активировать trial-период
     
-    Пользователь может активировать trial, если:
-    - нет ни одной подписки (любого статуса)
-    - нет записей об оплатах
-    - trial ещё не использован
+    Пользователь может активировать trial ТОЛЬКО если:
+    - trial_used_at IS NULL (trial ещё не использован)
+    
+    ВАЖНО: Наличие подписок или платежей НЕ влияет на eligibility.
+    Trial может быть активирован даже если есть активная подписка.
     
     Returns:
         True если пользователь может активировать trial, False иначе
     """
-    # Проверяем наличие подписок
-    if await has_any_subscription(telegram_id):
-        return False
-    
-    # Проверяем наличие платежей
-    if await has_any_payment(telegram_id):
-        return False
-    
-    # Проверяем, использован ли уже trial
-    if await has_trial_used(telegram_id):
-        return False
-    
-    return True
+    # КРИТИЧНО: Проверяем ТОЛЬКО trial_used_at
+    # Наличие подписок или платежей НЕ блокирует trial
+    trial_used = await has_trial_used(telegram_id)
+    return not trial_used
 
 
 async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:

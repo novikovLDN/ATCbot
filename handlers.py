@@ -1431,6 +1431,15 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     try:
         # КРИТИЧНО: Создаём подписку на 3 дня с source='trial'
         duration = timedelta(days=3)
+        now = datetime.now()
+        trial_expires_at = now + duration
+        
+        # ВАЖНО: Сначала помечаем trial как использованный (idempotent)
+        # Это предотвращает повторную активацию даже если grant_access упадёт
+        success = await database.mark_trial_used(telegram_id, trial_expires_at)
+        if not success:
+            raise Exception("Failed to mark trial as used")
+        
         result = await database.grant_access(
             telegram_id=telegram_id,
             duration=duration,
@@ -1447,7 +1456,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         
         # Логируем активацию trial
         logger.info(
-            f"trial_activated: user={telegram_id}, expires_at={subscription_end.isoformat()}, "
+            f"trial_activated: user={telegram_id}, trial_used_at={now.isoformat()}, "
+            f"trial_expires_at={trial_expires_at.isoformat()}, subscription_expires_at={subscription_end.isoformat()}, "
             f"uuid={uuid[:8]}..."
         )
         

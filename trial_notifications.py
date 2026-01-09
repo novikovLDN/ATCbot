@@ -84,8 +84,8 @@ async def send_trial_notification(
 async def process_trial_notifications(bot: Bot):
     """Обработать все уведомления о trial
     
-    Проверяет все активные trial-подписки и отправляет уведомления
-    согласно расписанию.
+    Проверяет всех пользователей с активным trial и отправляет уведомления
+    согласно расписанию на основе trial_expires_at.
     """
     if not database.DB_READY:
         return
@@ -95,28 +95,34 @@ async def process_trial_notifications(bot: Bot):
         async with pool.acquire() as conn:
             now = datetime.now()
             
-            # Получаем все активные trial-подписки
+            # Получаем всех пользователей с активным trial (trial_expires_at > now)
+            # и их trial-подписки для проверки флагов уведомлений
             rows = await conn.fetch("""
-                SELECT telegram_id, activated_at, expires_at, 
-                       trial_notif_6h_sent, trial_notif_18h_sent, trial_notif_30h_sent,
-                       trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
-                       trial_notif_71h_sent
-                FROM subscriptions
-                WHERE source = 'trial' 
-                  AND status = 'active'
-                  AND expires_at > $1
+                SELECT u.telegram_id, u.trial_expires_at,
+                       s.trial_notif_6h_sent, s.trial_notif_18h_sent, s.trial_notif_30h_sent,
+                       s.trial_notif_42h_sent, s.trial_notif_54h_sent, s.trial_notif_60h_sent,
+                       s.trial_notif_71h_sent
+                FROM users u
+                LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
+                WHERE u.trial_used_at IS NOT NULL
+                  AND u.trial_expires_at IS NOT NULL
+                  AND u.trial_expires_at > $1
             """, now)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
-                activated_at = row["activated_at"]
+                trial_expires_at = row["trial_expires_at"]
                 
-                if not activated_at:
+                if not trial_expires_at:
                     continue
                 
-                # Вычисляем время с момента активации
-                time_since_activation = now - activated_at
-                hours_since_activation = time_since_activation.total_seconds() / 3600
+                # Вычисляем время до окончания trial
+                time_until_expiry = trial_expires_at - now
+                hours_until_expiry = time_until_expiry.total_seconds() / 3600
+                
+                # Вычисляем время с момента активации (для обратной совместимости с расписанием)
+                # trial_expires_at - now = 72h - hours_until_expiry
+                hours_since_activation = 72 - hours_until_expiry
                 
                 # Проверяем каждое уведомление в расписании
                 for notification in TRIAL_NOTIFICATION_SCHEDULE:
@@ -132,6 +138,7 @@ async def process_trial_notifications(bot: Bot):
                     # - прошло достаточно времени (hours_since_activation >= hours)
                     # - но не слишком много (в пределах 1 часа после нужного времени)
                     # - и ещё не отправлено
+                    # Для 0h уведомления: hours_since_activation должен быть >= 0 и < 1
                     if (hours_since_activation >= hours and 
                         hours_since_activation < hours + 1 and 
                         not already_sent):
@@ -158,10 +165,11 @@ async def process_trial_notifications(bot: Bot):
 async def expire_trial_subscriptions(bot: Bot):
     """Завершить истёкшие trial-подписки
     
-    Через 72 часа после активации:
+    Когда trial_expires_at <= now:
     - Помечает подписку как expired
     - Удаляет UUID из VPN API
     - Отправляет финальное сообщение пользователю
+    - Логирует завершение trial
     """
     if not database.DB_READY:
         return
@@ -171,23 +179,26 @@ async def expire_trial_subscriptions(bot: Bot):
         async with pool.acquire() as conn:
             now = datetime.now()
             
-            # Получаем все trial-подписки, которые истекли (72 часа с момента активации)
+            # Получаем всех пользователей с истёкшим trial (trial_expires_at <= now)
+            # и их trial-подписки для отзыва доступа
             rows = await conn.fetch("""
-                SELECT telegram_id, uuid, activated_at, expires_at
-                FROM subscriptions
-                WHERE source = 'trial' 
-                  AND status = 'active'
-                  AND activated_at IS NOT NULL
-                  AND activated_at + INTERVAL '72 hours' <= $1
+                SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
+                       s.uuid, s.expires_at as subscription_expires_at
+                FROM users u
+                LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
+                WHERE u.trial_used_at IS NOT NULL
+                  AND u.trial_expires_at IS NOT NULL
+                  AND u.trial_expires_at <= $1
             """, now)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
                 uuid = row["uuid"]
-                activated_at = row["activated_at"]
+                trial_used_at = row["trial_used_at"]
+                trial_expires_at = row["trial_expires_at"]
                 
                 try:
-                    # Удаляем UUID из VPN API
+                    # Удаляем UUID из VPN API (если подписка существует)
                     if uuid:
                         import vpn_utils
                         try:
@@ -200,11 +211,11 @@ async def expire_trial_subscriptions(bot: Bot):
                                 f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}"
                             )
                     
-                    # Помечаем подписку как expired
+                    # Помечаем подписку как expired (если существует)
                     await conn.execute("""
                         UPDATE subscriptions 
                         SET status = 'expired', uuid = NULL, vpn_key = NULL
-                        WHERE telegram_id = $1 AND source = 'trial'
+                        WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
                     """, telegram_id)
                     
                     # Отправляем финальное сообщение
@@ -217,14 +228,17 @@ async def expire_trial_subscriptions(bot: Bot):
                         await bot.send_message(telegram_id, expired_text, parse_mode="HTML")
                         logger.info(
                             f"trial_expired: notification sent: user={telegram_id}, "
-                            f"activated_at={activated_at.isoformat()}"
+                            f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
+                            f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}"
                         )
                     except Exception as e:
                         logger.warning(f"Failed to send trial expiration notification to user {telegram_id}: {e}")
                     
                     logger.info(
-                        f"trial_expired: access_revoked: user={telegram_id}, "
-                        f"activated_at={activated_at.isoformat()}, expired_at={now.isoformat()}"
+                        f"trial_completed: user={telegram_id}, "
+                        f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
+                        f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                        f"completed_at={now.isoformat()}"
                     )
                     
                 except Exception as e:
