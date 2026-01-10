@@ -12,6 +12,9 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Singleton guard: предотвращает повторный запуск scheduler
+_TRIAL_SCHEDULER_STARTED = False
+
 # Расписание уведомлений (в часах от момента активации)
 TRIAL_NOTIFICATION_SCHEDULE = [
     {"hours": 6, "key": "trial_notification_6h", "has_button": False},
@@ -394,7 +397,19 @@ async def run_trial_scheduler(bot: Bot):
     """Основной цикл scheduler для trial-уведомлений
     
     Запускается каждые 5 минут для проверки и отправки уведомлений.
+    
+    SAFE: Singleton guard предотвращает повторный запуск.
+    Если scheduler уже запущен, повторные вызовы игнорируются.
     """
+    global _TRIAL_SCHEDULER_STARTED
+    
+    # Singleton guard: предотвращаем повторный запуск
+    if _TRIAL_SCHEDULER_STARTED:
+        logger.warning("Trial notifications scheduler already running, skipping duplicate start")
+        return
+    
+    # Устанавливаем флаг перед запуском
+    _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
     
     while True:
