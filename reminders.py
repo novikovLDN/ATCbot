@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramForbiddenError
 import database
 import localization
 import config
@@ -77,6 +78,9 @@ async def _send_notification_with_anti_spam(
             )
         logger.info(f"Smart notification ({notification_name}) sent to user {telegram_id}")
         return True
+    except TelegramForbiddenError:
+        logger.info(f"User {telegram_id} blocked bot, skipping notification ({notification_name})")
+        return False
     except Exception as e:
         logger.error(f"Error sending notification ({notification_name}) to user {telegram_id}: {e}")
         return False
@@ -297,6 +301,10 @@ async def send_smart_notifications(bot: Bot):
                     logger.info(f"Smart notification (VIP offer) sent to user {telegram_id}")
                     continue
                 
+            except TelegramForbiddenError:
+                # Пользователь заблокировал бота - это ожидаемое поведение, не ошибка
+                logger.info(f"User {telegram_id} blocked bot, skipping smart notification")
+                continue
             except Exception as e:
                 # Ошибка для одного пользователя не должна ломать цикл
                 logger.error(f"Error sending smart notification to user {telegram_id}: {e}", exc_info=True)
@@ -438,6 +446,10 @@ async def send_smart_reminders(bot: Bot):
                         )
                         logger.info(f"Paid subscription reminder (3h) sent to user {telegram_id}")
                 
+            except TelegramForbiddenError:
+                # Пользователь заблокировал бота - это ожидаемое поведение, не ошибка
+                logger.info(f"User {telegram_id} blocked bot, skipping reminder")
+                continue
             except Exception as e:
                 # Ошибка для одного пользователя не должна ломать цикл
                 logger.error(f"Error sending reminder to user {telegram_id}: {e}", exc_info=True)
