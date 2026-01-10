@@ -4,6 +4,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from typing import Tuple
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import database
@@ -44,7 +45,7 @@ async def send_trial_notification(
     telegram_id: int,
     notification_key: str,
     has_button: bool = False
-) -> bool:
+) -> Tuple[bool, str]:
     """Отправить уведомление о trial
     
     Args:
@@ -55,7 +56,10 @@ async def send_trial_notification(
         has_button: Показывать ли кнопку "Купить доступ"
     
     Returns:
-        True если уведомление отправлено, False иначе
+        Tuple[bool, str] - статус отправки:
+        - (True, "sent") - уведомление отправлено успешно
+        - (False, "failed_permanently") - постоянная ошибка (Forbidden/blocked), больше не пытаться
+        - (False, "failed_temporary") - временная ошибка, можно повторить позже
     """
     try:
         # Получаем язык пользователя
@@ -78,10 +82,32 @@ async def send_trial_notification(
             f"has_button={has_button}"
         )
         
-        return True
+        return (True, "sent")
     except Exception as e:
-        logger.error(f"Error sending trial notification to user {telegram_id}: {e}")
-        return False
+        error_str = str(e).lower()
+        
+        # Проверяем на постоянные ошибки (Forbidden/blocked)
+        permanent_errors = [
+            "forbidden",
+            "bot was blocked",
+            "user is deactivated",
+            "chat not found",
+            "user not found"
+        ]
+        
+        if any(keyword in error_str for keyword in permanent_errors):
+            logger.warning(
+                f"trial_notification_failed_permanently: user={telegram_id}, notification={notification_key}, "
+                f"reason=forbidden_or_blocked, error={str(e)}"
+            )
+            return (False, "failed_permanently")
+        else:
+            # Временная ошибка - можно повторить позже
+            logger.error(
+                f"trial_notification_failed_temporary: user={telegram_id}, notification={notification_key}, "
+                f"reason=temporary_error, error={str(e)}"
+            )
+            return (False, "failed_temporary")
 
 
 async def process_trial_notifications(bot: Bot):
@@ -219,12 +245,13 @@ async def process_trial_notifications(bot: Bot):
                             continue
                         
                         # Отправляем уведомление
-                        success = await send_trial_notification(
+                        success, status = await send_trial_notification(
                             bot, pool, telegram_id, key, has_button
                         )
                         
                         if success:
                             # Помечаем как отправленное (idempotency)
+                            # sent_at логируется в send_trial_notification
                             await conn.execute(
                                 f"UPDATE subscriptions SET {sent_flag_column} = TRUE "
                                 f"WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
@@ -232,12 +259,27 @@ async def process_trial_notifications(bot: Bot):
                             )
                             logger.info(
                                 f"trial_reminder_sent: user={telegram_id}, notification={key}, "
-                                f"hours_since_activation={hours_since_activation:.1f}h"
+                                f"hours_since_activation={hours_since_activation:.1f}h, sent_at={datetime.now().isoformat()}"
+                            )
+                        elif status == "failed_permanently":
+                            # Помечаем как permanently failed (idempotency)
+                            # Используем sent_flag как failed_flag для постоянных ошибок
+                            # Это предотвращает повторные попытки
+                            await conn.execute(
+                                f"UPDATE subscriptions SET {sent_flag_column} = TRUE "
+                                f"WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                                telegram_id
+                            )
+                            logger.warning(
+                                f"trial_reminder_failed_permanently: user={telegram_id}, notification={key}, "
+                                f"reason=forbidden_or_blocked, failed_at={datetime.now().isoformat()}, "
+                                f"will_not_retry=True"
                             )
                         else:
+                            # Временная ошибка - не помечаем как sent, попробуем позже
                             logger.warning(
-                                f"trial_reminder_failed: user={telegram_id}, notification={key}, "
-                                f"reason=send_failed"
+                                f"trial_reminder_failed_temporary: user={telegram_id}, notification={key}, "
+                                f"reason=temporary_error, will_retry=True"
                             )
     
     except Exception as e:

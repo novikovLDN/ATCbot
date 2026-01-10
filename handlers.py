@@ -26,42 +26,162 @@ _bot_start_time = time.time()
 # SAFE STARTUP GUARD: Helper функции для проверки готовности БД
 # ====================================================================================
 
-async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = None):
+async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = None, bot: Bot = None):
     """
-    Безопасное редактирование текста сообщения с обработкой ошибки "message is not modified"
+    Безопасное редактирование текста сообщения с обработкой ошибок
     
     Сравнивает текущий контент с новым перед редактированием, чтобы избежать ненужных вызовов API.
+    Если сообщение недоступно (inaccessible), использует send_message вместо edit_message.
     
     Args:
         message: Message объект для редактирования
         text: Новый текст сообщения
         reply_markup: Новая клавиатура (опционально) - MUST be InlineKeyboardMarkup, NOT coroutine
         parse_mode: Режим парсинга (HTML, Markdown и т.д.)
+        bot: Bot instance (требуется для fallback на send_message)
     """
     # Защита от передачи coroutine вместо InlineKeyboardMarkup
     if asyncio.iscoroutine(reply_markup):
         raise RuntimeError("reply_markup coroutine passed without await. Must await keyboard builder before passing to safe_edit_text.")
-    # Сравниваем текущий текст с новым
-    if message.text == text or (message.caption and message.caption == text):
-        # Текст совпадает - проверяем клавиатуру
+    
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: Проверяем, что message доступен (не inaccessible/deleted)
+    # В aiogram 3.x нет типа InaccessibleMessage, проверяем через hasattr
+    if not hasattr(message, 'chat'):
+        # Сообщение недоступно - используем send_message как fallback
+        if bot is None:
+            logger.warning("Message is inaccessible (no chat attr) and bot not provided, cannot send fallback message")
+            return
+        try:
+            # Пытаемся получить chat_id из других источников
+            chat_id = None
+            if hasattr(message, 'from_user') and hasattr(message.from_user, 'id'):
+                chat_id = message.from_user.id
+            
+            if chat_id:
+                await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+                logger.info(f"Message inaccessible (no chat attr), sent new message instead: chat_id={chat_id}")
+            else:
+                logger.warning("Message inaccessible (no chat attr) and cannot determine chat_id")
+        except Exception as send_error:
+            logger.error(f"Failed to send fallback message after inaccessible check: {send_error}")
+        return
+    
+    # Безопасная проверка атрибутов сообщения (никогда не обращаемся напрямую без hasattr)
+    current_text = None
+    try:
+        if hasattr(message, 'text'):
+            text_attr = getattr(message, 'text', None)
+            if text_attr:
+                current_text = text_attr
+        if not current_text and hasattr(message, 'caption'):
+            caption_attr = getattr(message, 'caption', None)
+            if caption_attr:
+                current_text = caption_attr
+    except AttributeError:
+        # Защита от AttributeError - сообщение может быть недоступно
+        logger.debug("AttributeError while checking message text/caption, treating as inaccessible")
+        current_text = None
+    
+    # Сравниваем текущий текст с новым (безопасно)
+    if current_text and current_text == text:
+        # Текст совпадает - проверяем клавиатуру (безопасно)
+        current_markup = None
+        try:
+            if hasattr(message, 'reply_markup'):
+                markup_attr = getattr(message, 'reply_markup', None)
+                if markup_attr:
+                    current_markup = markup_attr
+        except AttributeError:
+            # Защита от AttributeError
+            current_markup = None
+        
         if reply_markup is None:
             # Удаление клавиатуры - проверяем, есть ли она
-            if message.reply_markup is None:
+            if current_markup is None:
                 # Контент идентичен - не вызываем edit
                 return
         else:
             # Сравниваем клавиатуры (упрощённая проверка)
-            if message.reply_markup and _markups_equal(message.reply_markup, reply_markup):
+            if current_markup and _markups_equal(current_markup, reply_markup):
                 # Контент идентичен - не вызываем edit
                 return
     
     try:
         await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
+        error_msg = str(e).lower()
+        if "message is not modified" in error_msg:
+            # Игнорируем ошибку "message is not modified" - сообщение уже имеет нужное содержимое
+            logger.debug(f"Message not modified (expected): {e}")
+            return
+        elif any(keyword in error_msg for keyword in ["message to edit not found", "message can't be edited", "chat not found", "message is inaccessible"]):
+            # Сообщение недоступно - используем send_message как fallback
+            if bot is None:
+                logger.warning(f"Message inaccessible and bot not provided, cannot send fallback message: {e}")
+                return
+            
+            try:
+                # Получаем chat_id безопасно (никогда не обращаемся напрямую без hasattr)
+                chat_id = None
+                try:
+                    if hasattr(message, 'chat'):
+                        chat_obj = getattr(message, 'chat', None)
+                        if chat_obj and hasattr(chat_obj, 'id'):
+                            chat_id = getattr(chat_obj, 'id', None)
+                except AttributeError:
+                    pass
+                
+                if not chat_id:
+                    try:
+                        if hasattr(message, 'from_user'):
+                            user_obj = getattr(message, 'from_user', None)
+                            if user_obj and hasattr(user_obj, 'id'):
+                                chat_id = getattr(user_obj, 'id', None)
+                    except AttributeError:
+                        pass
+                
+                if chat_id:
+                    await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+                    logger.info(f"Message inaccessible, sent new message instead: chat_id={chat_id}")
+                else:
+                    logger.warning(f"Message inaccessible and cannot determine chat_id: {e}")
+            except Exception as send_error:
+                logger.error(f"Failed to send fallback message after edit failure: {send_error}")
+        else:
+            # Другие ошибки - пробрасываем
             raise
-        # Игнорируем ошибку "message is not modified" - сообщение уже имеет нужное содержимое
-        logger.debug(f"Message not modified (expected): {e}")
+    except AttributeError as e:
+        # Защита от AttributeError при обращении к атрибутам сообщения
+        logger.warning(f"AttributeError in safe_edit_text, message may be inaccessible: {e}")
+        # Пытаемся использовать send_message как fallback
+        if bot is not None:
+            try:
+                # Получаем chat_id безопасно (никогда не обращаемся напрямую без hasattr)
+                chat_id = None
+                try:
+                    if hasattr(message, 'chat'):
+                        chat_obj = getattr(message, 'chat', None)
+                        if chat_obj and hasattr(chat_obj, 'id'):
+                            chat_id = getattr(chat_obj, 'id', None)
+                except AttributeError:
+                    pass
+                
+                if not chat_id:
+                    try:
+                        if hasattr(message, 'from_user'):
+                            user_obj = getattr(message, 'from_user', None)
+                            if user_obj and hasattr(user_obj, 'id'):
+                                chat_id = getattr(user_obj, 'id', None)
+                    except AttributeError:
+                        pass
+                
+                if chat_id:
+                    await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+                    logger.info(f"AttributeError handled, sent new message instead: chat_id={chat_id}")
+                else:
+                    logger.warning(f"AttributeError handled but cannot determine chat_id: {e}")
+            except Exception as send_error:
+                logger.error(f"Failed to send fallback message after AttributeError: {send_error}")
 
 
 def _markups_equal(markup1: InlineKeyboardMarkup, markup2: InlineKeyboardMarkup) -> bool:

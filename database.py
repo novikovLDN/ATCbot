@@ -1686,13 +1686,16 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                         
                         # VPN AUDIT LOG: Логируем успешное удаление UUID при real-time проверке
                         try:
+                            # Явно определяем expires_at из subscription
+                            subscription_expires_at = subscription.get("expires_at")
+                            expires_at_str = subscription_expires_at.isoformat() if subscription_expires_at else "N/A"
                             await _log_vpn_lifecycle_audit_async(
                                 action="vpn_expire",
                                 telegram_id=telegram_id,
                                 uuid=uuid,
                                 source="auto-expiry",
                                 result="success",
-                                details=f"Real-time expiration check, expires_at={expires_at.isoformat()}"
+                                details=f"Real-time expiration check, expires_at={expires_at_str}"
                             )
                         except Exception as e:
                             logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
