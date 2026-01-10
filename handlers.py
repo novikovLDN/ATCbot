@@ -1294,10 +1294,14 @@ async def show_profile(message_or_query, language: str):
         if has_active_subscription:
             if auto_renew:
                 # Автопродление включено - next_billing_date = expires_at
-                expires_at = subscription["expires_at"]
-                if isinstance(expires_at, str):
-                    expires_at = datetime.fromisoformat(expires_at)
-                next_billing_str = expires_at.strftime("%d.%m.%Y")
+                # Инициализируем expires_at перед использованием
+                expires_at = subscription.get("expires_at")
+                if expires_at:
+                    if isinstance(expires_at, str):
+                        expires_at = datetime.fromisoformat(expires_at)
+                    next_billing_str = expires_at.strftime("%d.%m.%Y")
+                else:
+                    next_billing_str = "N/A"
                 try:
                     text += "\n" + localization.get_text(language, "profile_auto_renew_enabled", next_billing_date=next_billing_str)
                 except (KeyError, TypeError):
