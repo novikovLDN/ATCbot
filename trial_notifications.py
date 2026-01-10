@@ -86,6 +86,13 @@ async def process_trial_notifications(bot: Bot):
     
     Проверяет всех пользователей с активным trial и отправляет уведомления
     согласно расписанию на основе trial_expires_at.
+    
+    КРИТИЧЕСКИЕ ПРОВЕРКИ:
+    - subscription.source == "trial"
+    - subscription.status == "active"
+    - subscription.expires_at > now
+    - у пользователя НЕТ активной paid-подписки
+    - уведомление ещё не отправлялось (idempotency)
     """
     if not database.DB_READY:
         return
@@ -95,15 +102,20 @@ async def process_trial_notifications(bot: Bot):
         async with pool.acquire() as conn:
             now = datetime.now()
             
-            # Получаем всех пользователей с активным trial (trial_expires_at > now)
-            # и их trial-подписки для проверки флагов уведомлений
+            # Получаем только пользователей с АКТИВНОЙ trial-подпиской
+            # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
             rows = await conn.fetch("""
                 SELECT u.telegram_id, u.trial_expires_at,
+                       s.id as subscription_id,
+                       s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_18h_sent, s.trial_notif_30h_sent,
                        s.trial_notif_42h_sent, s.trial_notif_54h_sent, s.trial_notif_60h_sent,
                        s.trial_notif_71h_sent
                 FROM users u
-                LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
+                INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id 
+                    AND s.source = 'trial' 
+                    AND s.status = 'active'
+                    AND s.expires_at > $1
                 WHERE u.trial_used_at IS NOT NULL
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at > $1
@@ -112,8 +124,33 @@ async def process_trial_notifications(bot: Bot):
             for row in rows:
                 telegram_id = row["telegram_id"]
                 trial_expires_at = row["trial_expires_at"]
+                subscription_expires_at = row["subscription_expires_at"]
                 
-                if not trial_expires_at:
+                if not trial_expires_at or not subscription_expires_at:
+                    continue
+                
+                # КРИТИЧЕСКАЯ ПРОВЕРКА: subscription.expires_at > now
+                if subscription_expires_at <= now:
+                    logger.info(
+                        f"trial_reminder_skipped: user={telegram_id}, reason=subscription_expired, "
+                        f"expires_at={subscription_expires_at.isoformat()}"
+                    )
+                    continue
+                
+                # КРИТИЧЕСКАЯ ПРОВЕРКА: у пользователя НЕТ активной paid-подписки
+                paid_subscription = await conn.fetchrow("""
+                    SELECT 1 FROM subscriptions 
+                    WHERE telegram_id = $1 
+                    AND source = 'payment'
+                    AND status = 'active'
+                    AND expires_at > $2
+                    LIMIT 1
+                """, telegram_id, now)
+                
+                if paid_subscription:
+                    logger.info(
+                        f"trial_reminder_skipped: user={telegram_id}, reason=has_active_paid_subscription"
+                    )
                     continue
                 
                 # Вычисляем время до окончания trial
@@ -132,16 +169,51 @@ async def process_trial_notifications(bot: Bot):
                     
                     # Проверяем, нужно ли отправить это уведомление
                     sent_flag_column = f"trial_notif_{hours}h_sent"
-                    already_sent = row.get(sent_flag_column, False)
+                    # Безопасная проверка флага: NULL считается как False
+                    already_sent = row.get(sent_flag_column) is True
                     
                     # Уведомление нужно отправить, если:
                     # - прошло достаточно времени (hours_since_activation >= hours)
                     # - но не слишком много (в пределах 1 часа после нужного времени)
                     # - и ещё не отправлено
-                    # Для 0h уведомления: hours_since_activation должен быть >= 0 и < 1
                     if (hours_since_activation >= hours and 
                         hours_since_activation < hours + 1 and 
                         not already_sent):
+                        
+                        # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА перед отправкой (для безопасности)
+                        # Проверяем, что подписка всё ещё активна
+                        subscription_check = await conn.fetchrow("""
+                            SELECT id, source, status, expires_at
+                            FROM subscriptions
+                            WHERE telegram_id = $1
+                            AND source = 'trial'
+                            AND status = 'active'
+                            AND expires_at > $2
+                        """, telegram_id, now)
+                        
+                        if not subscription_check:
+                            logger.info(
+                                f"trial_reminder_skipped: user={telegram_id}, notification={key}, "
+                                f"reason=subscription_no_longer_active"
+                            )
+                            continue
+                        
+                        # Проверяем ещё раз отсутствие paid-подписки
+                        paid_check = await conn.fetchrow("""
+                            SELECT 1 FROM subscriptions 
+                            WHERE telegram_id = $1 
+                            AND source = 'payment'
+                            AND status = 'active'
+                            AND expires_at > $2
+                            LIMIT 1
+                        """, telegram_id, now)
+                        
+                        if paid_check:
+                            logger.info(
+                                f"trial_reminder_skipped: user={telegram_id}, notification={key}, "
+                                f"reason=has_active_paid_subscription"
+                            )
+                            continue
                         
                         # Отправляем уведомление
                         success = await send_trial_notification(
@@ -149,13 +221,20 @@ async def process_trial_notifications(bot: Bot):
                         )
                         
                         if success:
-                            # Помечаем как отправленное
+                            # Помечаем как отправленное (idempotency)
                             await conn.execute(
-                                f"UPDATE subscriptions SET {sent_flag_column} = TRUE WHERE telegram_id = $1",
+                                f"UPDATE subscriptions SET {sent_flag_column} = TRUE "
+                                f"WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
                                 telegram_id
                             )
                             logger.info(
-                                f"Trial notification {hours}h sent and marked: user={telegram_id}"
+                                f"trial_reminder_sent: user={telegram_id}, notification={key}, "
+                                f"hours_since_activation={hours_since_activation:.1f}h"
+                            )
+                        else:
+                            logger.warning(
+                                f"trial_reminder_failed: user={telegram_id}, notification={key}, "
+                                f"reason=send_failed"
                             )
     
     except Exception as e:
