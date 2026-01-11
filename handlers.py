@@ -3386,16 +3386,15 @@ async def callback_check_crypto_payment(callback: CallbackQuery):
         # Проверяем статус invoice через CryptoBot API (polling)
         invoice_status = await cryptobot.check_invoice_status(invoice_id)
         status = invoice_status.get("status")
+        raw_status = invoice_status.get("raw_status", "")
         payload = invoice_status.get("payload", "")
         
-        logger.info(f"CryptoBot invoice status checked: user={telegram_id}, invoice_id={invoice_id}, status={status}")
+        logger.info(f"CryptoBot invoice status checked: user={telegram_id}, invoice_id={invoice_id}, status={status}, raw_status={raw_status}")
         
         if status != "paid":
             # Оплата еще не выполнена
-            if status == "expired":
+            if status == "failed":
                 text = localization.get_text(language, "payment_expired", default="❌ Срок действия платежа истёк. Пожалуйста, создайте новый платеж.")
-            elif status == "active":
-                text = localization.get_text(language, "payment_pending", default="⏳ Платёж ещё не получен. Пожалуйста, завершите оплату и попробуйте снова.")
             else:
                 text = localization.get_text(language, "payment_pending", default="⏳ Платёж ещё не получен. Пожалуйста, завершите оплату и попробуйте снова.")
             
@@ -3413,8 +3412,16 @@ async def callback_check_crypto_payment(callback: CallbackQuery):
         
         purchase_id = payload.split(":", 1)[1]
         
-        # Получаем сумму оплаты
-        amount_rubles = float(invoice_status.get("amount", 0))
+        # Получаем сумму оплаты (USD string from API, convert back to RUB)
+        amount_usd_str = invoice_status.get("amount", "0")
+        try:
+            amount_usd = float(amount_usd_str) if amount_usd_str else 0.0
+            # Convert USD back to RUB for finalize_purchase
+            from payments.cryptobot import RUB_TO_USD_RATE
+            amount_rubles = amount_usd * RUB_TO_USD_RATE
+        except (ValueError, TypeError):
+            logger.error(f"Invalid amount in invoice status: {amount_usd_str}, invoice_id={invoice_id}")
+            amount_rubles = 0.0
         
         # Финализируем покупку
         logger.info(f"CryptoBot payment verified: user={telegram_id}, purchase_id={purchase_id}, invoice_id={invoice_id}, amount={amount_rubles} RUB")

@@ -18,6 +18,24 @@ CRYPTOBOT_ASSETS = os.getenv("CRYPTOBOT_ASSETS", "USDT,TON,BTC").split(",")
 
 ALLOWED_ASSETS = [asset.strip().upper() for asset in CRYPTOBOT_ASSETS if asset.strip()]
 
+# Exchange rate: RUB to USD (fixed rate for conversion)
+RUB_TO_USD_RATE = 95.0
+
+
+def rub_kopecks_to_usd(kopecks: int) -> float:
+    """
+    Convert RUB kopecks to USD
+    
+    Args:
+        kopecks: Amount in kopecks (RUB)
+        
+    Returns:
+        Amount in USD rounded to 2 decimal places
+    """
+    rubles = kopecks / 100.0
+    usd = rubles / RUB_TO_USD_RATE
+    return round(usd, 2)
+
 
 def is_enabled() -> bool:
     """Check if CryptoBot is configured"""
@@ -59,9 +77,12 @@ async def create_invoice(
     if asset.upper() not in ALLOWED_ASSETS:
         raise ValueError(f"Invalid asset: {asset}. Allowed: {ALLOWED_ASSETS}")
     
+    # Convert RUB to USD (CryptoBot API requires USD)
+    amount_usd = round(float(amount_rub) / RUB_TO_USD_RATE, 2)
+    
     request_body = {
-        "amount": round(float(amount_rub), 2),
-        "fiat": "RUB",
+        "amount": amount_usd,
+        "fiat": "USD",
         "asset": asset.upper(),
         "payload": payload,
         "description": description[:250] if description else "Atlas Secure VPN",
@@ -142,15 +163,37 @@ async def check_invoice_status(invoice_id: int) -> Dict[str, Any]:
         raise Exception(f"Invoice not found: invoice_id={invoice_id}")
     
     invoice = items[0]
-    status = invoice.get("status")
+    raw_status = invoice.get("status", "")
+    payload = invoice.get("payload", "")
+    paid_at = invoice.get("paid_at")
     
-    logger.info(f"CryptoBot invoice status checked: invoice_id={invoice_id}, status={status}")
+    # Parse amount (API returns string, not nested object)
+    amount_str = ""
+    if "amount" in invoice:
+        amount_value = invoice["amount"]
+        if isinstance(amount_value, str):
+            amount_str = amount_value
+        elif isinstance(amount_value, dict):
+            # Fallback for different API response formats
+            amount_str = str(amount_value.get("fiat", {}).get("value", ""))
+    
+    # Normalize status
+    if raw_status == "paid":
+        normalized_status = "paid"
+    elif raw_status == "active":
+        normalized_status = "pending"
+    elif raw_status in ("expired", "cancelled"):
+        normalized_status = "failed"
+    else:
+        normalized_status = "pending"
+    
+    logger.info(f"CryptoBot invoice status checked: invoice_id={invoice_id}, status={raw_status} -> {normalized_status}")
     
     return {
         "invoice_id": invoice.get("invoice_id"),
-        "status": status,  # "paid", "active", "expired"
-        "payload": invoice.get("payload"),
-        "paid_at": invoice.get("paid_at"),
-        "amount": invoice.get("amount", {}).get("fiat", {}).get("value"),
-        "currency": invoice.get("amount", {}).get("fiat", {}).get("currency"),
+        "status": normalized_status,
+        "raw_status": raw_status,
+        "payload": payload,
+        "paid_at": paid_at,
+        "amount": amount_str,
     }
