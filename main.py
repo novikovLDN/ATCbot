@@ -233,6 +233,18 @@ async def main():
     else:
         logger.warning("Auto-renewal task skipped (DB not ready)")
     
+    # Запуск фоновой задачи для автоматической проверки CryptoBot платежей (только если БД готова)
+    crypto_watcher_task = None
+    if database.DB_READY:
+        try:
+            import crypto_payment_watcher
+            crypto_watcher_task = asyncio.create_task(crypto_payment_watcher.crypto_payment_watcher_task(bot))
+            logger.info("Crypto payment watcher task started")
+        except Exception as e:
+            logger.warning(f"Crypto payment watcher task skipped: {e}")
+    else:
+        logger.warning("Crypto payment watcher task skipped (DB not ready)")
+    
     # Запуск бота
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")
