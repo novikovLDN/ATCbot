@@ -1,13 +1,9 @@
 """Фоновая задача для автоматической проверки статуса CryptoBot платежей"""
 import asyncio
-import json
 import logging
-import os
 from datetime import datetime, timedelta
-from pathlib import Path
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
-from typing import Dict, Optional
 import database
 import localization
 from payments import cryptobot
@@ -17,55 +13,14 @@ logger = logging.getLogger(__name__)
 # Интервал проверки: 30 секунд
 CHECK_INTERVAL_SECONDS = 30
 
-# Файл для хранения purchase_id → invoice_id mapping (не DB, просто файл)
-INVOICE_MAPPING_FILE = Path("data/crypto_invoice_mapping.json")
-
-
-def _load_invoice_mapping() -> Dict[str, int]:
-    """Загрузить mapping purchase_id → invoice_id из файла"""
-    if not INVOICE_MAPPING_FILE.exists():
-        return {}
-    
-    try:
-        with open(INVOICE_MAPPING_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading invoice mapping: {e}")
-        return {}
-
-
-def _save_invoice_mapping(mapping: Dict[str, int]):
-    """Сохранить mapping purchase_id → invoice_id в файл"""
-    try:
-        INVOICE_MAPPING_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(INVOICE_MAPPING_FILE, "w", encoding="utf-8") as f:
-            json.dump(mapping, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Error saving invoice mapping: {e}")
-
-
-def add_invoice_mapping(purchase_id: str, invoice_id: int):
-    """Добавить mapping purchase_id → invoice_id (публичная функция для handlers)"""
-    mapping = _load_invoice_mapping()
-    mapping[purchase_id] = invoice_id
-    _save_invoice_mapping(mapping)
-
-
-def _remove_invoice_mapping(purchase_id: str):
-    """Удалить mapping purchase_id → invoice_id"""
-    mapping = _load_invoice_mapping()
-    if purchase_id in mapping:
-        del mapping[purchase_id]
-        _save_invoice_mapping(mapping)
-
 
 async def check_crypto_payments(bot: Bot):
     """
     Проверка статуса CryptoBot платежей для всех pending purchases
     
     Логика:
-    1. Получаем все pending purchases (status='pending')
-    2. Для каждого с invoice_id (из mapping файла) проверяем статус через CryptoBot API
+    1. Получаем все pending purchases где provider_invoice_id IS NOT NULL
+    2. Для каждого проверяем статус invoice через CryptoBot API
     3. Если invoice статус='paid' → финализируем покупку
     4. Отправляем пользователю подтверждение с VPN ключом
     
@@ -78,24 +33,20 @@ async def check_crypto_payments(bot: Bot):
         return
     
     try:
-        invoice_mapping = _load_invoice_mapping()
-        if not invoice_mapping:
-            return
-        
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            # Получаем pending purchases, для которых есть invoice_id
-            purchase_ids = list(invoice_mapping.keys())
-            if not purchase_ids:
-                return
+            # Получаем pending purchases с provider_invoice_id (т.е. CryptoBot purchases)
+            # Ограничиваем выборку покупками за последние 24 часа (старые уже истекли)
+            cutoff_time = datetime.now() - timedelta(hours=24)
             
-            # Проверяем только те, которые еще pending
-            placeholders = ",".join([f"${i+1}" for i in range(len(purchase_ids))])
             pending_purchases = await conn.fetch(
-                f"""SELECT * FROM pending_purchases 
-                   WHERE purchase_id IN ({placeholders})
-                   AND status = 'pending'""",
-                *purchase_ids
+                """SELECT * FROM pending_purchases 
+                   WHERE status = 'pending' 
+                   AND provider_invoice_id IS NOT NULL
+                   AND created_at > $1
+                   ORDER BY created_at DESC
+                   LIMIT 100""",
+                cutoff_time
             )
             
             if not pending_purchases:
@@ -107,12 +58,15 @@ async def check_crypto_payments(bot: Bot):
                 purchase = dict(row)
                 purchase_id = purchase["purchase_id"]
                 telegram_id = purchase["telegram_id"]
-                invoice_id = invoice_mapping.get(purchase_id)
+                invoice_id_str = purchase.get("provider_invoice_id")
                 
-                if not invoice_id:
+                if not invoice_id_str:
                     continue
                 
                 try:
+                    # Преобразуем invoice_id в int для CryptoBot API
+                    invoice_id = int(invoice_id_str)
+                    
                     # Проверяем статус invoice через CryptoBot API
                     invoice_status = await cryptobot.check_invoice_status(invoice_id)
                     status = invoice_status.get("status")
@@ -142,15 +96,12 @@ async def check_crypto_payments(bot: Bot):
                         purchase_id=purchase_id,
                         payment_provider="cryptobot",
                         amount_rubles=amount_rubles,
-                        invoice_id=str(invoice_id)
+                        invoice_id=invoice_id_str
                     )
                     
                     if not result or not result.get("success"):
                         logger.error(f"Crypto payment finalization failed: purchase_id={purchase_id}, invoice_id={invoice_id}")
                         continue
-                    
-                    # Удаляем mapping после успешной финализации
-                    _remove_invoice_mapping(purchase_id)
                     
                     # Отправляем подтверждение пользователю
                     payment_id = result["payment_id"]
@@ -179,8 +130,7 @@ async def check_crypto_payments(bot: Bot):
                     
                 except ValueError as e:
                     # Pending purchase уже обработан (idempotency)
-                    logger.debug(f"Crypto payment already processed: purchase_id={purchase_id}, invoice_id={invoice_id}")
-                    _remove_invoice_mapping(purchase_id)
+                    logger.debug(f"Crypto payment already processed: purchase_id={purchase_id}, invoice_id={invoice_id_str}, error={e}")
                 except Exception as e:
                     # Ошибка для одной покупки не должна ломать весь процесс
                     logger.error(f"Error checking crypto payment for purchase {purchase_id}: {e}", exc_info=True)

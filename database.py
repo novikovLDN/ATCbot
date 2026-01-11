@@ -4105,6 +4105,32 @@ async def cancel_pending_purchases(telegram_id: int, reason: str = "user_action"
             logger.info(f"Pending purchases cancelled: telegram_id={telegram_id}, reason={reason}")
 
 
+async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) -> bool:
+    """
+    Обновить provider_invoice_id для pending покупки
+    
+    Args:
+        purchase_id: ID покупки
+        invoice_id: Invoice ID от платежного провайдера (CryptoBot)
+    
+    Returns:
+        True если успешно, False если покупка не найдена
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE pending_purchases SET provider_invoice_id = $1 WHERE purchase_id = $2 AND status = 'pending'",
+            invoice_id, purchase_id
+        )
+        
+        if result == "UPDATE 1":
+            logger.info(f"Pending purchase invoice_id updated: purchase_id={purchase_id}, invoice_id={invoice_id}")
+            return True
+        else:
+            logger.warning(f"Failed to update pending purchase invoice_id: purchase_id={purchase_id}, result={result}")
+            return False
+
+
 async def mark_pending_purchase_paid(purchase_id: str) -> bool:
     """
     Пометить pending покупку как оплаченную
