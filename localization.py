@@ -4,6 +4,10 @@ from typing import Dict
 TEXTS: Dict[str, Dict[str, str]] = {
     "ru": {
         "language_select": "🌍 Выбери язык:\n🇷🇺 Русский\n🇺🇸 English\n🇺🇿 O'zbek\n🇹🇯 Тоҷикӣ",
+        "language_button_ru": "🇷🇺 Русский",
+        "language_button_en": "🇺🇸 English",
+        "language_button_uz": "🇺🇿 O'zbek",
+        "language_button_tj": "🇹🇯 Тоҷикӣ",
         
         # Главное меню
         "welcome": "🔐 Atlas Secure\n\n🧩 Частный цифровой доступ\n⚙️ Стабильная работа привычных сервисов\n🛡 Конфиденциальность по умолчанию\n\nВы подключаетесь —\nостальное работает в фоне.",
@@ -777,6 +781,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
     },
     "uz": {
         "language_select": "Atlas Secure-ga xush kelibsiz\n\nShaxsiy himoyalangan kirish\nmurakkab sozlashlarsiz.\n\nIltimos, tilni tanlang:",
+        "language_button_ru": "🇷🇺 Русский",
+        "language_button_en": "🇺🇸 English",
+        "language_button_uz": "🇺🇿 O'zbek",
+        "language_button_tj": "🇹🇯 Тоҷикӣ",
         "welcome": "🔐 Atlas Secure\n\n🧩 Shaxsiy raqamli kirish\n⚙️ Tanish xizmatlarning barqaror ishlashi\n🛡 Sukut bo'yicha maxfiylik\n\nSiz ulanasiz —\nqolgan hamma narsa fon ishlaydi.",
         "profile": "👤 Mening profilim",
         "buy_vpn": "🔐 Kirishni sotib olish",
