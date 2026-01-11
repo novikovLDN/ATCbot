@@ -3302,6 +3302,13 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
         # КРИТИЧНО: Сохраняем invoice_id в FSM state для последующей проверки статуса
         await state.update_data(cryptobot_invoice_id=invoice_id)
         
+        # Регистрируем invoice_id для автоматической проверки платежей
+        try:
+            import crypto_payment_watcher
+            crypto_payment_watcher.add_invoice_mapping(purchase_id, invoice_id)
+        except Exception as e:
+            logger.warning(f"Failed to register invoice mapping: {e}")
+        
         logger.info(
             f"invoice_created: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period_days={period_days}, invoice_id={invoice_id}, "
