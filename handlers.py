@@ -3317,19 +3317,15 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
         # Отправляем пользователю сообщение с payment URL
         text = localization.get_text(
             language,
-            "crypto_invoice_created",
+            "crypto_payment_waiting",
             amount=final_price_rubles,
-            default=f"₿ Оплата криптовалютой\n\nСумма: {final_price_rubles:.2f} ₽\n\nНажмите на кнопку ниже для перехода на страницу оплаты.\n\nПосле оплаты нажмите кнопку \"Проверить оплату\"."
+            default=f"₿ Оплата криптовалютой\n\nСумма: {final_price_rubles:.2f} ₽\n\n⏳ Ожидаем подтверждение оплаты. Обычно это занимает до 5 минут. Доступ будет выдан автоматически."
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=localization.get_text(language, "crypto_pay_button", default="💳 Перейти к оплате"),
                 url=payment_url
-            )],
-            [InlineKeyboardButton(
-                text=localization.get_text(language, "check_payment", default="✅ Проверить оплату"),
-                callback_data=f"check_crypto:{invoice_id}"
             )],
             [InlineKeyboardButton(
                 text=localization.get_text(language, "back", default="⬅️ Назад"),
@@ -3353,138 +3349,6 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer(error_text, show_alert=True)
         await state.set_state(None)
-
-
-@router.callback_query(F.data.startswith("check_crypto:"))
-async def callback_check_crypto_payment(callback: CallbackQuery):
-    """Проверка статуса оплаты через CryptoBot (polling)
-    
-    КРИТИЧНО:
-    - Использует polling для проверки статуса (NO WEBHOOKS)
-    - Если оплата успешна, вызывает finalize_purchase
-    - Idempotent: повторные проверки безопасны
-    """
-    telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
-    # Извлекаем invoice_id из callback_data
-    try:
-        invoice_id_str = callback.data.split(":", 1)[1]
-        invoice_id = int(invoice_id_str)
-    except (ValueError, IndexError) as e:
-        logger.error(f"Invalid check_crypto callback_data: {callback.data}, error={e}")
-        await callback.answer(
-            localization.get_text(language, "error_payment_processing", default="Произошла ошибка. Попробуйте ещё раз."),
-            show_alert=True
-        )
-        return
-    
-    try:
-        from payments import cryptobot
-        if not cryptobot.is_enabled():
-            await callback.answer(
-                localization.get_text(language, "error_payments_unavailable", default="Оплата криптовалютой временно недоступна"),
-                show_alert=True
-            )
-            return
-        
-        # Проверяем статус invoice через CryptoBot API (polling)
-        invoice_status = await cryptobot.check_invoice_status(invoice_id)
-        status = invoice_status.get("status")
-        raw_status = invoice_status.get("raw_status", "")
-        payload = invoice_status.get("payload", "")
-        
-        logger.info(f"CryptoBot invoice status checked: user={telegram_id}, invoice_id={invoice_id}, status={status}, raw_status={raw_status}")
-        
-        if status != "paid":
-            # Оплата еще не выполнена
-            if status == "failed":
-                text = localization.get_text(language, "payment_expired", default="❌ Срок действия платежа истёк. Пожалуйста, создайте новый платеж.")
-            else:
-                text = localization.get_text(language, "payment_pending", default="⏳ Платёж ещё не получен. Пожалуйста, завершите оплату и попробуйте снова.")
-            
-            await callback.answer(text, show_alert=True)
-            return
-        
-        # Оплата успешна - извлекаем purchase_id из payload
-        if not payload.startswith("purchase:"):
-            logger.error(f"Invalid payload format in CryptoBot invoice: invoice_id={invoice_id}, payload={payload}")
-            await callback.answer(
-                localization.get_text(language, "error_payment_processing", default="Произошла ошибка. Попробуйте ещё раз."),
-                show_alert=True
-            )
-            return
-        
-        purchase_id = payload.split(":", 1)[1]
-        
-        # Получаем сумму оплаты (USD string from API, convert back to RUB)
-        amount_usd_str = invoice_status.get("amount", "0")
-        try:
-            amount_usd = float(amount_usd_str) if amount_usd_str else 0.0
-            # Convert USD back to RUB for finalize_purchase
-            from payments.cryptobot import RUB_TO_USD_RATE
-            amount_rubles = amount_usd * RUB_TO_USD_RATE
-        except (ValueError, TypeError):
-            logger.error(f"Invalid amount in invoice status: {amount_usd_str}, invoice_id={invoice_id}")
-            amount_rubles = 0.0
-        
-        # Финализируем покупку
-        logger.info(f"CryptoBot payment verified: user={telegram_id}, purchase_id={purchase_id}, invoice_id={invoice_id}, amount={amount_rubles} RUB")
-        
-        result = await database.finalize_purchase(
-            purchase_id=purchase_id,
-            payment_provider="cryptobot",
-            amount_rubles=amount_rubles,
-            invoice_id=str(invoice_id)
-        )
-        
-        if not result or not result.get("success"):
-            error_msg = f"finalize_purchase returned invalid result: {result}"
-            logger.error(f"CryptoBot payment finalization failed: {error_msg}")
-            await callback.answer(
-                localization.get_text(language, "error_payment_processing", default="Произошла ошибка. Попробуйте ещё раз."),
-                show_alert=True
-            )
-            return
-        
-        payment_id = result["payment_id"]
-        expires_at = result["expires_at"]
-        vpn_key = result["vpn_key"]
-        is_renewal = result.get("is_renewal", False)
-        
-        logger.info(
-            f"CryptoBot payment finalized: user={telegram_id}, purchase_id={purchase_id}, payment_id={payment_id}, "
-            f"invoice_id={invoice_id}, expires_at={expires_at.isoformat()}, vpn_key_length={len(vpn_key)}"
-        )
-        
-        # Отправляем подтверждение пользователю
-        expires_str = expires_at.strftime("%d.%m.%Y")
-        text = localization.get_text(language, "payment_approved", date=expires_str)
-        
-        await callback.message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
-        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        
-        await callback.answer(localization.get_text(language, "payment_success", default="✅ Платёж успешно обработан!"), show_alert=True)
-        
-        logger.info(
-            f"CryptoBot payment processed successfully: user={telegram_id}, payment_id={payment_id}, "
-            f"invoice_id={invoice_id}, purchase_id={purchase_id}, subscription_activated=True, vpn_key_issued=True"
-        )
-        
-    except ValueError as e:
-        # Pending purchase уже обработан
-        logger.info(f"CryptoBot payment check: purchase already processed: invoice_id={invoice_id}, error={e}")
-        await callback.answer(
-            localization.get_text(language, "payment_already_processed", default="✅ Этот платёж уже был обработан ранее."),
-            show_alert=True
-        )
-    except Exception as e:
-        logger.exception(f"Error checking CryptoBot payment status: user={telegram_id}, invoice_id={invoice_id}, error={e}")
-        await callback.answer(
-            localization.get_text(language, "error_payment_processing", default="Произошла ошибка. Попробуйте ещё раз."),
-            show_alert=True
-        )
 
 
 @router.callback_query(F.data == "enter_promo")
