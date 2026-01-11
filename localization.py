@@ -437,6 +437,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "copy_referral_link": "📋 Copy Link",
         "referral_link_copied": "Link sent",
         "referral_reward_notification": "🔥 You've earned referral cashback!\n\nYour friend has purchased a subscription.\n💰 Awarded: {amount:.2f} ₽\nBalance: {balance:.2f} ₽",
+        "referral_share_link_button": "📤 Share link",
+        "referral_stats_button": "📊 Referral stats",
+        "referral_stats_screen": (
+            "📊 <b>Referral Stats</b>\n\n"
+            "👤 Friends invited: {invited_count}\n"
+            "💰 Total cashback: {total_cashback:.2f} ₽\n\n"
+            "🎁 Your cashback level: {cashback_percent}%"
+        ),
         "referral_program_screen": (
             "👥 Invite Friend\n\n"
             "Invite friends and get cashback\n"
@@ -478,6 +486,29 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Выбор тарифа
         "select_tariff": "🕒 Select subscription period\n\nAtlas Secure is stable access\nthat simply works.\n\nIn any subscription:\n🔑 Personal key — only for you\n⚡️ Stable speed without limits\n📱💻 Works on all devices\n💬 Support in Telegram at any time\n\nThe longer the period — the less you think\nabout renewal and access issues.\n\nMost users choose subscriptions from 3 months.",
+        "select_tariff_type": "Select tariff:",
+        "tariff_basic_description": (
+            "🪙 Tariff: Basic\n\n"
+            "🔹 For everyday use\n"
+            "📲 Great for social media\n"
+            "🚀 Supports: Instagram, YouTube 4K, TikTok, Web, etc.\n"
+            "🔒 Reliable basic traffic protection\n"
+            "💡 Simple, effective connection\n\n"
+            "👉 Perfect for daily use without complex tasks"
+        ),
+        "tariff_plus_description": (
+            "🔑 Tariff: Plus\n\n"
+            "🔥 Priority access to servers\n"
+            "📶 Works with 5G without limits\n"
+            "🛡 Enhanced protection and encryption\n"
+            "🚫 Bypasses whitelists and blocks\n"
+            "⚡ Priority on maximum speed for streaming, gaming and downloads\n\n"
+            "👉 For those who want maximum comfort and freedom online"
+        ),
+        "tariff_basic_selected": "🔐 Basic tariff selected\nWhat period are you interested in?",
+        "tariff_plus_selected": "🔐 Plus tariff selected\nWhat period are you interested in?",
+        "tariff_select_basic_button": "✅ Select Basic",
+        "tariff_select_plus_button": "🔑 Select Plus",
         "enter_promo_button": "🎟 Enter promo code",
         "enter_promo_text": "Enter promo code:",
         "invalid_promo": "❌ Invalid promo code",
@@ -590,6 +621,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
         # Профиль - активная подписка (старая версия, для совместимости)
         "profile_active": "👤 Access Profile\n\nAccess status: Active\nAccess paid until {date}\n\nYou are connected. Access works stably.\n\nPersonal access key\nUsed for connection in VPN app.\nConnection persists while access is active.\n\n{vpn_key}\n\nWhen renewing, the selected period\nis automatically added to current access.\n\nUntil the period ends, you can\nnot return to settings and payment.",
         "profile_renewal_hint": "",
+        "profile_auto_renew_enabled": "🔁 Auto-renewal: {next_billing_date}",
+        "profile_auto_renew_disabled": "🔁 Auto-renewal: disabled",
         
         # Профиль - платеж на проверке
         "profile_payment_check": "🕒 Payment under verification.\n\nThis is a standard security procedure.\nAfter confirmation, access will appear automatically.",
@@ -632,6 +665,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "no_subscription": "👤 Access Profile\n\nAccess is not currently activated.\n\nAtlas Secure provides\nprivate secure access\nwith an individual connection key.\n\nYou can get access\nat any convenient time.",
         
         # О сервисе
+        "about_title": "🔎 About Atlas Secure",
         "about_text": "ℹ️ About Atlas Secure Service\n\nAtlas Secure is private secure access\nto the internet, built for stable\nand predictable operation without extra attention\nto settings and details.\n\nWe design infrastructure so\nthat you simply use access,\nnot think about how it works.\n\nWhat this gives in practice:\n\n🔐 Privacy by default\nWe don't track user actions,\ndon't store connection history\nand don't collect metadata.\n\n⚡️ Stability without limits\nOptimized servers without overload\nensure smooth and predictable operation.\n\n🌍 Reliable infrastructure\nDedicated servers in different regions,\nselected by speed and reliability.\n\n📱 All your devices\nOne access works on iOS, Android,\nmacOS and Windows without extra fees and limits.\n\nAtlas Secure is suitable if you:\n• work with important information\n• value stability and control\n• don't want to deal with technologies\n• prefer that service simply works\n\nAtlas Secure is not about features.\nIt's about peace and predictability.\n\nYou're connected.\nEverything else — works in the background.",
         "privacy_policy": "Privacy Policy",
         "privacy_policy_text": "🔐 Atlas Secure Privacy Policy\n\nAtlas Secure is built on the principle\nof data minimization.\n\nWe don't collect and don't store information\nthat is not required for service operation.\n\nWhat we DON'T store:\n• connection history\n• IP addresses and network traffic\n• DNS queries\n• data about visited resources\n• user activity metadata\n\nService architecture is implemented\non Zero-Logs principle.\n\nWhat may be processed:\n• access status\n• subscription validity period\n• technical key identifier\n\nThis data is not linked\nto your network activity.\n\nPayments:\nAtlas Secure doesn't process\nand doesn't store payment data.\nPayment goes through\nbanking and payment systems\noutside our infrastructure.\n\nData sharing:\nWe don't share data with third parties\nand don't use trackers,\nanalytics or advertising SDKs.\n\nSupport:\nWe process only information\nthat you voluntarily provide\nfor resolving a specific request.\n\nAtlas Secure.\nPrivacy is embedded\nin service architecture.",
@@ -702,6 +736,14 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "Access will be suspended automatically when it expires."
         ),
         "admin_revoke_user_notification": "⛔ Your access to Atlas Secure has been revoked by the administrator.",
+        "admin_reissue_user_notification": (
+            "🔐 VPN key updated\n\n"
+            "Your VPN connection key has been updated.\n\n"
+            "🔑 <b>New key:</b>\n"
+            "<code>{vpn_key}</code>\n\n"
+            "Use this key in your VPN app.\n\n"
+            "The old key is no longer valid."
+        ),
         
         # Ошибки (для пользователей)
         "error_payment_processing": "Payment processing error. Please contact support.",
@@ -740,11 +782,13 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "buy_vpn": "🔐 Kirishni sotib olish",
         "get_access_button": "🔐 Kirishni rasmiylashtirish",
         "about": "ℹ️ Xizmat haqida",
+        "about_title": "🔎 Atlas Secure xizmati haqida",
         "support": "🛡 Qo'llab-quvvatlash",
         "instruction": "🔌 Ko'rsatma",
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
+        "home_welcome_text": "🔐 Atlas Secure\n\nSizni Atlas Secure-da ko'rganimizdan xursandmiz 🤝\n\nBiz ta'minlaymiz:\n⚙️ tanish xizmatlarning barqaror ishlashi\n⚡ tez va ishonchli ulanish\n🛡 maxfiylik sukut bo'yicha\n\nSiz internetdan odatdagidek foydalanasiz —\nbarqarorlik va himoyani biz ko'rib chiqamiz.",
         "referral_program": "🤝 Do'stni taklif qilish",
         "referral_program_text": (
             "👥 Taklif dasturi\n\n"
@@ -769,10 +813,48 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "go_to_connection": "🔌 Ulanishga o'tish",
         "renew_subscription": "🔁 Kirishni uzaytirish",
         "no_active_subscription": "Faol obuna topilmadi.",
+        "referral_share_link_button": "📤 Havolani ulashish",
+        "referral_stats_button": "📊 Taklif statistikasi",
+        "referral_stats_screen": (
+            "📊 <b>Taklif statistikasi</b>\n\n"
+            "👤 Taklif qilingan do'stlar: {invited_count}\n"
+            "💰 Umumiy cashback: {total_cashback:.2f} ₽\n\n"
+            "🎁 Sizning cashback darajangiz: {cashback_percent}%"
+        ),
+        "referral_how_it_works": "📊 Dastur qanday ishlaydi",
+        "referral_how_it_works_text": (
+            "📊 Taklif dasturi qanday ishlaydi\n\n"
+            "1. Do'stingizga taklif havolangizni yuboring\n"
+            "2. Do'st havolani bosib ro'yxatdan o'tadi\n"
+            "3. Do'st obuna sotib olganda, sizga cashback to'lanadi\n\n"
+            "🎁 Cashback darajalari:\n"
+            "• 0-24 do'st → 10% cashback\n"
+            "• 25-49 do'st → 25% cashback\n"
+            "• 50+ do'st → 45% cashback\n\n"
+            "💰 Cashback har bir taklif xaridi uchun\n"
+            "sizning balansingizga avtomatik qo'shiladi.\n\n"
+            "💡 Daraja taklif qilingan do'stlar soniga qarab aniqlanadi,\n"
+            "kamida BIR MARTA obuna to'laganlar."
+        ),
+        "referral_level_progress": "\n\n📈 Sizning darajangiz: {current_level}% cashback\n{next_level}% darajasiga {referrals_to_next} taklif qolgan",
+        "referral_max_level": "\n\n🎉 Siz maksimal {current_level}% darajaga yetdingiz!",
+        "referral_program_screen": (
+            "🎁 Taklif dasturi\n\n"
+            "💡 Do'stlarni taklif qiling — har bir xaridlaridan cheksiz cashback oling!\n\n"
+            "📈 Darajalar:\n"
+            "✨ 0–24 do'st — 10% cashback\n"
+            "🔥 25–49 do'st — 25% cashback\n"
+            "💎 50+ do'st — 45% cashback\n\n"
+            "📍 Sizning taklif havolangiz:\n"
+            "{referral_link}\n\n"
+            "🪙 Cashback avtomatik ravishda balansga qo'shiladi."
+        ),
         # Профиль - новый формат
         "profile_welcome": "Atlas Secure-ga xush kelibsiz!\n\n👤 {username}\n\n💰 Balans: {balance:.2f} ₽",
         "profile_subscription_active": "Obuna:\n— 🟢 {date} gacha faol",
         "profile_subscription_inactive": "Obuna:\n— 🔴 Faol emas",
+        "profile_auto_renew_enabled": "🔁 Avtomatik uzaytirish: {next_billing_date}",
+        "profile_auto_renew_disabled": "🔁 Avtomatik uzaytirish: o'chirilgan",
         "profile_renewal_hint_new": "Uzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.",
         "profile_buy_hint": "Kirish olish uchun menyudan «Kirishni sotib olish»ni bosing.",
         "access_key_label": "Kirish kaliti:",
@@ -804,6 +886,29 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "subscription_history_action_reissue": "Yangi kalit berish",
         "subscription_history_action_manual_reissue": "Kalitni qayta berish",
         "select_tariff": "🕒 Obuna muddatini tanlang\n\nAtlas Secure — bu barqaror kirish,\noddiy ishlaydi.\n\nHar qanday obunada:\n🔑 Shaxsiy kalit — faqat siz uchun\n⚡️ Cheklovlarsiz barqaror tezlik\n📱💻 Barcha qurilmalarda ishlaydi\n💬 Telegram orqali istalgan vaqtda qo'llab-quvvatlash\n\nMuddat qancha uzoq bo'lsa — shuncha kam\nuzaytirish va kirish muammolari haqida o'ylaysiz.\n\nKo'pchilik foydalanuvchilar 3 oydan boshlab obunani tanlaydi.",
+        "select_tariff_type": "Тарифро интихоб кунед:",
+        "tariff_basic_description": (
+            "🪙 Тариф: Basic\n\n"
+            "🔹 Барои истифодаи рӯзона\n"
+            "📲 Барои шабакаҳои иҷтимоӣ хеле мувофиқ аст\n"
+            "🚀 Дастгирӣ мекунад: Instagram, YouTube 4K, TikTok, Web ва ғ.\n"
+            "🔒 Ҳимояи асосии эътимодноки трафик\n"
+            "💡 Пайвастшавии оддӣ, самаранок\n\n"
+            "👉 Барои истифодаи ҳаррӯза бе вазифаҳои мураккаб идеалӣ аст"
+        ),
+        "tariff_plus_description": (
+            "🔑 Тариф: Plus\n\n"
+            "🔥 Дастрасии аввалиятӣ ба серверҳо\n"
+            "📶 Бо 5G бе маҳдудият кор мекунад\n"
+            "🛡 Ҳимояи мустаҳкам ва рамзгузорӣ\n"
+            "🚫 Рӯйхатҳои сафед ва блокироҳоро гузаронанд\n"
+            "⚡ Аввалият ба суръати максималӣ барои стрим, бозӣ ва боркунӣ\n\n"
+            "👉 Барои касоне, ки максималӣ розигарӣ ва озодиро дар шабака мехоҳанд"
+        ),
+        "tariff_basic_selected": "🔐 Тарифи Basic интихоб шуд\nБарои чӣ муддат манфиат доред?",
+        "tariff_plus_selected": "🔐 Тарифи Plus интихоб шуд\nБарои чӣ муддат манфиат доред?",
+        "tariff_select_basic_button": "✅ Basic-ро интихоб кунед",
+        "tariff_select_plus_button": "🔑 Plus-ро интихоб кунед",
         "enter_promo_button": "🎟 Promokod kiriting",
         "enter_promo_text": "Promokod kiriting:",
         "invalid_promo": "❌ Noto'g'ri promokod",
@@ -1021,10 +1126,12 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "tj": {
         "language_select": "Хуш омадед ба Atlas Secure\n\nДастрасии хусусии ҳимояшуда\nбе танзимоти мураккаб.\n\nЛутфан, забонро интихоб кунед:",
         "welcome": "🔐 Atlas Secure\n\n🧩 Дастрасии рақамии хусусӣ\n⚙️ Амали устувори хизматҳои одатии\n🛡 Махфият ба таври сукут\n\nШумо пайванд мешавед —\nҳама чизҳои дигар дар фон кор мекунанд.",
+        "home_welcome_text": "🔐 Atlas Secure\n\nШуморо дар Atlas Secure дидан хурсандем 🤝\n\nМо таъмин мекунем:\n⚙️ амали устувори хизматҳои одатии\n⚡ пайванди тез ва эътимоднок\n🛡 махфият ба таври сукут\n\nШумо интернетро одатан истифода мебаред —\nбаробари устуворию ҳимояро мо парво мекардем.",
         "profile": "👤 Профили ман",
         "buy_vpn": "🔐 Хариди дастрасӣ",
         "get_access_button": "🔐 Дастрасиро расмият додан",
         "about": "ℹ️ Дар бораи хизмат",
+        "about_title": "🔎 Дар бораи хизмати Atlas Secure",
         "support": "🛡 Дастгирӣ",
         "instruction": "🔌 Дастур",
         "instruction_device_ios": "📱 iOS",
@@ -1080,10 +1187,20 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "go_to_connection": "🔌 Ба пайвандшавӣ гузаштан",
         "renew_subscription": "🔁 Дастрасиро васеъ кардан",
         "no_active_subscription": "Обунаи фаъол ёфт нашуд.",
+        "referral_share_link_button": "📤 Пайвандро мубодила кардан",
+        "referral_stats_button": "📊 Омори таклиф",
+        "referral_stats_screen": (
+            "📊 <b>Омори таклиф</b>\n\n"
+            "👤 Таклифшудаи дӯстон: {invited_count}\n"
+            "💰 Cashback-и умумӣ: {total_cashback:.2f} ₽\n\n"
+            "🎁 Сатҳи cashback-и шумо: {cashback_percent}%"
+        ),
         # Профиль - новый формат
         "profile_welcome": "Хуш омадед ба Atlas Secure!\n\n👤 {username}\n\n💰 Балланс: {balance:.2f} ₽",
         "profile_subscription_active": "Обуна:\n— 🟢 То {date} фаъол аст",
         "profile_subscription_inactive": "Обуна:\n— 🔴 Фаъол нест",
+        "profile_auto_renew_enabled": "🔁 Васеъкунии худкор: {next_billing_date}",
+        "profile_auto_renew_disabled": "🔁 Васеъкунии худкор: хомӯш аст",
         "profile_renewal_hint_new": "Ҳангоми васеъ кардан муддати интихобшуда\nба дастрасии ҷорӣ ба таври худкор илова карда мешавад.",
         "profile_buy_hint": "Барои дастрасӣ гирифтан дар меню «Хариди обуна»-ро пахш кунед.",
         "access_key_label": "Калиди дастрасӣ:",
@@ -1115,6 +1232,29 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "subscription_history_action_reissue": "Додани калиди нав",
         "subscription_history_action_manual_reissue": "Аз нав додани калид",
         "select_tariff": "🕒 Муддати обунаро интихоб кунед\n\nAtlas Secure — ин дастрасии устувор аст,\nки оддӣ кор мекунад.\n\nДар ҳар як обуна:\n🔑 Калиди шахсӣ — танҳо барои шумо\n⚡️ Суръати устувор бе маҳдудият\n📱💻 Дар ҳамаи дастгоҳҳо кор мекунад\n💬 Дастгирӣ дар Telegram дар ҳар лаҳза\n\nМуддат чӣ қадар дарозтар бошад — шумо камтар\nдар бораи васеъ кардан ва мушкилоти дастрасӣ фикр мекунед.\n\nАксарияти корбарон обунаҳоро аз 3 моҳ интихоб мекунанд.",
+        "select_tariff_type": "Тарифро интихоб кунед:",
+        "tariff_basic_description": (
+            "🪙 Тариф: Basic\n\n"
+            "🔹 Барои истифодаи рӯзона\n"
+            "📲 Барои шабакаҳои иҷтимоӣ хеле мувофиқ аст\n"
+            "🚀 Дастгирӣ мекунад: Instagram, YouTube 4K, TikTok, Web ва ғ.\n"
+            "🔒 Ҳимояи асосии эътимодноки трафик\n"
+            "💡 Пайвастшавии оддӣ, самаранок\n\n"
+            "👉 Барои истифодаи ҳаррӯза бе вазифаҳои мураккаб идеалӣ аст"
+        ),
+        "tariff_plus_description": (
+            "🔑 Тариф: Plus\n\n"
+            "🔥 Дастрасии аввалиятӣ ба серверҳо\n"
+            "📶 Бо 5G бе маҳдудият кор мекунад\n"
+            "🛡 Ҳимояи мустаҳкам ва рамзгузорӣ\n"
+            "🚫 Рӯйхатҳои сафед ва блокироҳоро гузаронанд\n"
+            "⚡ Аввалият ба суръати максималӣ барои стрим, бозӣ ва боркунӣ\n\n"
+            "👉 Барои касоне, ки максималӣ розигарӣ ва озодиро дар шабака мехоҳанд"
+        ),
+        "tariff_basic_selected": "🔐 Тарифи Basic интихоб шуд\nБарои чӣ муддат манфиат доред?",
+        "tariff_plus_selected": "🔐 Тарифи Plus интихоб шуд\nБарои чӣ муддат манфиат доред?",
+        "tariff_select_basic_button": "✅ Basic-ро интихоб кунед",
+        "tariff_select_plus_button": "🔑 Plus-ро интихоб кунед",
         "enter_promo_button": "🎟 Промокодро ворид кунед",
         "enter_promo_text": "Промокодро ворид кунед:",
         "invalid_promo": "❌ Промокоди нодуруст",
