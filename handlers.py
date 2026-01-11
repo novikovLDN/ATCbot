@@ -2032,7 +2032,7 @@ async def callback_topup_amount(callback: CallbackQuery):
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "pay_crypto", default="₿ Криптовалюта"),
+            text=localization.get_text(language, "pay_crypto", default="🌏 Криптовалюта"),
             callback_data=f"topup_crypto:{amount}"
         )],
         [InlineKeyboardButton(
@@ -2132,7 +2132,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "pay_crypto", default="₿ Криптовалюта"),
+            text=localization.get_text(language, "pay_crypto", default="🌏 Криптовалюта"),
             callback_data=f"topup_crypto:{amount}"
         )],
         [InlineKeyboardButton(
@@ -2723,7 +2723,7 @@ async def show_payment_method_selection(
     
     # Кнопка оплаты криптовалютой (CryptoBot)
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "pay_crypto", default="₿ Криптовалюта"),
+        text=localization.get_text(language, "pay_crypto", default="🌏 Криптовалюта"),
         callback_data="pay:crypto"
     )])
     
