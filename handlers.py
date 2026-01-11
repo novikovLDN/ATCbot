@@ -2032,8 +2032,8 @@ async def callback_topup_amount(callback: CallbackQuery):
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
-            text="Crypto (Скоро добавим)",
-            callback_data="crypto_disabled"  # Неактивная кнопка - только для показа
+            text=localization.get_text(language, "pay_crypto", default="₿ Криптовалюта"),
+            callback_data=f"topup_crypto:{amount}"
         )],
         [InlineKeyboardButton(
             text=localization.get_text(language, "back", default="← Назад"),
@@ -2132,8 +2132,8 @@ async def process_topup_amount(message: Message, state: FSMContext):
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
-            text="Crypto (Скоро добавим)",
-            callback_data="crypto_disabled"  # Неактивная кнопка - только для показа
+            text=localization.get_text(language, "pay_crypto", default="₿ Криптовалюта"),
+            callback_data=f"topup_crypto:{amount}"
         )],
         [InlineKeyboardButton(
             text=localization.get_text(language, "back", default="← Назад"),
@@ -3349,6 +3349,109 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
         )
         await callback.answer(error_text, show_alert=True)
         await state.set_state(None)
+
+
+@router.callback_query(F.data.startswith("topup_crypto:"))
+async def callback_topup_crypto(callback: CallbackQuery):
+    """Пополнение баланса через CryptoBot"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Извлекаем сумму из callback_data
+    amount_str = callback.data.split(":")[1]
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await callback.answer(localization.get_text(language, "error_invalid_amount", default="Неверная сумма"), show_alert=True)
+        return
+    
+    if amount <= 0 or amount > 100000:
+        await callback.answer(localization.get_text(language, "error_invalid_amount", default="Неверная сумма"), show_alert=True)
+        return
+    
+    # Проверяем доступность CryptoBot
+    from payments import cryptobot
+    if not cryptobot.is_enabled():
+        await callback.answer(
+            localization.get_text(language, "error_payments_unavailable", default="Оплата криптовалютой временно недоступна"),
+            show_alert=True
+        )
+        return
+    
+    try:
+        # Создаем pending purchase для пополнения баланса
+        # Используем tariff='basic' и period_days=0 как индикатор balance_topup
+        amount_kopecks = amount * 100
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff="basic",  # Используем 'basic' (требование CHECK constraint), period_days=0 будет индикатором
+            period_days=0,  # Индикатор balance_topup
+            price_kopecks=amount_kopecks,
+            promo_code=None
+        )
+        
+        # Формируем описание
+        description = f"Пополнение баланса на {amount} ₽"
+        
+        # Формируем payload (храним purchase_id для идентификации)
+        payload = f"purchase:{purchase_id}"
+        
+        # Создаем invoice через CryptoBot API
+        invoice_data = await cryptobot.create_invoice(
+            amount_rub=float(amount),
+            description=description,
+            payload=payload
+        )
+        
+        invoice_id = invoice_data["invoice_id"]
+        payment_url = invoice_data["pay_url"]
+        
+        # Сохраняем invoice_id в БД для автоматической проверки платежей
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error(f"Failed to save invoice_id to DB: purchase_id={purchase_id}, invoice_id={invoice_id}, error={e}")
+        
+        logger.info(
+            f"balance_topup_invoice_created: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
+            f"amount={amount} RUB, invoice_id={invoice_id}"
+        )
+        
+        # Отправляем пользователю сообщение с payment URL
+        text = localization.get_text(
+            language,
+            "balance_topup_waiting",
+            amount=amount,
+            default=f"₿ Пополнение баланса через криптовалюту\n\nСумма: {amount} ₽\n\n⏳ Ожидаем подтверждение оплаты. Обычно это занимает до 5 минут. Баланс будет пополнен автоматически."
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "crypto_pay_button", default="💳 Перейти к оплате"),
+                url=payment_url
+            )],
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                callback_data="topup_balance"
+            )]
+        ])
+        
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+        
+    except Exception as e:
+        logger.exception(f"Error creating CryptoBot invoice for balance top-up: {e}")
+        error_text = localization.get_text(
+            language,
+            "error_payment_create",
+            default="Ошибка создания платежа. Попробуйте ещё раз."
+        )
+        await callback.answer(error_text, show_alert=True)
 
 
 @router.callback_query(F.data == "enter_promo")

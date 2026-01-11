@@ -4270,7 +4270,65 @@ async def finalize_purchase(
                 logger.error(f"finalize_purchase: payment_rejected: reason=db_update_failed, {error_msg}")
                 raise Exception(error_msg)
             
-            # STEP 4: Создаем payment record
+            # STEP 4: Проверяем, является ли это пополнением баланса (period_days == 0)
+            is_balance_topup = (period_days == 0)
+            
+            if is_balance_topup:
+                # ОБРАБОТКА ПОПОЛНЕНИЯ БАЛАНСА
+                logger.info(
+                    f"finalize_purchase: BALANCE_TOPUP [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"amount={amount_rubles:.2f} RUB]"
+                )
+                
+                # Увеличиваем баланс пользователя
+                balance_increased = await increase_balance(
+                    telegram_id=telegram_id,
+                    amount=amount_rubles,
+                    source="cryptobot" if payment_provider == "cryptobot" else "telegram_payment",
+                    description=f"Balance top-up via {payment_provider}"
+                )
+                
+                if not balance_increased:
+                    error_msg = f"Failed to increase balance: purchase_id={purchase_id}, user={telegram_id}"
+                    logger.error(f"finalize_purchase: {error_msg}")
+                    raise Exception(error_msg)
+                
+                # Создаем payment record для баланса
+                payment_id = await conn.fetchval(
+                    "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                    telegram_id,
+                    "balance_topup",
+                    int(amount_rubles * 100)  # Сохраняем в копейках
+                )
+                
+                if not payment_id:
+                    error_msg = f"Failed to create payment record: purchase_id={purchase_id}, user={telegram_id}"
+                    logger.error(f"finalize_purchase: {error_msg}")
+                    raise Exception(error_msg)
+                
+                logger.info(
+                    f"balance_topup_completed: purchase_id={purchase_id}, user={telegram_id}, "
+                    f"provider={payment_provider}, payment_id={payment_id}, amount={amount_rubles:.2f} RUB"
+                )
+                
+                logger.info(
+                    f"finalize_purchase: SUCCESS [BALANCE_TOPUP] [purchase_id={purchase_id}, user={telegram_id}, "
+                    f"provider={payment_provider}, payment_id={payment_id}, amount={amount_rubles:.2f} RUB]"
+                )
+                
+                # Возвращаем результат для balance_topup (без VPN ключа)
+                return {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": None,  # Нет подписки
+                    "vpn_key": None,  # Нет VPN ключа
+                    "is_renewal": False,
+                    "is_balance_topup": True,
+                    "amount": amount_rubles
+                }
+            
+            # STEP 5: ОБРАБОТКА ПОДПИСКИ (period_days > 0)
+            # Создаем payment record
             payment_id = await conn.fetchval(
                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
                 telegram_id,
@@ -4283,7 +4341,7 @@ async def finalize_purchase(
                 logger.error(f"finalize_purchase: {error_msg}")
                 raise Exception(error_msg)
             
-            # STEP 5: Активируем подписку через grant_access
+            # Активируем подписку через grant_access
             duration = timedelta(days=period_days)
             grant_result = await grant_access(
                 telegram_id=telegram_id,
