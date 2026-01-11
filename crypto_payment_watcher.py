@@ -103,30 +103,54 @@ async def check_crypto_payments(bot: Bot):
                         logger.error(f"Crypto payment finalization failed: purchase_id={purchase_id}, invoice_id={invoice_id}")
                         continue
                     
-                    # Отправляем подтверждение пользователю
-                    payment_id = result["payment_id"]
-                    expires_at = result["expires_at"]
-                    vpn_key = result["vpn_key"]
+                    # Проверяем, является ли это пополнением баланса
+                    is_balance_topup = result.get("is_balance_topup", False)
                     
                     user = await database.get_user(telegram_id)
                     language = user.get("language", "ru") if user else "ru"
                     
-                    expires_str = expires_at.strftime("%d.%m.%Y")
-                    text = localization.get_text(language, "payment_approved", date=expires_str)
-                    
-                    # Импорт здесь для избежания circular import
-                    import handlers
-                    try:
-                        await bot.send_message(telegram_id, text, reply_markup=handlers.get_vpn_key_keyboard(language), parse_mode="HTML")
-                        await bot.send_message(telegram_id, f"<code>{vpn_key}</code>", parse_mode="HTML")
-                        logger.info(
-                            f"Crypto payment auto-confirmed: user={telegram_id}, purchase_id={purchase_id}, "
-                            f"invoice_id={invoice_id}, payment_id={payment_id}"
+                    if is_balance_topup:
+                        # Отправляем подтверждение пополнения баланса
+                        amount = result.get("amount", amount_rubles)
+                        text = localization.get_text(
+                            language,
+                            "balance_topup_success",
+                            amount=amount,
+                            default=f"✅ Баланс успешно пополнен на {amount:.2f} ₽"
                         )
-                    except TelegramForbiddenError:
-                        logger.info(f"User {telegram_id} blocked bot, skipping confirmation message")
-                    except Exception as e:
-                        logger.error(f"Error sending confirmation to user {telegram_id}: {e}")
+                        
+                        try:
+                            await bot.send_message(telegram_id, text, parse_mode="HTML")
+                            logger.info(
+                                f"Crypto balance top-up auto-confirmed: user={telegram_id}, purchase_id={purchase_id}, "
+                                f"invoice_id={invoice_id}, amount={amount} RUB"
+                            )
+                        except TelegramForbiddenError:
+                            logger.info(f"User {telegram_id} blocked bot, skipping balance top-up confirmation message")
+                        except Exception as e:
+                            logger.error(f"Error sending balance top-up confirmation to user {telegram_id}: {e}")
+                    else:
+                        # Отправляем подтверждение покупки подписки
+                        payment_id = result["payment_id"]
+                        expires_at = result["expires_at"]
+                        vpn_key = result["vpn_key"]
+                        
+                        expires_str = expires_at.strftime("%d.%m.%Y")
+                        text = localization.get_text(language, "payment_approved", date=expires_str)
+                        
+                        # Импорт здесь для избежания circular import
+                        import handlers
+                        try:
+                            await bot.send_message(telegram_id, text, reply_markup=handlers.get_vpn_key_keyboard(language), parse_mode="HTML")
+                            await bot.send_message(telegram_id, f"<code>{vpn_key}</code>", parse_mode="HTML")
+                            logger.info(
+                                f"Crypto payment auto-confirmed: user={telegram_id}, purchase_id={purchase_id}, "
+                                f"invoice_id={invoice_id}, payment_id={payment_id}"
+                            )
+                        except TelegramForbiddenError:
+                            logger.info(f"User {telegram_id} blocked bot, skipping confirmation message")
+                        except Exception as e:
+                            logger.error(f"Error sending confirmation to user {telegram_id}: {e}")
                     
                 except ValueError as e:
                     # Pending purchase уже обработан (idempotency)
