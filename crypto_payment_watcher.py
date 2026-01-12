@@ -43,7 +43,7 @@ async def check_crypto_payments(bot: Bot):
                 """SELECT * FROM pending_purchases 
                    WHERE status = 'pending' 
                    AND provider_invoice_id IS NOT NULL
-                   AND expires_at > $1
+                   WHERE expires_at > (NOW() AT TIME ZONE 'UTC')
                    ORDER BY created_at DESC
                    LIMIT 100""",
                 now_utc
