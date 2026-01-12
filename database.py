@@ -299,6 +299,8 @@ async def init_db() -> bool:
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_used_at TIMESTAMP")
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMP")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_completed_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS smart_offer_sent BOOLEAN DEFAULT FALSE")
         except Exception:
             pass
             # Если колонка уже существует как NUMERIC, конвертируем в INTEGER (копейки)
