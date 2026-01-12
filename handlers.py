@@ -3867,6 +3867,15 @@ async def process_successful_payment(message: Message, state: FSMContext):
         return
     
     telegram_id = message.from_user.id
+    
+    # КРИТИЧНО: Инициализация языка в начале функции для гарантированной доступности
+    # Получаем язык пользователя из профиля или используем "ru" как fallback
+    try:
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+    except Exception as e:
+        logger.warning(f"Failed to get user language for {telegram_id}, using 'ru' as fallback: {e}")
+        language = "ru"
     payment = message.successful_payment
     payload = payment.invoice_payload
     
@@ -4268,12 +4277,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Здесь только отправка пользователю - это атомарная операция после успешного платежа
     expires_str = expires_at.strftime("%d.%m.%Y")
     
-    # Отправляем сообщение об успешной активации
-    text = localization.get_text(language, "payment_approved", date=expires_str)
+    # Отправляем сообщение об успешной активации с гарантированным fallback
     try:
+        text = localization.get_text(language, "payment_approved", date=expires_str)
         await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
     except Exception as e:
-        logger.error(f"Failed to send payment approval message: user={telegram_id}, error={e}")
+        logger.error(f"Failed to send payment approval message with localization: user={telegram_id}, error={e}")
+        # КРИТИЧНО: Fallback на русский текст если локализация не работает
+        try:
+            fallback_text = f"✅ Оплата подтверждена! Доступ до {expires_str}"
+            await message.answer(fallback_text, reply_markup=get_vpn_key_keyboard("ru"), parse_mode="HTML")
+        except Exception as fallback_error:
+            logger.error(f"Failed to send fallback payment approval message: user={telegram_id}, error={fallback_error}")
         # Не критично - продолжаем отправку ключа
     
     # КРИТИЧНО: Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
