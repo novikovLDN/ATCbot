@@ -4,7 +4,7 @@ import sys
 import hashlib
 import base64
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
 import config
@@ -184,9 +184,20 @@ async def init_db() -> bool:
                 promo_code TEXT,
                 status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'expired')),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP NOT NULL
+                expires_at TIMESTAMP
             )
         """)
+        
+        # Миграция: устанавливаем expires_at для существующих pending purchases с NULL expires_at
+        try:
+            await conn.execute("""
+                UPDATE pending_purchases 
+                SET expires_at = created_at + INTERVAL '30 minutes'
+                WHERE expires_at IS NULL
+                AND status = 'pending'
+            """)
+        except Exception:
+            pass
         
         # Создаем индексы для быстрого поиска
         try:
@@ -4120,9 +4131,13 @@ async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) 
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Для crypto purchases устанавливаем TTL = 30 минут с момента создания invoice
+        now_utc = datetime.now(timezone.utc)
+        expires_at_utc = now_utc + timedelta(minutes=30)
+        
         result = await conn.execute(
-            "UPDATE pending_purchases SET provider_invoice_id = $1 WHERE purchase_id = $2 AND status = 'pending'",
-            invoice_id, purchase_id
+            "UPDATE pending_purchases SET provider_invoice_id = $1, expires_at = $3 WHERE purchase_id = $2 AND status = 'pending'",
+            invoice_id, purchase_id, expires_at_utc
         )
         
         if result == "UPDATE 1":

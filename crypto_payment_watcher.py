@@ -1,7 +1,7 @@
 """Фоновая задача для автоматической проверки статуса CryptoBot платежей"""
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 import database
@@ -36,17 +36,17 @@ async def check_crypto_payments(bot: Bot):
         pool = await database.get_pool()
         async with pool.acquire() as conn:
             # Получаем pending purchases с provider_invoice_id (т.е. CryptoBot purchases)
-            # Ограничиваем выборку покупками за последние 24 часа (старые уже истекли)
-            cutoff_time = datetime.now() - timedelta(hours=24)
+            # Только не истёкшие покупки: status = 'pending' AND expires_at > now_utc
+            now_utc = datetime.now(timezone.utc)
             
             pending_purchases = await conn.fetch(
                 """SELECT * FROM pending_purchases 
                    WHERE status = 'pending' 
                    AND provider_invoice_id IS NOT NULL
-                   AND created_at > $1
+                   AND expires_at > $1
                    ORDER BY created_at DESC
                    LIMIT 100""",
-                cutoff_time
+                now_utc
             )
             
             if not pending_purchases:
@@ -164,6 +164,52 @@ async def check_crypto_payments(bot: Bot):
         logger.exception(f"Error in check_crypto_payments: {e}")
 
 
+async def cleanup_expired_purchases():
+    """
+    Очистка истёкших pending purchases
+    
+    Помечает как 'expired' все покупки где:
+    - status = 'pending'
+    - expires_at <= now_utc
+    
+    Безопасно: не удаляет покупки, только меняет статус
+    """
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            now_utc = datetime.now(timezone.utc)
+            
+            # Получаем список истёкших покупок перед обновлением для логирования
+            expired_purchases = await conn.fetch("""
+                SELECT id, purchase_id, telegram_id, expires_at
+                FROM pending_purchases 
+                WHERE status = 'pending' 
+                AND expires_at IS NOT NULL
+                AND expires_at <= $1
+            """, now_utc)
+            
+            if not expired_purchases:
+                return
+            
+            # Помечаем как expired
+            result = await conn.execute("""
+                UPDATE pending_purchases 
+                SET status = 'expired'
+                WHERE status = 'pending' 
+                AND expires_at IS NOT NULL
+                AND expires_at <= $1
+            """, now_utc)
+            
+            # Логируем каждую истёкшую покупку
+            for purchase in expired_purchases:
+                logger.info(
+                    f"crypto_invoice_expired: purchase_id={purchase['purchase_id']}"
+                )
+                    
+    except Exception as e:
+        logger.error(f"Error in cleanup_expired_purchases: {e}", exc_info=True)
+
+
 async def crypto_payment_watcher_task(bot: Bot):
     """
     Фоновая задача для автоматической проверки CryptoBot платежей
@@ -175,6 +221,7 @@ async def crypto_payment_watcher_task(bot: Bot):
     # Первая проверка сразу при запуске
     try:
         await check_crypto_payments(bot)
+        await cleanup_expired_purchases()
     except Exception as e:
         logger.exception(f"Error in initial crypto payment check: {e}")
     
@@ -182,6 +229,7 @@ async def crypto_payment_watcher_task(bot: Bot):
         try:
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
             await check_crypto_payments(bot)
+            await cleanup_expired_purchases()
         except asyncio.CancelledError:
             logger.info("Crypto payment watcher task cancelled")
             break
