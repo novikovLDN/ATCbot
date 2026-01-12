@@ -4,7 +4,7 @@ import sys
 import hashlib
 import base64
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
 import config
@@ -4132,7 +4132,7 @@ async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) 
     pool = await get_pool()
     async with pool.acquire() as conn:
         # Для crypto purchases устанавливаем TTL = 30 минут с момента создания invoice
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.utcnow()
         expires_at_utc = now_utc + timedelta(minutes=30)
         
         result = await conn.execute(

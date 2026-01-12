@@ -1,7 +1,7 @@
 """Фоновая задача для автоматической проверки статуса CryptoBot платежей"""
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 import database
@@ -37,7 +37,7 @@ async def check_crypto_payments(bot: Bot):
         async with pool.acquire() as conn:
             # Получаем pending purchases с provider_invoice_id (т.е. CryptoBot purchases)
             # Только не истёкшие покупки: status = 'pending' AND expires_at > now_utc
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.utcnow()
             
             pending_purchases = await conn.fetch(
                 """SELECT * FROM pending_purchases 
@@ -177,7 +177,7 @@ async def cleanup_expired_purchases():
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.utcnow()
             
             # Получаем список истёкших покупок перед обновлением для логирования
             expired_purchases = await conn.fetch("""
