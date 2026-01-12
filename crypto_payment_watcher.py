@@ -43,8 +43,7 @@ async def check_crypto_payments(bot: Bot):
                    AND provider_invoice_id IS NOT NULL
                    AND expires_at > (NOW() AT TIME ZONE 'UTC')
                    ORDER BY created_at DESC
-                   LIMIT 100""",
-                statement_name=None
+                   LIMIT 100"""
             )
             
             if not pending_purchases:
@@ -182,7 +181,7 @@ async def cleanup_expired_purchases():
                 WHERE status = 'pending' 
                 AND expires_at IS NOT NULL
                 AND expires_at <= (NOW() AT TIME ZONE 'UTC')
-            """, statement_name=None)
+            """)
             
             if not expired_purchases:
                 return
@@ -194,7 +193,7 @@ async def cleanup_expired_purchases():
                 WHERE status = 'pending' 
                 AND expires_at IS NOT NULL
                 AND expires_at <= (NOW() AT TIME ZONE 'UTC')
-            """, statement_name=None)
+            """)
             
             # Логируем каждую истёкшую покупку
             for purchase in expired_purchases:
