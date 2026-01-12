@@ -36,17 +36,18 @@ async def check_crypto_payments(bot: Bot):
         pool = await database.get_pool()
         async with pool.acquire() as conn:
             # Получаем pending purchases с provider_invoice_id (т.е. CryptoBot purchases)
-            # Только не истёкшие покупки: status = 'pending' AND expires_at > now_utc
-            now_utc = datetime.utcnow()
-            
+            # Только не истёкшие покупки: status = 'pending' AND expires_at > (NOW() AT TIME ZONE 'UTC')
             pending_purchases = await conn.fetch(
                 """SELECT * FROM pending_purchases 
                    WHERE status = 'pending' 
                    AND provider_invoice_id IS NOT NULL
+<<<<<<< HEAD
                    WHERE expires_at > (NOW() AT TIME ZONE 'UTC')
+=======
+                   AND expires_at > (NOW() AT TIME ZONE 'UTC')
+>>>>>>> 8bf85af (Fix crypto payment watcher: move TTL time comparison fully to PostgreSQL (UTC-safe))
                    ORDER BY created_at DESC
-                   LIMIT 100""",
-                now_utc
+                   LIMIT 100"""
             )
             
             if not pending_purchases:
@@ -177,16 +178,14 @@ async def cleanup_expired_purchases():
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            now_utc = datetime.utcnow()
-            
             # Получаем список истёкших покупок перед обновлением для логирования
             expired_purchases = await conn.fetch("""
                 SELECT id, purchase_id, telegram_id, expires_at
                 FROM pending_purchases 
                 WHERE status = 'pending' 
                 AND expires_at IS NOT NULL
-                AND expires_at <= $1
-            """, now_utc)
+                AND expires_at <= (NOW() AT TIME ZONE 'UTC')
+            """)
             
             if not expired_purchases:
                 return
@@ -197,8 +196,8 @@ async def cleanup_expired_purchases():
                 SET status = 'expired'
                 WHERE status = 'pending' 
                 AND expires_at IS NOT NULL
-                AND expires_at <= $1
-            """, now_utc)
+                AND expires_at <= (NOW() AT TIME ZONE 'UTC')
+            """)
             
             # Логируем каждую истёкшую покупку
             for purchase in expired_purchases:
