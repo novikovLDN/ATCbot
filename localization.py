@@ -682,15 +682,15 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Инструкция
         "instruction_text": (
-            "🔑 Step 1. Add VPN Key\n\n"
+            "🔑 Step 1. Add Key\n\n"
             "1. Open v2RayTun app\n"
             "2. Tap «➕ Add Configuration»\n"
             "3. Select «Import by Link»\n"
-            "4. Paste the VPN key received from bot\n"
+            "4. Paste the key received from bot\n"
             "5. Confirm addition\n\n"
             "⚠️ Important:\n"
             "— Delete old key before adding new one\n"
-            "— One VPN key works only for one user\n\n"
+            "— One key works only for one user\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "🚀 Step 2. Connect\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
@@ -699,13 +699,13 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "3. Wait for «Connected» status\n\n"
             "After connection:\n"
             "— All internet traffic is protected\n"
-            "— VPN works automatically\n\n"
+            "—  works automatically\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "❓ If not connecting\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             "• Check that subscription is active\n"
             "• Make sure you're using v2RayTun\n"
-            "• Delete old VPN configurations"
+            "• Delete old  configurations"
         ),
         
         # Администратор
