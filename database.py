@@ -650,6 +650,26 @@ async def init_db() -> bool:
             DB_READY = False
             return False
         
+        # ====================================================================================
+        # КРИТИЧНО: Проверяем что таблица users существует и доступна
+        # ====================================================================================
+        # users - базовая таблица, без неё БД не может считаться готовой
+        users_exists = await conn.fetchval("SELECT to_regclass('public.users')")
+        if users_exists is None:
+            logger.error("CRITICAL: Table 'users' does not exist after migrations")
+            logger.error("This is a critical failure - users table is required for all operations")
+            DB_READY = False
+            return False
+        
+        # Проверяем что users таблица имеет базовую структуру
+        try:
+            users_count = await conn.fetchval("SELECT COUNT(*) FROM users")
+            logger.info(f"Users table verified: {users_count} users found")
+        except Exception as e:
+            logger.error(f"CRITICAL: Cannot query users table: {e}")
+            DB_READY = False
+            return False
+        
         # Логируем информацию о БД для диагностики
         try:
             db_name = await conn.fetchval("SELECT current_database()")
@@ -659,9 +679,9 @@ async def init_db() -> bool:
         except Exception as e:
             logger.warning(f"Could not log database info: {e}")
         
-        # ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ВСЕХ ТАБЛИЦ устанавливаем DB_READY = True
+        # ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ВСЕХ ТАБЛИЦ И users устанавливаем DB_READY = True
         DB_READY = True
-        logger.info("Database initialized successfully - all required tables verified")
+        logger.info("Database initialized successfully - all required tables verified, users table accessible")
         return True
 
 
