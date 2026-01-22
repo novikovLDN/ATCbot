@@ -1,18 +1,64 @@
 import os
 import sys
 
-print("🚨 STAGE CONFIG LOADED 🚨", flush=True)
-print("APP_ENV =", os.getenv("APP_ENV"), flush=True)
-# Telegram Bot Token (получить у @BotFather)
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    print("ERROR: BOT_TOKEN environment variable is not set!", file=sys.stderr)
+# ====================================================================================
+# ENVIRONMENT CONFIGURATION: Изоляция PROD / STAGE / LOCAL через префиксы
+# ====================================================================================
+# ВАЖНО: Все переменные окружения должны использовать префикс окружения:
+#   - PROD: PROD_BOT_TOKEN, PROD_DATABASE_URL, PROD_ADMIN_TELEGRAM_ID
+#   - STAGE: STAGE_BOT_TOKEN, STAGE_DATABASE_URL, STAGE_ADMIN_TELEGRAM_ID
+#   - LOCAL: LOCAL_BOT_TOKEN, LOCAL_DATABASE_URL, LOCAL_ADMIN_TELEGRAM_ID
+# 
+# Это гарантирует полную изоляцию окружений и предотвращает случайное
+# использование неправильных переменных (например, STAGE бот не сможет
+# использовать PROD_BOT_TOKEN даже если он случайно задан).
+# ====================================================================================
+
+APP_ENV = os.getenv("APP_ENV", "prod").lower()
+if APP_ENV not in ("prod", "stage", "local"):
+    print(f"ERROR: Invalid APP_ENV={APP_ENV}. Must be one of: prod, stage, local", file=sys.stderr)
     sys.exit(1)
 
+def env(key: str) -> str:
+    """
+    Получить переменную окружения с префиксом окружения
+    
+    Args:
+        key: Имя переменной без префикса (например, "BOT_TOKEN")
+    
+    Returns:
+        Значение переменной с префиксом (например, "STAGE_BOT_TOKEN")
+    
+    Example:
+        env("BOT_TOKEN") -> "STAGE_BOT_TOKEN" (если APP_ENV=stage)
+        env("DATABASE_URL") -> "PROD_DATABASE_URL" (если APP_ENV=prod)
+    """
+    env_key = f"{APP_ENV.upper()}_{key}"
+    return os.getenv(env_key, "")
+
+# Защита от прямого использования переменных без префикса
+# Это предотвращает случайное использование неправильных переменных
+_direct_usage_vars = ["BOT_TOKEN", "DATABASE_URL", "ADMIN_TELEGRAM_ID", "TG_PROVIDER_TOKEN"]
+for var in _direct_usage_vars:
+    if os.getenv(var):
+        print(f"ERROR: Direct usage of {var} is FORBIDDEN!", file=sys.stderr)
+        print(f"ERROR: Use {APP_ENV.upper()}_{var} instead (via env('{var}'))", file=sys.stderr)
+        print(f"ERROR: This prevents accidental PROD/STAGE configuration mix-up", file=sys.stderr)
+        sys.exit(1)
+
+print(f"INFO: Config loaded for environment: {APP_ENV.upper()}", flush=True)
+
+# Telegram Bot Token (получить у @BotFather)
+BOT_TOKEN = env("BOT_TOKEN")
+if not BOT_TOKEN:
+    print(f"ERROR: {APP_ENV.upper()}_BOT_TOKEN environment variable is not set!", file=sys.stderr)
+    sys.exit(1)
+print(f"INFO: Using BOT_TOKEN from {APP_ENV.upper()}_BOT_TOKEN", flush=True)
+
 # Telegram ID администратора (можно узнать у @userinfobot)
-ADMIN_TELEGRAM_ID_STR = os.getenv("ADMIN_TELEGRAM_ID")
+ADMIN_TELEGRAM_ID_STR = env("ADMIN_TELEGRAM_ID")
 if not ADMIN_TELEGRAM_ID_STR:
-    print("ERROR: ADMIN_TELEGRAM_ID environment variable is not set!", file=sys.stderr)
+    print(f"ERROR: {APP_ENV.upper()}_ADMIN_TELEGRAM_ID environment variable is not set!", file=sys.stderr)
     sys.exit(1)
 
 try:
@@ -56,11 +102,19 @@ SUPPORT_TELEGRAM = "@support"
 VPN_KEYS_FILE = "vpn_keys.txt"
 
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)
-TG_PROVIDER_TOKEN = os.getenv("TG_PROVIDER_TOKEN", "")
+# В PROD: ОБЯЗАТЕЛЕН (иначе платежи не работают)
+# В STAGE: опционален (платежи могут быть отключены)
+TG_PROVIDER_TOKEN = env("TG_PROVIDER_TOKEN")
+if not TG_PROVIDER_TOKEN:
+    if APP_ENV == "prod":
+        print(f"ERROR: {APP_ENV.upper()}_TG_PROVIDER_TOKEN is REQUIRED in PROD!", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print(f"WARNING: {APP_ENV.upper()}_TG_PROVIDER_TOKEN is not set - payments will be disabled", file=sys.stderr)
 
 # Xray Core API Configuration (OPTIONAL - бот работает без VPN API, но VPN-операции блокируются)
-XRAY_API_URL = os.getenv("XRAY_API_URL", "")
-XRAY_API_KEY = os.getenv("XRAY_API_KEY", "")
+XRAY_API_URL = env("XRAY_API_URL")
+XRAY_API_KEY = env("XRAY_API_KEY")
 
 # Флаг доступности VPN API
 VPN_ENABLED = bool(XRAY_API_URL and XRAY_API_KEY)
@@ -74,6 +128,7 @@ else:
 
 # Xray VLESS REALITY Server Constants (REQUIRED)
 # Эти параметры используются для генерации VLESS ссылок
+# Используем прямые переменные без префикса (они общие для всех окружений)
 XRAY_SERVER_IP = os.getenv("XRAY_SERVER_IP", "172.86.67.9")
 XRAY_PORT = int(os.getenv("XRAY_PORT", "443"))
 XRAY_SNI = os.getenv("XRAY_SNI", "www.cloudflare.com")
@@ -84,7 +139,7 @@ XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
 XRAY_FP = os.getenv("XRAY_FP", "ios")  # По умолчанию ios согласно требованиям
 
 # Crypto Bot (Telegram Crypto Pay) Configuration
-CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
-CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "https://pay.crypt.bot/api")
-CRYPTOBOT_WEBHOOK_SECRET = os.getenv("CRYPTOBOT_WEBHOOK_SECRET", "")
+CRYPTOBOT_TOKEN = env("CRYPTOBOT_TOKEN")
+CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
+CRYPTOBOT_WEBHOOK_SECRET = env("CRYPTOBOT_WEBHOOK_SECRET")
 
