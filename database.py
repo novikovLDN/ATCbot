@@ -621,9 +621,48 @@ async def init_db() -> bool:
         await _init_promo_codes(conn)
         
         logger.info("Database tables initialized")
-    # Успешная инициализация
-    DB_READY = True
-    return True
+        
+        # ====================================================================================
+        # КРИТИЧНО: Проверяем существование всех критичных таблиц после миграций
+        # ====================================================================================
+        # Если миграции упали частично, таблицы могут отсутствовать
+        # Это предотвращает установку DB_READY = True при частично сломанной БД
+        required_tables = [
+            "users",
+            "subscriptions",
+            "pending_purchases",
+            "payments",
+            "balance_transactions"
+        ]
+        
+        missing_tables = []
+        for table_name in required_tables:
+            table_exists = await conn.fetchval(
+                "SELECT to_regclass($1::text)",
+                f"public.{table_name}"
+            )
+            if table_exists is None:
+                missing_tables.append(table_name)
+        
+        if missing_tables:
+            logger.error(f"CRITICAL: Required tables are missing after migrations: {missing_tables}")
+            logger.error("Database is in BROKEN state - migrations may have failed partially")
+            DB_READY = False
+            return False
+        
+        # Логируем информацию о БД для диагностики
+        try:
+            db_name = await conn.fetchval("SELECT current_database()")
+            db_user = await conn.fetchval("SELECT current_user")
+            db_schema = await conn.fetchval("SELECT current_schema()")
+            logger.info(f"Database connection verified: database={db_name}, user={db_user}, schema={db_schema}")
+        except Exception as e:
+            logger.warning(f"Could not log database info: {e}")
+        
+        # ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ВСЕХ ТАБЛИЦ устанавливаем DB_READY = True
+        DB_READY = True
+        logger.info("Database initialized successfully - all required tables verified")
+        return True
 
 
 async def _init_promo_codes(conn):
