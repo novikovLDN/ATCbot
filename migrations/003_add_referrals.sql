@@ -7,6 +7,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS referrer_id BIGINT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_level TEXT DEFAULT 'base' CHECK (referral_level IN ('base', 'vip'));
 
 -- Migrate data from referred_by to referrer_id if needed
+-- Используем DO блок для безопасной проверки существования колонки
 DO $$
 BEGIN
     IF EXISTS (
