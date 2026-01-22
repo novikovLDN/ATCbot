@@ -45,12 +45,16 @@ async def main():
     
     try:
         success = await database.init_db()
+        # init_db() уже устанавливает DB_READY внутри себя после создания всех таблиц
         if success:
             logger.info("✅ База данных инициализирована успешно")
-            database.DB_READY = True
+            # Проверяем, что DB_READY установлен корректно
+            if not database.DB_READY:
+                logger.error("CRITICAL: init_db() returned True but DB_READY is False")
+                database.DB_READY = False
         else:
             logger.error("❌ DB INIT FAILED — RUNNING IN DEGRADED MODE")
-            database.DB_READY = False
+            # DB_READY уже установлен в init_db()
             # Уведомляем администратора о деградированном режиме
             try:
                 await admin_notifications.notify_admin_degraded_mode(bot)
