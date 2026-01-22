@@ -332,27 +332,37 @@ async def clear_promo_session(state: FSMContext):
 
 
 # ====================================================================================
-async def ensure_db_ready_message(message_or_query) -> bool:
+async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: bool = False) -> bool:
     """
     Проверка готовности базы данных с отправкой сообщения пользователю
     
     Args:
         message_or_query: Message или CallbackQuery объект
+        allow_readonly_in_stage: Если True, в STAGE разрешает read-only операции без БД
         
     Returns:
-        True если БД готова, False если БД недоступна (сообщение отправлено)
+        True если БД готова или операция разрешена в STAGE, False если БД недоступна (сообщение отправлено)
     """
     if not database.DB_READY:
+        # В STAGE разрешаем read-only операции (меню, профиль, навигация)
+        # В PROD всегда блокируем
+        if allow_readonly_in_stage and config.IS_STAGE:
+            return True
+        
         # Определяем язык пользователя (по умолчанию русский)
         # ВАЖНО: Не обращаемся к БД если она не готова
         language = "ru"
         
-        # Получаем текст сообщения
-        error_text = localization.get_text(
-            language,
-            "service_unavailable",
-            default="⚠️ Сервис временно недоступен. Попробуйте позже."
-        )
+        # Получаем текст сообщения в зависимости от окружения
+        if config.IS_PROD:
+            error_text = localization.get_text(
+                language,
+                "service_unavailable",
+                default="⚠️ Сервис временно недоступен. Попробуйте позже."
+            )
+        else:
+            # STAGE/LOCAL: более мягкое сообщение
+            error_text = "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны."
         
         # Отправляем сообщение
         try:
@@ -370,17 +380,18 @@ async def ensure_db_ready_message(message_or_query) -> bool:
     return True
 
 
-async def ensure_db_ready_callback(callback: CallbackQuery) -> bool:
+async def ensure_db_ready_callback(callback: CallbackQuery, allow_readonly_in_stage: bool = False) -> bool:
     """
     Проверка готовности базы данных для CallbackQuery (для удобства)
     
     Args:
         callback: CallbackQuery объект
+        allow_readonly_in_stage: Если True, в STAGE разрешает read-only операции без БД
         
     Returns:
-        True если БД готова, False если БД недоступна (сообщение отправлено)
+        True если БД готова или операция разрешена в STAGE, False если БД недоступна (сообщение отправлено)
     """
-    return await ensure_db_ready_message(callback)
+    return await ensure_db_ready_message(callback, allow_readonly_in_stage=allow_readonly_in_stage)
 
 
 class AdminUserSearch(StatesGroup):
@@ -461,14 +472,22 @@ def get_language_keyboard():
 
 async def format_text_with_incident(text: str, language: str) -> str:
     """Добавить баннер инцидента к тексту, если режим активен"""
-    incident = await database.get_incident_settings()
-    if incident["is_active"]:
-        banner = localization.get_text(language, "incident_banner")
-        incident_text = incident.get("incident_text")
-        if incident_text:
-            banner += f"\n{incident_text}"
-        return f"{banner}\n\n⸻\n\n{text}"
-    return text
+    # Безопасный вызов: если БД не готова или таблица не существует, пропускаем инцидент
+    try:
+        if not database.DB_READY:
+            return text
+        incident = await database.get_incident_settings()
+        if incident and incident.get("is_active"):
+            banner = localization.get_text(language, "incident_banner")
+            incident_text = incident.get("incident_text")
+            if incident_text:
+                banner += f"\n{incident_text}"
+            return f"{banner}\n\n⸻\n\n{text}"
+        return text
+    except Exception as e:
+        # Если таблица incident_settings не существует или другая ошибка - просто возвращаем текст
+        logger.warning(f"Error getting incident settings: {e}")
+        return text
 
 
 async def get_main_menu_keyboard(language: str, telegram_id: int = None):
@@ -1154,10 +1173,12 @@ async def cmd_start(message: Message):
     # /start может работать в деградированном режиме (только показ меню),
     # но если БД недоступна, не пытаемся создавать пользователя
     if not database.DB_READY:
-        # Показываем сообщение о недоступности и главное меню (read-only)
+        # В STAGE показываем меню без сообщения об ошибке (read-only режим)
+        # В PROD показываем сообщение об ошибке
         language = "ru"  # По умолчанию русский
         text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
-        text += "\n\n" + localization.get_text(language, "service_unavailable")
+        if config.IS_PROD:
+            text += "\n\n" + localization.get_text(language, "service_unavailable", default="⚠️ Сервис временно недоступен. Попробуйте позже.")
         keyboard = await get_main_menu_keyboard(language, message.from_user.id)
         await message.answer(text, reply_markup=keyboard)
         return
@@ -1549,6 +1570,11 @@ async def callback_language(callback: CallbackQuery):
 async def callback_main_menu(callback: CallbackQuery):
     """Главное меню"""
     # SAFE STARTUP GUARD: Главное меню может работать в деградированном режиме
+    # В STAGE разрешаем read-only операции (навигация, меню)
+    # В PROD блокируем если БД не готова
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+    
     telegram_id = callback.from_user.id
     language = "ru"  # По умолчанию
     if database.DB_READY:
