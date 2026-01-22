@@ -127,6 +127,18 @@ def ensure_db_ready() -> bool:
     return True
 
 
+async def _get_pool_safe() -> Optional[asyncpg.Pool]:
+    """
+    Безопасное получение pool с проверкой DB_READY
+    
+    Returns:
+        Pool если БД готова, None если БД не готова
+    """
+    if not DB_READY:
+        return None
+    return await get_pool()
+
+
 async def init_db() -> bool:
     """
     Инициализация базы данных и создание таблиц
@@ -138,6 +150,8 @@ async def init_db() -> bool:
         Любые исключения пробрасываются наверх для обработки в startup guard
     """
     global DB_READY
+    # Сбрасываем DB_READY перед инициализацией
+    DB_READY = False
     pool = await get_pool()
     
     # ====================================================================================
@@ -631,7 +645,14 @@ async def _init_promo_codes(conn):
 
 async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить пользователя по Telegram ID"""
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_user skipped")
+        return None
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_user skipped")
+        return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM users WHERE telegram_id = $1", telegram_id
@@ -650,7 +671,14 @@ async def get_user_balance(telegram_id: int) -> float:
         Баланс в рублях (0.0 если пользователь не найден)
     """
     from decimal import Decimal
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_user_balance skipped")
+        return 0.0
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_user_balance skipped")
+        return 0.0
     async with pool.acquire() as conn:
         balance = await conn.fetchval(
             "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
@@ -734,7 +762,14 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
     # Конвертируем рубли в копейки для хранения
     amount_kopecks = int(amount * 100)
     
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, decrease_balance skipped")
+        return False
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, decrease_balance skipped")
+        return False
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
@@ -796,7 +831,14 @@ async def log_balance_transaction(telegram_id: int, amount: float, transaction_t
     """
     amount_kopecks = int(amount * 100)
     
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, log_balance_transaction skipped")
+        return False
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, log_balance_transaction skipped")
+        return False
     async with pool.acquire() as conn:
         try:
             await conn.execute(
@@ -1526,7 +1568,14 @@ async def update_username(telegram_id: int, username: Optional[str]):
 
 async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить pending платеж пользователя"""
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_pending_payment_by_user skipped")
+        return None
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_pending_payment_by_user skipped")
+        return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM payments WHERE telegram_id = $1 AND status = 'pending'",
@@ -1664,7 +1713,14 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     Returns:
         True если подписка была отключена, False если подписка активна или отсутствует
     """
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, check_and_disable_expired_subscription skipped")
+        return False
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, check_and_disable_expired_subscription skipped")
+        return False
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
@@ -1764,7 +1820,14 @@ async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     # Сначала проверяем и отключаем истёкшие подписки
     await check_and_disable_expired_subscription(telegram_id)
     
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_subscription skipped")
+        return None
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_subscription skipped")
+        return None
     async with pool.acquire() as conn:
         now = datetime.now()
         row = await conn.fetchrow(
@@ -1779,7 +1842,14 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
     
     Возвращает подписку, если она существует, даже если expires_at <= now.
     """
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_subscription_any skipped")
+        return None
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_subscription_any skipped")
+        return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM subscriptions WHERE telegram_id = $1",
@@ -3179,10 +3249,17 @@ async def get_subscriptions_needing_reminder() -> list:
     - reminder_sent = FALSE
     - expires_at <= now + 3 days
     """
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_subscriptions_needing_reminder skipped")
+        return []
     now = datetime.now()
     reminder_date = now + timedelta(days=3)
     
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_subscriptions_needing_reminder skipped")
+        return []
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT * FROM subscriptions 
@@ -3360,7 +3437,14 @@ async def get_subscriptions_for_reminders() -> list:
     
     Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
     """
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_subscriptions_for_reminders skipped")
+        return []
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_subscriptions_for_reminders skipped")
+        return []
     async with pool.acquire() as conn:
         now = datetime.now()
         rows = await conn.fetch(
@@ -4075,7 +4159,14 @@ async def get_pending_purchase(purchase_id: str, telegram_id: int, check_expiry:
     Returns:
         Словарь с данными покупки, если валидна, иначе None
     """
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_pending_purchase skipped")
+        return None
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_pending_purchase skipped")
+        return None
     async with pool.acquire() as conn:
         if check_expiry:
             # При обычной проверке (создание покупки) проверяем срок действия
@@ -4483,7 +4574,14 @@ async def expire_old_pending_purchases() -> int:
     Returns:
         Количество истёкших покупок
     """
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, expire_old_pending_purchases skipped")
+        return 0
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, expire_old_pending_purchases skipped")
+        return 0
     async with pool.acquire() as conn:
         result = await conn.execute(
             "UPDATE pending_purchases SET status = 'expired' WHERE status = 'pending' AND expires_at <= NOW()"
@@ -4541,7 +4639,14 @@ async def get_subscription_history(telegram_id: int, limit: int = 5) -> list:
     Returns:
         Список словарей с записями истории, отсортированные по created_at DESC
     """
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, get_subscription_history skipped")
+        return []
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_subscription_history skipped")
+        return []
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT * FROM subscription_history 
