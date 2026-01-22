@@ -27,6 +27,12 @@ async def main():
     # Конфигурация уже проверена в config.py
     # Если переменные окружения не заданы, программа завершится с ошибкой
     
+    # Логируем информацию о конфигурации при старте
+    logger.info(f"Starting bot in {config.APP_ENV.upper()} environment")
+    logger.info(f"Using BOT_TOKEN from {config.APP_ENV.upper()}_BOT_TOKEN")
+    logger.info(f"Using DATABASE_URL from {config.APP_ENV.upper()}_DATABASE_URL")
+    logger.info(f"Using ADMIN_TELEGRAM_ID from {config.APP_ENV.upper()}_ADMIN_TELEGRAM_ID")
+    
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())

@@ -81,11 +81,17 @@ def safe_get(dictionary: Dict[str, Any], key: str, default: Any = None) -> Any:
         return default
     return dictionary.get(key, default)
 
-# Получаем DATABASE_URL из переменных окружения
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Получаем DATABASE_URL из переменных окружения через config.env()
+# Используем префикс окружения (STAGE_DATABASE_URL / PROD_DATABASE_URL)
+DATABASE_URL = config.env("DATABASE_URL")
 if not DATABASE_URL:
-    print("ERROR: DATABASE_URL environment variable is not set!", file=sys.stderr)
-    sys.exit(1)
+    # В PROD DATABASE_URL обязателен
+    if config.APP_ENV == "prod":
+        print(f"ERROR: {config.APP_ENV.upper()}_DATABASE_URL is REQUIRED in PROD!", file=sys.stderr)
+        sys.exit(1)
+    else:
+        # В STAGE/LOCAL допустим degraded mode
+        logger.warning(f"{config.APP_ENV.upper()}_DATABASE_URL is not set - running in degraded mode")
 
 # Глобальный пул соединений
 _pool: Optional[asyncpg.Pool] = None
@@ -94,6 +100,8 @@ _pool: Optional[asyncpg.Pool] = None
 async def get_pool() -> asyncpg.Pool:
     """Получить пул соединений, создав его при необходимости"""
     global _pool
+    if not DATABASE_URL:
+        raise RuntimeError(f"{config.APP_ENV.upper()}_DATABASE_URL is not configured")
     if _pool is None:
         _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
         logger.info("Database connection pool created")
