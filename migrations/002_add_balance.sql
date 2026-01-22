@@ -23,6 +23,7 @@ ALTER TABLE balance_transactions ADD COLUMN IF NOT EXISTS related_user_id BIGINT
 ALTER TABLE balance_transactions ADD COLUMN IF NOT EXISTS source TEXT;
 
 -- Ensure amount is NUMERIC type
+-- Используем DO блок для безопасной проверки типа колонки
 DO $$
 BEGIN
     IF EXISTS (

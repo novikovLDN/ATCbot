@@ -98,64 +98,66 @@ async def apply_migration(conn: asyncpg.Connection, version: str, migration_path
             return True
         
         logger.info(f"Applying migration {version}: {migration_path.name}")
+        logger.debug(f"Migration SQL content:\n{sql_content}")
         
-        # Выполняем SQL в транзакции
-        # asyncpg.execute может выполнить только одну команду за раз
-        # Разделяем SQL на отдельные команды по точке с запятой
+        # Проверяем, содержит ли миграция DO блоки
+        # Если содержит, выполняем весь файл целиком (PostgreSQL правильно обработает несколько команд)
+        # Если нет, можем разделить по точкам с запятой для лучшей диагностики ошибок
+        has_do_block = 'DO $$' in sql_content.upper() or 'DO $' in sql_content.upper()
         
-        # Простой парсер SQL команд (разделение по ; вне строк)
-        commands = []
-        current_command = []
-        in_single_quote = False
-        in_double_quote = False
-        in_dollar_quote = False
-        dollar_tag = None
-        
-        for char in sql_content:
-            current_command.append(char)
+        if has_do_block:
+            # Выполняем весь SQL файл целиком
+            # PostgreSQL правильно обработает несколько команд, разделенных точкой с запятой
+            # Это гарантирует, что DO $$ блоки не будут разорваны
+            await conn.execute(sql_content)
+        else:
+            # Простой парсер для файлов без DO блоков
+            # Разделяем по точке с запятой вне строк
+            commands = []
+            current_command = []
+            in_single_quote = False
+            in_double_quote = False
             
-            if not in_single_quote and not in_double_quote and not in_dollar_quote:
-                # Проверяем начало dollar-quoted строки ($tag$)
-                if char == '$':
-                    # Простая проверка: если следующий символ не пробел, это может быть dollar quote
-                    # Для упрощения считаем, что dollar quotes не используются в миграциях
-                    pass
-                elif char == "'":
-                    in_single_quote = True
-                elif char == '"':
-                    in_double_quote = True
-                elif char == ';':
-                    # Конец команды
-                    command_text = ''.join(current_command).strip()
-                    if command_text and not command_text.startswith('--'):
-                        commands.append(command_text)
-                    current_command = []
-            else:
-                if in_single_quote and char == "'":
-                    # Проверяем экранированную кавычку
-                    if len(current_command) > 1 and current_command[-2] == "'":
-                        continue  # Двойная кавычка - экранирование
-                    in_single_quote = False
-                elif in_double_quote and char == '"':
-                    if len(current_command) > 1 and current_command[-2] == '"':
-                        continue  # Двойная кавычка - экранирование
-                    in_double_quote = False
-        
-        # Если осталась незавершённая команда
-        if current_command:
-            command_text = ''.join(current_command).strip()
-            if command_text and not command_text.startswith('--'):
-                commands.append(command_text)
-        
-        # Выполняем каждую команду
-        for cmd in commands:
-            cmd = cmd.strip()
-            if cmd and not cmd.startswith('--'):
-                # Удаляем завершающую точку с запятой
-                if cmd.endswith(';'):
-                    cmd = cmd[:-1].strip()
-                if cmd:
-                    await conn.execute(cmd)
+            for char in sql_content:
+                current_command.append(char)
+                
+                if not in_single_quote and not in_double_quote:
+                    if char == "'":
+                        in_single_quote = True
+                    elif char == '"':
+                        in_double_quote = True
+                    elif char == ';':
+                        # Конец команды
+                        command_text = ''.join(current_command).strip()
+                        if command_text and not command_text.startswith('--'):
+                            commands.append(command_text)
+                        current_command = []
+                else:
+                    if in_single_quote and char == "'":
+                        # Проверяем экранированную кавычку
+                        if len(current_command) > 1 and current_command[-2] == "'":
+                            continue  # Двойная кавычка - экранирование
+                        in_single_quote = False
+                    elif in_double_quote and char == '"':
+                        if len(current_command) > 1 and current_command[-2] == '"':
+                            continue  # Двойная кавычка - экранирование
+                        in_double_quote = False
+            
+            # Если осталась незавершённая команда
+            if current_command:
+                command_text = ''.join(current_command).strip()
+                if command_text and not command_text.startswith('--'):
+                    commands.append(command_text)
+            
+            # Выполняем каждую команду
+            for cmd in commands:
+                cmd = cmd.strip()
+                if cmd and not cmd.startswith('--'):
+                    # Удаляем завершающую точку с запятой
+                    if cmd.endswith(';'):
+                        cmd = cmd[:-1].strip()
+                    if cmd:
+                        await conn.execute(cmd)
         
         # Записываем версию в schema_migrations
         await conn.execute(
@@ -167,7 +169,9 @@ async def apply_migration(conn: asyncpg.Connection, version: str, migration_path
         return True
         
     except Exception as e:
-        logger.exception(f"Error applying migration {version}: {e}")
+        logger.error(f"CRITICAL: Failed to apply migration {version} ({migration_path.name})")
+        logger.error(f"Migration SQL:\n{sql_content}")
+        logger.exception(f"Error details: {e}")
         raise
 
 
@@ -211,7 +215,9 @@ async def run_migrations(conn: asyncpg.Connection) -> bool:
                 async with conn.transaction():
                     await apply_migration(conn, version, migration_path)
             except Exception as e:
-                logger.exception(f"Failed to apply migration {version}: {e}")
+                logger.error(f"CRITICAL: Migration {version} ({migration_path.name}) FAILED")
+                logger.error(f"This will prevent database initialization. Fix the migration and retry.")
+                logger.exception(f"Migration error: {e}")
                 raise  # Пробрасываем исключение, чтобы остановить процесс миграций
         
         logger.info("All migrations applied successfully")
