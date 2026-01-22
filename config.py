@@ -1,6 +1,8 @@
 import os
 import sys
 
+print("🚨 STAGE CONFIG LOADED 🚨", flush=True)
+print("APP_ENV =", os.getenv("APP_ENV"), flush=True)
 # Telegram Bot Token (получить у @BotFather)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
