@@ -2958,15 +2958,29 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         
         # Начисляем реферальный кешбэк при оплате с баланса
         # КРИТИЧНО: Используем payment.id для создания уникального purchase_id
+        # КРИТИЧНО: Выполняем внутри транзакции для атомарности
         purchase_id = f"balance_purchase_{payment_id}" if payment_id else None
-        try:
-            reward_result = await database.process_referral_reward(
-                buyer_id=telegram_id,
-                purchase_id=purchase_id,  # Используем payment.id для идемпотентности
-                amount_rubles=final_price_rubles
-            )
-            
-            if reward_result.get("success"):
+        reward_result = None
+        if purchase_id:
+            pool = await database.get_pool()
+            if pool:
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        try:
+                            reward_result = await database.process_referral_reward(
+                                buyer_id=telegram_id,
+                                purchase_id=purchase_id,  # Используем payment.id для идемпотентности
+                                amount_rubles=final_price_rubles,
+                                conn=conn
+                            )
+                        except Exception as e:
+                            # FINANCIAL errors propagate and rollback transaction
+                            logger.error(f"Balance purchase referral reward failed (transaction rolled back): {e}")
+                            raise
+        
+        # Отправляем уведомление о кешбэке (после успешного завершения транзакции)
+        if reward_result and reward_result.get("success"):
+            try:
                 await send_referral_cashback_notification(
                     bot=callback.message.bot,
                     referrer_id=reward_result.get("referrer_id"),
@@ -2979,8 +2993,8 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     action_type="покупка" if not is_renewal else "продление"
                 )
                 logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={final_price_rubles} RUB")
-        except Exception as e:
-            logger.exception(f"Error processing referral cashback for balance payment: user={telegram_id}: {e}")
+            except Exception as e:
+                logger.exception(f"Error sending referral cashback notification for balance payment: user={telegram_id}: {e}")
         
         # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
         import vpn_utils
@@ -3996,15 +4010,29 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 
                 # Начисляем реферальный кешбэк при пополнении баланса
                 # КРИТИЧНО: Используем payment.id для создания уникального purchase_id
+                # КРИТИЧНО: Выполняем внутри транзакции для атомарности
                 purchase_id = f"balance_topup_{payment_id}" if payment_id else None
-                try:
-                    reward_result = await database.process_referral_reward(
-                        buyer_id=telegram_id,
-                        purchase_id=purchase_id,  # Используем payment.id для идемпотентности
-                        amount_rubles=payment_amount_rubles
-                    )
-                    
-                    if reward_result.get("success"):
+                reward_result = None
+                if purchase_id:
+                    pool = await database.get_pool()
+                    if pool:
+                        async with pool.acquire() as conn:
+                            async with conn.transaction():
+                                try:
+                                    reward_result = await database.process_referral_reward(
+                                        buyer_id=telegram_id,
+                                        purchase_id=purchase_id,  # Используем payment.id для идемпотентности
+                                        amount_rubles=payment_amount_rubles,
+                                        conn=conn
+                                    )
+                                except Exception as e:
+                                    # FINANCIAL errors propagate and rollback transaction
+                                    logger.error(f"Balance topup referral reward failed (transaction rolled back): {e}")
+                                    raise
+                
+                # Отправляем уведомление о кешбэке (после успешного завершения транзакции)
+                if reward_result and reward_result.get("success"):
+                    try:
                         await send_referral_cashback_notification(
                             bot=message.bot,
                             referrer_id=reward_result.get("referrer_id"),
@@ -4017,8 +4045,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
                             action_type="пополнение"
                         )
                         logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
-                except Exception as e:
-                    logger.exception(f"Error processing referral cashback for balance topup: user={telegram_id}: {e}")
+                    except Exception as e:
+                        logger.exception(f"Error sending referral cashback notification for balance topup: user={telegram_id}: {e}")
                 
                 # Логируем событие
                 logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
