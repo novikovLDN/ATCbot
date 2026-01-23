@@ -443,8 +443,15 @@ async def expire_trial_subscriptions(bot: Bot):
                     # Если есть платная подписка - отправляем стандартное сообщение
                     if trial_completed_sent:
                         expired_text = localization.get_text(language, "trial_expired_text")
+                        # Создаем inline клавиатуру с CTA
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(
+                                text="🔐 Купить доступ",
+                                callback_data="menu_buy_vpn"
+                            )]
+                        ])
                         try:
-                            await bot.send_message(telegram_id, expired_text, parse_mode="HTML")
+                            await bot.send_message(telegram_id, expired_text, parse_mode="HTML", reply_markup=keyboard)
                             logger.info(
                                 f"trial_expired: notification sent (paid subscription exists): user={telegram_id}, "
                                 f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "

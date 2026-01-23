@@ -3989,7 +3989,20 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 balance=new_balance,
                 default=f"✅ Баланс пополнен\n\nНа счёте: {new_balance:.2f} ₽"
             )
-            await message.answer(text)
+            
+            # Создаем inline клавиатуру для UX
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🔐 Купить доступ",
+                    callback_data="menu_buy_vpn"
+                )],
+                [InlineKeyboardButton(
+                    text="👤 Мой профиль",
+                    callback_data="menu_profile"
+                )]
+            ])
+            
+            await message.answer(text, reply_markup=keyboard)
             
             # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
             try:
@@ -8506,8 +8519,20 @@ async def reject_payment(callback: CallbackQuery):
         
         text = localization.get_text(language, "payment_rejected")
         
+        # Создаем inline клавиатуру для UX
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔄 Повторить оплату",
+                callback_data="menu_buy_vpn"
+            )],
+            [InlineKeyboardButton(
+                text="🆘 Поддержка",
+                callback_data="menu_support"
+            )]
+        ])
+        
         try:
-            await callback.bot.send_message(telegram_id, text)
+            await callback.bot.send_message(telegram_id, text, reply_markup=keyboard)
             logging.info(f"Rejection message sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
             logging.error(f"Error sending rejection message to user {telegram_id}: {e}")
