@@ -2887,109 +2887,49 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             and existing_subscription.get("expires_at") > datetime.now()
         )
         
-        # КРИТИЧНО: Списываем баланс и активируем подписку в ОДНОЙ транзакции
-        # Списываем баланс
-        success = await database.decrease_balance(
+        # КРИТИЧНО: Все финансовые операции выполняются атомарно в одной транзакции
+        # через finalize_balance_purchase
+        months = period_days // 30
+        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+        transaction_description = f"Оплата подписки {tariff_name} на {months} месяц(ев)"
+        
+        result = await database.finalize_balance_purchase(
             telegram_id=telegram_id,
-            amount=final_price_rubles,
-            source="subscription_payment",
-            description=f"Оплата подписки {tariff_name} на {months} месяц(ев)"
+            tariff_type=tariff_type,
+            period_days=period_days,
+            amount_rubles=final_price_rubles,
+            description=transaction_description
         )
         
-        if not success:
-            logger.error(f"Failed to decrease balance for subscription payment: user={telegram_id}, amount={final_price_rubles}")
-            error_text = localization.get_text(language, "error_payment_processing", default="Ошибка обработки платежа. Обратитесь в поддержку.")
+        if not result or not result.get("success"):
+            error_text = localization.get_text(
+                language,
+                "error_payment_processing",
+                default="Ошибка обработки платежа. Обратитесь в поддержку."
+            )
             await callback.message.answer(error_text)
             await state.set_state(None)
             return
         
-        # Активируем подписку через grant_access
-        duration = timedelta(days=period_days)
+        # Извлекаем результаты
+        payment_id = result["payment_id"]
+        expires_at = result["expires_at"]
+        vpn_key = result["vpn_key"]
+        is_renewal = result["is_renewal"]
+        referral_reward_result = result.get("referral_reward")
         
-        try:
-            result = await database.grant_access(
-                telegram_id=telegram_id,
-                duration=duration,
-                source="payment",
-                admin_telegram_id=None,
-                admin_grant_days=None
-            )
-            
-            expires_at = result["subscription_end"]
-            # Если vless_url есть - это новый UUID, используем его
-            # Если vless_url нет - это продление, получаем vpn_key из подписки
-            if result.get("vless_url"):
-                vpn_key = result["vless_url"]
-                is_renewal = had_active_subscription_before_payment  # Используем флаг ДО платежа
-            else:
-                # Продление - получаем vpn_key из существующей подписки
-                subscription = await database.get_subscription(telegram_id)
-                if subscription and subscription.get("vpn_key"):
-                    vpn_key = subscription["vpn_key"]
-                else:
-                    # Fallback: используем UUID
-                    vpn_key = result.get("uuid", "")
-                is_renewal = True
-            
-            if not expires_at or not vpn_key:
-                raise Exception(f"grant_access returned invalid result: expires_at={expires_at}, vpn_key={bool(vpn_key)}")
-        except Exception as e:
-            logger.exception(f"CRITICAL: Failed to grant access after balance payment for user {telegram_id}: {e}")
-            # Возвращаем деньги на баланс (rollback)
-            await database.increase_balance(
-                telegram_id=telegram_id,
-                amount=final_price_rubles,
-                source="refund",
-                description=f"Возврат средств за неудачную активацию подписки"
-            )
-            error_text = localization.get_text(language, "error_subscription_activation", default="Ошибка активации подписки. Средства возвращены на баланс.")
-            await callback.message.answer(error_text)
-            await state.set_state(None)
-            return
-        
-        # Создаем запись о платеже для аналитики
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            # КРИТИЧНО: Захватываем payment.id для идемпотентности реферальных наград
-            payment_id = await conn.fetchval(
-                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
-                telegram_id, f"{tariff_type}_{period_days}", final_price_kopecks
-            )
-        
-        # Начисляем реферальный кешбэк при оплате с баланса
-        # КРИТИЧНО: Используем payment.id для создания уникального purchase_id
-        # КРИТИЧНО: Выполняем внутри транзакции для атомарности
-        purchase_id = f"balance_purchase_{payment_id}" if payment_id else None
-        reward_result = None
-        if purchase_id:
-            pool = await database.get_pool()
-            if pool:
-                async with pool.acquire() as conn:
-                    async with conn.transaction():
-                        try:
-                            reward_result = await database.process_referral_reward(
-                                buyer_id=telegram_id,
-                                purchase_id=purchase_id,  # Используем payment.id для идемпотентности
-                                amount_rubles=final_price_rubles,
-                                conn=conn
-                            )
-                        except Exception as e:
-                            # FINANCIAL errors propagate and rollback transaction
-                            logger.error(f"Balance purchase referral reward failed (transaction rolled back): {e}")
-                            raise
-        
-        # Отправляем уведомление о кешбэке (после успешного завершения транзакции)
-        if reward_result and reward_result.get("success"):
+        # Отправляем уведомление о кешбэке (если начислен)
+        if referral_reward_result and referral_reward_result.get("success"):
             try:
                 await send_referral_cashback_notification(
                     bot=callback.message.bot,
-                    referrer_id=reward_result.get("referrer_id"),
+                    referrer_id=referral_reward_result.get("referrer_id"),
                     referred_id=telegram_id,
                     purchase_amount=final_price_rubles,
-                    cashback_amount=reward_result.get("reward_amount"),
-                    cashback_percent=reward_result.get("percent"),
-                    paid_referrals_count=reward_result.get("paid_referrals_count", 0),
-                    referrals_needed=reward_result.get("referrals_needed", 0),
+                    cashback_amount=referral_reward_result.get("reward_amount"),
+                    cashback_percent=referral_reward_result.get("percent"),
+                    paid_referrals_count=referral_reward_result.get("paid_referrals_count", 0),
+                    referrals_needed=referral_reward_result.get("referrals_needed", 0),
                     action_type="покупка" if not is_renewal else "продление"
                 )
                 logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={final_price_rubles} RUB")
@@ -3972,90 +3912,60 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 logger.warning(f"Balance topup amount mismatch: expected={amount}, actual={payment_amount_rubles}")
                 # Используем фактическую сумму из платежа
             
-            # Пополняем баланс
-            success = await database.increase_balance(
+            # КРИТИЧНО: Все финансовые операции выполняются атомарно в одной транзакции
+            # через finalize_balance_topup
+            result = await database.finalize_balance_topup(
                 telegram_id=telegram_id,
-                amount=payment_amount_rubles,
-                source="telegram_payment",
-                description=f"Пополнение баланса через Telegram Payments"
+                amount_rubles=payment_amount_rubles,
+                description="Пополнение баланса через Telegram Payments"
             )
             
-            if success:
-                # Создаем запись о платеже для аналитики и идемпотентности
-                pool = await database.get_pool()
-                payment_id = None
-                if pool:
-                    async with pool.acquire() as conn:
-                        # КРИТИЧНО: Захватываем payment.id для идемпотентности реферальных наград
-                        payment_id = await conn.fetchval(
-                            "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
-                            telegram_id,
-                            "balance_topup",
-                            int(payment_amount_rubles * 100)  # Сохраняем в копейках
-                        )
-                
-                # Получаем новый баланс
-                new_balance = await database.get_user_balance(telegram_id)
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                
-                # Отправляем сообщение об успешном пополнении
-                text = localization.get_text(
+            if not result or not result.get("success"):
+                error_text = localization.get_text(
                     language,
-                    "topup_balance_success",
-                    balance=new_balance,
-                    default=f"✅ Баланс пополнен\n\nНа счёте: {new_balance:.2f} ₽"
+                    "error_payment_processing",
+                    default="Ошибка обработки платежа. Обратитесь в поддержку."
                 )
-                await message.answer(text)
-                
-                # Начисляем реферальный кешбэк при пополнении баланса
-                # КРИТИЧНО: Используем payment.id для создания уникального purchase_id
-                # КРИТИЧНО: Выполняем внутри транзакции для атомарности
-                purchase_id = f"balance_topup_{payment_id}" if payment_id else None
-                reward_result = None
-                if purchase_id:
-                    pool = await database.get_pool()
-                    if pool:
-                        async with pool.acquire() as conn:
-                            async with conn.transaction():
-                                try:
-                                    reward_result = await database.process_referral_reward(
-                                        buyer_id=telegram_id,
-                                        purchase_id=purchase_id,  # Используем payment.id для идемпотентности
-                                        amount_rubles=payment_amount_rubles,
-                                        conn=conn
-                                    )
-                                except Exception as e:
-                                    # FINANCIAL errors propagate and rollback transaction
-                                    logger.error(f"Balance topup referral reward failed (transaction rolled back): {e}")
-                                    raise
-                
-                # Отправляем уведомление о кешбэке (после успешного завершения транзакции)
-                if reward_result and reward_result.get("success"):
-                    try:
-                        await send_referral_cashback_notification(
-                            bot=message.bot,
-                            referrer_id=reward_result.get("referrer_id"),
-                            referred_id=telegram_id,
-                            purchase_amount=payment_amount_rubles,
-                            cashback_amount=reward_result.get("reward_amount"),
-                            cashback_percent=reward_result.get("percent"),
-                            paid_referrals_count=reward_result.get("paid_referrals_count", 0),
-                            referrals_needed=reward_result.get("referrals_needed", 0),
-                            action_type="пополнение"
-                        )
-                        logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
-                    except Exception as e:
-                        logger.exception(f"Error sending referral cashback notification for balance topup: user={telegram_id}: {e}")
-                
-                # Логируем событие
-                logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
-            else:
-                logger.error(f"Failed to increase balance for user {telegram_id}, amount={payment_amount_rubles}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
+                await message.answer(error_text)
+                return
             
+            # Извлекаем результаты
+            new_balance = result["new_balance"]
+            referral_reward_result = result.get("referral_reward")
+            
+            # Получаем язык пользователя для сообщения
+            user = await database.get_user(telegram_id)
+            language = user.get("language", "ru") if user else "ru"
+            
+            # Отправляем сообщение об успешном пополнении
+            text = localization.get_text(
+                language,
+                "topup_balance_success",
+                balance=new_balance,
+                default=f"✅ Баланс пополнен\n\nНа счёте: {new_balance:.2f} ₽"
+            )
+            await message.answer(text)
+            
+            # Отправляем уведомление о кешбэке (если начислен)
+            if referral_reward_result and referral_reward_result.get("success"):
+                try:
+                    await send_referral_cashback_notification(
+                        bot=message.bot,
+                        referrer_id=referral_reward_result.get("referrer_id"),
+                        referred_id=telegram_id,
+                        purchase_amount=payment_amount_rubles,
+                        cashback_amount=referral_reward_result.get("reward_amount"),
+                        cashback_percent=referral_reward_result.get("percent"),
+                        paid_referrals_count=referral_reward_result.get("paid_referrals_count", 0),
+                        referrals_needed=referral_reward_result.get("referrals_needed", 0),
+                        action_type="пополнение"
+                    )
+                    logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
+                except Exception as e:
+                    logger.exception(f"Error sending referral cashback notification for balance topup: user={telegram_id}: {e}")
+            
+            # Логируем событие
+            logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
             return
             
         except (ValueError, IndexError) as e:
