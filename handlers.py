@@ -2962,6 +2962,18 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
         await clear_promo_session(state)
         
+        # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
+        notification_already_sent = await database.is_payment_notification_sent(payment_id)
+        
+        if notification_already_sent:
+            logger.info(
+                f"NOTIFICATION_IDEMPOTENT_SKIP [type=balance_purchase, payment_id={payment_id}, user={telegram_id}, "
+                f"scenario={'renewal' if is_renewal else 'first_purchase'}]"
+            )
+            await state.set_state(None)
+            await state.clear()
+            return
+        
         # КРИТИЧНО: Очищаем FSM после успешной активации
         await state.set_state(None)
         await state.clear()
@@ -3046,6 +3058,23 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 logger.info(f"VPN key sent as plain text: user={telegram_id}")
             except Exception as key_error:
                 logger.exception(f"CRITICAL: Failed to send VPN key even as plain text: {key_error}")
+        
+        # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
+        try:
+            sent = await database.mark_payment_notification_sent(payment_id)
+            if sent:
+                logger.info(
+                    f"NOTIFICATION_SENT [type=balance_purchase, payment_id={payment_id}, user={telegram_id}, "
+                    f"scenario={'renewal' if is_renewal else 'first_purchase'}]"
+                )
+            else:
+                logger.warning(
+                    f"NOTIFICATION_FLAG_ALREADY_SET [type=balance_purchase, payment_id={payment_id}, user={telegram_id}]"
+                )
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+            )
         
         logger.info(
             f"Subscription activated from balance: user={telegram_id}, "
@@ -3936,8 +3965,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 return
             
             # Извлекаем результаты
+            payment_id = result["payment_id"]
             new_balance = result["new_balance"]
             referral_reward_result = result.get("referral_reward")
+            
+            # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
+            notification_already_sent = await database.is_payment_notification_sent(payment_id)
+            
+            if notification_already_sent:
+                logger.info(
+                    f"NOTIFICATION_IDEMPOTENT_SKIP [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
+                )
+                return
             
             # Получаем язык пользователя для сообщения
             user = await database.get_user(telegram_id)
@@ -3951,6 +3990,22 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 default=f"✅ Баланс пополнен\n\nНа счёте: {new_balance:.2f} ₽"
             )
             await message.answer(text)
+            
+            # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
+            try:
+                sent = await database.mark_payment_notification_sent(payment_id)
+                if sent:
+                    logger.info(
+                        f"NOTIFICATION_SENT [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
+                    )
+                else:
+                    logger.warning(
+                        f"NOTIFICATION_FLAG_ALREADY_SET [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+                )
             
             # Отправляем уведомление о кешбэке (если начислен)
             if referral_reward_result and referral_reward_result.get("success"):
@@ -4277,6 +4332,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Здесь только отправка пользователю - это атомарная операция после успешного платежа
     expires_str = expires_at.strftime("%d.%m.%Y")
     
+    # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
+    notification_already_sent = await database.is_payment_notification_sent(payment_id)
+    
+    if notification_already_sent:
+        logger.info(
+            f"NOTIFICATION_IDEMPOTENT_SKIP [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
+            f"purchase_id={purchase_id}]"
+        )
+        return
+    
     # Отправляем сообщение об успешной активации с гарантированным fallback
     try:
         text = localization.get_text(language, "payment_approved", date=expires_str)
@@ -4299,6 +4364,23 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
             f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_length={len(vpn_key)}]"
         )
+        
+        # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки VPN ключа)
+        try:
+            sent = await database.mark_payment_notification_sent(payment_id)
+            if sent:
+                logger.info(
+                    f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
+                    f"purchase_id={purchase_id}]"
+                )
+            else:
+                logger.warning(
+                    f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
+                )
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+            )
         
         # КРИТИЧНО: Очищаем FSM state после успешной активации подписки
         try:

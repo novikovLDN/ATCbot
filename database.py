@@ -81,6 +81,76 @@ def safe_get(dictionary: Dict[str, Any], key: str, default: Any = None) -> Any:
         return default
     return dictionary.get(key, default)
 
+
+async def mark_payment_notification_sent(
+    payment_id: int,
+    conn: Optional[asyncpg.Connection] = None
+) -> bool:
+    """
+    Атомарно пометить уведомление о платеже как отправленное (идемпотентность).
+    
+    Args:
+        payment_id: ID платежа из таблицы payments
+        conn: Существующее соединение (опционально, если None - создается новое)
+    
+    Returns:
+        True если флаг был установлен (первая отправка), False если уже был установлен (повторная попытка)
+    
+    Raises:
+        asyncpg exceptions: При ошибках БД
+    """
+    if conn:
+        # Используем существующее соединение (внутри транзакции)
+        result = await conn.execute(
+            "UPDATE payments SET notification_sent = TRUE WHERE id = $1 AND notification_sent = FALSE",
+            payment_id
+        )
+        # asyncpg execute возвращает строку вида "UPDATE 1" или "UPDATE 0"
+        return "1" in result
+    else:
+        # Создаем новое соединение
+        pool = await get_pool()
+        if pool is None:
+            raise RuntimeError("Database pool is not available")
+        async with pool.acquire() as new_conn:
+            result = await new_conn.execute(
+                "UPDATE payments SET notification_sent = TRUE WHERE id = $1 AND notification_sent = FALSE",
+                payment_id
+            )
+            return "1" in result
+
+
+async def is_payment_notification_sent(
+    payment_id: int,
+    conn: Optional[asyncpg.Connection] = None
+) -> bool:
+    """
+    Проверить, было ли уже отправлено уведомление о платеже.
+    
+    Args:
+        payment_id: ID платежа из таблицы payments
+        conn: Существующее соединение (опционально)
+    
+    Returns:
+        True если уведомление уже отправлено, False если еще не отправлено
+    """
+    if conn:
+        notification_sent = await conn.fetchval(
+            "SELECT notification_sent FROM payments WHERE id = $1",
+            payment_id
+        )
+        return notification_sent is True
+    else:
+        pool = await get_pool()
+        if pool is None:
+            return False
+        async with pool.acquire() as new_conn:
+            notification_sent = await new_conn.fetchval(
+                "SELECT notification_sent FROM payments WHERE id = $1",
+                payment_id
+            )
+            return notification_sent is True
+
 # Получаем DATABASE_URL из переменных окружения через config.env()
 # Используем префикс окружения (STAGE_DATABASE_URL / PROD_DATABASE_URL)
 DATABASE_URL = config.env("DATABASE_URL")
@@ -350,6 +420,12 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'payment'")
         except Exception:
             # Колонки уже существуют
+            pass
+        
+        # Миграция: добавляем поле notification_sent в payments для идемпотентности уведомлений
+        try:
+            await conn.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS notification_sent BOOLEAN DEFAULT FALSE")
+        except Exception:
             pass
         
         # Миграция: добавляем поле balance в users (хранится в копейках как INTEGER)
