@@ -59,7 +59,7 @@ async def process_pending_activations(bot: Bot):
         async with pool.acquire() as conn:
             # Выбираем подписки с pending активацией и попытками меньше максимума
             pending_subscriptions = await conn.fetch(
-                """SELECT telegram_id, id, activation_attempts, last_activation_error, expires_at
+                """SELECT telegram_id, id, activation_attempts, last_activation_error, expires_at, activated_at
                    FROM subscriptions
                    WHERE activation_status = 'pending'
                      AND activation_attempts < $1
@@ -67,6 +67,55 @@ async def process_pending_activations(bot: Bot):
                    LIMIT 50""",
                 MAX_ACTIVATION_ATTEMPTS
             )
+            
+            # Проверяем подписки для админ-уведомления (>= 2 попыток ИЛИ pending > 30 минут)
+            # Используем activated_at как время создания подписки (когда она стала pending)
+            from datetime import timedelta
+            notification_threshold = datetime.now() - timedelta(minutes=30)
+            pending_for_notification = await conn.fetch(
+                """SELECT telegram_id, id, activation_attempts, last_activation_error, activated_at
+                   FROM subscriptions
+                   WHERE activation_status = 'pending'
+                     AND (activation_attempts >= 2 
+                          OR (activated_at IS NOT NULL AND activated_at < $1))
+                   ORDER BY COALESCE(activated_at, '1970-01-01'::timestamp) ASC
+                   LIMIT 10""",
+                notification_threshold
+            )
+            
+            # Отправляем уведомление админу, если есть подписки для уведомления
+            # Используем флаг для предотвращения спама (отправляем не чаще раза в час)
+            if pending_for_notification:
+                oldest_pending_list = []
+                for sub_row in pending_for_notification:
+                    activated_at = sub_row.get("activated_at")
+                    if activated_at and isinstance(activated_at, str):
+                        try:
+                            activated_at = datetime.fromisoformat(activated_at.replace('Z', '+00:00'))
+                        except:
+                            activated_at = datetime.now()
+                    elif not activated_at:
+                        activated_at = datetime.now()
+                    
+                    oldest_pending_list.append({
+                        "subscription_id": sub_row["id"],
+                        "telegram_id": sub_row["telegram_id"],
+                        "attempts": sub_row["activation_attempts"],
+                        "error": sub_row.get("last_activation_error") or "N/A",
+                        "pending_since": activated_at
+                    })
+                
+                total_pending_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM subscriptions WHERE activation_status = 'pending'"
+                ) or 0
+                
+                # Отправляем уведомление только если есть подписки, требующие внимания
+                if total_pending_count > 0:
+                    await admin_notifications.notify_admin_pending_activations(
+                        bot, 
+                        total_pending_count,
+                        oldest_pending_list
+                    )
             
             if not pending_subscriptions:
                 logger.debug("No pending activations found")

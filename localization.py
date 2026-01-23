@@ -205,6 +205,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Успешная активация
         "payment_approved": "✅ Доступ активирован\n\nВаш персональный ключ доступа готов.\n\n🔑 Персональный ключ доступа будет отправлен в следующем сообщении.\n\n🟢 Срок действия доступа:\nдо {date}\n\nКлюч закреплён за вами\nи будет доступен в профиле.\n\n👉 Подключение занимает не более 1 минуты.\nЕсли понадобится помощь — мы на связи.",
+        "payment_pending_activation": "✅ Подписка оформлена!\n\n📅 Срок действия: до {date}\n\n⏳ Активация выполняется автоматически. VPN ключ будет отправлен вам в ближайшее время.\n\nЕсли ключ не пришёл в течение часа, обратитесь в поддержку.",
         
         # Отклонение
         "payment_rejected": "❌ Платёж не подтверждён.\n\nЕсли вы уверены, что оплатили —\nобратитесь в поддержку.",
@@ -220,6 +221,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_welcome": "👤 {username}\n📊 Баланс: {balance:.2f} ₽",
         "profile_subscription_active": "📆 Подписка: активна до {date}",
         "profile_subscription_inactive": "📆 Подписка: неактивна",
+        "profile_subscription_pending": "📆 Подписка оформлена, активация выполняется автоматически\n\nСрок действия: до {date}",
         "profile_auto_renew_enabled": "🔁 Автопродление: {next_billing_date}",
         "profile_auto_renew_disabled": "🔁 Автопродление: выключено",
         "profile_renewal_hint_new": "При продлении выбранный срок\nдобавляется к текущему автоматически.",
@@ -595,6 +597,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         # Успешная активация
         "payment_approved": "✅ Access activated\n\nYour personal access key is ready.\n\n🔑 Personal access key will be sent in the next message.\n\n🟢 Access valid until:\nuntil {date}\n\nThe key is assigned to you\nand will be available in your profile.\n\n👉 Connection takes no more than 1 minute.\nIf you need help — we're here.",
+        "payment_pending_activation": "✅ Subscription created!\n\n📅 Valid until: {date}\n\n⏳ Activation is in progress. VPN key will be sent to you shortly.\n\nIf the key doesn't arrive within an hour, please contact support.",
         
         # Отклонение
         "payment_rejected": "❌ Payment not confirmed.\n\nIf you are sure you paid —\ncontact support.",
@@ -603,6 +606,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_welcome": "Welcome to Atlas Secure!\n\n👤 {username}\n\n💰 Balance: {balance:.2f} ₽",
         "profile_subscription_active": "Subscription:\n— 🟢 Active until {date}",
         "profile_subscription_inactive": "Subscription:\n— 🔴 Inactive",
+        "profile_subscription_pending": "Subscription:\n— ⏳ Pending activation\n\nValid until: {date}",
         "profile_renewal_hint_new": "When renewing, the selected period\nis automatically added to current access.",
         "profile_buy_hint": "Click «Buy Subscription» in the menu to get access.",
         "access_key_label": "Access Key:",
@@ -868,6 +872,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_welcome": "Atlas Secure-ga xush kelibsiz!\n\n👤 {username}\n\n💰 Balans: {balance:.2f} ₽",
         "profile_subscription_active": "Obuna:\n— 🟢 {date} gacha faol",
         "profile_subscription_inactive": "Obuna:\n— 🔴 Faol emas",
+        "profile_subscription_pending": "Obuna:\n— ⏳ Faollashtirish kutilmoqda\n\nAmal qilish muddati: {date}",
         "profile_auto_renew_enabled": "🔁 Avtomatik uzaytirish: {next_billing_date}",
         "profile_auto_renew_disabled": "🔁 Avtomatik uzaytirish: o'chirilgan",
         "profile_renewal_hint_new": "Uzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.",
@@ -992,6 +997,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "paid_button": "To'lovni tasdiqlash",
         "payment_pending": "Tasdiqlash jarayonda\n\nTo'lov ro'yxatga olingan.\nTekshiruv 5 minutgacha davom etadi.\nKirish faollashtirish avtomatik ravishda amalga oshiriladi.",
         "payment_approved": "✅ Kirish faollashtirildi\n\nSizning shaxsiy kirish kalitingiz tayyor.\n\n🔑 Shaxsiy kirish kaliti keyingi xabarda yuboriladi.\n\n🟢 Kirish amal qilish muddati:\n{date} gacha\n\nKalit sizga biriktirilgan\nva profilingizda mavjud bo'ladi.\n\n👉 Ulanish 1 minutdan ko'p vaqt olmaydi.\nAgar yordam kerak bo'lsa — biz yonadasiz.",
+        "payment_pending_activation": "✅ Obuna yaratildi!\n\n📅 Amal qilish muddati: {date}\n\n⏳ Faollashtirish jarayonda. VPN kaliti tez orada yuboriladi.\n\nAgar kalit bir soat ichida kelmasa, qo'llab-quvvatlashga murojaat qiling.",
         "payment_rejected": "❌ To'lov tasdiqlanmadi.\n\nAgar to'laganingizga ishonchingiz komil bo'lsa — qo'llab-quvvatlashga murojaat qiling.",
         "profile_active": "👤 Kirish profili\n\nKirish holati: Faol\nKirish {date} gacha to'langan\n\nSiz ulangansiz. Kirish barqaror ishlaydi.\n\nShaxsiy kirish kaliti\nVPN ilovasida ulanish uchun ishlatiladi.\nUlanish kirish faol bo'lguncha saqlanadi.\n\n{vpn_key}\n\nUzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.\n\nMuddat tugaguncha siz\nsozlashlar va to'lovga qaytishingiz shart emas.",
         "profile_renewal_hint": "",
@@ -1214,6 +1220,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "profile_welcome": "Хуш омадед ба Atlas Secure!\n\n👤 {username}\n\n💰 Балланс: {balance:.2f} ₽",
         "profile_subscription_active": "Обуна:\n— 🟢 То {date} фаъол аст",
         "profile_subscription_inactive": "Обуна:\n— 🔴 Фаъол нест",
+        "profile_subscription_pending": "Обуна:\n— ⏳ Фаъолсозӣ дар интизор аст\n\nМуддати амал: {date}",
         "profile_auto_renew_enabled": "🔁 Васеъкунии худкор: {next_billing_date}",
         "profile_auto_renew_disabled": "🔁 Васеъкунии худкор: хомӯш аст",
         "profile_renewal_hint_new": "Ҳангоми васеъ кардан муддати интихобшуда\nба дастрасии ҷорӣ ба таври худкор илова карда мешавад.",
@@ -1339,6 +1346,7 @@ TEXTS: Dict[str, Dict[str, str]] = {
         
         "payment_pending": "Тасдиқ дар раванд аст\n\nПардохт ба қайд гирифта шуд.\nСанҷиш то 5 дақиқа давом мекунад.\nФаъолсозии дастрасӣ ба таври худкор иҷро мешавад.",
         "payment_approved": "✅ Дастрасӣ фаъол шуд\n\nКалиди шахсии дастрасии шумо омода аст.\n\n🔑 Калиди шахсии дастрасӣ дар пайвандаки омадора расонида мешавад.\n\n🟢 Муддати амали дастрасӣ:\nто {date}\n\nКалид ба шумо закреп шудааст\nва дар профили шумо дастрас хоҳад буд.\n\n👉 Пайванд 1 дақиқа зиёд вақт намегирад.\nАгар кӯмак лозим бошад — мо дар дастрасем.",
+        "payment_pending_activation": "✅ Обуна сохта шуд!\n\n📅 Муддати амал: {date}\n\n⏳ Фаъолсозӣ дар раванд аст. Калиди VPN ба зудӣ ба шумо ирсол карда мешавад.\n\nАгар калид дар як соат нарасад, ба дастгирӣ муроҷиат кунед.",
         "payment_rejected": "❌ Пардохт тасдиқ нашуд.\n\nАгар мӯътақид ҳастед, ки пардохт кардед — ба дастгирӣ муроҷиат кунед.",
         "profile_active": "👤 Профили дастрасӣ\n\nҲолати дастрасӣ: Фаъол\nДастрасӣ то {date} пардохт шудааст\n\nШумо пайванд шудед. Дастрасӣ устувор кор мекунад.\n\nКалиди шахсии дастрасӣ\nБарои пайванд дар барномаи VPN истифода мешавад.\nПайванд то дастрасӣ фаъол аст, нигоҳ дошта мешавад.\n\n{vpn_key}\n\nҲангоми васеъ кардан муддати интихобшуда\nба дастрасии ҷорӣ ба таври худкор илова карда мешавад.\n\nТо муддат анҷом наёбад, шумо\nба танзимот ва пардохт бозгашт кардан лозим нест.",
         "profile_renewal_hint": "",
