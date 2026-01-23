@@ -1,6 +1,18 @@
 -- Migration 004: Add pending purchases system
 -- Creates pending_purchases table for purchase context hardening
 
+-- Проверяем существование таблицы users перед выполнением миграции
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'users'
+    ) THEN
+        RAISE WARNING 'Table users does not exist, skipping migration 004';
+        RETURN;
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS pending_purchases (
     id SERIAL PRIMARY KEY,
     purchase_id TEXT UNIQUE NOT NULL,

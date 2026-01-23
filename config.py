@@ -19,6 +19,11 @@ if APP_ENV not in ("prod", "stage", "local"):
     print(f"ERROR: Invalid APP_ENV={APP_ENV}. Must be one of: prod, stage, local", file=sys.stderr)
     sys.exit(1)
 
+# Флаги окружения для архитектурного разделения поведения
+IS_LOCAL = APP_ENV == "local"
+IS_STAGE = APP_ENV == "stage"
+IS_PROD = APP_ENV == "prod"
+
 def env(key: str) -> str:
     """
     Получить переменную окружения с префиксом окружения

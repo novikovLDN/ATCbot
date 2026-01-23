@@ -1,6 +1,18 @@
 -- Migration 007: Add extended audit log fields
 -- Adds VPN lifecycle audit fields to audit_log
 
+-- Проверяем существование таблицы users перед выполнением миграции
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'users'
+    ) THEN
+        RAISE WARNING 'Table users does not exist, skipping migration 007';
+        RETURN;
+    END IF;
+END $$;
+
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS uuid TEXT;
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS result TEXT CHECK (result IN ('success', 'error'));

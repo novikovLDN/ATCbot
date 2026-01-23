@@ -135,6 +135,36 @@ def ensure_db_ready() -> bool:
     return True
 
 
+async def check_critical_tables() -> bool:
+    """
+    Проверить существование КРИТИЧЕСКИХ таблиц (users)
+    
+    CRITICAL таблицы - это таблицы, без которых бот не может работать вообще.
+    NON-CRITICAL таблицы (audit_log, incident_settings, referrals) могут отсутствовать.
+    
+    Returns:
+        True если критические таблицы существуют, False если отсутствуют
+    """
+    if not DATABASE_URL:
+        return False
+    
+    pool = await get_pool()
+    if pool is None:
+        return False
+    
+    try:
+        async with pool.acquire() as conn:
+            # Проверяем только users - это критическая таблица
+            users_exists = await conn.fetchval("SELECT to_regclass('public.users')")
+            if users_exists is None:
+                logger.warning("CRITICAL: users table does not exist")
+                return False
+            return True
+    except Exception as e:
+        logger.warning(f"Error checking critical tables: {e}")
+        return False
+
+
 async def _get_pool_safe() -> Optional[asyncpg.Pool]:
     """
     Безопасное получение pool с проверкой DB_READY
@@ -1096,12 +1126,26 @@ async def create_user(telegram_id: int, username: Optional[str] = None, language
 
 async def find_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
     """Найти пользователя по referral_code"""
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), find_user_by_referral_code skipped")
+        return None
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM users WHERE referral_code = $1", referral_code
-        )
-        return dict(row) if row else None
+    if pool is None:
+        return None
+    
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM users WHERE referral_code = $1", referral_code
+            )
+            return dict(row) if row else None
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"users table missing or referral_code column missing — skipping: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error finding user by referral code: {e}")
+        return None
 
 
 async def register_referral(referrer_user_id: int, referred_user_id: int) -> bool:
@@ -1115,14 +1159,21 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
     Returns:
         True если регистрация успешна, False если уже зарегистрирован или ошибка
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), register_referral skipped")
+        return False
+    
     # Запрет self-referral
     if referrer_user_id == referred_user_id:
         logger.warning(f"Self-referral attempt blocked: user_id={referrer_user_id}")
         return False
     
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        try:
+    if pool is None:
+        return False
+    
+    try:
+        async with pool.acquire() as conn:
             # Проверяем, что пользователь еще не был приглашен
             existing = await conn.fetchrow(
                 "SELECT * FROM referrals WHERE referred_user_id = $1", referred_user_id
@@ -1151,9 +1202,12 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
             
             logger.info(f"Referral registered: referrer={referrer_user_id}, referred={referred_user_id}")
             return True
-        except Exception as e:
-            logger.exception(f"Error registering referral: referrer_id={referrer_user_id}, referred_id={referred_user_id}")
-            return False
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals or users table missing or inaccessible — skipping referral registration: {e}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error registering referral: referrer_id={referrer_user_id}, referred_id={referred_user_id}")
+        return False
 
 
 async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
@@ -1163,20 +1217,34 @@ async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
     Returns:
         Словарь с ключами: total_referred, total_rewarded
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_referral_stats skipped")
+        return {"total_referred": 0, "total_rewarded": 0}
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        total_referred = await conn.fetchval(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1", telegram_id
-        )
-        # total_rewarded больше не используется (кешбэк начисляется при каждой оплате)
-        total_rewarded = await conn.fetchval(
-            "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND is_rewarded = TRUE", telegram_id
-        )
-        
-        return {
-            "total_referred": total_referred or 0,
-            "total_rewarded": total_rewarded or 0
-        }
+    if pool is None:
+        return {"total_referred": 0, "total_rewarded": 0}
+    
+    try:
+        async with pool.acquire() as conn:
+            total_referred = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1", telegram_id
+            )
+            # total_rewarded больше не используется (кешбэк начисляется при каждой оплате)
+            total_rewarded = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND is_rewarded = TRUE", telegram_id
+            )
+            
+            return {
+                "total_referred": total_referred or 0,
+                "total_rewarded": total_rewarded or 0
+            }
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals table missing or inaccessible — skipping: {e}")
+        return {"total_referred": 0, "total_rewarded": 0}
+    except Exception as e:
+        logger.warning(f"Error getting referral stats: {e}")
+        return {"total_referred": 0, "total_rewarded": 0}
 
 
 async def get_referral_cashback_percent(partner_id: int) -> int:
@@ -1196,8 +1264,15 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
     
     SAFE: Всегда возвращает валидный процент, даже если данных нет
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_referral_cashback_percent skipped")
+        return 10
+    
+    pool = await get_pool()
+    if pool is None:
+        return 10
+    
     try:
-        pool = await get_pool()
         async with pool.acquire() as conn:
             # Считаем количество РЕФЕРАЛОВ, КОТОРЫЕ ОПЛАТИЛИ (из referral_rewards)
             paid_referrals_count_val = await conn.fetchval(
@@ -1215,8 +1290,11 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
             return 25
         else:
             return 10
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referral_rewards table missing or inaccessible — skipping: {e}")
+        return 10
     except Exception as e:
-        logger.exception(f"Error in get_referral_cashback_percent for partner_id={partner_id}: {e}")
+        logger.warning(f"Error in get_referral_cashback_percent for partner_id={partner_id}: {e}")
         # Возвращаем безопасное значение по умолчанию
         return 10
 
@@ -1264,8 +1342,27 @@ async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
     
     SAFE: Всегда возвращает валидный словарь с безопасными значениями по умолчанию
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_referral_level_info skipped")
+        return {
+            "current_level": 10,
+            "referrals_count": 0,
+            "paid_referrals_count": 0,
+            "next_level": 25,
+            "referrals_to_next": 25
+        }
+    
+    pool = await get_pool()
+    if pool is None:
+        return {
+            "current_level": 10,
+            "referrals_count": 0,
+            "paid_referrals_count": 0,
+            "next_level": 25,
+            "referrals_to_next": 25
+        }
+    
     try:
-        pool = await get_pool()
         async with pool.acquire() as conn:
             # Считаем количество приглашённых пользователей (из таблицы referrals)
             # Безопасная обработка NULL
@@ -1306,8 +1403,17 @@ async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
                 "next_level": next_level,
                 "referrals_to_next": referrals_to_next
             }
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals or referral_rewards table missing or inaccessible — skipping: {e}")
+        return {
+            "current_level": 10,
+            "referrals_count": 0,
+            "paid_referrals_count": 0,
+            "next_level": 25,
+            "referrals_to_next": 25
+        }
     except Exception as e:
-        logger.exception(f"Error in get_referral_level_info for partner_id={partner_id}: {e}")
+        logger.warning(f"Error in get_referral_level_info for partner_id={partner_id}: {e}")
         # Возвращаем безопасные значения по умолчанию
         return {
             "current_level": 10,
@@ -2260,11 +2366,16 @@ async def _log_audit_event_atomic(conn, action: str, telegram_id: int, target_us
         target_user: Telegram ID пользователя, над которым выполнено действие (опционально)
         details: Дополнительные детали действия (опционально)
     """
-    await conn.execute(
-        """INSERT INTO audit_log (action, telegram_id, target_user, details)
-           VALUES ($1, $2, $3, $4)""",
-        action, telegram_id, target_user, details
-    )
+    try:
+        await conn.execute(
+            """INSERT INTO audit_log (action, telegram_id, target_user, details)
+               VALUES ($1, $2, $3, $4)""",
+            action, telegram_id, target_user, details
+        )
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
+    except Exception as e:
+        logger.warning(f"Error logging audit event: {e}")
 
 
 async def _log_vpn_lifecycle_audit_async(
@@ -2375,10 +2486,23 @@ async def _log_audit_event_atomic_standalone(action: str, telegram_id: int, targ
         target_user: Telegram ID пользователя, над которым выполнено действие (опционально)
         details: Дополнительные детали действия (опционально)
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), audit log skipped")
+        return
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await _log_audit_event_atomic(conn, action, telegram_id, target_user, details)
+    if pool is None:
+        logger.warning("Pool is None, audit log skipped")
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await _log_audit_event_atomic(conn, action, telegram_id, target_user, details)
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
+    except Exception as e:
+        logger.warning(f"Error logging audit event (standalone): {e}")
 
 
 async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tuple[Optional[str], Optional[str]]:
@@ -3617,11 +3741,19 @@ async def get_admin_referral_stats(
         - current_cashback_percent: Текущий процент кешбэка
         - first_referral_date: Дата первого приглашения
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_admin_referral_stats skipped")
+        return []
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Базовый запрос для агрегированной статистики
-        # Используем подзапросы для корректной агрегации
-        base_query = """
+    if pool is None:
+        return []
+    
+    try:
+        async with pool.acquire() as conn:
+            # Базовый запрос для агрегированной статистики
+            # Используем подзапросы для корректной агрегации
+            base_query = """
             SELECT 
                 u.telegram_id AS referrer_id,
                 u.username,
@@ -3744,6 +3876,12 @@ async def get_admin_referral_stats(
                 continue  # Пропускаем проблемные строки, но продолжаем обработку
         
         return result
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals or related tables missing or inaccessible — skipping admin referral stats: {e}")
+        return []
+    except Exception as e:
+        logger.warning(f"Error getting admin referral stats: {e}")
+        return []
 
 
 async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]]:
@@ -3766,19 +3904,27 @@ async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]
           - cashback_amount: Сумма кешбэка (рубли)
           - purchase_id: ID платежа
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_admin_referral_detail skipped")
+        return None
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Получаем информацию о реферере
-        referrer = await conn.fetchrow(
-            "SELECT telegram_id, username FROM users WHERE telegram_id = $1",
-            referrer_id
-        )
-        
-        if not referrer:
-            return None
-        
-        # Получаем список всех приглашённых с детальной информацией
-        invited_list_query = """
+    if pool is None:
+        return None
+    
+    try:
+        async with pool.acquire() as conn:
+            # Получаем информацию о реферере
+            referrer = await conn.fetchrow(
+                "SELECT telegram_id, username FROM users WHERE telegram_id = $1",
+                referrer_id
+            )
+            
+            if not referrer:
+                return None
+            
+            # Получаем список всех приглашённых с детальной информацией
+            invited_list_query = """
             SELECT 
                 r.referred_user_id AS invited_user_id,
                 u.username,
@@ -3802,27 +3948,33 @@ async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]
             WHERE r.referrer_user_id = $1
             GROUP BY r.referred_user_id, u.username, r.created_at
             ORDER BY r.created_at DESC
-        """
-        
-        invited_rows = await conn.fetch(invited_list_query, referrer_id)
-        
-        invited_list = []
-        for row in invited_rows:
-            invited_list.append({
-                "invited_user_id": row["invited_user_id"],
-                "username": row["username"] or f"ID{row['invited_user_id']}",
-                "registered_at": row["registered_at"],
-                "first_payment_date": row["first_payment_date"],
-                "purchase_amount": (row["purchase_amount_kopecks"] or 0) / 100.0,
-                "cashback_amount": (row["cashback_amount_kopecks"] or 0) / 100.0,
-                "purchase_id": row["purchase_id"]
-            })
-        
-        return {
-            "referrer_id": referrer_id,
-            "username": referrer["username"] or f"ID{referrer_id}",
-            "invited_list": invited_list
-        }
+            """
+            
+            invited_rows = await conn.fetch(invited_list_query, referrer_id)
+            
+            invited_list = []
+            for row in invited_rows:
+                invited_list.append({
+                    "invited_user_id": row["invited_user_id"],
+                    "username": row["username"] or f"ID{row['invited_user_id']}",
+                    "registered_at": row["registered_at"],
+                    "first_payment_date": row["first_payment_date"],
+                    "purchase_amount": (row["purchase_amount_kopecks"] or 0) / 100.0,
+                    "cashback_amount": (row["cashback_amount_kopecks"] or 0) / 100.0,
+                    "purchase_id": row["purchase_id"]
+                })
+            
+            return {
+                "referrer_id": referrer_id,
+                "username": referrer["username"] or f"ID{referrer_id}",
+                "invited_list": invited_list
+            }
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals or related tables missing or inaccessible — skipping admin referral detail: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error getting admin referral detail: {e}")
+        return None
 
 
 async def get_referral_overall_stats(
@@ -3845,83 +3997,125 @@ async def get_referral_overall_stats(
         - total_cashback_paid: Общий выплаченный кешбэк (рубли)
         - avg_cashback_per_referrer: Средний кешбэк на реферера (рубли)
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Базовые условия для фильтрации по дате
-        date_filter = ""
-        params = []
-        if date_from or date_to:
-            conditions = []
-            if date_from:
-                conditions.append("rr.created_at >= $1")
-                params.append(date_from)
-            if date_to:
-                param_idx = len(params) + 1
-                conditions.append(f"rr.created_at <= ${param_idx}")
-                params.append(date_to)
-            date_filter = "WHERE " + " AND ".join(conditions)
-        
-        # Всего рефереров (уникальных)
-        # Безопасная обработка NULL через COALESCE
-        total_referrers_query = f"""
-            SELECT COALESCE(COUNT(DISTINCT rr.referrer_id), 0)
-            FROM referral_rewards rr
-            {date_filter}
-        """
-        total_referrers_val = await conn.fetchval(total_referrers_query, *params)
-        total_referrers = safe_int(total_referrers_val)
-        
-        # Всего приглашённых (из таблицы referrals)
-        total_referrals_query = "SELECT COALESCE(COUNT(DISTINCT referred_user_id), 0) FROM referrals"
-        if date_from or date_to:
-            # Если есть фильтр по дате, применяем его к referrals
-            if date_from:
-                total_referrals_query += " WHERE created_at >= $1"
-            if date_to:
-                param_idx = len([date_from]) + 1
-                total_referrals_query += f" {'AND' if date_from else 'WHERE'} created_at <= ${param_idx}"
-        total_referrals_val = await conn.fetchval(total_referrals_query, *params)
-        total_referrals = safe_int(total_referrals_val)
-        
-        # Всего оплативших рефералов (уникальных buyer_id из referral_rewards)
-        total_paid_referrals_query = f"""
-            SELECT COALESCE(COUNT(DISTINCT rr.buyer_id), 0)
-            FROM referral_rewards rr
-            {date_filter}
-        """
-        total_paid_referrals_val = await conn.fetchval(total_paid_referrals_query, *params)
-        total_paid_referrals = safe_int(total_paid_referrals_val)
-        
-        # Общий доход от рефералов (сумма purchase_amount из referral_rewards)
-        total_revenue_query = f"""
-            SELECT COALESCE(SUM(rr.purchase_amount), 0)
-            FROM referral_rewards rr
-            {date_filter}
-        """
-        total_revenue_kopecks_val = await conn.fetchval(total_revenue_query, *params)
-        total_revenue_kopecks = safe_int(total_revenue_kopecks_val)
-        total_revenue = total_revenue_kopecks / 100.0
-        
-        # Общий выплаченный кешбэк (сумма reward_amount из referral_rewards)
-        total_cashback_query = f"""
-            SELECT COALESCE(SUM(rr.reward_amount), 0)
-            FROM referral_rewards rr
-            {date_filter}
-        """
-        total_cashback_kopecks_val = await conn.fetchval(total_cashback_query, *params)
-        total_cashback_kopecks = safe_int(total_cashback_kopecks_val)
-        total_cashback_paid = total_cashback_kopecks / 100.0
-        
-        # Средний кешбэк на реферера (защита от деления на 0)
-        avg_cashback_per_referrer = total_cashback_paid / total_referrers if total_referrers > 0 else 0.0
-        
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_referral_overall_stats skipped")
         return {
-            "total_referrers": total_referrers,
-            "total_referrals": total_referrals,
-            "total_paid_referrals": total_paid_referrals,
-            "total_revenue": round(total_revenue, 2),
-            "total_cashback_paid": round(total_cashback_paid, 2),
-            "avg_cashback_per_referrer": round(avg_cashback_per_referrer, 2)
+            "total_referrers": 0,
+            "total_referrals": 0,
+            "total_paid_referrals": 0,
+            "total_revenue": 0.0,
+            "total_cashback_paid": 0.0,
+            "avg_cashback_per_referrer": 0.0
+        }
+    
+    pool = await get_pool()
+    if pool is None:
+        return {
+            "total_referrers": 0,
+            "total_referrals": 0,
+            "total_paid_referrals": 0,
+            "total_revenue": 0.0,
+            "total_cashback_paid": 0.0,
+            "avg_cashback_per_referrer": 0.0
+        }
+    
+    try:
+        async with pool.acquire() as conn:
+            # Базовые условия для фильтрации по дате
+            date_filter = ""
+            params = []
+            if date_from or date_to:
+                conditions = []
+                if date_from:
+                    conditions.append("rr.created_at >= $1")
+                    params.append(date_from)
+                if date_to:
+                    param_idx = len(params) + 1
+                    conditions.append(f"rr.created_at <= ${param_idx}")
+                    params.append(date_to)
+                date_filter = "WHERE " + " AND ".join(conditions)
+            
+            # Всего рефереров (уникальных)
+            # Безопасная обработка NULL через COALESCE
+            total_referrers_query = f"""
+                SELECT COALESCE(COUNT(DISTINCT rr.referrer_id), 0)
+                FROM referral_rewards rr
+                {date_filter}
+            """
+            total_referrers_val = await conn.fetchval(total_referrers_query, *params)
+            total_referrers = safe_int(total_referrers_val)
+            
+            # Всего приглашённых (из таблицы referrals)
+            total_referrals_query = "SELECT COALESCE(COUNT(DISTINCT referred_user_id), 0) FROM referrals"
+            if date_from or date_to:
+                # Если есть фильтр по дате, применяем его к referrals
+                if date_from:
+                    total_referrals_query += " WHERE created_at >= $1"
+                if date_to:
+                    param_idx = len([date_from]) + 1
+                    total_referrals_query += f" {'AND' if date_from else 'WHERE'} created_at <= ${param_idx}"
+            total_referrals_val = await conn.fetchval(total_referrals_query, *params)
+            total_referrals = safe_int(total_referrals_val)
+            
+            # Всего оплативших рефералов (уникальных buyer_id из referral_rewards)
+            total_paid_referrals_query = f"""
+                SELECT COALESCE(COUNT(DISTINCT rr.buyer_id), 0)
+                FROM referral_rewards rr
+                {date_filter}
+            """
+            total_paid_referrals_val = await conn.fetchval(total_paid_referrals_query, *params)
+            total_paid_referrals = safe_int(total_paid_referrals_val)
+            
+            # Общий доход от рефералов (сумма purchase_amount из referral_rewards)
+            total_revenue_query = f"""
+                SELECT COALESCE(SUM(rr.purchase_amount), 0)
+                FROM referral_rewards rr
+                {date_filter}
+            """
+            total_revenue_kopecks_val = await conn.fetchval(total_revenue_query, *params)
+            total_revenue_kopecks = safe_int(total_revenue_kopecks_val)
+            total_revenue = total_revenue_kopecks / 100.0
+            
+            # Общий выплаченный кешбэк (сумма reward_amount из referral_rewards)
+            total_cashback_query = f"""
+                SELECT COALESCE(SUM(rr.reward_amount), 0)
+                FROM referral_rewards rr
+                {date_filter}
+            """
+            total_cashback_kopecks_val = await conn.fetchval(total_cashback_query, *params)
+            total_cashback_kopecks = safe_int(total_cashback_kopecks_val)
+            total_cashback_paid = total_cashback_kopecks / 100.0
+            
+            # Средний кешбэк на реферера (защита от деления на 0)
+            avg_cashback_per_referrer = total_cashback_paid / total_referrers if total_referrers > 0 else 0.0
+            
+            return {
+                "total_referrers": total_referrers,
+                "total_referrals": total_referrals,
+                "total_paid_referrals": total_paid_referrals,
+                "total_revenue": round(total_revenue, 2),
+                "total_cashback_paid": round(total_cashback_paid, 2),
+                "avg_cashback_per_referrer": round(avg_cashback_per_referrer, 2)
+            }
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals or referral_rewards tables missing or inaccessible — skipping referral overall stats: {e}")
+        return {
+            "total_referrers": 0,
+            "total_referrals": 0,
+            "total_paid_referrals": 0,
+            "total_revenue": 0.0,
+            "total_cashback_paid": 0.0,
+            "avg_cashback_per_referrer": 0.0
+        }
+    except Exception as e:
+        logger.warning(f"Error getting referral overall stats: {e}")
+        return {
+            "total_referrers": 0,
+            "total_referrals": 0,
+            "total_paid_referrals": 0,
+            "total_revenue": 0.0,
+            "total_cashback_paid": 0.0,
+            "avg_cashback_per_referrer": 0.0
         }
 
 
@@ -4834,15 +5028,29 @@ async def get_last_audit_logs(limit: int = 10) -> list:
     Returns:
         Список словарей с записями audit_log, отсортированных по created_at DESC
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_last_audit_logs skipped")
+        return []
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT * FROM audit_log 
-               ORDER BY created_at DESC 
-               LIMIT $1""",
-            limit
-        )
-        return [dict(row) for row in rows]
+    if pool is None:
+        return []
+    
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM audit_log 
+                   ORDER BY created_at DESC 
+                   LIMIT $1""",
+                limit
+            )
+            return [dict(row) for row in rows]
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"audit_log table missing or inaccessible — skipping: {e}")
+        return []
+    except Exception as e:
+        logger.warning(f"Error getting audit logs: {e}")
+        return []
 
 
 async def create_broadcast(title: str, message: str, broadcast_type: str, segment: str, sent_by: int, is_ab_test: bool = False, message_a: str = None, message_b: str = None) -> int:
@@ -4973,13 +5181,27 @@ async def get_incident_settings() -> Dict[str, Any]:
     Returns:
         Словарь с is_active и incident_text
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_incident_settings skipped")
+        return {"is_active": False, "incident_text": None}
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT is_active, incident_text FROM incident_settings ORDER BY id LIMIT 1"
-        )
-        if row:
-            return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
+    if pool is None:
+        return {"is_active": False, "incident_text": None}
+    
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT is_active, incident_text FROM incident_settings ORDER BY id LIMIT 1"
+            )
+            if row:
+                return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
+            return {"is_active": False, "incident_text": None}
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
+        return {"is_active": False, "incident_text": None}
+    except Exception as e:
+        logger.warning(f"Error getting incident settings: {e}")
         return {"is_active": False, "incident_text": None}
 
 
@@ -4990,22 +5212,35 @@ async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None
         is_active: Активен ли режим инцидента
         incident_text: Текст инцидента (опционально)
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), set_incident_mode skipped")
+        return
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        if incident_text is not None:
-            await conn.execute(
-                """UPDATE incident_settings 
-                   SET is_active = $1, incident_text = $2, updated_at = CURRENT_TIMESTAMP
-                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
-                is_active, incident_text
-            )
-        else:
-            await conn.execute(
-                """UPDATE incident_settings 
-                   SET is_active = $1, updated_at = CURRENT_TIMESTAMP
-                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
-                is_active
-            )
+    if pool is None:
+        logger.warning("Pool is None, set_incident_mode skipped")
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            if incident_text is not None:
+                await conn.execute(
+                    """UPDATE incident_settings 
+                       SET is_active = $1, incident_text = $2, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                    is_active, incident_text
+                )
+            else:
+                await conn.execute(
+                    """UPDATE incident_settings 
+                       SET is_active = $1, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                    is_active
+                )
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
+    except Exception as e:
+        logger.warning(f"Error setting incident mode: {e}")
 
 
 async def get_ab_test_broadcasts() -> list:
@@ -5031,13 +5266,27 @@ async def get_incident_settings() -> Dict[str, Any]:
     Returns:
         Словарь с is_active и incident_text
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), get_incident_settings skipped")
+        return {"is_active": False, "incident_text": None}
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT is_active, incident_text FROM incident_settings ORDER BY id LIMIT 1"
-        )
-        if row:
-            return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
+    if pool is None:
+        return {"is_active": False, "incident_text": None}
+    
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT is_active, incident_text FROM incident_settings ORDER BY id LIMIT 1"
+            )
+            if row:
+                return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
+            return {"is_active": False, "incident_text": None}
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
+        return {"is_active": False, "incident_text": None}
+    except Exception as e:
+        logger.warning(f"Error getting incident settings: {e}")
         return {"is_active": False, "incident_text": None}
 
 
@@ -5048,22 +5297,35 @@ async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None
         is_active: Активен ли режим инцидента
         incident_text: Текст инцидента (опционально)
     """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), set_incident_mode skipped")
+        return
+    
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        if incident_text is not None:
-            await conn.execute(
-                """UPDATE incident_settings 
-                   SET is_active = $1, incident_text = $2, updated_at = CURRENT_TIMESTAMP
-                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
-                is_active, incident_text
-            )
-        else:
-            await conn.execute(
-                """UPDATE incident_settings 
-                   SET is_active = $1, updated_at = CURRENT_TIMESTAMP
-                   WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
-                is_active
-            )
+    if pool is None:
+        logger.warning("Pool is None, set_incident_mode skipped")
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            if incident_text is not None:
+                await conn.execute(
+                    """UPDATE incident_settings 
+                       SET is_active = $1, incident_text = $2, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                    is_active, incident_text
+                )
+            else:
+                await conn.execute(
+                    """UPDATE incident_settings 
+                       SET is_active = $1, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
+                    is_active
+                )
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
+    except Exception as e:
+        logger.warning(f"Error setting incident mode: {e}")
 
 
 async def get_ab_test_stats(broadcast_id: int) -> Optional[Dict[str, Any]]:
@@ -5657,10 +5919,10 @@ async def get_referral_analytics() -> Dict[str, Any]:
         - referred_users_count: количество приглашенных пользователей
         - active_referrals: количество активных рефералов
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # Доход от рефералов: сумма всех платежей пользователей, у которых есть referrer_id
-        referral_revenue_kopecks = await conn.fetchval(
+    try:
+        async with pool.acquire() as conn:
+            # Доход от рефералов: сумма всех платежей пользователей, у которых есть referrer_id
+            referral_revenue_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(p.amount), 0)
                FROM payments p
                JOIN users u ON p.telegram_id = u.telegram_id
@@ -5701,6 +5963,24 @@ async def get_referral_analytics() -> Dict[str, Any]:
             "net_profit": net_profit,
             "referred_users_count": referred_users_count,
             "active_referrals": active_referrals
+        }
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals or related tables missing or inaccessible — skipping referral analytics: {e}")
+        return {
+            "referral_revenue": 0.0,
+            "cashback_paid": 0.0,
+            "net_profit": 0.0,
+            "referred_users_count": 0,
+            "active_referrals": 0
+        }
+    except Exception as e:
+        logger.warning(f"Error getting referral analytics: {e}")
+        return {
+            "referral_revenue": 0.0,
+            "cashback_paid": 0.0,
+            "net_profit": 0.0,
+            "referred_users_count": 0,
+            "active_referrals": 0
         }
 
 

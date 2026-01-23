@@ -336,14 +336,23 @@ async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: boo
     """
     Проверка готовности базы данных с отправкой сообщения пользователю
     
+    НОВАЯ ЛОГИКА:
+    - CRITICAL ошибки (users table missing) → блокируем UI в PROD
+    - NON-CRITICAL ошибки (audit_log, incident_settings missing) → НЕ блокируем UI
+    - В STAGE разрешаем read-only операции даже при отсутствии опциональных таблиц
+    
     Args:
         message_or_query: Message или CallbackQuery объект
         allow_readonly_in_stage: Если True, в STAGE разрешает read-only операции без БД
         
     Returns:
-        True если БД готова или операция разрешена в STAGE, False если БД недоступна (сообщение отправлено)
+        True если БД готова или операция разрешена, False если БД недоступна (сообщение отправлено)
     """
-    if not database.DB_READY:
+    # Проверяем CRITICAL таблицы (users) - это определяет, можем ли мы работать вообще
+    critical_ok = await database.check_critical_tables()
+    
+    if not critical_ok:
+        # CRITICAL ошибка - users table отсутствует
         # В STAGE разрешаем read-only операции (меню, профиль, навигация)
         # В PROD всегда блокируем
         if allow_readonly_in_stage and config.IS_STAGE:
@@ -377,6 +386,9 @@ async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: boo
             logging.exception(f"Error sending degraded mode message: {e}")
         
         return False
+    
+    # CRITICAL таблицы существуют - разрешаем работу
+    # Даже если DB_READY = False (из-за отсутствия опциональных таблиц), мы можем работать
     return True
 
 
