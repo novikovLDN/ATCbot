@@ -14,6 +14,7 @@ import auto_renewal
 import health_server
 import admin_notifications
 import trial_notifications
+import activation_worker
 
 # Настройка логирования
 logging.basicConfig(
@@ -120,7 +121,8 @@ async def main():
     recovered_tasks = {
         "reminder": None,
         "fast_cleanup": None,
-        "auto_renewal": None
+        "auto_renewal": None,
+        "activation_worker": None
     }
     
     async def retry_db_init():
@@ -137,7 +139,7 @@ async def main():
         - Никогда не падает (все исключения обрабатываются)
         - Не блокирует главный event loop
         """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, recovered_tasks
+        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, recovered_tasks
         retry_interval = 30  # секунд
         
         # Если БД уже готова, задача не запускается
@@ -184,6 +186,10 @@ async def main():
                         if auto_renewal_task is None and recovered_tasks["auto_renewal"] is None:
                             recovered_tasks["auto_renewal"] = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
                             logger.info("Auto-renewal task started (recovered)")
+                        
+                        if activation_worker_task is None and recovered_tasks["activation_worker"] is None:
+                            recovered_tasks["activation_worker"] = asyncio.create_task(activation_worker.activation_worker_task(bot))
+                            logger.info("Activation worker task started (recovered)")
                         
                         # Успешно инициализировали БД - выходим из цикла
                         logger.info("DB retry task completed successfully, stopping retry loop")
@@ -243,6 +249,14 @@ async def main():
     else:
         logger.warning("Auto-renewal task skipped (DB not ready)")
     
+    # Запуск фоновой задачи для активации отложенных подписок (только если БД готова)
+    activation_worker_task = None
+    if database.DB_READY:
+        activation_worker_task = asyncio.create_task(activation_worker.activation_worker_task(bot))
+        logger.info("Activation worker task started")
+    else:
+        logger.warning("Activation worker task skipped (DB not ready)")
+    
     # Запуск фоновой задачи для автоматической проверки CryptoBot платежей (только если БД готова)
     crypto_watcher_task = None
     if database.DB_READY:
@@ -276,6 +290,10 @@ async def main():
             auto_renewal_task.cancel()
         if recovered_tasks.get("auto_renewal"):
             recovered_tasks["auto_renewal"].cancel()
+        if activation_worker_task:
+            activation_worker_task.cancel()
+        if recovered_tasks.get("activation_worker"):
+            recovered_tasks["activation_worker"].cancel()
         if cleanup_task:
             cleanup_task.cancel()
         if fast_cleanup_task:
@@ -315,6 +333,16 @@ async def main():
         if recovered_tasks.get("auto_renewal"):
             try:
                 await recovered_tasks["auto_renewal"]
+            except asyncio.CancelledError:
+                pass
+        if activation_worker_task:
+            try:
+                await activation_worker_task
+            except asyncio.CancelledError:
+                pass
+        if recovered_tasks.get("activation_worker"):
+            try:
+                await recovered_tasks["activation_worker"]
             except asyncio.CancelledError:
                 pass
         if cleanup_task:
