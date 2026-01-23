@@ -230,10 +230,24 @@ async def process_auto_renewals(bot: Bot):
                         
                         # Создаем запись о платеже для аналитики
                         tariff_str = f"{tariff_type}_{period_days}"
-                        await conn.execute(
-                            "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved')",
+                        payment_id = await conn.fetchval(
+                            "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
                             telegram_id, tariff_str, int(amount_rubles * 100)  # Сохраняем в копейках
                         )
+                        
+                        if not payment_id:
+                            logger.error(f"Failed to create payment record for auto-renewal: user={telegram_id}")
+                            continue
+                        
+                        # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
+                        import database
+                        notification_already_sent = await database.is_payment_notification_sent(payment_id, conn=conn)
+                        
+                        if notification_already_sent:
+                            logger.info(
+                                f"NOTIFICATION_IDEMPOTENT_SKIP [type=auto_renewal, payment_id={payment_id}, user={telegram_id}]"
+                            )
+                            continue
                         
                         # Отправляем уведомление пользователю
                         expires_str = expires_at.strftime("%d.%m.%Y")
@@ -251,6 +265,22 @@ async def process_auto_renewals(bot: Bot):
                             text = f"✅ Подписка автоматически продлена на {duration_days} дней.\n\nДействует до: {expires_str}\nС баланса списано: {amount_rubles:.2f} ₽"
                         
                         await bot.send_message(telegram_id, text)
+                        
+                        # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
+                        try:
+                            sent = await database.mark_payment_notification_sent(payment_id, conn=conn)
+                            if sent:
+                                logger.info(
+                                    f"NOTIFICATION_SENT [type=auto_renewal, payment_id={payment_id}, user={telegram_id}]"
+                                )
+                            else:
+                                logger.warning(
+                                    f"NOTIFICATION_FLAG_ALREADY_SET [type=auto_renewal, payment_id={payment_id}, user={telegram_id}]"
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+                            )
                         
                         logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
                         
