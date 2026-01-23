@@ -2561,11 +2561,20 @@ async def _log_subscription_history_atomic(conn, telegram_id: int, vpn_key: str,
     Args:
         conn: Соединение с БД (внутри транзакции)
         telegram_id: Telegram ID пользователя
-        vpn_key: VPN-ключ
+        vpn_key: VPN-ключ (может быть None для pending activations)
         start_date: Дата начала периода
         end_date: Дата окончания периода
         action_type: Тип действия ('purchase', 'renewal', 'reissue', 'manual_reissue')
     """
+    # Пропускаем запись истории для pending activations (vpn_key == None)
+    # История будет записана позже, когда activation_worker активирует подписку
+    if vpn_key is None:
+        logger.info(
+            f"SUBSCRIPTION_HISTORY_SKIPPED [reason=pending_activation, user={telegram_id}, "
+            f"action={action_type}, subscription_end={end_date.isoformat()}]"
+        )
+        return
+    
     await conn.execute(
         """INSERT INTO subscription_history (telegram_id, vpn_key, start_date, end_date, action_type)
            VALUES ($1, $2, $3, $4, $5)""",
