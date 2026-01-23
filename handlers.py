@@ -2950,16 +2950,19 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # Создаем запись о платеже для аналитики
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved')",
+            # КРИТИЧНО: Захватываем payment.id для идемпотентности реферальных наград
+            payment_id = await conn.fetchval(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
                 telegram_id, f"{tariff_type}_{period_days}", final_price_kopecks
             )
         
         # Начисляем реферальный кешбэк при оплате с баланса
+        # КРИТИЧНО: Используем payment.id для создания уникального purchase_id
+        purchase_id = f"balance_purchase_{payment_id}" if payment_id else None
         try:
             reward_result = await database.process_referral_reward(
                 buyer_id=telegram_id,
-                purchase_id=None,  # Оплата с баланса не имеет purchase_id
+                purchase_id=purchase_id,  # Используем payment.id для идемпотентности
                 amount_rubles=final_price_rubles
             )
             
@@ -3964,6 +3967,19 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )
             
             if success:
+                # Создаем запись о платеже для аналитики и идемпотентности
+                pool = await database.get_pool()
+                payment_id = None
+                if pool:
+                    async with pool.acquire() as conn:
+                        # КРИТИЧНО: Захватываем payment.id для идемпотентности реферальных наград
+                        payment_id = await conn.fetchval(
+                            "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                            telegram_id,
+                            "balance_topup",
+                            int(payment_amount_rubles * 100)  # Сохраняем в копейках
+                        )
+                
                 # Получаем новый баланс
                 new_balance = await database.get_user_balance(telegram_id)
                 user = await database.get_user(telegram_id)
@@ -3979,10 +3995,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 await message.answer(text)
                 
                 # Начисляем реферальный кешбэк при пополнении баланса
+                # КРИТИЧНО: Используем payment.id для создания уникального purchase_id
+                purchase_id = f"balance_topup_{payment_id}" if payment_id else None
                 try:
                     reward_result = await database.process_referral_reward(
                         buyer_id=telegram_id,
-                        purchase_id=None,  # Пополнение баланса не имеет purchase_id
+                        purchase_id=purchase_id,  # Используем payment.id для идемпотентности
                         amount_rubles=payment_amount_rubles
                     )
                     
