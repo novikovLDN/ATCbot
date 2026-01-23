@@ -5565,10 +5565,16 @@ async def finalize_balance_purchase(
             vpn_key = grant_result.get("vless_url") or grant_result.get("vpn_key") or ""
             is_renewal = grant_result.get("action") == "renewal"
             
-            if not expires_at or not vpn_key:
+            # expires_at is ALWAYS required
+            if not expires_at:
                 raise ValueError(
-                    f"grant_access returned invalid result: expires_at={expires_at}, "
-                    f"vpn_key={bool(vpn_key)}"
+                    f"grant_access returned invalid result: expires_at={expires_at}"
+                )
+            
+            # vpn_key is required ONLY for new subscriptions
+            if not is_renewal and not vpn_key:
+                raise ValueError(
+                    "grant_access returned invalid result for NEW subscription: vpn_key is missing"
                 )
             
             # STEP 3: Создаем запись о платеже

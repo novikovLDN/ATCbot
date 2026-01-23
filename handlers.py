@@ -2937,8 +2937,14 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 logger.exception(f"Error sending referral cashback notification for balance payment: user={telegram_id}: {e}")
         
         # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
+        # Для продлений vpn_key может быть пустым - получаем из подписки
+        if is_renewal and not vpn_key:
+            subscription = await database.get_subscription(telegram_id)
+            if subscription and subscription.get("vpn_key"):
+                vpn_key = subscription["vpn_key"]
+        
         import vpn_utils
-        if not vpn_utils.validate_vless_link(vpn_key):
+        if vpn_key and not vpn_utils.validate_vless_link(vpn_key):
             error_msg = (
                 f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
                 "Key will NOT be sent to user."
