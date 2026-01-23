@@ -17,17 +17,30 @@ async def check_database_connection() -> Tuple[bool, str]:
     
     Returns:
         Кортеж (is_ok, message) - статус проверки и сообщение
+    
+    NOTE: Read-only check - только SELECT, никаких INSERT/UPDATE
     """
     try:
+        if not database.DB_READY:
+            return False, "PostgreSQL подключение: DB not ready (degraded mode)"
+        
         pool = await database.get_pool()
+        if pool is None:
+            return False, "PostgreSQL подключение: Pool is None"
+        
         async with pool.acquire() as conn:
-            # Выполняем простой запрос для проверки подключения
+            # Выполняем простой запрос для проверки подключения (read-only)
             result = await conn.fetchval("SELECT 1")
             if result == 1:
                 return True, "PostgreSQL подключение: OK"
             else:
                 return False, "PostgreSQL подключение: Ошибка (неожиданный результат)"
     except Exception as e:
+        # В STAGE/LOCAL логируем как WARNING, не ERROR
+        if config.IS_STAGE or config.IS_LOCAL:
+            logger.warning(f"Database connection check failed in {config.APP_ENV.upper()}: {e}")
+        else:
+            logger.error(f"Database connection check failed: {e}")
         return False, f"PostgreSQL подключение: Ошибка ({str(e)})"
 
 
@@ -108,6 +121,8 @@ async def send_health_alert(bot: Bot, messages: List[str]):
     Args:
         bot: Экземпляр бота
         messages: Список сообщений о проблемах
+    
+    NOTE: Read-only healthcheck - NO INSERT/UPDATE, NO audit_log writes
     """
     try:
         alert_text = "🚨 Health Check Alert\n\nОбнаружены проблемы:\n\n"
@@ -116,14 +131,8 @@ async def send_health_alert(bot: Bot, messages: List[str]):
         await bot.send_message(config.ADMIN_TELEGRAM_ID, alert_text)
         logger.warning(f"Health check alert sent to admin: {alert_text}")
         
-        # Записываем событие в audit_log
-        details = "; ".join(messages)
-        await database._log_audit_event_atomic_standalone(
-            "health_check_alert",
-            config.ADMIN_TELEGRAM_ID,
-            None,
-            details
-        )
+        # НЕ записываем в audit_log - healthcheck должен быть read-only
+        # Если audit_log таблица отсутствует, это не должно ломать healthcheck
     except Exception as e:
         logger.error(f"Error sending health check alert to admin: {e}", exc_info=True)
 

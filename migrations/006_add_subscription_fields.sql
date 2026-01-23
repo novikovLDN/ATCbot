@@ -1,6 +1,18 @@
 -- Migration 006: Add extended subscription fields
 -- Adds Xray Core fields and notification flags to subscriptions
 
+-- Проверяем существование таблицы users перед выполнением миграции
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'users'
+    ) THEN
+        RAISE WARNING 'Table users does not exist, skipping migration 006';
+        RETURN;
+    END IF;
+END $$;
+
 -- Xray Core fields for VLESS
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS uuid TEXT;
 ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';

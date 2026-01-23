@@ -1,6 +1,18 @@
 -- Migration 005: Add referral rewards system
 -- Creates referral_rewards table for tracking cashback accruals
 
+-- Проверяем существование таблицы users перед выполнением миграции
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'users'
+    ) THEN
+        RAISE WARNING 'Table users does not exist, skipping migration 005';
+        RETURN;
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS referral_rewards (
     id SERIAL PRIMARY KEY,
     referrer_id BIGINT NOT NULL,
