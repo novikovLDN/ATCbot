@@ -17,14 +17,10 @@ logger = logging.getLogger(__name__)
 _TRIAL_SCHEDULER_STARTED = False
 
 # Расписание уведомлений (в часах от момента активации)
+# Уменьшено до 3 уведомлений для премиального UX
 TRIAL_NOTIFICATION_SCHEDULE = [
-    {"hours": 6, "key": "trial_notification_6h", "has_button": False},
-    {"hours": 18, "key": "trial_notification_18h", "has_button": False},
-    {"hours": 30, "key": "trial_notification_30h", "has_button": False},
-    {"hours": 42, "key": "trial_notification_42h", "has_button": False},
-    {"hours": 54, "key": "trial_notification_54h", "has_button": False},
-    {"hours": 60, "key": "trial_notification_60h", "has_button": True},
-    {"hours": 71, "key": "trial_notification_71h", "has_button": True},
+    {"hours": 6, "key": "trial_notification_6h", "has_button": False},  # Onboarding reminder
+    {"hours": 48, "key": "trial_notification_60h", "has_button": True, "db_flag": "trial_notif_60h_sent"},  # 48h reminder (uses 60h DB flag)
 ]
 
 
@@ -137,9 +133,7 @@ async def process_trial_notifications(bot: Bot):
                 SELECT u.telegram_id, u.trial_expires_at,
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
-                       s.trial_notif_6h_sent, s.trial_notif_18h_sent, s.trial_notif_30h_sent,
-                       s.trial_notif_42h_sent, s.trial_notif_54h_sent, s.trial_notif_60h_sent,
-                       s.trial_notif_71h_sent
+                       s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id 
                     AND s.source = 'trial' 
@@ -190,14 +184,88 @@ async def process_trial_notifications(bot: Bot):
                 # trial_expires_at - now = 72h - hours_until_expiry
                 hours_since_activation = 72 - hours_until_expiry
                 
-                # Проверяем каждое уведомление в расписании
+                # ФИНАЛЬНОЕ НАПОМИНАНИЕ: за 6 часов до окончания trial
+                # Используем флаг trial_notif_71h_sent для финального напоминания
+                # (71h reminder удален, флаг свободен)
+                if (hours_until_expiry <= 6 and 
+                    hours_until_expiry > 5 and
+                    not row.get("trial_notif_71h_sent", False)):
+                    
+                    # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА перед отправкой (для безопасности)
+                    subscription_check = await conn.fetchrow("""
+                        SELECT id, source, status, expires_at
+                        FROM subscriptions
+                        WHERE telegram_id = $1
+                        AND source = 'trial'
+                        AND status = 'active'
+                        AND expires_at > $2
+                    """, telegram_id, now)
+                    
+                    if not subscription_check:
+                        logger.info(
+                            f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
+                            f"reason=subscription_no_longer_active"
+                        )
+                    else:
+                        paid_check = await conn.fetchrow("""
+                            SELECT 1 FROM subscriptions 
+                            WHERE telegram_id = $1 
+                            AND source = 'payment'
+                            AND status = 'active'
+                            AND expires_at > $2
+                            LIMIT 1
+                        """, telegram_id, now)
+                        
+                        if paid_check:
+                            logger.info(
+                                f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
+                                f"reason=has_active_paid_subscription"
+                            )
+                        else:
+                            # Отправляем финальное напоминание с кнопкой
+                            # Используем trial_notification_71h (текст подходит для финального напоминания)
+                            success, status = await send_trial_notification(
+                                bot, pool, telegram_id, "trial_notification_71h", has_button=True
+                            )
+                            
+                            if success:
+                                await conn.execute(
+                                    "UPDATE subscriptions SET trial_notif_71h_sent = TRUE "
+                                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                                    telegram_id
+                                )
+                                logger.info(
+                                    f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
+                                    f"hours_until_expiry={hours_until_expiry:.1f}h, sent_at={datetime.now().isoformat()}"
+                                )
+                            elif status == "failed_permanently":
+                                await conn.execute(
+                                    "UPDATE subscriptions SET trial_notif_71h_sent = TRUE "
+                                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                                    telegram_id
+                                )
+                                logger.warning(
+                                    f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
+                                    f"reason=forbidden_or_blocked, failed_at={datetime.now().isoformat()}, will_not_retry=True"
+                                )
+                            else:
+                                logger.warning(
+                                    f"trial_reminder_failed_temporary: user={telegram_id}, notification=final_6h_before_expiry, "
+                                    f"reason=temporary_error, will_retry=True"
+                                )
+                    # Пропускаем остальные проверки для этого пользователя в этом цикле
+                    continue
+                
+                # Проверяем каждое уведомление в расписании (6h и 48h)
                 for notification in TRIAL_NOTIFICATION_SCHEDULE:
                     hours = notification["hours"]
                     key = notification["key"]
                     has_button = notification["has_button"]
+                    # Используем db_flag если указан, иначе формируем из hours
+                    db_flag = notification.get("db_flag", f"trial_notif_{hours}h_sent")
                     
                     # Проверяем, нужно ли отправить это уведомление
-                    sent_flag_column = f"trial_notif_{hours}h_sent"
+                    sent_flag_column = db_flag
                     # Безопасная проверка флага: NULL считается как False
                     already_sent = row.get(sent_flag_column) is True
                     
@@ -205,8 +273,10 @@ async def process_trial_notifications(bot: Bot):
                     # - прошло достаточно времени (hours_since_activation >= hours)
                     # - но не слишком много (в пределах 1 часа после нужного времени)
                     # - и ещё не отправлено
+                    # - и не слишком близко к окончанию (чтобы не конфликтовать с финальным напоминанием)
                     if (hours_since_activation >= hours and 
                         hours_since_activation < hours + 1 and 
+                        hours_until_expiry > 6 and  # Не отправляем если осталось <= 6 часов (это финальное напоминание)
                         not already_sent):
                         
                         # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА перед отправкой (для безопасности)
