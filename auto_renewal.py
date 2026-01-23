@@ -251,7 +251,6 @@ async def process_auto_renewals(bot: Bot):
                             continue
                         
                         # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
-                        import database
                         notification_already_sent = await database.is_payment_notification_sent(payment_id, conn=conn)
                         
                         if notification_already_sent:
