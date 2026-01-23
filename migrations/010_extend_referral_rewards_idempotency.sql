@@ -43,8 +43,8 @@ BEGIN
         -- but provides basic protection during migration period
         CREATE UNIQUE INDEX idx_referral_rewards_unique_null_purchase
         ON referral_rewards(buyer_id, reward_amount, created_at)
-        WHERE purchase_id IS NULL;
-        
+    WHERE purchase_id IS NULL;
+    
         RAISE NOTICE 'Created unique index for NULL purchase_id cases';
     ELSE
         RAISE NOTICE 'Index idx_referral_rewards_unique_null_purchase already exists';
