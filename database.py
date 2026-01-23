@@ -1249,7 +1249,10 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
     
     # Запрет self-referral
     if referrer_user_id == referred_user_id:
-        logger.warning(f"Self-referral attempt blocked: user_id={referrer_user_id}")
+        logger.warning(
+            f"REFERRAL_SELF_ATTEMPT [user_id={referrer_user_id}, "
+            f"referrer_id={referrer_user_id}, referred_id={referred_user_id}]"
+        )
         return False
     
     pool = await get_pool()

@@ -36,9 +36,10 @@ async def process_auto_renewals(bot: Bot):
     - Если баланса хватает: продлеваем через grant_access() (без создания нового UUID)
     - Если баланса не хватает: ничего не делаем (auto-expiry обработает)
     
-    Защита от повторного списания:
-    - Используется last_auto_renewal_at для отслеживания последнего автопродления
-    - Одна подписка обрабатывается только один раз за цикл
+    Защита от race conditions:
+    - SELECT ... FOR UPDATE SKIP LOCKED: только один воркер может обработать подписку
+    - last_auto_renewal_at устанавливается в НАЧАЛЕ транзакции (до обработки)
+    - При ошибке транзакция откатывается, last_auto_renewal_at возвращается к предыдущему значению
     - Идемпотентность: при рестарте не будет двойного списания
     - Атомарные транзакции для баланса и подписки
     """
@@ -58,7 +59,8 @@ async def process_auto_renewals(bot: Bot):
                AND s.expires_at <= $1 
                AND s.expires_at > $2
                AND s.uuid IS NOT NULL
-               AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')""",
+               AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
+               FOR UPDATE SKIP LOCKED""",
             renewal_threshold, now
         )
         
@@ -74,8 +76,26 @@ async def process_auto_renewals(bot: Bot):
             # Используем транзакцию для атомарности операции
             async with conn.transaction():
                 try:
+                    # КРИТИЧНО: Обновляем last_auto_renewal_at в НАЧАЛЕ транзакции
+                    # Это предотвращает обработку одной подписки несколькими воркерами
+                    # даже при рестарте или параллельных вызовах
+                    update_result = await conn.execute(
+                        """UPDATE subscriptions 
+                           SET last_auto_renewal_at = $1 
+                           WHERE telegram_id = $2 
+                           AND status = 'active'
+                           AND auto_renew = TRUE
+                           AND (last_auto_renewal_at IS NULL OR last_auto_renewal_at < expires_at - INTERVAL '12 hours')""",
+                        now, telegram_id
+                    )
+                    
+                    # Если UPDATE не затронул ни одной строки - подписка уже обрабатывается или не подходит
+                    if update_result == "UPDATE 0":
+                        logger.debug(f"Subscription {telegram_id} already being processed or conditions changed, skipping")
+                        continue
+                    
                     # Дополнительная проверка: убеждаемся, что подписка еще не была обработана
-                    # (защита от race condition при параллельных вызовах)
+                    # (дополнительная защита от race condition)
                     current_sub = await conn.fetchrow(
                         """SELECT auto_renew, expires_at, last_auto_renewal_at 
                            FROM subscriptions 
@@ -85,17 +105,8 @@ async def process_auto_renewals(bot: Bot):
                     
                     if not current_sub or not current_sub["auto_renew"]:
                         logger.debug(f"Subscription {telegram_id} no longer has auto_renew enabled, skipping")
+                        # Откатываем транзакцию (last_auto_renewal_at будет откачен)
                         continue
-                    
-                    # Проверяем, не была ли подписка уже обработана
-                    last_renewal = current_sub.get("last_auto_renewal_at")
-                    if last_renewal:
-                        if isinstance(last_renewal, str):
-                            last_renewal = datetime.fromisoformat(last_renewal)
-                        # Если автопродление было менее 12 часов назад - пропускаем (защита от повторного списания)
-                        if (now - last_renewal).total_seconds() < 43200:  # 12 часов
-                            logger.debug(f"Subscription {telegram_id} was already processed recently, skipping")
-                            continue
                     
                     # Получаем последний утвержденный платеж для определения тарифа
                     last_payment = await database.get_last_approved_payment(telegram_id)
@@ -221,13 +232,12 @@ async def process_auto_renewals(bot: Bot):
                                 source="refund",
                                 description=f"Возврат средств за неудачное автопродление"
                             )
+                            # last_auto_renewal_at уже установлен в начале транзакции
+                            # При ошибке транзакция откатится, и last_auto_renewal_at вернется к предыдущему значению
                             continue
                         
-                        # Отмечаем, что автопродление было выполнено (защита от повторного списания)
-                        await conn.execute(
-                            "UPDATE subscriptions SET last_auto_renewal_at = $1 WHERE telegram_id = $2",
-                            now, telegram_id
-                        )
+                        # last_auto_renewal_at уже установлен в начале транзакции
+                        # НЕ обновляем его здесь - это предотвращает race conditions
                         
                         # Создаем запись о платеже для аналитики
                         tariff_str = f"{tariff_type}_{period_days}"

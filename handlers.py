@@ -1237,7 +1237,10 @@ async def cmd_start(message: Message):
                 
                 # ПРОВЕРКА 1: Self-referral запрещен
                 if referrer_user_id == telegram_id:
-                    logger.warning(f"REFERRAL FRAUD: Self-referral attempt blocked - user_id={telegram_id}, referral_code={referral_code}")
+                    logger.warning(
+                        f"REFERRAL_SELF_ATTEMPT [user_id={telegram_id}, "
+                        f"referral_code={referral_code}]"
+                    )
                     # Игнорируем попытку, не отправляем сообщение пользователю
                 else:
                     user = await database.get_user(telegram_id)
