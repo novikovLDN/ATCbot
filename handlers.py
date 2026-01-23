@@ -3887,13 +3887,26 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not database.DB_READY:
         language = "ru"  # По умолчанию
-        error_text = localization.get_text(
+        text = localization.get_text(
             language,
-            "service_unavailable",
-            default="⚠️ Сервис временно недоступен. Попробуйте позже."
+            "service_unavailable_payment",
+            default="⚠️ Платёж получен, но сервис временно недоступен.\n\nМы уже работаем над восстановлением.\nВаш платёж не потеряется — доступ будет выдан автоматически,\nкак только сервис станет доступен.\n\nЕсли у вас есть вопросы, напишите в поддержку."
         )
-        await message.answer(error_text)
-        logger.error("Payment received but DB not ready - payment rejected")
+        
+        # Создаем стандартную inline клавиатуру для UX
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔐 Купить / Продлить доступ",
+                callback_data="menu_buy_vpn"
+            )],
+            [InlineKeyboardButton(
+                text="🆘 Поддержка",
+                callback_data="menu_support"
+            )]
+        ])
+        
+        await message.answer(text, reply_markup=keyboard)
+        logger.error("Payment received but service unavailable (DB not ready)")
         return
     
     telegram_id = message.from_user.id
