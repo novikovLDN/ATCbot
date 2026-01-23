@@ -5473,6 +5473,268 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 raise
 
 
+async def finalize_balance_purchase(
+    telegram_id: int,
+    tariff_type: str,
+    period_days: int,
+    amount_rubles: float,
+    description: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Атомарно обработать покупку подписки с баланса.
+    
+    Выполняет в одной транзакции:
+    - Списывает баланс
+    - Активирует подписку
+    - Создает запись о платеже
+    - Обрабатывает реферальный кешбэк
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        tariff_type: Тип тарифа ('basic' или 'plus')
+        period_days: Количество дней подписки
+        amount_rubles: Сумма платежа в рублях
+        description: Описание платежа (опционально)
+    
+    Returns:
+        {
+            "success": bool,
+            "payment_id": Optional[int],
+            "expires_at": Optional[datetime],
+            "vpn_key": Optional[str],
+            "is_renewal": bool,
+            "new_balance": float,
+            "referral_reward": Optional[Dict[str, Any]]
+        }
+    
+    Raises:
+        ValueError: При недостатке баланса или других бизнес-ошибках
+        asyncpg exceptions: При финансовых ошибках (откат транзакции)
+    """
+    if amount_rubles <= 0:
+        raise ValueError(f"Invalid amount for balance purchase: {amount_rubles}")
+    
+    amount_kopecks = int(amount_rubles * 100)
+    pool = await get_pool()
+    
+    if pool is None:
+        raise RuntimeError("Database pool is not available")
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # STEP 1: Проверяем и списываем баланс
+            current_balance = await conn.fetchval(
+                "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+            )
+            
+            if current_balance is None:
+                raise ValueError(f"User {telegram_id} not found")
+            
+            if current_balance < amount_kopecks:
+                raise ValueError(
+                    f"Insufficient balance: {current_balance} < {amount_kopecks} "
+                    f"(user={telegram_id}, required={amount_rubles:.2f} RUB)"
+                )
+            
+            # Списываем баланс
+            await conn.execute(
+                "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
+                amount_kopecks, telegram_id
+            )
+            
+            # Записываем транзакцию баланса
+            transaction_description = description or f"Оплата подписки {tariff_type} на {period_days} дней"
+            await conn.execute(
+                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                telegram_id, -amount_kopecks, "subscription_payment", "subscription_payment", transaction_description
+            )
+            
+            # STEP 2: Активируем подписку
+            duration = timedelta(days=period_days)
+            grant_result = await grant_access(
+                telegram_id=telegram_id,
+                duration=duration,
+                source="payment",
+                admin_telegram_id=None,
+                admin_grant_days=None,
+                conn=conn
+            )
+            
+            expires_at = grant_result["subscription_end"]
+            vpn_key = grant_result.get("vless_url") or grant_result.get("vpn_key") or ""
+            is_renewal = grant_result.get("action") == "renewal"
+            
+            if not expires_at or not vpn_key:
+                raise ValueError(
+                    f"grant_access returned invalid result: expires_at={expires_at}, "
+                    f"vpn_key={bool(vpn_key)}"
+                )
+            
+            # STEP 3: Создаем запись о платеже
+            payment_id = await conn.fetchval(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                telegram_id, f"{tariff_type}_{period_days}", amount_kopecks
+            )
+            
+            if not payment_id:
+                raise ValueError(f"Failed to create payment record for user {telegram_id}")
+            
+            # STEP 4: Обрабатываем реферальный кешбэк
+            purchase_id = f"balance_purchase_{payment_id}"
+            referral_reward_result = None
+            
+            try:
+                referral_reward_result = await process_referral_reward(
+                    buyer_id=telegram_id,
+                    purchase_id=purchase_id,
+                    amount_rubles=amount_rubles,
+                    conn=conn
+                )
+            except Exception as e:
+                # FINANCIAL errors propagate and rollback transaction
+                logger.error(
+                    f"finalize_balance_purchase: Referral reward financial error "
+                    f"(transaction will rollback): user={telegram_id}, purchase_id={purchase_id}, error={e}"
+                )
+                raise
+            
+            # STEP 5: Получаем новый баланс
+            new_balance_kopecks = await conn.fetchval(
+                "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+            )
+            new_balance = (new_balance_kopecks or 0) / 100.0
+            
+            logger.info(
+                f"finalize_balance_purchase: SUCCESS [user={telegram_id}, payment_id={payment_id}, "
+                f"tariff={tariff_type}, period={period_days}, amount={amount_rubles:.2f} RUB, "
+                f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}, "
+                f"new_balance={new_balance:.2f} RUB, referral_reward_success={referral_reward_result.get('success') if referral_reward_result else False}]"
+            )
+            
+            return {
+                "success": True,
+                "payment_id": payment_id,
+                "expires_at": expires_at,
+                "vpn_key": vpn_key,
+                "is_renewal": is_renewal,
+                "new_balance": new_balance,
+                "referral_reward": referral_reward_result
+            }
+
+
+async def finalize_balance_topup(
+    telegram_id: int,
+    amount_rubles: float,
+    description: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Атомарно обработать пополнение баланса.
+    
+    Выполняет в одной транзакции:
+    - Пополняет баланс
+    - Создает запись о платеже
+    - Обрабатывает реферальный кешбэк
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        amount_rubles: Сумма пополнения в рублях
+        description: Описание платежа (опционально)
+    
+    Returns:
+        {
+            "success": bool,
+            "payment_id": Optional[int],
+            "new_balance": float,
+            "referral_reward": Optional[Dict[str, Any]]
+        }
+    
+    Raises:
+        ValueError: При некорректной сумме
+        asyncpg exceptions: При финансовых ошибках (откат транзакции)
+    """
+    if amount_rubles <= 0:
+        raise ValueError(f"Invalid amount for balance topup: {amount_rubles}")
+    
+    amount_kopecks = int(amount_rubles * 100)
+    pool = await get_pool()
+    
+    if pool is None:
+        raise RuntimeError("Database pool is not available")
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # STEP 1: Проверяем существование пользователя
+            user_exists = await conn.fetchval(
+                "SELECT telegram_id FROM users WHERE telegram_id = $1", telegram_id
+            )
+            
+            if user_exists is None:
+                raise ValueError(f"User {telegram_id} not found")
+            
+            # STEP 2: Пополняем баланс
+            await conn.execute(
+                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                amount_kopecks, telegram_id
+            )
+            
+            # STEP 3: Записываем транзакцию баланса
+            transaction_description = description or "Пополнение баланса через Telegram Payments"
+            transaction_type = "topup"
+            await conn.execute(
+                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                telegram_id, amount_kopecks, transaction_type, "telegram_payment", transaction_description
+            )
+            
+            # STEP 4: Создаем запись о платеже
+            payment_id = await conn.fetchval(
+                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                telegram_id, "balance_topup", amount_kopecks
+            )
+            
+            if not payment_id:
+                raise ValueError(f"Failed to create payment record for user {telegram_id}")
+            
+            # STEP 5: Обрабатываем реферальный кешбэк
+            purchase_id = f"balance_topup_{payment_id}"
+            referral_reward_result = None
+            
+            try:
+                referral_reward_result = await process_referral_reward(
+                    buyer_id=telegram_id,
+                    purchase_id=purchase_id,
+                    amount_rubles=amount_rubles,
+                    conn=conn
+                )
+            except Exception as e:
+                # FINANCIAL errors propagate and rollback transaction
+                logger.error(
+                    f"finalize_balance_topup: Referral reward financial error "
+                    f"(transaction will rollback): user={telegram_id}, purchase_id={purchase_id}, error={e}"
+                )
+                raise
+            
+            # STEP 6: Получаем новый баланс
+            new_balance_kopecks = await conn.fetchval(
+                "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+            )
+            new_balance = (new_balance_kopecks or 0) / 100.0
+            
+            logger.info(
+                f"finalize_balance_topup: SUCCESS [user={telegram_id}, payment_id={payment_id}, "
+                f"amount={amount_rubles:.2f} RUB, new_balance={new_balance:.2f} RUB, "
+                f"referral_reward_success={referral_reward_result.get('success') if referral_reward_result else False}]"
+            )
+            
+            return {
+                "success": True,
+                "payment_id": payment_id,
+                "new_balance": new_balance,
+                "referral_reward": referral_reward_result
+            }
+
+
 async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admin_telegram_id: int) -> Tuple[Optional[datetime], Optional[str]]:
     """Атомарно выдать доступ пользователю на N минут (админ)
     
