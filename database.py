@@ -428,6 +428,14 @@ async def init_db() -> bool:
         except Exception:
             pass
         
+        # Миграция: добавляем поля для delayed activation (premium flow)
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS activation_status TEXT DEFAULT 'active'")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS activation_attempts INTEGER DEFAULT 0")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_activation_error TEXT")
+        except Exception:
+            pass
+        
         # Миграция: добавляем поле balance в users (хранится в копейках как INTEGER)
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS balance INTEGER NOT NULL DEFAULT 0")
@@ -2917,6 +2925,7 @@ async def grant_access(
                 
                 # КРИТИЧЕСКИ ВАЖНО: Обновляем БД БЕЗ вызова VPN API
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
+                # activation_status остается 'active' при продлении
                 try:
                     await conn.execute(
                         """UPDATE subscriptions 
@@ -2926,7 +2935,8 @@ async def grant_access(
                                reminder_3d_sent = FALSE,
                                reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE,
-                               reminder_6h_sent = FALSE
+                               reminder_6h_sent = FALSE,
+                               activation_status = 'active'
                            WHERE telegram_id = $2""",
                         subscription_end, telegram_id
                     )
@@ -3022,12 +3032,128 @@ async def grant_access(
         # ЗАЩИТА: Проверяем доступность VPN API перед созданием UUID
         import config
         if not config.VPN_ENABLED:
-            error_msg = (
-                f"Cannot create VPN access for user {telegram_id}: VPN API is not configured. "
-                "Please set XRAY_API_URL and XRAY_API_KEY environment variables."
+            # PREMIUM FLOW: Delayed activation - create subscription with pending status
+            # Payment succeeds, subscription is created, but VPN key will be generated later
+            logger.info(
+                f"grant_access: ACTIVATION_PENDING [user={telegram_id}, source={source}, "
+                f"reason=VPN_API_not_available] - "
+                "Creating subscription with pending activation status"
             )
-            logger.error(error_msg)
-            raise Exception(error_msg)
+            
+            # Вычисляем даты
+            subscription_start = now
+            subscription_end = now + duration
+            
+            # ВАЛИДАЦИЯ: Проверяем что subscription_end вычислен корректно
+            if not subscription_end or subscription_end <= subscription_start:
+                error_msg = f"Invalid subscription_end for user {telegram_id}: start={subscription_start}, end={subscription_end}"
+                logger.error(f"grant_access: ERROR_INVALID_DATES [user={telegram_id}, error={error_msg}]")
+                raise Exception(error_msg)
+            
+            logger.info(
+                f"grant_access: CALCULATED_DATES [user={telegram_id}, subscription_start={subscription_start.isoformat()}, "
+                f"subscription_end={subscription_end.isoformat()}, duration_days={duration.days}]"
+            )
+            
+            # Определяем action_type для истории
+            if source == "payment":
+                history_action_type = "purchase"
+            elif source == "admin":
+                history_action_type = "admin_grant"
+            else:
+                history_action_type = source
+            
+            # Сохраняем подписку с pending activation status
+            try:
+                await conn.execute(
+                    """INSERT INTO subscriptions (
+                           telegram_id, uuid, vpn_key, expires_at, status, source,
+                           reminder_sent, reminder_3d_sent, reminder_24h_sent,
+                           reminder_3h_sent, reminder_6h_sent, admin_grant_days,
+                           activated_at, last_bytes,
+                           trial_notif_6h_sent, trial_notif_18h_sent, trial_notif_30h_sent,
+                           trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
+                           trial_notif_71h_sent,
+                           activation_status, activation_attempts, last_activation_error
+                       )
+                       VALUES ($1, NULL, NULL, $2, 'active', $3, FALSE, FALSE, FALSE, FALSE, FALSE, $4, $5, 0,
+                               FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
+                               'pending', 0, NULL)
+                       ON CONFLICT (telegram_id) 
+                       DO UPDATE SET 
+                           expires_at = $2,
+                           status = 'active',
+                           source = $3,
+                           reminder_sent = FALSE,
+                           reminder_3d_sent = FALSE,
+                           reminder_24h_sent = FALSE,
+                           reminder_3h_sent = FALSE,
+                           reminder_6h_sent = FALSE,
+                           admin_grant_days = $4,
+                           activated_at = $5,
+                           last_bytes = 0,
+                           trial_notif_6h_sent = FALSE,
+                           trial_notif_18h_sent = FALSE,
+                           trial_notif_30h_sent = FALSE,
+                           trial_notif_42h_sent = FALSE,
+                           trial_notif_54h_sent = FALSE,
+                           trial_notif_60h_sent = FALSE,
+                           trial_notif_71h_sent = FALSE,
+                           activation_status = 'pending',
+                           activation_attempts = 0,
+                           last_activation_error = NULL,
+                           uuid = NULL,
+                           vpn_key = NULL""",
+                    telegram_id, subscription_end, source, admin_grant_days, subscription_start
+                )
+                
+                # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
+                saved_subscription = await conn.fetchrow(
+                    "SELECT expires_at, status, activation_status FROM subscriptions WHERE telegram_id = $1",
+                    telegram_id
+                )
+                if not saved_subscription or saved_subscription["expires_at"] != subscription_end:
+                    error_msg = f"Failed to verify subscription save for user {telegram_id}"
+                    logger.error(f"grant_access: ERROR_DB_VERIFICATION [user={telegram_id}, error={error_msg}]")
+                    raise Exception(error_msg)
+                
+                subscription_id = await conn.fetchval(
+                    "SELECT id FROM subscriptions WHERE telegram_id = $1",
+                    telegram_id
+                )
+                
+                logger.info(
+                    f"grant_access: ACTIVATION_PENDING [user={telegram_id}, subscription_id={subscription_id}, "
+                    f"subscription_end={saved_subscription['expires_at'].isoformat()}, "
+                    f"status={saved_subscription['status']}, activation_status={saved_subscription.get('activation_status', 'pending')}]"
+                )
+            except Exception as e:
+                logger.error(
+                    f"grant_access: DB_SAVE_FAILED [user={telegram_id}, error={str(e)}]"
+                )
+                raise Exception(f"Failed to save subscription to database: {e}") from e
+            
+            # Записываем в историю подписок (без VPN ключа)
+            await _log_subscription_history_atomic(conn, telegram_id, None, subscription_start, subscription_end, history_action_type)
+            
+            # Audit log
+            if admin_telegram_id:
+                duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
+                details = f"Granted {duration_str} access via {source}, Expires: {subscription_end.isoformat()}, Activation: pending (VPN API unavailable)"
+                await _log_audit_event_atomic(conn, "subscription_created", admin_telegram_id, telegram_id, details)
+            
+            duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
+            logger.info(
+                f"grant_access: PENDING_ACTIVATION_SUCCESS [action=pending_activation, telegram_id={telegram_id}, "
+                f"subscription_end={subscription_end.isoformat()}, duration={duration_str}, source={source}]"
+            )
+            
+            return {
+                "uuid": None,
+                "vless_url": None,
+                "subscription_end": subscription_end,
+                "action": "pending_activation"
+            }
         
         # Если был старый UUID и он ещё существует - удаляем его из VPN API
         if uuid:
@@ -3101,7 +3227,7 @@ async def grant_access(
                 # Успешно получен валидный UUID и VLESS URL
                 uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
                 logger.info(
-                    f"grant_access: VPN_API_SUCCESS [action=add_user, user={telegram_id}, uuid={uuid_preview}, "
+                    f"grant_access: ACTIVATION_IMMEDIATE_SUCCESS [action=add_user, user={telegram_id}, uuid={uuid_preview}, "
                     f"source={source}, attempt={attempt + 1}, vless_url_length={len(vless_url) if vless_url else 0}]"
                 )
                 break  # Успех - выходим из цикла retry
@@ -3183,10 +3309,12 @@ async def grant_access(
                        activated_at, last_bytes,
                        trial_notif_6h_sent, trial_notif_18h_sent, trial_notif_30h_sent,
                        trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
-                       trial_notif_71h_sent
+                       trial_notif_71h_sent,
+                       activation_status, activation_attempts, last_activation_error
                    )
                    VALUES ($1, $2, $3, $4, 'active', $5, FALSE, FALSE, FALSE, FALSE, FALSE, $6, $7, 0,
-                           FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE)
+                           FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
+                           'active', 0, NULL)
                    ON CONFLICT (telegram_id) 
                    DO UPDATE SET 
                        uuid = $2,
@@ -3208,7 +3336,10 @@ async def grant_access(
                        trial_notif_42h_sent = FALSE,
                        trial_notif_54h_sent = FALSE,
                        trial_notif_60h_sent = FALSE,
-                       trial_notif_71h_sent = FALSE""",
+                       trial_notif_71h_sent = FALSE,
+                       activation_status = 'active',
+                       activation_attempts = 0,
+                       last_activation_error = NULL""",
                 telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start
             )
             
