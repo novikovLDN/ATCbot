@@ -36,11 +36,11 @@ def get_subscription_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 def get_tariff_1_month_keyboard(language: str) -> InlineKeyboardMarkup:
-    """Клавиатура для подписки на 1 месяц"""
+    """Клавиатура для подписки на 1 месяц (унифицирована с стандартными CTA)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "subscribe_1_month_button", default="🔐 Подписка на 1 месяц"),
-            callback_data="tariff_1"
+            text=localization.get_text(language, "buy_vpn", default="🔐 Купить / Продлить доступ"),
+            callback_data="menu_buy_vpn"
         )]
     ])
     return keyboard

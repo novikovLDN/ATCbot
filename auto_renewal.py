@@ -272,8 +272,8 @@ async def process_auto_renewals(bot: Bot):
                                 callback_data="menu_profile"
                             )],
                             [InlineKeyboardButton(
-                                text="⚙️ Управление автопродлением",
-                                callback_data="menu_auto_renewal"
+                                text="🔐 Купить / Продлить доступ",
+                                callback_data="menu_buy_vpn"
                             )]
                         ])
                         
