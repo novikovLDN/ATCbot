@@ -446,7 +446,7 @@ async def expire_trial_subscriptions(bot: Bot):
                         # Создаем inline клавиатуру с CTA
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[
                             [InlineKeyboardButton(
-                                text="🔐 Купить доступ",
+                                text="🔐 Купить / Продлить доступ",
                                 callback_data="menu_buy_vpn"
                             )]
                         ])

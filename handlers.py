@@ -3993,7 +3993,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             # Создаем inline клавиатуру для UX
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="🔐 Купить доступ",
+                    text="🔐 Купить / Продлить доступ",
                     callback_data="menu_buy_vpn"
                 )],
                 [InlineKeyboardButton(
@@ -8522,7 +8522,7 @@ async def reject_payment(callback: CallbackQuery):
         # Создаем inline клавиатуру для UX
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="🔄 Повторить оплату",
+                text="🔐 Купить / Продлить доступ",
                 callback_data="menu_buy_vpn"
             )],
             [InlineKeyboardButton(
