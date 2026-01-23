@@ -4962,9 +4962,35 @@ async def finalize_purchase(
                 logger.error(f"finalize_purchase: {error_msg}")
                 raise Exception(error_msg)
             
-            # Получаем VPN ключ
+            # Проверяем action для обработки pending activation
+            action = grant_result.get("action")
+            is_renewal = action == "renewal"
+            
+            # PENDING ACTIVATION: Если action == 'pending_activation', это ожидаемое поведение
+            # VPN ключ будет создан позже activation_worker'ом
+            if action == "pending_activation":
+                logger.info(
+                    f"finalize_purchase: PENDING_ACTIVATION_ACCEPTED [purchase_id={purchase_id}, user={telegram_id}]"
+                )
+                
+                # Обновляем payment → approved
+                await conn.execute(
+                    "UPDATE payments SET status = 'approved' WHERE id = $1",
+                    payment_id
+                )
+                
+                # Возвращаем успешный результат без vpn_key
+                return {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": expires_at,
+                    "vpn_key": None,
+                    "activation_status": "pending",
+                    "is_renewal": False
+                }
+            
+            # Получаем VPN ключ для нормальной активации
             vpn_key = grant_result.get("vless_url")
-            is_renewal = grant_result.get("action") == "renewal"
             
             if not vpn_key:
                 # Если это продление, получаем ключ из существующей подписки
