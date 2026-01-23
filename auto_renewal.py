@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import database
 import localization
 import config
@@ -264,7 +265,19 @@ async def process_auto_renewals(bot: Bot):
                             # Fallback на старый формат, если локализация не обновлена
                             text = f"✅ Подписка автоматически продлена на {duration_days} дней.\n\nДействует до: {expires_str}\nС баланса списано: {amount_rubles:.2f} ₽"
                         
-                        await bot.send_message(telegram_id, text)
+                        # Создаем inline клавиатуру для UX
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(
+                                text="👤 Мой профиль",
+                                callback_data="menu_profile"
+                            )],
+                            [InlineKeyboardButton(
+                                text="⚙️ Управление автопродлением",
+                                callback_data="menu_auto_renewal"
+                            )]
+                        ])
+                        
+                        await bot.send_message(telegram_id, text, reply_markup=keyboard)
                         
                         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
                         try:
