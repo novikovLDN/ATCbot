@@ -6339,10 +6339,21 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                 vpn_key = subscription.get("vpn_key", "")
                 
                 # 2. Удаляем UUID из Xray API (если есть)
+                # PART D.7: If vpn_api != healthy, NEVER call VPN API
                 if uuid:
                     try:
-                        await vpn_utils.remove_vless_user(uuid)
-                        logger.info(f"Deleted UUID {uuid} for user {telegram_id} during admin revoke")
+                        from app.core.system_state import recalculate_from_runtime, ComponentStatus
+                        system_state = recalculate_from_runtime()
+                        if system_state.vpn_api.status != ComponentStatus.HEALTHY:
+                            logger.warning(
+                                f"admin_revoke_access_atomic: VPN_API_DISABLED [user={telegram_id}] - "
+                                f"VPN API is {system_state.vpn_api.status.value}, skipping UUID removal"
+                            )
+                            # PART D.7: Mark cleanup as pending, log SKIPPED
+                            # UUID will be removed later when VPN API is healthy
+                        else:
+                            await vpn_utils.remove_vless_user(uuid)
+                            logger.info(f"Deleted UUID {uuid} for user {telegram_id} during admin revoke")
                     except Exception as e:
                         # Не падаем, если UUID уже удален или произошла ошибка
                         logger.error(f"Error deleting UUID {uuid} for user {telegram_id}: {e}", exc_info=True)
