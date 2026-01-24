@@ -2919,7 +2919,18 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Устанавливаем FSM state в choose_tariff
     await state.set_state(PurchaseState.choose_tariff)
     
-    text = localization.get_text(language, "select_tariff", default="📊 Тарифы")
+    # NEW TEXT: Clean, enterprise-style descriptions
+    text = (
+        "✅ Basic\n"
+        "Для повседневного использования\n\n"
+        "🔑 Plus\n"
+        "Приоритетный доступ и выделенный сервер\n\n"
+        "🧩 Корпоративный доступ\n"
+        "Индивидуальная конфигурация под задачи компании.\n"
+        "Выделенная инфраструктура, контроль доступа\n"
+        "и персональное сопровождение."
+    )
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=localization.get_text(language, "tariff_select_basic_button", default="✅ Выбрать Basic"), 
@@ -2938,7 +2949,7 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             callback_data="corporate_access_request"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back", default="⬅️ Назад в меню"),
+            text=localization.get_text(language, "back", default="← Назад"),
             callback_data="menu_main"
         )],
     ])
