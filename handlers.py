@@ -18,6 +18,15 @@ import asyncio
 import random
 from typing import Optional, Dict, Any
 from app.services.subscriptions import service as subscription_service
+from app.services.payments import service as payment_service
+from app.services.payments.exceptions import (
+    PaymentServiceError,
+    InvalidPaymentPayloadError,
+    PaymentAmountMismatchError,
+    PaymentAlreadyProcessedError,
+    PaymentFinalizationError,
+)
+from app.services.activation import service as activation_service
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
@@ -4013,45 +4022,21 @@ async def process_successful_payment(message: Message, state: FSMContext):
     )
     
     # Проверяем, является ли это пополнением баланса
-    if payload.startswith("balance_topup_"):
-        # Пополнение баланса
-        try:
-            parts = payload.split("_")
-            if len(parts) < 4:
-                logger.error(f"Invalid balance topup payload format: {payload}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-            
-            payload_user_id = int(parts[2])
-            amount = int(parts[3])
-            
-            # Проверяем, что платеж для этого пользователя
-            if payload_user_id != telegram_id:
-                logger.warning(f"Balance topup payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-            
-            # Получаем фактическую сумму из платежа (в рублях)
+    try:
+        payload_info = await payment_service.verify_payment_payload(payload, telegram_id)
+        
+        if payload_info.payload_type == "balance_topup":
+            # Пополнение баланса - используем payment service
             payment_amount_rubles = payment.total_amount / 100.0
             
-            # Проверяем, что сумма совпадает (с небольшой погрешностью)
-            if abs(payment_amount_rubles - amount) > 1.0:
-                logger.warning(f"Balance topup amount mismatch: expected={amount}, actual={payment_amount_rubles}")
-                # Используем фактическую сумму из платежа
-            
-            # КРИТИЧНО: Все финансовые операции выполняются атомарно в одной транзакции
-            # через finalize_balance_topup
-            result = await database.finalize_balance_topup(
-                telegram_id=telegram_id,
-                amount_rubles=payment_amount_rubles,
-                description="Пополнение баланса через Telegram Payments"
-            )
-            
-            if not result or not result.get("success"):
+            try:
+                result = await payment_service.finalize_balance_topup_payment(
+                    telegram_id=telegram_id,
+                    amount_rubles=payment_amount_rubles,
+                    description="Пополнение баланса через Telegram Payments"
+                )
+            except PaymentFinalizationError as e:
+                logger.error(f"Balance topup finalization failed: user={telegram_id}, error={e}")
                 error_text = localization.get_text(
                     language,
                     "error_payment_processing",
@@ -4061,9 +4046,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 return
             
             # Извлекаем результаты
-            payment_id = result["payment_id"]
-            new_balance = result["new_balance"]
-            referral_reward_result = result.get("referral_reward")
+            payment_id = result.payment_id
+            new_balance = result.new_balance
+            referral_reward_result = result.referral_reward
             
             # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
             notification_already_sent = await database.is_payment_notification_sent(payment_id)
@@ -4138,235 +4123,94 @@ async def process_successful_payment(message: Message, state: FSMContext):
             logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
             return
             
-        except (ValueError, IndexError) as e:
-            logger.error(f"Error parsing balance topup payload {payload}: {e}")
-            user = await database.get_user(telegram_id)
-            language = user.get("language", "ru") if user else "ru"
-            await message.answer(localization.get_text(language, "error_payment_processing"))
-            return
-    
-    # Обработка платежей за подписку с валидацией pending purchase
-    pending_purchase = None
-    promo_code_used = None
-    tariff_type = None
-    period_days = None
-    payment_amount = None
-    
-    try:
-        # Новый формат: "purchase:purchase_id"
-        if payload.startswith("purchase:"):
-            purchase_id = payload.split(":", 1)[1]
-            
-            # ВАЛИДАЦИЯ: Проверяем валидность pending purchase
-            pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id)
-            if not pending_purchase:
-                error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
-                logger.error(
-                    f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
-                    f"reason=pending_purchase_not_found_or_expired"
-                )
-                await database._log_audit_event_atomic_standalone(
-                    "purchase_rejected_due_to_stale_context",
-                    telegram_id,
-                    None,
-                    f"Payment received but pending purchase invalid: purchase_id={purchase_id}"
-                )
-                return
-            
-            # КРИТИЧНО: Проверка суммы платежа перед активацией
-            payment_amount_rubles = payment.total_amount / 100.0
-            expected_amount_rubles = pending_purchase["price_kopecks"] / 100.0
-            amount_diff = abs(payment_amount_rubles - expected_amount_rubles)
-            
-            if amount_diff > 1.0:
-                error_text = "Сумма платежа не совпадает с ожидаемой. Обратитесь в поддержку."
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
-                logger.error(
-                    f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
-                    f"reason=amount_mismatch, expected={expected_amount_rubles:.2f} RUB, "
-                    f"actual={payment_amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB"
-                )
-                return
-            
-            # Используем данные из pending purchase
-            tariff_type = pending_purchase["tariff"]
-            period_days = pending_purchase["period_days"]
-            payment_amount = pending_purchase["price_kopecks"] / 100.0  # Конвертируем в рубли
-            promo_code_used = pending_purchase.get("promo_code")
-            
-            # КРИТИЧНО: Логируем верификацию платежа
-            logger.info(
-                f"payment_verified: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
-                f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles:.2f} RUB, "
-                f"amount_match=True, purchase_status=pending"
-            )
-            
-            await database._log_audit_event_atomic_standalone(
-                "payment_received",
-                telegram_id,
-                None,
-                f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount_rubles:.2f} RUB"
-            )
-        elif payload.startswith("renew:"):
-            # Продление подписки (legacy формат, сохраняем для обратной совместимости)
-            parts = payload.split(":")
-            if len(parts) < 3:
-                logger.error(f"Invalid renewal payload format: {payload}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-            
-            payload_user_id = int(parts[1])
-            tariff_key = parts[2]
-            
-            # Проверяем, что платеж для этого пользователя
-            if payload_user_id != telegram_id:
-                logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-        elif payload.startswith("purchase:promo:"):
-            # Старый формат с промокодом (legacy, сохраняем для обратной совместимости)
-            parts = payload.split(":")
-            if len(parts) < 5:
-                logger.error(f"Invalid promo purchase payload format: {payload}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-            
-            promo_code_used = parts[2]
-            payload_user_id = int(parts[3])
-            tariff_key = parts[4]
-            
-            # Проверяем, что платеж для этого пользователя
-            if payload_user_id != telegram_id:
-                logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-        else:
-            # Старый формат (legacy, сохраняем для обратной совместимости)
-            parts = payload.split("_")
-            if len(parts) < 2:
-                logger.error(f"Invalid payload format: {payload}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-            
-            payload_user_id = int(parts[0])
-            tariff_key = parts[1]
-            
-            # Проверяем, что платеж для этого пользователя
-            if payload_user_id != telegram_id:
-                logger.warning(f"Payload user_id mismatch: payload_user_id={payload_user_id}, telegram_id={telegram_id}")
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
-                await message.answer(localization.get_text(language, "error_payment_processing"))
-                return
-            
-    except (ValueError, IndexError) as e:
-        logger.error(f"Error parsing payload {payload}: {e}")
+    except InvalidPaymentPayloadError as e:
+        logger.error(f"Invalid payment payload: {payload}, error={e}")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_payment_processing"))
+        return
+    except PaymentServiceError as e:
+        logger.error(f"Payment service error: {e}")
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_payment_processing"))
         return
     
-    # Используем данные из pending purchase
+    # Обработка платежей за подписку
+    # Проверяем, что это платеж за подписку (не balance topup)
+    if payload_info.payload_type != "purchase":
+        # Legacy formats are not supported for new purchases - only balance topup
+        logger.error(f"Unsupported payload type for subscription payment: {payload_info.payload_type}, payload={payload}")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_payment_processing"))
+        return
+    
+    # Extract purchase_id from payload_info
+    purchase_id = payload_info.purchase_id
+    if not purchase_id:
+        logger.error(f"No purchase_id in payload: {payload}")
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(localization.get_text(language, "error_payment_processing"))
+        return
+    
+    # Get pending purchase for logging
+    pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     if not pending_purchase:
-        # Это не должно произойти, так как мы уже отклонили legacy формат
         error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
-        logger.error(f"No pending purchase found: user={telegram_id}, payload={payload}")
+        logger.error(
+            f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
+            f"reason=pending_purchase_not_found_or_expired"
+        )
+        await database._log_audit_event_atomic_standalone(
+            "purchase_rejected_due_to_stale_context",
+            telegram_id,
+            None,
+            f"Payment received but pending purchase invalid: purchase_id={purchase_id}"
+        )
         return
     
-    purchase_id = pending_purchase["purchase_id"]
-    # Используем фактическую сумму из платежа (уже проверена выше)
-    payment_amount_rubles = payment.total_amount / 100.0
     tariff_type = pending_purchase["tariff"]
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
+    payment_amount_rubles = payment.total_amount / 100.0
     
-    # ИДЕМПОТЕНТНОСТЬ: Проверяем, не обработан ли уже этот платеж
-    # Если pending_purchase уже помечен как paid, значит payment уже обработан
-    pending_purchase_status = pending_purchase.get("status")
-    if pending_purchase_status == "paid":
-        # Платеж уже обработан - проверяем подписку и отправляем существующий ключ
-        logger.info(
-            f"process_successful_payment: IDEMPOTENCY_CHECK [user={telegram_id}, purchase_id={purchase_id}, "
-            f"reason=pending_purchase_already_paid, status={pending_purchase_status}]"
-        )
-        
-        # Проверяем, существует ли payment для этого purchase_id
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            payment_row = await conn.fetchrow(
-                "SELECT id, status FROM payments WHERE purchase_id = $1 ORDER BY id DESC LIMIT 1",
-                purchase_id
-            )
-            
-        if payment_row and payment_row.get("status") == "approved":
-            # Платеж уже обработан - получаем существующую подписку и отправляем ключ
-            existing_subscription = await database.get_subscription(telegram_id)
-            if existing_subscription and existing_subscription.get("status") == "active":
-                expires_at = existing_subscription.get("expires_at")
-                vpn_key = existing_subscription.get("vpn_key")
-                if not vpn_key:
-                    # Генерируем ключ из UUID если отсутствует
-                    uuid = existing_subscription.get("uuid")
-                    if uuid:
-                        import vpn_utils
-                        vpn_key = vpn_utils.generate_vless_url(uuid)
-                
-                if expires_at and vpn_key:
-                    user = await database.get_user(telegram_id)
-                    language = user.get("language", "ru") if user else "ru"
-                    expires_str = expires_at.strftime("%d.%m.%Y")
-                    text = localization.get_text(language, "payment_approved", date=expires_str)
-                    await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
-                    await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-                    
-                    logger.info(
-                        f"process_successful_payment: IDEMPOTENCY_KEY_RESENT [user={telegram_id}, purchase_id={purchase_id}, "
-                        f"payment_id={payment_row['id']}, expires_at={expires_at.isoformat()}, reason=already_processed]"
-                    )
-                    return
+    # КРИТИЧНО: Логируем верификацию платежа
+    logger.info(
+        f"payment_verified: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
+        f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles:.2f} RUB, "
+        f"amount_match=True, purchase_status=pending"
+    )
     
-    # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
-    # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
-    # КРИТИЧНО: Вызывается ТОЛЬКО после проверки суммы и валидности pending_purchase
-    # КРИТИЧНО: VPN ключ создается и валидируется ВНУТРИ finalize_purchase ПЕРЕД финализацией платежа
+    await database._log_audit_event_atomic_standalone(
+        "payment_received",
+        telegram_id,
+        None,
+        f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount_rubles:.2f} RUB"
+    )
+    
+    # Finalize subscription payment through payment service
     try:
-        result = await subscription_service.finalize_purchase(
+        result = await payment_service.finalize_subscription_payment(
             purchase_id=purchase_id,
+            telegram_id=telegram_id,
             payment_provider="telegram_payment",
             amount_rubles=payment_amount_rubles
         )
         
-        if not result or not result.get("success"):
-            raise Exception(f"finalize_purchase returned invalid result: {result}")
-        
-        payment_id = result["payment_id"]
-        expires_at = result["expires_at"]
-        vpn_key = result.get("vpn_key")
-        is_renewal = result["is_renewal"]
+        payment_id = result.payment_id
+        expires_at = result.expires_at
+        vpn_key = result.vpn_key
+        is_renewal = result.is_renewal
         
         # Проверяем статус активации подписки
-        subscription_check = await database.get_subscription_any(telegram_id)
+        activation_status = result.activation_status
         is_pending_activation = (
-            subscription_check and 
-            subscription_check.get("activation_status") == "pending" and
+            activation_status == "pending" and
             not is_renewal and
             not vpn_key
         )
@@ -4440,13 +4284,32 @@ async def process_successful_payment(message: Message, state: FSMContext):
         logger.info(
             f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
             f"purchase_id={purchase_id}, expires_at={expires_at.isoformat()}, is_renewal={is_renewal}, "
-            f"vpn_key_length={len(vpn_key)}]"
+            f"vpn_key_length={len(vpn_key) if vpn_key else 0}]"
         )
         
-    except Exception as e:
-        # КРИТИЧНО: Логируем все ошибки с полным контекстом
+    # Note: PaymentAlreadyProcessedError is no longer raised - service returns existing subscription data
+    # If payment was already processed, result contains existing subscription data
+        
+    except (InvalidPaymentPayloadError, PaymentAmountMismatchError) as e:
+        # Payment validation failed
+        logger.error(
+            f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
+            f"reason={type(e).__name__}, error={str(e)}"
+        )
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        error_text = localization.get_text(
+            language, 
+            "error_payment_processing",
+            default="Ошибка обработки платежа. Обратитесь в поддержку."
+        )
+        await message.answer(error_text)
+        return
+        
+    except PaymentFinalizationError as e:
+        # Payment finalization failed
         error_msg = (
-            f"CRITICAL: finalize_purchase FAILED [user={telegram_id}, purchase_id={purchase_id}, "
+            f"CRITICAL: payment finalization FAILED [user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period_days={period_days}, "
             f"error={str(e)}, error_type={type(e).__name__}]"
         )
@@ -4462,17 +4325,36 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         await message.answer(error_text)
         
-        # Логируем событие для админа
+        # Log event for admin
         try:
             await database._log_audit_event_atomic_standalone(
                 "payment_subscription_activation_failed",
                 config.ADMIN_TELEGRAM_ID,
                 telegram_id,
-                f"Payment received but finalize_purchase failed: purchase_id={purchase_id}, error={str(e)}"
+                f"Payment received but finalization failed: purchase_id={purchase_id}, error={str(e)}"
             )
         except Exception as log_error:
             logger.error(f"Failed to log audit event: {log_error}")
         
+        return
+        
+    except Exception as e:
+        # Unexpected error
+        error_msg = (
+            f"CRITICAL: unexpected error in payment processing [user={telegram_id}, purchase_id={purchase_id}, "
+            f"error={str(e)}, error_type={type(e).__name__}]"
+        )
+        logger.error(error_msg)
+        logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, purchase_id={purchase_id}]")
+        
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        error_text = localization.get_text(
+            language, 
+            "error_subscription_activation",
+            default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
+        )
+        await message.answer(error_text)
         return
     
     # КРИТИЧНО: VPN ключ отправляется СРАЗУ после успешной финализации платежа
@@ -4600,7 +4482,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Реферальный кешбэк уже обработан в finalize_purchase через process_referral_reward
     # Отправляем уведомление рефереру (если кешбэк был начислен)
     try:
-        referral_reward = result.get("referral_reward")
+        referral_reward = result.referral_reward
         if referral_reward and referral_reward.get("success"):
             await send_referral_cashback_notification(
                 bot=message.bot,
