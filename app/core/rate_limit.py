@@ -18,7 +18,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
@@ -184,7 +184,7 @@ class RateLimiter:
                 
                 return False, f"Слишком много запросов. Попробуйте через {wait_seconds} секунд."
     
-    def get_status(self, telegram_id: int, action_key: str) -> Dict[str, any]:
+    def get_status(self, telegram_id: int, action_key: str) -> Dict[str, Any]:
         """
         Get rate limit status for user and action.
         
