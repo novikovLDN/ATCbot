@@ -330,7 +330,14 @@ async def init_db() -> bool:
         Любые исключения пробрасываются наверх для обработки в startup guard
     """
     global DB_READY, _pool
-    # Сбрасываем DB_READY перед инициализацией
+    
+    # PART A.3: DB_READY must be set ONLY ONCE after all steps succeed
+    # PART D.8: init_db() MUST be idempotent - safe to call N times
+    if DB_READY:
+        logger.info("Database already initialized (DB_READY=True), skipping init")
+        return True
+    
+    # Сбрасываем DB_READY перед инициализацией (only if not already True)
     DB_READY = False
     
     if not DATABASE_URL:
@@ -376,15 +383,8 @@ async def init_db() -> bool:
     
     # 5️⃣ IF migrations_success IS FALSE → already returned False above
     # Now proceed with table creation (pool.acquire() is safe after yield)
-    # Retry pool.acquire() on transient database errors only
-    conn = await retry_async(
-        lambda: _pool.acquire(),
-        retries=2,
-        base_delay=0.5,
-        max_delay=2.0,
-        retry_on=(asyncpg.PostgresError,)
-    )
-    async with conn:
+    # STRICT PATTERN: async with pool.acquire() as conn
+    async with _pool.acquire() as conn:
         # Таблица users
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -6626,6 +6626,7 @@ async def get_referral_analytics() -> Dict[str, Any]:
         - active_referrals: количество активных рефералов
     """
     try:
+        pool = await get_pool()
         async with pool.acquire() as conn:
             # Доход от рефералов: сумма всех платежей пользователей, у которых есть referrer_id
             referral_revenue_kopecks = await conn.fetchval(

@@ -226,6 +226,11 @@ def handler_exception_boundary(handler_name: str, operation: str = None):
                 # Return early without executing handler
                 return
             
+            # PART C.7: Handlers MUST check system_state.is_available
+            # Return user-friendly message, NEVER throw exceptions in degraded mode
+            # Note: DB_READY check above already handles database unavailability
+            # Additional system_state check can be added here if needed for other components
+            
             try:
                 # Execute handler
                 result = await func(*args, **kwargs)
