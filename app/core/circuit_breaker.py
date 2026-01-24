@@ -19,7 +19,7 @@ import threading
 from enum import Enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +165,7 @@ class CircuitBreakerLite:
             self._update_state()
             return self._state
     
-    def get_status(self) -> Dict[str, any]:
+    def get_status(self) -> Dict[str, Any]:
         """
         Get circuit breaker status.
         
