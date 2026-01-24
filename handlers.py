@@ -7967,10 +7967,10 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
 @router.callback_query(F.data.startswith("admin:grant_minutes:"), StateFilter(AdminGrantAccess.waiting_for_days))
 async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """
-    4️⃣ NOTIFY USER LOGIC (GRANT + REVOKE)
+    1️⃣ FIX CONTRACT MISUSE: Execute grant BEFORE showing notify buttons.
+    2️⃣ STORE NOTIFY CONTEXT EXPLICITLY: Encode data in callback_data.
     
-    Quick action: Grant access for N minutes.
-    Ask for notify_user choice before executing.
+    Quick action: Grant access for N minutes, then ask for notify choice.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
@@ -7983,19 +7983,36 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         user_id = int(parts[2])
         minutes = int(parts[3])
         
-        # Save user_id and minutes in FSM, ask for notify choice
-        await state.update_data(user_id=user_id, minutes=minutes, action_type="grant_minutes")
+        # 1️⃣ FIX CONTRACT MISUSE: Execute grant FIRST (treat as side-effect only)
+        try:
+            await database.admin_grant_access_minutes_atomic(
+                telegram_id=user_id,
+                minutes=minutes,
+                admin_telegram_id=callback.from_user.id
+            )
+            # If no exception → grant is successful (don't check return value)
+        except Exception as e:
+            logger.exception(f"CRITICAL: Failed to grant admin access (minutes) for user {user_id}, minutes={minutes}, admin={callback.from_user.id}: {e}")
+            text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await callback.answer("Ошибка создания ключа", show_alert=True)
+            await state.clear()
+            return
         
-        text = f"✅ Выдать доступ на {minutes} минут\n\nУведомить пользователя?"
+        # 2️⃣ STORE NOTIFY CONTEXT EXPLICITLY: Encode all data in callback_data
+        # Format: admin:notify:yes:minutes:<user_id>:<minutes>
+        text = f"✅ Доступ выдан на {minutes} минут\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Да", callback_data="admin:notify:yes")],
-            [InlineKeyboardButton(text="🔕 Нет", callback_data="admin:notify:no")],
+            [InlineKeyboardButton(text="🔔 Да", callback_data=f"admin:notify:yes:minutes:{user_id}:{minutes}")],
+            [InlineKeyboardButton(text="🔕 Нет", callback_data=f"admin:notify:no:minutes:{user_id}:{minutes}")],
             [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(AdminGrantAccess.waiting_for_notify)
         
-        logger.debug(f"FSM: AdminGrantAccess.waiting_for_notify set for quick action (minutes={minutes})")
+        # Clear FSM - notify handlers will work without FSM
+        await state.clear()
+        
+        logger.debug(f"Grant executed for user {user_id}, minutes={minutes}, waiting for notify choice")
         
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_minutes: {e}")
@@ -8276,13 +8293,15 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
         await state.clear()
 
 
-@router.callback_query(F.data.startswith("admin:notify:"), StateFilter(AdminGrantAccess.waiting_for_notify))
-async def callback_admin_grant_quick_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
+@router.callback_query(F.data.startswith("admin:notify:yes:minutes:") | F.data.startswith("admin:notify:no:minutes:"))
+async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot):
     """
-    4️⃣ NOTIFY USER LOGIC (GRANT + REVOKE)
+    3️⃣ REGISTER EXPLICIT CALLBACK HANDLERS
+    4️⃣ IMPLEMENT NOTIFY LOGIC
     
-    Execute quick grant action (1/7/14 days, 1 year, 10 minutes) with notify_user choice.
-    Unified handler for all quick actions.
+    Handle notify choice for minutes grant.
+    Works WITHOUT FSM - all data encoded in callback_data.
+    Format: admin:notify:yes|no:minutes:<user_id>:<minutes>
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
@@ -8291,164 +8310,55 @@ async def callback_admin_grant_quick_notify(callback: CallbackQuery, state: FSMC
     await callback.answer()
     
     try:
-        notify_user = callback.data.split(":")[2] == "yes"
-        data = await state.get_data()
-        user_id = data.get("user_id")
-        action_type = data.get("action_type")
-        
-        if not user_id or not action_type:
-            await callback.answer("Ошибка: данные не найдены", show_alert=True)
-            await state.clear()
+        # 3️⃣ REGISTER EXPLICIT CALLBACK HANDLERS: Parse callback_data
+        parts = callback.data.split(":")
+        if len(parts) != 6 or parts[1] != "notify" or parts[3] != "minutes":
+            logger.warning(f"Invalid notify callback format: {callback.data}")
+            await callback.answer("Ошибка формата команды", show_alert=True)
             return
         
-        logger.debug(f"FSM: Executing quick action {action_type} for user {user_id}, notify_user={notify_user}")
+        notify_choice = parts[2]  # "yes" or "no"
+        user_id = int(parts[4])
+        minutes = int(parts[5])
         
-        # Execute based on action_type
-        if action_type == "grant_days":
-            days = data.get("days")
-            expires_at, vpn_key = await database.admin_grant_access_atomic(
-                telegram_id=user_id,
-                days=days,
-                admin_telegram_id=callback.from_user.id
-            )
-            
-            if not expires_at or not vpn_key:
-                raise Exception(f"admin_grant_access_atomic returned None")
-            
-            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
-            text = f"✅ Доступ выдан на {days} дней"
-            if notify_user:
-                text += "\nПользователь уведомлён."
-            else:
-                text += "\nДействие выполнено без уведомления."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
-            
-            # PART 6: Notify user if flag is True
-            if notify_user:
-                try:
-                    user_lang = await database.get_user(user_id)
-                    language = user_lang.get("language", "ru") if user_lang else "ru"
-                    vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
-                    user_text = localization.get_text(
-                        language,
-                        "admin_grant_user_notification",
-                        days=days,
-                        vpn_key=vpn_key_html,
-                        date=expires_str,
-                        default=f"✅ Вам выдан доступ на {days} дней\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
-                    )
-                    await bot.send_message(user_id, user_text, parse_mode="HTML")
-                except Exception as e:
-                    logger.exception(f"Error sending notification to user {user_id}: {e}")
-            
-            # PART 6: Audit log
-            await database._log_audit_event_atomic_standalone(
-                "admin_grant_access",
-                callback.from_user.id,
-                user_id,
-                f"Admin granted {days} days access, notify_user={notify_user}, expires_at={expires_str}"
-            )
+        notify = notify_choice == "yes"
         
-        elif action_type == "grant_minutes":
-            minutes = data.get("minutes")
-            expires_at, vpn_key = await database.admin_grant_access_minutes_atomic(
-                telegram_id=user_id,
-                minutes=minutes,
-                admin_telegram_id=callback.from_user.id
-            )
-            
-            if not expires_at or not vpn_key:
-                raise Exception(f"admin_grant_access_minutes_atomic returned None")
-            
-            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
-            text = f"✅ Доступ выдан на {minutes} минут"
-            if notify_user:
-                text += "\nПользователь уведомлён."
-            else:
-                text += "\nДействие выполнено без уведомления."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
-            
-            # PART 6: Notify user if flag is True
-            if notify_user:
-                try:
-                    user_lang = await database.get_user(user_id)
-                    language = user_lang.get("language", "ru") if user_lang else "ru"
-                    user_text = localization.get_text(
-                        language,
-                        "admin_grant_user_notification_10m",
-                        default=f"✅ Вам выдан тестовый доступ на {minutes} минут"
-                    )
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text=localization.get_text(language, "go_to_connection", default="Перейти к подключению"),
-                            callback_data="menu_instruction"
-                        )]
-                    ])
-                    await bot.send_message(user_id, user_text, reply_markup=keyboard)
-                except Exception as e:
-                    logger.exception(f"Error sending notification to user {user_id}: {e}")
-            
-            # PART 6: Audit log
-            await database._log_audit_event_atomic_standalone(
-                "admin_grant_access_minutes",
-                callback.from_user.id,
-                user_id,
-                f"Admin granted {minutes} minutes access, notify_user={notify_user}, expires_at={expires_str}"
-            )
+        # 4️⃣ ЛОГИРОВАНИЕ: при выборе notify
+        logger.info(f"ADMIN_GRANT_NOTIFY_SELECTED [notify={notify_choice}, user_id={user_id}, minutes={minutes}]")
         
-        elif action_type == "grant_1_year":
-            expires_at, vpn_key = await database.admin_grant_access_atomic(
-                telegram_id=user_id,
-                days=365,
-                admin_telegram_id=callback.from_user.id
-            )
-            
-            if not expires_at or not vpn_key:
-                raise Exception(f"admin_grant_access_atomic returned None")
-            
-            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
-            text = f"✅ Доступ на 1 год выдан"
-            if notify_user:
-                text += "\nПользователь уведомлён."
-            else:
-                text += "\nДействие выполнено без уведомления."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
-            
-            # PART 6: Notify user if flag is True
-            if notify_user:
-                try:
-                    user_lang = await database.get_user(user_id)
-                    language = user_lang.get("language", "ru") if user_lang else "ru"
-                    vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
-                    user_text = localization.get_text(
-                        language,
-                        "admin_grant_user_notification_1_year",
-                        vpn_key=vpn_key_html,
-                        date=expires_str,
-                        default=f"✅ Вам выдан доступ на 1 год\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
-                    )
-                    await bot.send_message(user_id, user_text, parse_mode="HTML")
-                except Exception as e:
-                    logger.exception(f"Error sending notification to user {user_id}: {e}")
-            
-            # PART 6: Audit log
-            await database._log_audit_event_atomic_standalone(
-                "admin_grant_access_1_year",
-                callback.from_user.id,
-                user_id,
-                f"Admin granted 1 year access, notify_user={notify_user}, expires_at={expires_str}"
-            )
+        # 4️⃣ IMPLEMENT NOTIFY LOGIC: For admin:notify:yes
+        if notify:
+            try:
+                # 4️⃣ IMPLEMENT NOTIFY LOGIC: Send message to target user
+                user_text = f"Администратор выдал вам доступ на {minutes} минут"
+                await bot.send_message(user_id, user_text)
+                
+                # 4️⃣ ЛОГИРОВАНИЕ: при отправке уведомления
+                logger.info(f"NOTIFICATION_SENT [type=admin_grant, user_id={user_id}, minutes={minutes}]")
+            except Exception as e:
+                logger.exception(f"Error sending notification to user {user_id}: {e}")
+                # 6️⃣ ERROR HANDLING: Don't crash, just log
         
+        # 4️⃣ IMPLEMENT NOTIFY LOGIC: For admin:notify:no
         else:
-            raise Exception(f"Unknown action_type: {action_type}")
+            # 4️⃣ ЛОГИРОВАНИЕ: если notify=False
+            logger.info(f"ADMIN_GRANT_NOTIFY_SKIPPED [user_id={user_id}, minutes={minutes}]")
         
-        await state.clear()
-        logger.debug(f"FSM: AdminGrantAccess cleared after quick action")
+        # 5️⃣ CLEAN TERMINATION: Edit admin message to "Готово"
+        text = f"✅ Доступ выдан на {minutes} минут"
+        if notify:
+            text += "\nПользователь уведомлён."
+        else:
+            text += "\nДействие выполнено без уведомления."
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
         
+    except ValueError as e:
+        logger.warning(f"Invalid callback data format: {callback.data}, error: {e}")
+        await callback.answer("Ошибка: неверный формат команды", show_alert=True)
     except Exception as e:
-        logger.exception(f"Error in callback_admin_grant_quick_notify: {e}")
+        # 6️⃣ ERROR HANDLING: NO generic Exception raises, graceful exit
+        logger.warning(f"Unexpected error in callback_admin_grant_minutes_notify: {e}")
         await callback.answer("Ошибка", show_alert=True)
-        await state.clear()
 
 
 @router.callback_query(F.data.startswith("admin:revoke:user:"))
