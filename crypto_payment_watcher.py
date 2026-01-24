@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
+import asyncpg
 import database
 import localization
 from payments import cryptobot
@@ -32,8 +33,17 @@ async def check_crypto_payments(bot: Bot):
     if not cryptobot.is_enabled():
         return
     
+    # RESILIENCE FIX: Handle temporary DB unavailability gracefully
     try:
         pool = await database.get_pool()
+    except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
+        logger.warning(f"crypto_payment_watcher: Database temporarily unavailable (pool acquisition failed): {type(e).__name__}: {str(e)[:100]}")
+        return
+    except Exception as e:
+        logger.error(f"crypto_payment_watcher: Unexpected error getting DB pool: {type(e).__name__}: {str(e)[:100]}")
+        return
+    
+    try:
         async with pool.acquire() as conn:
             # Получаем pending purchases с provider_invoice_id (т.е. CryptoBot purchases)
             # Только не истёкшие покупки: status = 'pending' AND expires_at > (NOW() AT TIME ZONE 'UTC')
@@ -156,9 +166,12 @@ async def check_crypto_payments(bot: Bot):
                     # Ошибка для одной покупки не должна ломать весь процесс
                     logger.error(f"Error checking crypto payment for purchase {purchase_id}: {e}", exc_info=True)
                     continue
-                    
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
+        logger.warning(f"crypto_payment_watcher: Database temporarily unavailable in check_crypto_payments: {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
-        logger.exception(f"Error in check_crypto_payments: {e}")
+        logger.error(f"crypto_payment_watcher: Unexpected error in check_crypto_payments: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("crypto_payment_watcher: Full traceback in check_crypto_payments", exc_info=True)
 
 
 async def cleanup_expired_purchases():
@@ -171,8 +184,17 @@ async def cleanup_expired_purchases():
     
     Безопасно: не удаляет покупки, только меняет статус
     """
+    # RESILIENCE FIX: Handle temporary DB unavailability gracefully
     try:
         pool = await database.get_pool()
+    except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
+        logger.warning(f"crypto_payment_watcher: Database temporarily unavailable in cleanup_expired_purchases (pool acquisition failed): {type(e).__name__}: {str(e)[:100]}")
+        return
+    except Exception as e:
+        logger.error(f"crypto_payment_watcher: Unexpected error getting DB pool in cleanup_expired_purchases: {type(e).__name__}: {str(e)[:100]}")
+        return
+    
+    try:
         async with pool.acquire() as conn:
             # Получаем список истёкших покупок перед обновлением для логирования
             expired_purchases = await conn.fetch("""
@@ -200,9 +222,12 @@ async def cleanup_expired_purchases():
                 logger.info(
                     f"crypto_invoice_expired: purchase_id={purchase['purchase_id']}"
                 )
-                    
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
+        logger.warning(f"crypto_payment_watcher: Database temporarily unavailable in cleanup_expired_purchases: {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
-        logger.error(f"Error in cleanup_expired_purchases: {e}", exc_info=True)
+        logger.error(f"crypto_payment_watcher: Unexpected error in cleanup_expired_purchases: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("crypto_payment_watcher: Full traceback in cleanup_expired_purchases", exc_info=True)
 
 
 async def crypto_payment_watcher_task(bot: Bot):
@@ -217,8 +242,12 @@ async def crypto_payment_watcher_task(bot: Bot):
     try:
         await check_crypto_payments(bot)
         await cleanup_expired_purchases()
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        # RESILIENCE FIX: Temporary DB failures don't crash the task
+        logger.warning(f"crypto_payment_watcher: Initial check failed (DB temporarily unavailable): {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
-        logger.exception(f"Error in initial crypto payment check: {e}")
+        logger.error(f"crypto_payment_watcher: Unexpected error in initial check: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("crypto_payment_watcher: Full traceback for initial check", exc_info=True)
     
     while True:
         try:
@@ -228,7 +257,13 @@ async def crypto_payment_watcher_task(bot: Bot):
         except asyncio.CancelledError:
             logger.info("Crypto payment watcher task cancelled")
             break
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            # RESILIENCE FIX: Temporary DB failures don't crash the task loop
+            logger.warning(f"crypto_payment_watcher: Database temporarily unavailable: {type(e).__name__}: {str(e)[:100]}")
+            # При ошибке ждем половину интервала перед повтором
+            await asyncio.sleep(CHECK_INTERVAL_SECONDS // 2)
         except Exception as e:
-            logger.exception(f"Error in crypto payment watcher task: {e}")
+            logger.error(f"crypto_payment_watcher: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
+            logger.debug("crypto_payment_watcher: Full traceback for task loop", exc_info=True)
             # При ошибке ждем половину интервала перед повтором
             await asyncio.sleep(CHECK_INTERVAL_SECONDS // 2)

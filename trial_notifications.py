@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Tuple
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncpg
 import database
 import localization
 import config
@@ -351,9 +352,12 @@ async def process_trial_notifications(bot: Bot):
                                 f"trial_reminder_failed_temporary: user={telegram_id}, notification={key}, "
                                 f"reason=temporary_error, will_retry=True"
                             )
-    
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
+        logger.warning(f"trial_notifications: Database temporarily unavailable in process_trial_notifications: {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
-        logger.exception(f"Error processing trial notifications: {e}")
+        logger.error(f"trial_notifications: Unexpected error in process_trial_notifications: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("trial_notifications: Full traceback in process_trial_notifications", exc_info=True)
 
 
 async def expire_trial_subscriptions(bot: Bot):
@@ -480,9 +484,12 @@ async def expire_trial_subscriptions(bot: Bot):
                     
                 except Exception as e:
                     logger.exception(f"Error expiring trial subscription for user {telegram_id}: {e}")
-    
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
+        logger.warning(f"trial_notifications: Database temporarily unavailable in expire_trial_subscriptions: {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
-        logger.exception(f"Error expiring trial subscriptions: {e}")
+        logger.error(f"trial_notifications: Unexpected error in expire_trial_subscriptions: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("trial_notifications: Full traceback in expire_trial_subscriptions", exc_info=True)
 
 
 async def run_trial_scheduler(bot: Bot):
@@ -512,8 +519,12 @@ async def run_trial_scheduler(bot: Bot):
             # Завершаем истёкшие trial-подписки
             await expire_trial_subscriptions(bot)
             
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            # RESILIENCE FIX: Temporary DB failures don't crash the task loop
+            logger.warning(f"trial_notifications: Database temporarily unavailable in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
         except Exception as e:
-            logger.exception(f"Error in trial scheduler: {e}")
+            logger.error(f"trial_notifications: Unexpected error in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
+            logger.debug("trial_notifications: Full traceback for scheduler loop", exc_info=True)
         
         # Ждём 5 минут до следующей проверки
         await asyncio.sleep(300)

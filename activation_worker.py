@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncpg
 import database
 import localization
 import config
@@ -50,9 +51,17 @@ async def process_pending_activations(bot: Bot):
         logger.debug("Skipping activation worker: VPN API not enabled")
         return
     
-    pool = await database.get_pool()
-    if pool is None:
-        logger.warning("Activation worker: Cannot get DB pool")
+    # RESILIENCE FIX: Handle temporary DB unavailability gracefully
+    try:
+        pool = await database.get_pool()
+        if pool is None:
+            logger.warning("Activation worker: Cannot get DB pool")
+            return
+    except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
+        logger.warning(f"activation_worker: Database temporarily unavailable (pool acquisition failed): {type(e).__name__}: {str(e)[:100]}")
+        return
+    except Exception as e:
+        logger.error(f"activation_worker: Unexpected error getting DB pool: {type(e).__name__}: {str(e)[:100]}")
         return
     
     try:
@@ -296,9 +305,13 @@ async def process_pending_activations(bot: Bot):
                 
                 # Небольшая задержка между обработкой подписок
                 await asyncio.sleep(0.5)
-                
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
+        logger.warning(f"activation_worker: Database temporarily unavailable in process_pending_activations: {type(e).__name__}: {str(e)[:100]}")
+        # Не пробрасываем исключение - воркер должен продолжать работать
     except Exception as e:
-        logger.exception(f"Error in activation worker: {e}")
+        logger.error(f"activation_worker: Unexpected error in process_pending_activations: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("activation_worker: Full traceback in process_pending_activations", exc_info=True)
         # Не пробрасываем исключение - воркер должен продолжать работать
 
 
@@ -314,8 +327,13 @@ async def activation_worker_task(bot: Bot):
     while True:
         try:
             await process_pending_activations(bot)
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            # RESILIENCE FIX: Temporary DB failures don't crash the task loop
+            logger.warning(f"activation_worker: Database temporarily unavailable in task loop: {type(e).__name__}: {str(e)[:100]}")
+            # Продолжаем работу даже при ошибке
         except Exception as e:
-            logger.exception(f"Unexpected error in activation worker loop: {e}")
+            logger.error(f"activation_worker: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
+            logger.debug("activation_worker: Full traceback for task loop", exc_info=True)
             # Продолжаем работу даже при ошибке
         
         await asyncio.sleep(ACTIVATION_INTERVAL_SECONDS)
