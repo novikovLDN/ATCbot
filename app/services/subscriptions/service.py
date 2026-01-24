@@ -10,6 +10,8 @@ All functions are pure business logic - no aiogram imports or Telegram-specific 
 
 import logging
 from typing import Optional, Dict, Any
+from datetime import datetime
+from dataclasses import dataclass
 import database
 import config
 
@@ -235,6 +237,149 @@ async def finalize_purchase(
     except Exception as e:
         logger.error(f"Payment finalization failed: purchase_id={purchase_id}, error={e}")
         raise PaymentFinalizationError(f"Payment finalization failed: {e}") from e
+
+
+# ====================================================================================
+# Subscription Status and Expiry Logic
+# ====================================================================================
+
+@dataclass
+class SubscriptionStatus:
+    """Subscription status information"""
+    is_active: bool
+    has_subscription: bool
+    expires_at: Optional[datetime]
+    activation_status: Optional[str]
+    is_expired: bool
+
+
+def parse_expires_at(expires_at: Any) -> Optional[datetime]:
+    """
+    Parse expires_at from various formats (datetime, string, None).
+    
+    Args:
+        expires_at: Expiration date in various formats
+        
+    Returns:
+        datetime object or None
+    """
+    if expires_at is None:
+        return None
+    
+    if isinstance(expires_at, datetime):
+        return expires_at
+    
+    if isinstance(expires_at, str):
+        try:
+            return datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+        except:
+            try:
+                return datetime.fromisoformat(expires_at)
+            except:
+                return None
+    
+    return None
+
+
+def is_subscription_active(
+    subscription: Optional[Dict[str, Any]],
+    now: Optional[datetime] = None
+) -> bool:
+    """
+    Check if subscription is active.
+    
+    Subscription is active if:
+    - subscription exists
+    - status == 'active'
+    - expires_at > now
+    - uuid is not None (has VPN access)
+    
+    Args:
+        subscription: Subscription dictionary from database
+        now: Current time (defaults to datetime.now())
+        
+    Returns:
+        True if subscription is active, False otherwise
+    """
+    if not subscription:
+        return False
+    
+    if now is None:
+        now = datetime.now()
+    
+    status = subscription.get("status")
+    if status != "active":
+        return False
+    
+    expires_at = parse_expires_at(subscription.get("expires_at"))
+    if not expires_at:
+        return False
+    
+    if expires_at <= now:
+        return False
+    
+    # Check if UUID exists (has VPN access)
+    uuid = subscription.get("uuid")
+    if uuid is None:
+        return False
+    
+    return True
+
+
+def get_subscription_status(
+    subscription: Optional[Dict[str, Any]],
+    now: Optional[datetime] = None
+) -> SubscriptionStatus:
+    """
+    Get comprehensive subscription status information.
+    
+    Args:
+        subscription: Subscription dictionary from database
+        now: Current time (defaults to datetime.now())
+        
+    Returns:
+        SubscriptionStatus with all status information
+    """
+    if now is None:
+        now = datetime.now()
+    
+    if not subscription:
+        return SubscriptionStatus(
+            is_active=False,
+            has_subscription=False,
+            expires_at=None,
+            activation_status=None,
+            is_expired=False
+        )
+    
+    expires_at = parse_expires_at(subscription.get("expires_at"))
+    activation_status = subscription.get("activation_status", "active")
+    is_active = is_subscription_active(subscription, now)
+    is_expired = expires_at is not None and expires_at <= now
+    
+    return SubscriptionStatus(
+        is_active=is_active,
+        has_subscription=True,
+        expires_at=expires_at,
+        activation_status=activation_status,
+        is_expired=is_expired
+    )
+
+
+async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
+    """
+    Check and disable expired subscription if needed.
+    
+    This is a wrapper around database.check_and_disable_expired_subscription
+    to keep subscription-related logic in the subscription service.
+    
+    Args:
+        telegram_id: Telegram ID of the user
+        
+    Returns:
+        True if subscription was disabled, False otherwise
+    """
+    return await database.check_and_disable_expired_subscription(telegram_id)
 
 
 # ====================================================================================

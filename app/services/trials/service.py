@@ -18,6 +18,28 @@ import database
 
 
 # ====================================================================================
+# Trial Availability
+# ====================================================================================
+
+async def is_trial_available(telegram_id: int) -> bool:
+    """
+    Check if trial is available for a user.
+    
+    Trial is available if:
+    - trial_used_at IS NULL
+    - No active subscription
+    - No paid subscriptions in history (source='payment')
+    
+    Args:
+        telegram_id: Telegram ID of the user
+        
+    Returns:
+        True if trial is available, False otherwise
+    """
+    return await database.is_trial_available(telegram_id)
+
+
+# ====================================================================================
 # Domain Exceptions
 # ====================================================================================
 

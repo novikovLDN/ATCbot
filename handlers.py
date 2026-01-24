@@ -18,6 +18,11 @@ import asyncio
 import random
 from typing import Optional, Dict, Any
 from app.services.subscriptions import service as subscription_service
+from app.services.subscriptions.service import (
+    is_subscription_active,
+    get_subscription_status,
+    check_and_disable_expired_subscription as check_subscription_expiry_service,
+)
 from app.services.payments import service as payment_service
 from app.services.payments.exceptions import (
     PaymentServiceError,
@@ -27,6 +32,7 @@ from app.services.payments.exceptions import (
     PaymentFinalizationError,
 )
 from app.services.activation import service as activation_service
+from app.services.trials import service as trial_service
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
@@ -527,10 +533,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     buttons = []
     
     # КРИТИЧНО: Кнопка "Пробный период 3 дня" только для новых пользователей
-    # Используем is_trial_available() для строгой проверки всех условий
+    # Используем trial service для строгой проверки всех условий
     if telegram_id and database.DB_READY:
         try:
-            is_available = await database.is_trial_available(telegram_id)
+            is_available = await trial_service.is_trial_available(telegram_id)
             if is_available:
                 buttons.append([InlineKeyboardButton(
                     text=localization.get_text(language, "trial_button", default="🎁 Пробный период 3 дня"),
@@ -1364,7 +1370,7 @@ async def check_subscription_expiry(telegram_id: int) -> bool:
     Вызывается в начале критичных handlers для дополнительной безопасности.
     Возвращает True если подписка была отключена, False если активна или отсутствует.
     """
-    return await database.check_and_disable_expired_subscription(telegram_id)
+    return await check_subscription_expiry_service(telegram_id)
 
 
 async def show_profile(message_or_query, language: str):
@@ -1385,7 +1391,7 @@ async def show_profile(message_or_query, language: str):
     
     # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
     if telegram_id:
-        await database.check_and_disable_expired_subscription(telegram_id)
+        await check_subscription_expiry_service(telegram_id)
     
     try:
         # Дополнительная защита: проверка истечения подписки
@@ -1419,50 +1425,38 @@ async def show_profile(message_or_query, language: str):
             logger.warning(f"Error getting profile_welcome text for language {language}: {e}")
             text = f"Добро пожаловать в Atlas Secure!\n\n👤 {username}\n\n💰 Баланс: {round(balance_rubles, 2)} ₽"
         
-        # Определяем статус подписки
-        has_active_subscription = False
-        has_any_subscription = False
-        activation_status = None
-        if subscription:
-            has_any_subscription = True
-            expires_at = subscription["expires_at"]
-            if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at)
-            
-            activation_status = subscription.get("activation_status", "active")
-            now = datetime.now()
-            has_active_subscription = expires_at > now
-            
-            # Проверяем статус активации
-            if activation_status == "pending":
-                # Подписка оформлена, но активация отложена
-                try:
-                    expires_str = expires_at.strftime("%d.%m.%Y")
-                    pending_text = localization.get_text(
-                        language,
-                        "profile_subscription_pending",
-                        date=expires_str,
-                        default=f"📆 Подписка оформлена, активация выполняется автоматически\n\nСрок действия: до {expires_str}"
-                    )
-                    text += "\n" + pending_text
-                except (KeyError, TypeError):
-                    expires_str = expires_at.strftime("%d.%m.%Y")
-                    text += f"\n📆 Подписка оформлена, активация выполняется автоматически\n\nСрок действия: до {expires_str}"
-            elif has_active_subscription:
-                # Подписка активна
-                try:
-                    expires_str = expires_at.strftime("%d.%m.%Y")
-                    text += "\n" + localization.get_text(language, "profile_subscription_active", date=expires_str)
-                except (KeyError, TypeError):
-                    text += f"\n📆 Подписка: активна до {expires_at.strftime('%d.%m.%Y')}"
-            else:
-                # Подписка неактивна (истекла)
-                try:
-                    text += "\n" + localization.get_text(language, "profile_subscription_inactive")
-                except (KeyError, TypeError):
-                    text += "\n📆 Подписка: неактивна"
+        # Определяем статус подписки используя subscription service
+        subscription_status = get_subscription_status(subscription)
+        has_active_subscription = subscription_status.is_active
+        has_any_subscription = subscription_status.has_subscription
+        activation_status = subscription_status.activation_status
+        expires_at = subscription_status.expires_at
+        
+        # Формируем текст в зависимости от статуса
+        if activation_status == "pending":
+            # Подписка оформлена, но активация отложена
+            try:
+                expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
+                pending_text = localization.get_text(
+                    language,
+                    "profile_subscription_pending",
+                    date=expires_str,
+                    default=f"📆 Подписка оформлена, активация выполняется автоматически\n\nСрок действия: до {expires_str}"
+                )
+                text += "\n" + pending_text
+            except (KeyError, TypeError):
+                expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
+                text += f"\n📆 Подписка оформлена, активация выполняется автоматически\n\nСрок действия: до {expires_str}"
+        elif has_active_subscription:
+            # Подписка активна
+            try:
+                expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
+                text += "\n" + localization.get_text(language, "profile_subscription_active", date=expires_str)
+            except (KeyError, TypeError):
+                expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
+                text += f"\n📆 Подписка: активна до {expires_str}"
         else:
-            # Подписки нет
+            # Подписка неактивна (истекла или отсутствует)
             try:
                 text += "\n" + localization.get_text(language, "profile_subscription_inactive")
             except (KeyError, TypeError):
@@ -1474,15 +1468,12 @@ async def show_profile(message_or_query, language: str):
             auto_renew = subscription.get("auto_renew", False)
         
         # Добавляем информацию об автопродлении (только для активных подписок)
-        if has_active_subscription:
+        if subscription_status.is_active:
             if auto_renew:
                 # Автопродление включено - next_billing_date = expires_at
-                # Инициализируем expires_at перед использованием
-                expires_at = subscription.get("expires_at")
-                if expires_at:
-                    if isinstance(expires_at, str):
-                        expires_at = datetime.fromisoformat(expires_at)
-                    next_billing_str = expires_at.strftime("%d.%m.%Y")
+                # Используем expires_at из subscription_status
+                if subscription_status.expires_at:
+                    next_billing_str = subscription_status.expires_at.strftime("%d.%m.%Y")
                 else:
                     next_billing_str = "N/A"
                 try:
@@ -1825,10 +1816,19 @@ async def callback_vip_access(callback: CallbackQuery):
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
     
-    # Проверяем наличие АКТИВНОЙ подписки (status=active AND expires_at>now)
+    # Проверяем наличие АКТИВНОЙ подписки используя subscription service
     # Продление работает для ЛЮБОЙ активной подписки независимо от source (payment/admin/test)
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
+        try:
+            error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
+        except (KeyError, TypeError):
+            error_text = "Активная подписка не найдена."
+        await callback.message.answer(error_text)
+        return
+    
+    # Проверяем что подписка действительно активна используя service
+    if not is_subscription_active(subscription):
         try:
             error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
         except (KeyError, TypeError):
@@ -2910,12 +2910,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # КРИТИЧНО: Проверяем, была ли активная подписка ДО платежа
         # Это нужно для определения сценария: первая покупка vs продление
         existing_subscription = await database.get_subscription(telegram_id)
-        had_active_subscription_before_payment = (
-            existing_subscription is not None 
-            and existing_subscription.get("status") == "active"
-            and existing_subscription.get("expires_at")
-            and existing_subscription.get("expires_at") > datetime.now()
-        )
+        had_active_subscription_before_payment = is_subscription_active(existing_subscription) if existing_subscription else False
         
         # КРИТИЧНО: Все финансовые операции выполняются атомарно в одной транзакции
         # через finalize_balance_purchase
@@ -6755,8 +6750,9 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             
-            now = datetime.now()
-            if expires_at > now:
+            # Используем subscription service для определения статуса
+            subscription_status = get_subscription_status(subscription)
+            if subscription_status.is_active:
                 text += "Статус подписки: ✅ Активна\n"
             else:
                 text += "Статус подписки: ⛔ Истекла\n"
@@ -6794,15 +6790,18 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         if is_vip:
             text += f"\n👑 VIP-статус: активен\n"
         
-        if subscription:
-            expires_at = subscription["expires_at"]
-            if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-            now = datetime.now()
-            has_active = expires_at > now
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="HTML")
-        else:
-            await message.answer(text, reply_markup=get_admin_user_keyboard(has_active_subscription=False, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip), parse_mode="HTML")
+        # Используем subscription service для определения статуса подписки
+        subscription_status = get_subscription_status(subscription)
+        await message.answer(
+            text,
+            reply_markup=get_admin_user_keyboard(
+                has_active_subscription=subscription_status.is_active,
+                user_id=user["telegram_id"],
+                has_discount=has_discount,
+                is_vip=is_vip
+            ),
+            parse_mode="HTML"
+        )
         
         # Логируем просмотр информации о пользователе
         details = f"Admin searched by {search_by}: {search_value}, found user {user['telegram_id']}"
@@ -7544,8 +7543,9 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
             expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
         expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
         
-        now = datetime.now()
-        if expires_at > now:
+        # Используем subscription service для определения статуса
+        subscription_status = get_subscription_status(subscription)
+        if subscription_status.is_active:
             text += "Статус подписки: ✅ Активна\n"
         else:
             text += "Статус подписки: ⛔ Истекла\n"
@@ -7584,14 +7584,9 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
         text += f"\n👑 VIP-статус: активен\n"
     
     # Определяем статус подписки для клавиатуры
-    if subscription:
-        expires_at = subscription["expires_at"]
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-        now = datetime.now()
-        has_active = expires_at > now
-    else:
-        has_active = False
+    # Используем subscription service для определения статуса подписки
+    subscription_status = get_subscription_status(subscription)
+    has_active = subscription_status.is_active
     
     # Отображаем карточку
     keyboard = get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip)
