@@ -1,4 +1,5 @@
 import asyncpg
+import asyncio
 import os
 import sys
 import hashlib
@@ -340,6 +341,7 @@ async def init_db() -> bool:
         logger.error("DATABASE_URL not configured")
         return False
     
+    # 1️⃣ Eager DB probe BEFORE pool creation
     try:
         test_conn = await asyncpg.connect(DATABASE_URL)
         await test_conn.execute("SELECT 1")
@@ -348,7 +350,14 @@ async def init_db() -> bool:
         logger.error(f"Database readiness check failed: {e}")
         return False
     
+    # 2️⃣ Yield control to event loop after successful probe
+    await asyncio.sleep(0)
+    
+    # 3️⃣ Create pool AFTER probe and loop yield
     pool = await get_pool()
+    
+    # 4️⃣ Yield again after pool creation to ensure pool is initialized
+    await asyncio.sleep(0)
     
     # ====================================================================================
     # VERSIONED MIGRATIONS: Применяем миграции перед созданием таблиц
