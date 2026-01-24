@@ -446,13 +446,13 @@ async def auto_renewal_task(bot: Bot):
                     )
                     continue
                 
-                # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
-                # VPN-only degradation ≠ system degradation
-                # Only log if CRITICAL components are degraded
-                if system_state.is_degraded and not system_state.is_healthy:
+                # PART D.4: Workers continue normally if DEGRADED
+                # PART D.4: Workers skip only if system_state == UNAVAILABLE
+                # DEGRADED state allows continuation (optional components degraded, critical healthy)
+                if system_state.is_degraded:
                     logger.info(
                         f"[DEGRADED] system_state detected in auto_renewal_task "
-                        f"(continuing with reduced functionality)"
+                        f"(continuing with reduced functionality - optional components degraded)"
                     )
             except Exception:
                 # Ignore system state errors - continue with normal flow

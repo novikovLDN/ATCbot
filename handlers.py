@@ -1942,13 +1942,12 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         )
         
         # STEP 1.1 - RUNTIME GUARDRAILS: Handlers log degradation but do NOT branch logic
-        # PART C.7: Continue to LOG degraded if VPN missing, but only if CRITICAL components are degraded
-        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
-        # VPN-only degradation ≠ system degradation
-        if system_state.is_degraded and not system_state.is_healthy:
+        # PART D.5: Handlers log DEGRADED for VPN-related actions
+        # PART D.5: NEVER block payments or DB flows
+        if system_state.is_degraded:
             logger.info(
                 f"[DEGRADED] system_state detected during callback_activate_trial "
-                f"(user={callback.from_user.id})"
+                f"(user={callback.from_user.id}, optional components degraded)"
             )
             _degradation_notice = True
         else:
@@ -2596,12 +2595,12 @@ async def callback_copy_key(callback: CallbackQuery):
             payments=payments_component,
         )
         
-        # PART C.7: Continue to LOG degraded, but only if CRITICAL components are degraded
-        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
-        if system_state.is_degraded and not system_state.is_healthy:
+        # PART D.5: Handlers log DEGRADED for VPN-related actions
+        # PART D.5: NEVER block payments or DB flows
+        if system_state.is_degraded:
             logger.info(
                 f"[DEGRADED] system_state detected during callback_copy_key "
-                f"(user={callback.from_user.id})"
+                f"(user={callback.from_user.id}, optional components degraded)"
             )
     except Exception:
         # Ignore system state errors - must not affect key copy flow
@@ -2693,12 +2692,12 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
             payments=payments_component,
         )
         
-        # PART C.7: Continue to LOG degraded, but only if CRITICAL components are degraded
-        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
-        if system_state.is_degraded and not system_state.is_healthy:
+        # PART D.5: Handlers log DEGRADED for VPN-related actions
+        # PART D.5: NEVER block payments or DB flows
+        if system_state.is_degraded:
             logger.info(
                 f"[DEGRADED] system_state detected during callback_copy_vpn_key "
-                f"(user={callback.from_user.id})"
+                f"(user={callback.from_user.id}, optional components degraded)"
             )
     except Exception:
         # Ignore system state errors - must not affect key copy flow
@@ -4526,12 +4525,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
             payments=payments_component,
         )
         
-        # PART C.7: Continue to LOG degraded, but only if CRITICAL components are degraded
-        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
-        if system_state.is_degraded and not system_state.is_healthy:
+        # PART D.5: Handlers log DEGRADED for VPN-related actions
+        # PART D.5: NEVER block payments or DB flows (payments flow continues regardless)
+        if system_state.is_degraded:
             logger.info(
                 f"[DEGRADED] system_state detected during process_successful_payment "
-                f"(user={message.from_user.id})"
+                f"(user={message.from_user.id}, optional components degraded - payment flow continues)"
             )
             # Store degradation flag for UX message (will be used later if needed)
             _degradation_notice = True

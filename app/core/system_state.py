@@ -24,7 +24,7 @@ STEP 1.1 - RUNTIME GUARDRAILS:
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Set
 
 
 class ComponentStatus(Enum):
@@ -32,6 +32,13 @@ class ComponentStatus(Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNAVAILABLE = "unavailable"
+
+
+# PART A.1: Explicitly define component criticality
+# CRITICAL components: system cannot function without them
+# OPTIONAL components: system can function with reduced capabilities
+CRITICAL_COMPONENTS: Set[str] = {"database", "payments"}
+OPTIONAL_COMPONENTS: Set[str] = {"vpn_api", "analytics", "notifications"}
 
 
 @dataclass(frozen=True)
@@ -78,14 +85,23 @@ class SystemState:
     @property
     def is_healthy(self) -> bool:
         """
-        Check if all components are healthy.
+        Check if system is healthy.
+        
+        PART B.2: System is HEALTHY if:
+        - All CRITICAL components are HEALTHY
+        - OPTIONAL components can be DEGRADED (system still healthy)
         
         Returns:
-            True if all components have status HEALTHY
+            True if all CRITICAL components are HEALTHY
         """
+        # Check CRITICAL components only
+        critical_components = {
+            "database": self.database,
+            "payments": self.payments,
+        }
         return all(
-            component.status == ComponentStatus.HEALTHY
-            for component in [self.database, self.vpn_api, self.payments]
+            comp.status == ComponentStatus.HEALTHY
+            for comp in critical_components.values()
         )
     
     @property
@@ -93,37 +109,59 @@ class SystemState:
         """
         Check if system is in degraded mode.
         
-        PART A.3: is_degraded MUST be true ONLY if a CRITICAL component is degraded.
-        VPN API is NON-CRITICAL, so VPN-only degradation ≠ system degradation.
+        PART B.2: System is DEGRADED if:
+        - All CRITICAL components are HEALTHY
+        - At least one OPTIONAL component is DEGRADED
+        - No component is UNAVAILABLE
         
         Returns:
-            True if at least one CRITICAL component (database, payments) is DEGRADED
-            but none are UNAVAILABLE. VPN API degradation is ignored.
+            True if system is DEGRADED (optional components degraded, critical healthy)
         """
-        # CRITICAL components: database, payments
-        # NON-CRITICAL: vpn_api (system can work without it)
-        critical_components = [self.database, self.payments]
-        has_critical_degraded = any(
-            component.status == ComponentStatus.DEGRADED
-            for component in critical_components
+        # PART B.2: If ANY critical component is UNHEALTHY → system_state = UNAVAILABLE (not DEGRADED)
+        critical_components = {
+            "database": self.database,
+            "payments": self.payments,
+        }
+        # If any critical component is not HEALTHY, system is not DEGRADED (it's UNAVAILABLE)
+        if not all(comp.status == ComponentStatus.HEALTHY for comp in critical_components.values()):
+            return False
+        
+        # PART B.2: Else if ANY optional component is DEGRADED → system_state = DEGRADED
+        optional_components = {
+            "vpn_api": self.vpn_api,
+        }
+        has_optional_degraded = any(
+            comp.status == ComponentStatus.DEGRADED
+            for comp in optional_components.values()
         )
+        
+        # PART B.2: No component must be UNAVAILABLE
         has_unavailable = any(
-            component.status == ComponentStatus.UNAVAILABLE
-            for component in [self.database, self.vpn_api, self.payments]
+            comp.status == ComponentStatus.UNAVAILABLE
+            for comp in [self.database, self.vpn_api, self.payments]
         )
-        return has_critical_degraded and not has_unavailable
+        
+        return has_optional_degraded and not has_unavailable
     
     @property
     def is_unavailable(self) -> bool:
         """
-        Check if any component is unavailable.
+        Check if system is unavailable.
+        
+        PART B.2: System is UNAVAILABLE if:
+        - ANY CRITICAL component is UNHEALTHY (DEGRADED or UNAVAILABLE)
         
         Returns:
-            True if any component has status UNAVAILABLE
+            True if any CRITICAL component is not HEALTHY
         """
+        # PART B.2: If ANY critical component is UNHEALTHY → system_state = UNAVAILABLE
+        critical_components = {
+            "database": self.database,
+            "payments": self.payments,
+        }
         return any(
-            component.status == ComponentStatus.UNAVAILABLE
-            for component in [self.database, self.vpn_api, self.payments]
+            comp.status != ComponentStatus.HEALTHY
+            for comp in critical_components.values()
         )
     
     def summary(self) -> Dict[str, Any]:
@@ -259,17 +297,18 @@ def create_default_system_state() -> SystemState:
 
 def recalculate_from_runtime() -> SystemState:
     """
-    PART A.2: Recalculate SystemState from current runtime state.
+    PART B.2 / PART C.3: Recalculate SystemState from current runtime state.
     
     Called after:
     - init_db() success
     - retry success
     - on startup if DB_READY=True
     
-    PART A.1: After successful database.init_db():
+    PART C.3: Expected state with missing XRAY_API:
     - database = healthy
-    - vpn_api = degraded ONLY if XRAY_API_* missing
     - payments = healthy
+    - vpn_api = degraded
+    - system_state = DEGRADED (NOT UNAVAILABLE)
     
     Returns:
         SystemState reflecting current runtime health

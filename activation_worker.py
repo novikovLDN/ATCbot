@@ -452,13 +452,13 @@ async def activation_worker_task(bot: Bot):
                     await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                     continue
                 
-                # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
-                # VPN-only degradation ≠ system degradation
-                # Only log if CRITICAL components are degraded
-                if system_state.is_degraded and not system_state.is_healthy:
+                # PART D.4: Workers continue normally if DEGRADED
+                # PART D.4: Workers skip only if system_state == UNAVAILABLE
+                # DEGRADED state allows continuation (optional components degraded, critical healthy)
+                if system_state.is_degraded:
                     logger.info(
                         f"[DEGRADED] system_state detected in activation_worker "
-                        f"(continuing with reduced functionality)"
+                        f"(continuing with reduced functionality - optional components degraded)"
                     )
                 
                 # B4.2 - COOLDOWN & BACKOFF: Check cooldown before starting operations
