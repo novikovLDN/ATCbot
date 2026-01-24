@@ -33,6 +33,12 @@ from app.services.payments.exceptions import (
 )
 from app.services.activation import service as activation_service
 from app.services.trials import service as trial_service
+from app.services.admin import service as admin_service
+from app.services.admin.exceptions import (
+    AdminServiceError,
+    UserNotFoundError,
+    InvalidAdminActionError,
+)
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
@@ -6715,25 +6721,30 @@ async def process_admin_user_id(message: Message, state: FSMContext):
             await state.clear()
             return
         
-        # Получаем информацию о подписке
-        subscription = await database.get_subscription(user["telegram_id"])
+        # Получаем полный обзор пользователя через admin service
+        try:
+            overview = await admin_service.get_admin_user_overview(user["telegram_id"])
+        except UserNotFoundError:
+            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+            await state.clear()
+            return
         
-        # Получаем расширенную статистику
-        stats = await database.get_user_extended_stats(user["telegram_id"])
+        # Получаем доступные действия через admin service
+        actions = admin_service.get_admin_user_actions(overview)
         
-        # Формируем карточку пользователя
+        # Формируем карточку пользователя (только форматирование)
         text = "👤 Пользователь\n\n"
-        text += f"Telegram ID: {user['telegram_id']}\n"
-        username_display = user.get('username') or 'не указан'
+        text += f"Telegram ID: {overview.user['telegram_id']}\n"
+        username_display = overview.user.get('username') or 'не указан'
         text += f"Username: @{username_display}\n"
         
         # Язык
-        user_language = user.get('language') or 'ru'
+        user_language = overview.user.get('language') or 'ru'
         language_display = localization.LANGUAGE_BUTTONS.get(user_language, user_language)
         text += f"Язык: {language_display}\n"
         
         # Дата регистрации
-        created_at = user.get('created_at')
+        created_at = overview.user.get('created_at')
         if created_at:
             if isinstance(created_at, str):
                 created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
@@ -6744,40 +6755,34 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         
         text += "\n"
         
-        if subscription:
-            expires_at = subscription["expires_at"]
-            if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+        # Информация о подписке
+        if overview.subscription:
+            expires_at = overview.subscription_status.expires_at
+            if expires_at:
+                expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            else:
+                expires_str = "—"
             
-            # Используем subscription service для определения статуса
-            subscription_status = get_subscription_status(subscription)
-            if subscription_status.is_active:
+            if overview.subscription_status.is_active:
                 text += "Статус подписки: ✅ Активна\n"
             else:
                 text += "Статус подписки: ⛔ Истекла\n"
             
             text += f"Срок действия: до {expires_str}\n"
-            text += f"VPN-ключ: {subscription['vpn_key']}\n"
+            text += f"VPN-ключ: {overview.subscription.get('vpn_key', '—')}\n"
         else:
             text += "Статус подписки: ❌ Нет подписки\n"
             text += "VPN-ключ: —\n"
             text += "Срок действия: —\n"
         
         # Статистика
-        text += f"\nКоличество продлений: {stats['renewals_count']}\n"
-        text += f"Количество перевыпусков: {stats['reissues_count']}\n"
+        text += f"\nКоличество продлений: {overview.stats['renewals_count']}\n"
+        text += f"Количество перевыпусков: {overview.stats['reissues_count']}\n"
         
-        # Проверяем наличие персональной скидки
-        user_discount = await database.get_user_discount(user["telegram_id"])
-        has_discount = user_discount is not None
-        
-        # Проверяем VIP-статус (явно определяем переменную)
-        is_vip = await database.is_vip_user(user["telegram_id"])
-        
-        if user_discount:
-            discount_percent = user_discount["discount_percent"]
-            expires_at_discount = user_discount.get("expires_at")
+        # Персональная скидка
+        if overview.user_discount:
+            discount_percent = overview.user_discount["discount_percent"]
+            expires_at_discount = overview.user_discount.get("expires_at")
             if expires_at_discount:
                 if isinstance(expires_at_discount, str):
                     expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
@@ -6786,19 +6791,18 @@ async def process_admin_user_id(message: Message, state: FSMContext):
             else:
                 text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
         
-        # Добавляем информацию о VIP-статусе
-        if is_vip:
+        # VIP-статус
+        if overview.is_vip:
             text += f"\n👑 VIP-статус: активен\n"
         
-        # Используем subscription service для определения статуса подписки
-        subscription_status = get_subscription_status(subscription)
+        # Используем actions для определения доступных действий
         await message.answer(
             text,
             reply_markup=get_admin_user_keyboard(
-                has_active_subscription=subscription_status.is_active,
-                user_id=user["telegram_id"],
-                has_discount=has_discount,
-                is_vip=is_vip
+                has_active_subscription=overview.subscription_status.is_active,
+                user_id=overview.user["telegram_id"],
+                has_discount=overview.user_discount is not None,
+                is_vip=overview.is_vip
             ),
             parse_mode="HTML"
         )
@@ -7499,34 +7503,32 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
 
 async def _show_admin_user_card(message_or_callback, user_id: int):
     """Вспомогательная функция для отображения карточки пользователя администратору"""
-    # Получаем данные пользователя
-    user = await database.find_user_by_id_or_username(telegram_id=user_id)
-    if not user:
+    # Получаем полный обзор пользователя через admin service
+    try:
+        overview = await admin_service.get_admin_user_overview(user_id)
+    except UserNotFoundError:
         if hasattr(message_or_callback, 'edit_text'):
             await message_or_callback.edit_text("❌ Пользователь не найден", reply_markup=get_admin_back_keyboard())
         else:
             await message_or_callback.answer("❌ Пользователь не найден")
         return
     
-    # Получаем информацию о подписке
-    subscription = await database.get_subscription(user["telegram_id"])
+    # Получаем доступные действия через admin service
+    actions = admin_service.get_admin_user_actions(overview)
     
-    # Получаем расширенную статистику
-    stats = await database.get_user_extended_stats(user["telegram_id"])
-    
-    # Формируем карточку пользователя
+    # Формируем карточку пользователя (только форматирование)
     text = "👤 Пользователь\n\n"
-    text += f"Telegram ID: {user['telegram_id']}\n"
-    username_display = user.get('username') or 'не указан'
+    text += f"Telegram ID: {overview.user['telegram_id']}\n"
+    username_display = overview.user.get('username') or 'не указан'
     text += f"Username: @{username_display}\n"
     
     # Язык
-    user_language = user.get('language') or 'ru'
+    user_language = overview.user.get('language') or 'ru'
     language_display = localization.LANGUAGE_BUTTONS.get(user_language, user_language)
     text += f"Язык: {language_display}\n"
     
     # Дата регистрации
-    created_at = user.get('created_at')
+    created_at = overview.user.get('created_at')
     if created_at:
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
@@ -7537,40 +7539,34 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
     
     text += "\n"
     
-    if subscription:
-        expires_at = subscription["expires_at"]
-        if isinstance(expires_at, str):
-            expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+    # Информация о подписке
+    if overview.subscription:
+        expires_at = overview.subscription_status.expires_at
+        if expires_at:
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+        else:
+            expires_str = "—"
         
-        # Используем subscription service для определения статуса
-        subscription_status = get_subscription_status(subscription)
-        if subscription_status.is_active:
+        if overview.subscription_status.is_active:
             text += "Статус подписки: ✅ Активна\n"
         else:
             text += "Статус подписки: ⛔ Истекла\n"
         
         text += f"Срок действия: до {expires_str}\n"
-        text += f"VPN-ключ: {subscription['vpn_key']}\n"
+        text += f"VPN-ключ: {overview.subscription.get('vpn_key', '—')}\n"
     else:
         text += "Статус подписки: ❌ Нет подписки\n"
         text += "VPN-ключ: —\n"
         text += "Срок действия: —\n"
     
     # Статистика
-    text += f"\nКоличество продлений: {stats['renewals_count']}\n"
-    text += f"Количество перевыпусков: {stats['reissues_count']}\n"
+    text += f"\nКоличество продлений: {overview.stats['renewals_count']}\n"
+    text += f"Количество перевыпусков: {overview.stats['reissues_count']}\n"
     
-    # Проверяем наличие персональной скидки
-    user_discount = await database.get_user_discount(user["telegram_id"])
-    has_discount = user_discount is not None
-    
-    # Проверяем VIP-статус (явно определяем переменную)
-    is_vip = await database.is_vip_user(user["telegram_id"])
-    
-    if user_discount:
-        discount_percent = user_discount["discount_percent"]
-        expires_at_discount = user_discount.get("expires_at")
+    # Персональная скидка
+    if overview.user_discount:
+        discount_percent = overview.user_discount["discount_percent"]
+        expires_at_discount = overview.user_discount.get("expires_at")
         if expires_at_discount:
             if isinstance(expires_at_discount, str):
                 expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
@@ -7579,17 +7575,17 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
         else:
             text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
     
-    # Добавляем информацию о VIP-статусе
-    if is_vip:
+    # VIP-статус
+    if overview.is_vip:
         text += f"\n👑 VIP-статус: активен\n"
     
-    # Определяем статус подписки для клавиатуры
-    # Используем subscription service для определения статуса подписки
-    subscription_status = get_subscription_status(subscription)
-    has_active = subscription_status.is_active
-    
     # Отображаем карточку
-    keyboard = get_admin_user_keyboard(has_active_subscription=has_active, user_id=user["telegram_id"], has_discount=has_discount, is_vip=is_vip)
+    keyboard = get_admin_user_keyboard(
+        has_active_subscription=overview.subscription_status.is_active,
+        user_id=overview.user["telegram_id"],
+        has_discount=overview.user_discount is not None,
+        is_vip=overview.is_vip
+    )
     
     if hasattr(message_or_callback, 'edit_text'):
         await message_or_callback.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
