@@ -357,8 +357,10 @@ async def init_db() -> bool:
     pool = await get_pool()
     
     # 4️⃣ Yield again after pool creation to ensure pool is initialized
+    # CRITICAL: pool.acquire() MUST NOT be called before this yield completes
     await asyncio.sleep(0)
     
+    # 5️⃣ ONLY AFTER BOTH event loop yields, run migrations
     # ====================================================================================
     # VERSIONED MIGRATIONS: Применяем миграции перед созданием таблиц
     # ====================================================================================
@@ -904,9 +906,10 @@ async def init_db() -> bool:
         except Exception as e:
             logger.warning(f"Could not log database info: {e}")
         
+        # 7️⃣ If migrations and table creation succeed, mark DB_READY = True
         # ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ВСЕХ ТАБЛИЦ И users устанавливаем DB_READY = True
         DB_READY = True
-        logger.info("Database initialized successfully - all required tables verified, users table accessible")
+        logger.info("DB initialized successfully")
         return True
 
 
