@@ -65,7 +65,8 @@ async def process_auto_renewals(bot: Bot):
     async with pool.acquire() as conn:
         # Находим подписки, которые истекают в течение RENEWAL_WINDOW и имеют auto_renew = true
         # Исключаем подписки, которые уже были обработаны в этом цикле (защита от повторного списания)
-        now = datetime.now()
+        # КРИТИЧНО: Используем UTC для согласованности с БД (expires_at хранится в UTC)
+        now = datetime.utcnow()
         renewal_threshold = now + RENEWAL_WINDOW
         
         subscriptions = await conn.fetch(
