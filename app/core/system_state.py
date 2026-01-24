@@ -34,6 +34,20 @@ class ComponentStatus(Enum):
     UNAVAILABLE = "unavailable"
 
 
+class SystemSeverity(Enum):
+    """
+    PART A.1: System severity level for admin dashboard.
+    
+    Severity levels:
+    - GREEN: All critical components healthy, no issues
+    - YELLOW: System degraded (optional components degraded)
+    - RED: System unavailable (critical components unhealthy)
+    """
+    GREEN = "green"
+    YELLOW = "yellow"
+    RED = "red"
+
+
 # PART A.1: Explicitly define component criticality
 # CRITICAL components: system cannot function without them
 # OPTIONAL components: system can function with reduced capabilities
@@ -142,6 +156,75 @@ class SystemState:
         )
         
         return has_optional_degraded and not has_unavailable
+    
+    def get_severity(self, pending_activations: int = 0) -> SystemSeverity:
+        """
+        PART A.2: Calculate system severity based on component states.
+        
+        Rules:
+        - RED: system_state == UNAVAILABLE OR database != healthy OR payments != healthy
+        - YELLOW: system_state == DEGRADED OR vpn_api degraded OR pending_activations > 0
+        - GREEN: all critical components healthy AND no pending activations
+        
+        Args:
+            pending_activations: Number of pending activations (default: 0)
+        
+        Returns:
+            SystemSeverity enum value
+        """
+        # PART A.2: RED severity
+        if self.is_unavailable:
+            return SystemSeverity.RED
+        if self.database.status != ComponentStatus.HEALTHY:
+            return SystemSeverity.RED
+        if self.payments.status != ComponentStatus.HEALTHY:
+            return SystemSeverity.RED
+        
+        # PART A.2: YELLOW severity
+        if self.is_degraded:
+            return SystemSeverity.YELLOW
+        if self.vpn_api.status == ComponentStatus.DEGRADED:
+            return SystemSeverity.YELLOW
+        if pending_activations > 0:
+            return SystemSeverity.YELLOW
+        
+        # PART A.2: GREEN severity
+        return SystemSeverity.GREEN
+    
+    def get_error_summary(self) -> list:
+        """
+        PART B.4: Get compact error summary with only actionable issues.
+        
+        Returns:
+            List of error dicts with keys: component, reason, impact
+        """
+        errors = []
+        
+        # Check critical components
+        if self.database.status != ComponentStatus.HEALTHY:
+            errors.append({
+                "component": "database",
+                "reason": self.database.error or "Database unhealthy",
+                "impact": "CRITICAL: System cannot process requests"
+            })
+        
+        if self.payments.status != ComponentStatus.HEALTHY:
+            errors.append({
+                "component": "payments",
+                "reason": self.payments.error or "Payments unhealthy",
+                "impact": "CRITICAL: Payment processing unavailable"
+            })
+        
+        # Check optional components (only if critical are healthy)
+        if self.database.status == ComponentStatus.HEALTHY and self.payments.status == ComponentStatus.HEALTHY:
+            if self.vpn_api.status == ComponentStatus.DEGRADED:
+                errors.append({
+                    "component": "vpn_api",
+                    "reason": self.vpn_api.error or "VPN API degraded",
+                    "impact": "VPN provisioning disabled, activations pending"
+                })
+        
+        return errors
     
     @property
     def is_unavailable(self) -> bool:
