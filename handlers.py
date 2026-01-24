@@ -17,6 +17,7 @@ import os
 import asyncio
 import random
 from typing import Optional, Dict, Any
+from app.services.subscriptions import service as subscription_service
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
@@ -2547,13 +2548,13 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     for period_days, period_data in periods.items():
         # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены для отображения
         try:
-            price_info = await database.calculate_final_price(
+            price_info = await subscription_service.calculate_price(
                 telegram_id=telegram_id,
                 tariff=tariff_type,
                 period_days=period_days,
                 promo_code=promo_code
             )
-        except ValueError as e:
+        except (subscription_service.InvalidTariffError, subscription_service.PriceCalculationError) as e:
             logger.error(f"Error calculating price: tariff={tariff_type}, period={period_days}, error={e}")
             continue  # Пропускаем этот период если ошибка расчета
         
@@ -2696,16 +2697,16 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     
     # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
     try:
-        price_info = await database.calculate_final_price(
+        price_info = await subscription_service.calculate_price(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
             promo_code=promo_code
         )
-    except ValueError as e:
+    except (subscription_service.InvalidTariffError, subscription_service.PriceCalculationError) as e:
         error_text = localization.get_text(language, "error_tariff", default="Ошибка тарифа")
         await callback.answer(error_text, show_alert=True)
-        logger.error(f"Invalid tariff/period in calculate_final_price: user={telegram_id}, tariff={tariff_type}, period={period_days}, error={e}")
+        logger.error(f"Invalid tariff/period in calculate_price: user={telegram_id}, tariff={tariff_type}, period={period_days}, error={e}")
         return
     
     # КРИТИЧНО: Сохраняем данные в FSM state (БЕЗ создания pending_purchase)
@@ -3248,7 +3249,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     
     try:
         # КРИТИЧНО: Создаем pending_purchase ТОЛЬКО при выборе оплаты картой
-        purchase_id = await database.create_pending_purchase(
+        purchase_id = await subscription_service.create_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
@@ -3374,7 +3375,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     
     try:
         # Создаем pending_purchase
-        purchase_id = await database.create_pending_purchase(
+        purchase_id = await subscription_service.create_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
@@ -3499,7 +3500,7 @@ async def callback_topup_crypto(callback: CallbackQuery):
         # Создаем pending purchase для пополнения баланса
         # Используем tariff='basic' и period_days=0 как индикатор balance_topup
         amount_kopecks = amount * 100
-        purchase_id = await database.create_pending_purchase(
+        purchase_id = await subscription_service.create_purchase(
             telegram_id=telegram_id,
             tariff="basic",  # Используем 'basic' (требование CHECK constraint), period_days=0 будет индикатором
             period_days=0,  # Индикатор balance_topup
@@ -4347,7 +4348,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # КРИТИЧНО: Вызывается ТОЛЬКО после проверки суммы и валидности pending_purchase
     # КРИТИЧНО: VPN ключ создается и валидируется ВНУТРИ finalize_purchase ПЕРЕД финализацией платежа
     try:
-        result = await database.finalize_purchase(
+        result = await subscription_service.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider="telegram_payment",
             amount_rubles=payment_amount_rubles
