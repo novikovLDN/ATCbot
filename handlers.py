@@ -721,6 +721,10 @@ class AdminDiscountCreate(StatesGroup):
     waiting_for_expires = State()
 
 
+class CorporateAccessRequest(StatesGroup):
+    waiting_for_confirmation = State()
+
+
 class PromoCodeInput(StatesGroup):
     waiting_for_promo = State()
 
@@ -2930,6 +2934,10 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             callback_data="enter_promo"
         )],
         [InlineKeyboardButton(
+            text="🧩 Корпоративный доступ",
+            callback_data="corporate_access_request"
+        )],
+        [InlineKeyboardButton(
             text=localization.get_text(language, "back", default="⬅️ Назад в меню"),
             callback_data="menu_main"
         )],
@@ -2937,6 +2945,158 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
+
+
+@router.callback_query(F.data == "corporate_access_request")
+async def callback_corporate_access_request(callback: CallbackQuery, state: FSMContext):
+    """
+    🧩 CORPORATE ACCESS REQUEST FLOW
+    
+    Entry point: User taps "Корпоративный доступ" button.
+    Shows confirmation screen with consent text.
+    """
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    # Set FSM state
+    await state.set_state(CorporateAccessRequest.waiting_for_confirmation)
+    
+    # Show confirmation screen with consent text
+    consent_text = (
+        "Отправляя запрос, вы подтверждаете согласие\n"
+        "на обработку вашего Telegram Username и ID,\n"
+        "а также информации, добровольно предоставленной\n"
+        "вами в рамках обращения."
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить", callback_data="corporate_access_confirm")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="menu_buy_vpn")],
+    ])
+    
+    await safe_edit_text(callback.message, consent_text, reply_markup=keyboard)
+    await callback.answer()
+    
+    logger.debug(f"FSM: CorporateAccessRequest.waiting_for_confirmation set for user {telegram_id}")
+
+
+@router.callback_query(F.data == "corporate_access_confirm", StateFilter(CorporateAccessRequest.waiting_for_confirmation))
+async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """
+    🧩 CORPORATE ACCESS REQUEST FLOW
+    
+    On confirmation: Send admin notification and user confirmation.
+    """
+    if not await ensure_db_ready_callback(callback):
+        return
+    
+    telegram_id = callback.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    try:
+        # Get user data
+        username = callback.from_user.username
+        username_display = f"@{username}" if username else "не указан"
+        
+        # Get subscription status
+        subscription = await database.get_subscription(telegram_id)
+        has_active_subscription = False
+        if subscription:
+            from app.services.subscriptions.service import get_subscription_status
+            subscription_status = get_subscription_status(subscription)
+            has_active_subscription = subscription_status.is_active
+        
+        subscription_status_text = "ДА" if has_active_subscription else "НЕТ"
+        
+        # Get registration date
+        registration_date = "N/A"
+        if user and user.get("created_at"):
+            if isinstance(user["created_at"], str):
+                from datetime import datetime
+                registration_date = datetime.fromisoformat(user["created_at"]).strftime("%d.%m.%Y")
+            else:
+                registration_date = user["created_at"].strftime("%d.%m.%Y")
+        
+        # Current date
+        from datetime import datetime
+        request_date = datetime.now().strftime("%d.%m.%Y")
+        
+        # Send admin notification
+        admin_message = (
+            f"📩 Новый запрос на корпоративный доступ\n\n"
+            f"ID: {telegram_id}\n"
+            f"Username: {username_display}\n"
+            f"Дата запроса: {request_date}\n\n"
+            f"Активная подписка: {subscription_status_text}\n"
+            f"Дата регистрации в боте: {registration_date}"
+        )
+        
+        try:
+            await bot.send_message(
+                config.ADMIN_TELEGRAM_ID,
+                admin_message,
+                parse_mode=None
+            )
+            admin_notified = True
+        except Exception as e:
+            logger.critical(f"Failed to send corporate access request to admin: {e}")
+            admin_notified = False
+        
+        # Send user confirmation message
+        user_confirmation_text = (
+            "Запрос принят.\n\n"
+            "Он передан на индивидуальное рассмотрение.\n"
+            "С Вами свяжется менеджер для дальнейшего\n"
+            "согласования корпоративного доступа, ожидайте."
+        )
+        
+        user_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=localization.get_text(language, "profile", default="👤 Мой профиль"),
+                callback_data="menu_profile"
+            )],
+        ])
+        
+        await callback.message.answer(user_confirmation_text, reply_markup=user_keyboard)
+        
+        # Write audit log
+        try:
+            await database._log_audit_event_atomic_standalone(
+                "corporate_access_request",
+                telegram_id,
+                None,
+                f"Corporate access request: username={username_display}, has_active_subscription={has_active_subscription}, admin_notified={admin_notified}, requested_at={request_date}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to write audit log for corporate access request: {e}")
+        
+        # Clear FSM
+        await state.clear()
+        logger.debug(f"FSM: CorporateAccessRequest cleared after confirmation for user {telegram_id}")
+        
+        await callback.answer()
+        
+    except Exception as e:
+        logger.exception(f"Error in callback_corporate_access_confirm: {e}")
+        # Still confirm user even if admin notification fails
+        try:
+            user_confirmation_text = (
+                "Запрос принят.\n\n"
+                "Он передан на индивидуальное рассмотрение.\n"
+                "С Вами свяжется менеджер для дальнейшего\n"
+                "согласования корпоративного доступа, ожидайте."
+            )
+            await callback.message.answer(user_confirmation_text)
+        except Exception:
+            pass
+        await state.clear()
+        await callback.answer("Запрос принят", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("tariff:"))
