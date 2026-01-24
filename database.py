@@ -3980,6 +3980,7 @@ async def get_admin_referral_stats(
         return []
     
     try:
+        # FIX: Все операции с conn должны происходить строго внутри async with
         async with pool.acquire() as conn:
             # Базовый запрос для агрегированной статистики
             # Используем подзапросы для корректной агрегации
@@ -4017,73 +4018,82 @@ async def get_admin_referral_stats(
                 WHERE bt.type = 'cashback' AND bt.source = 'referral'
                 GROUP BY bt.user_id
             ) cashback_stats ON u.telegram_id = cashback_stats.referrer_user_id
-        """
+            """
+            
+            where_clauses = []
+            params = []
+            param_index = 1
+            
+            # Фильтр по поисковому запросу
+            if search_query:
+                try:
+                    # Пробуем найти по telegram_id
+                    telegram_id = int(search_query)
+                    where_clauses.append(f"u.telegram_id = ${param_index}")
+                    params.append(telegram_id)
+                    param_index += 1
+                except ValueError:
+                    # Иначе ищем по username
+                    where_clauses.append(f"LOWER(u.username) LIKE LOWER(${param_index})")
+                    params.append(f"%{search_query}%")
+                    param_index += 1
+            
+            # Фильтр: показываем только рефереров (тех, кто пригласил хотя бы одного)
+            where_clauses.append(f"ref_stats.invited_count > 0 OR EXISTS (SELECT 1 FROM referrals r2 WHERE r2.referrer_user_id = u.telegram_id)")
+            
+            # Группировка по рефереру
+            group_by = "GROUP BY u.telegram_id, u.username, ref_stats.invited_count, paid_stats.paid_count, revenue_stats.total_revenue_kopecks, cashback_stats.total_cashback_kopecks"
+            
+            # Сортировка
+            sort_column_map = {
+                "total_revenue": "total_invited_revenue_kopecks",
+                "invited_count": "invited_count",
+                "cashback_paid": "total_cashback_paid_kopecks"
+            }
+            sort_column = sort_column_map.get(sort_by, "total_invited_revenue_kopecks")
+            order_by = f"ORDER BY {sort_column} {sort_order}, u.telegram_id ASC"
+            
+            # Пагинация
+            limit_clause = f"LIMIT ${param_index} OFFSET ${param_index + 1}"
+            params.extend([limit, offset])
+            
+            # Собираем полный запрос
+            where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            full_query = f"{base_query} {where_clause} {group_by} {order_by} {limit_clause}"
+            
+            # FIX: Все операции с conn.fetch() происходят строго внутри блока async with
+            rows = await conn.fetch(full_query, *params)
+            
+            # FIX: Извлекаем все данные из rows внутри блока async with
+            # Преобразуем rows в список словарей, чтобы не зависеть от connection после выхода из блока
+            rows_data = []
+            for row in rows:
+                rows_data.append(dict(row))
         
-        where_clauses = []
-        params = []
-        param_index = 1
-        
-        # Фильтр по поисковому запросу
-        if search_query:
-            try:
-                # Пробуем найти по telegram_id
-                telegram_id = int(search_query)
-                where_clauses.append(f"u.telegram_id = ${param_index}")
-                params.append(telegram_id)
-                param_index += 1
-            except ValueError:
-                # Иначе ищем по username
-                where_clauses.append(f"LOWER(u.username) LIKE LOWER(${param_index})")
-                params.append(f"%{search_query}%")
-                param_index += 1
-        
-        # Фильтр: показываем только рефереров (тех, кто пригласил хотя бы одного)
-        where_clauses.append(f"ref_stats.invited_count > 0 OR EXISTS (SELECT 1 FROM referrals r2 WHERE r2.referrer_user_id = u.telegram_id)")
-        
-        # Группировка по рефереру
-        group_by = "GROUP BY u.telegram_id, u.username, ref_stats.invited_count, paid_stats.paid_count, revenue_stats.total_revenue_kopecks, cashback_stats.total_cashback_kopecks"
-        
-        # Сортировка
-        sort_column_map = {
-            "total_revenue": "total_invited_revenue_kopecks",
-            "invited_count": "invited_count",
-            "cashback_paid": "total_cashback_paid_kopecks"
-        }
-        sort_column = sort_column_map.get(sort_by, "total_invited_revenue_kopecks")
-        order_by = f"ORDER BY {sort_column} {sort_order}, u.telegram_id ASC"
-        
-        # Пагинация
-        limit_clause = f"LIMIT ${param_index} OFFSET ${param_index + 1}"
-        params.extend([limit, offset])
-        
-        # Собираем полный запрос
-        where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
-        full_query = f"{base_query} {where_clause} {group_by} {order_by} {limit_clause}"
-        
-        rows = await conn.fetch(full_query, *params)
-        
-        # Обрабатываем результаты с безопасной обработкой NULL
+        # FIX: Обработка результатов происходит ПОСЛЕ выхода из блока async with
+        # Это гарантирует, что conn не используется после release
         result = []
-        for row in rows:
+        for row_data in rows_data:
             try:
-                referrer_id = row["referrer_id"]
+                referrer_id = row_data.get("referrer_id")
                 if referrer_id is None:
                     continue  # Пропускаем строки без referrer_id
                 
                 # Безопасное извлечение значений с обработкой NULL
-                invited_count = safe_int(row.get("invited_count"))
-                paid_count = safe_int(row.get("paid_count"))
+                invited_count = safe_int(row_data.get("invited_count"))
+                paid_count = safe_int(row_data.get("paid_count"))
                 
                 # Вычисляем процент конверсии (защита от деления на 0)
                 conversion_percent = (paid_count / invited_count * 100) if invited_count > 0 else 0.0
                 
                 # Конвертируем из копеек в рубли с безопасной обработкой NULL
-                total_invited_revenue_kopecks = safe_int(row.get("total_invited_revenue_kopecks"))
-                total_cashback_paid_kopecks = safe_int(row.get("total_cashback_paid_kopecks"))
+                total_invited_revenue_kopecks = safe_int(row_data.get("total_invited_revenue_kopecks"))
+                total_cashback_paid_kopecks = safe_int(row_data.get("total_cashback_paid_kopecks"))
                 total_invited_revenue = total_invited_revenue_kopecks / 100.0
                 total_cashback_paid = total_cashback_paid_kopecks / 100.0
                 
                 # Определяем текущий процент кешбэка (безопасно)
+                # FIX: Вызываем после выхода из блока conn, чтобы избежать проблем с connection lifecycle
                 try:
                     current_cashback_percent = await get_referral_cashback_percent(referrer_id)
                 except Exception as e:
@@ -4092,21 +4102,22 @@ async def get_admin_referral_stats(
                 
                 result.append({
                     "referrer_id": referrer_id,
-                    "username": row.get("username") or f"ID{referrer_id}",
+                    "username": row_data.get("username") or f"ID{referrer_id}",
                     "invited_count": invited_count,
                     "paid_count": paid_count,
                     "conversion_percent": round(conversion_percent, 2),
                     "total_invited_revenue": round(total_invited_revenue, 2),
                     "total_cashback_paid": round(total_cashback_paid, 2),
                     "current_cashback_percent": current_cashback_percent,
-                    "first_referral_date": row.get("first_referral_date")
+                    "first_referral_date": row_data.get("first_referral_date")
                 })
             except Exception as e:
-                logger.exception(f"Error processing row in get_admin_referral_stats: {e}, row={dict(row)}")
+                logger.exception(f"Error processing row in get_admin_referral_stats: {e}, row={row_data}")
                 continue  # Пропускаем проблемные строки, но продолжаем обработку
         
         return result
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except asyncpg.exceptions.PostgresError as e:
+        # FIX: asyncpg.ProgrammingError не существует, используем PostgresError
         logger.warning(f"referrals or related tables missing or inaccessible — skipping admin referral stats: {e}")
         return []
     except Exception as e:
