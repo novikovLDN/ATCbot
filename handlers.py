@@ -705,6 +705,9 @@ class IncidentEdit(StatesGroup):
 
 class AdminGrantAccess(StatesGroup):
     waiting_for_days = State()
+    waiting_for_duration_value = State()
+    waiting_for_duration_unit = State()
+    waiting_for_notify_user = State()
 
 
 class AdminDiscountCreate(StatesGroup):
@@ -1220,6 +1223,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
 def get_admin_dashboard_keyboard():
     """Клавиатура главного экрана админ-дашборда"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Admin Dashboard", callback_data="admin:dashboard")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin:stats")],
         [InlineKeyboardButton(text="💰 Аналитика", callback_data="admin:analytics")],
         [InlineKeyboardButton(text="📈 Метрики", callback_data="admin:metrics")],
@@ -2617,6 +2621,19 @@ async def callback_copy_key(callback: CallbackQuery):
     
     # Получаем активную подписку (проверка через subscriptions)
     subscription = await database.get_subscription(telegram_id)
+    
+    # PART 8: Fix pending activation UX - disable copy key button until active
+    if subscription:
+        activation_status = subscription.get("activation_status", "active")
+        if activation_status == "pending":
+            error_text = localization.get_text(
+                language,
+                "error_activation_pending",
+                default="⏳ Активация в процессе. VPN ключ будет доступен после завершения активации."
+            )
+            logging.info(f"copy_key: Activation pending for user {telegram_id}")
+            await callback.answer(error_text, show_alert=True)
+            return
     
     if not subscription or not subscription.get("vpn_key"):
         error_text = localization.get_text(language, "error_no_active_subscription", default="❌ Активная подписка не найдена")
@@ -6043,6 +6060,59 @@ async def cmd_pending_activations(message: Message):
         await message.answer(f"❌ Ошибка при получении данных: {e}")
 
 
+@router.callback_query(F.data == "admin:dashboard")
+async def callback_admin_dashboard(callback: CallbackQuery):
+    """
+    2. ADMIN DASHBOARD UI (TELEGRAM)
+    
+    Display real-time system health with severity indicator.
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    try:
+        from app.core.system_health import evaluate_system_health, get_error_summary_compact
+        
+        # Get system health report
+        health_report = await evaluate_system_health()
+        error_summary = await get_error_summary_compact()
+        
+        # Build dashboard text
+        text = f"📊 Admin Dashboard\n\n"
+        text += health_report.summary
+        text += "\n\n"
+        
+        # Add error summary if any
+        if error_summary:
+            text += "⚠️ ACTIVE ISSUES:\n\n"
+            for i, error in enumerate(error_summary[:5], 1):  # Limit to 5 issues
+                text += f"{i}. {error['component'].upper()}: {error['reason']}\n"
+                text += f"   → {error['impact']}\n\n"
+        
+        # Add refresh button
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:dashboard")],
+            [InlineKeyboardButton(text="🧪 Тесты", callback_data="admin:test_menu")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+        ])
+        
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await callback.answer()
+        
+        # Audit log
+        await database._log_audit_event_atomic_standalone(
+            "admin_dashboard_viewed",
+            callback.from_user.id,
+            None,
+            f"Admin viewed dashboard: severity={health_report.level.value}, issues={len(error_summary)}"
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_dashboard: {e}")
+        await callback.answer("Ошибка при получении данных дашборда", show_alert=True)
+
+
 @router.callback_query(F.data == "admin:main")
 async def callback_admin_main(callback: CallbackQuery):
     """Главный экран админ-дашборда"""
@@ -7618,7 +7688,11 @@ async def callback_admin_user_history(callback: CallbackQuery):
 
 
 def get_admin_grant_days_keyboard(user_id: int):
-    """Клавиатура для выбора срока доступа (1/7/14 дней, 1 год или 10 минут)"""
+    """
+    5. ADVANCED ACCESS CONTROL (GRANT / REVOKE)
+    
+    Keyboard for selecting access duration with quick options and custom duration.
+    """
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="1 день", callback_data=f"admin:grant_days:{user_id}:1"),
@@ -7632,6 +7706,9 @@ def get_admin_grant_days_keyboard(user_id: int):
         ],
         [
             InlineKeyboardButton(text="⏱ Доступ на 10 минут", callback_data=f"admin:grant_minutes:{user_id}:10"),
+        ],
+        [
+            InlineKeyboardButton(text="⚙️ Настроить (дни/часы/минуты)", callback_data=f"admin:grant_custom:{user_id}"),
         ],
         [
             InlineKeyboardButton(text="🔙 Назад", callback_data="admin:user"),
