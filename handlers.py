@@ -705,9 +705,15 @@ class IncidentEdit(StatesGroup):
 
 class AdminGrantAccess(StatesGroup):
     waiting_for_days = State()
-    waiting_for_duration_value = State()
-    waiting_for_duration_unit = State()
-    waiting_for_notify_user = State()
+    waiting_for_duration_unit = State()  # PART 1: Select unit first (minutes/hours/days)
+    waiting_for_duration_value = State()  # PART 1: Then enter value
+    waiting_for_notify_choice = State()  # PART 1: Then notify choice
+    confirming = State()
+
+
+class AdminRevokeAccess(StatesGroup):
+    waiting_for_notify_choice = State()  # PART 4: Notify choice for revoke
+    confirming = State()
 
 
 class AdminDiscountCreate(StatesGroup):
@@ -7938,10 +7944,204 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
         await state.clear()
 
 
+@router.callback_query(F.data.startswith("admin:grant_custom:"))
+async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext):
+    """
+    PART 1: Start custom grant flow - select duration unit first.
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        user_id = int(callback.data.split(":")[2])
+        await state.update_data(user_id=user_id)
+        
+        text = "⚙️ Настройка доступа\n\nВыберите единицу времени:"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⏱ Минуты", callback_data="admin:grant:unit:minutes")],
+            [InlineKeyboardButton(text="🕐 Часы", callback_data="admin:grant:unit:hours")],
+            [InlineKeyboardButton(text="📅 Дни", callback_data="admin:grant:unit:days")],
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:grant:{user_id}")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(AdminGrantAccess.waiting_for_duration_unit)
+        
+        logger.debug(f"FSM: AdminGrantAccess.waiting_for_duration_unit set for user {user_id}")
+        
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_custom: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:grant:unit:"), StateFilter(AdminGrantAccess.waiting_for_duration_unit))
+async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
+    """
+    PART 1: Process duration unit selection, move to value input.
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        unit = callback.data.split(":")[3]  # minutes, hours, days
+        await state.update_data(duration_unit=unit)
+        
+        unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(unit, unit)
+        text = f"⚙️ Настройка доступа\n\nЕдиница: {unit_text}\n\nВведите количество (положительное число):"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:main")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(AdminGrantAccess.waiting_for_duration_value)
+        
+        logger.debug(f"FSM: AdminGrantAccess.waiting_for_duration_value set, unit={unit}")
+        
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_unit: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+        await state.clear()
+
+
+@router.message(StateFilter(AdminGrantAccess.waiting_for_duration_value))
+async def process_admin_grant_value(message: Message, state: FSMContext):
+    """
+    PART 1: Process duration value input, move to notify choice.
+    """
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer("Недостаточно прав доступа")
+        await state.clear()
+        return
+    
+    try:
+        value = int(message.text.strip())
+        if value <= 0:
+            await message.answer("❌ Введите положительное число")
+            return
+        
+        data = await state.get_data()
+        unit = data.get("duration_unit")
+        unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(unit, unit)
+        
+        await state.update_data(duration_value=value)
+        
+        text = f"⚙️ Настройка доступа\n\nПродолжительность: {value} {unit_text}\n\nУведомить пользователя?"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔔 Да", callback_data="admin:grant:notify:yes")],
+            [InlineKeyboardButton(text="🔕 Нет", callback_data="admin:grant:notify:no")],
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:main")],
+        ])
+        await message.answer(text, reply_markup=keyboard)
+        await state.set_state(AdminGrantAccess.waiting_for_notify_choice)
+        
+        logger.debug(f"FSM: AdminGrantAccess.waiting_for_notify_choice set, value={value}, unit={unit}")
+        
+    except ValueError:
+        await message.answer("❌ Введите число")
+    except Exception as e:
+        logger.exception(f"Error in process_admin_grant_value: {e}")
+        await message.answer("Ошибка")
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:grant:notify:"), StateFilter(AdminGrantAccess.waiting_for_notify_choice))
+async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """
+    PART 1: Execute grant access with notify_user choice.
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        notify_user = callback.data.split(":")[3] == "yes"
+        data = await state.get_data()
+        user_id = data.get("user_id")
+        duration_value = data.get("duration_value")
+        duration_unit = data.get("duration_unit")
+        
+        if not all([user_id, duration_value, duration_unit]):
+            await callback.answer("Ошибка: данные не найдены", show_alert=True)
+            await state.clear()
+            return
+        
+        # PART 3: Convert duration to timedelta
+        from datetime import timedelta
+        if duration_unit == "minutes":
+            duration = timedelta(minutes=duration_value)
+        elif duration_unit == "hours":
+            duration = timedelta(hours=duration_value)
+        else:  # days
+            duration = timedelta(days=duration_value)
+        
+        logger.debug(f"FSM: Executing grant for user {user_id}, duration={duration}, notify_user={notify_user}")
+        
+        # PART 3: Execute grant_access
+        try:
+            result = await database.grant_access(
+                telegram_id=user_id,
+                duration=duration,
+                source="admin",
+                admin_telegram_id=callback.from_user.id,
+                admin_grant_days=None  # Custom duration
+            )
+            
+            expires_at = result["subscription_end"]
+            vpn_key = result.get("vless_url") or result.get("uuid", "")
+            
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(duration_unit, duration_unit)
+            text = f"✅ Доступ выдан на {duration_value} {unit_text}"
+            if notify_user:
+                text += "\nПользователь уведомлён."
+            else:
+                text += "\nДействие выполнено без уведомления."
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            
+            # PART 6: Notify user if flag is True
+            if notify_user and vpn_key:
+                try:
+                    user_lang = await database.get_user(user_id)
+                    language = user_lang.get("language", "ru") if user_lang else "ru"
+                    vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
+                    user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
+                    await bot.send_message(user_id, user_text, parse_mode="HTML")
+                except Exception as e:
+                    logger.exception(f"Error sending notification to user {user_id}: {e}")
+            
+            # PART 6: Audit log
+            await database._log_audit_event_atomic_standalone(
+                "admin_grant_access_custom",
+                callback.from_user.id,
+                user_id,
+                f"Admin granted {duration_value} {duration_unit} access, notify_user={notify_user}, expires_at={expires_str}"
+            )
+            
+        except Exception as e:
+            logger.exception(f"Error granting custom access: {e}")
+            await callback.message.answer(f"❌ Ошибка: {str(e)[:100]}", reply_markup=get_admin_back_keyboard())
+        
+        await state.clear()
+        logger.debug(f"FSM: AdminGrantAccess cleared after grant")
+        
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_notify: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+        await state.clear()
+
+
 @router.callback_query(F.data.startswith("admin:revoke:"))
-async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
-    """Обработчик кнопки 'Лишить доступа'"""
-    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
+async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """
+    PART 4: Admin revoke access - ask for notify choice first.
+    """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7951,39 +8151,96 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
     try:
         user_id = int(callback.data.split(":")[2])
         
-        # Лишаем доступа
+        # PART 4: Save user_id and ask for notify choice
+        await state.update_data(user_id=user_id)
+        
+        text = "❌ Лишить доступа\n\nУведомить пользователя?"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔔 Да", callback_data="admin:revoke:notify:yes")],
+            [InlineKeyboardButton(text="🔕 Нет", callback_data="admin:revoke:notify:no")],
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:user")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        await state.set_state(AdminRevokeAccess.waiting_for_notify_choice)
+        
+        logger.debug(f"FSM: AdminRevokeAccess.waiting_for_notify_choice set for user {user_id}")
+        
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_revoke: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:revoke:notify:"), StateFilter(AdminRevokeAccess.waiting_for_notify_choice))
+async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state: FSMContext):
+    """
+    PART 4: Execute revoke with notify_user choice.
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        notify_user = callback.data.split(":")[3] == "yes"
+        data = await state.get_data()
+        user_id = data.get("user_id")
+        
+        if not user_id:
+            await callback.answer("Ошибка: user_id не найден", show_alert=True)
+            await state.clear()
+            return
+        
+        logger.debug(f"FSM: Executing revoke for user {user_id}, notify_user={notify_user}")
+        
+        # PART 4: Execute revoke
         revoked = await database.admin_revoke_access_atomic(
             telegram_id=user_id,
             admin_telegram_id=callback.from_user.id
         )
         
         if not revoked:
-            # Нет активной подписки
             text = "❌ У пользователя нет активной подписки"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
-            # Успешно
-            text = "✅ Доступ отозван\nПользователь уведомлён."
+            text = "✅ Доступ отозван"
+            if notify_user:
+                text += "\nПользователь уведомлён."
+            else:
+                text += "\nДействие выполнено без уведомления."
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
-            # Уведомляем пользователя
-            try:
-                user_lang = await database.get_user(user_id)
-                language = user_lang.get("language", "ru") if user_lang else "ru"
-                
-                user_text = localization.get_text(language, "admin_revoke_user_notification")
-                await bot.send_message(user_id, user_text)
-            except Exception as e:
-                logging.exception(f"Error sending notification to user {user_id}: {e}")
+            # PART 6: Notify user if flag is True
+            if notify_user:
+                try:
+                    user_lang = await database.get_user(user_id)
+                    language = user_lang.get("language", "ru") if user_lang else "ru"
+                    user_text = localization.get_text(
+                        language,
+                        "admin_revoke_user_notification",
+                        default="❌ Ваш доступ был отозван администратором."
+                    )
+                    await bot.send_message(user_id, user_text)
+                except Exception as e:
+                    logger.exception(f"Error sending notification to user {user_id}: {e}")
+            
+            # PART 6: Audit log
+            await database._log_audit_event_atomic_standalone(
+                "admin_revoke_access",
+                callback.from_user.id,
+                user_id,
+                f"Admin revoked access, notify_user={notify_user}"
+            )
+        
+        await state.clear()
+        logger.debug(f"FSM: AdminRevokeAccess cleared after revoke")
         
     except Exception as e:
-        logging.exception(f"Error in callback_admin_revoke: {e}")
-        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("admin:revoke:"))
-async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
+        logger.exception(f"Error in callback_admin_revoke_notify: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+        await state.clear()
     """Обработчик кнопки 'Лишить доступа'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
