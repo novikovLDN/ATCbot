@@ -3027,16 +3027,16 @@ async def grant_access(
         conn: Соединение с БД (если None, создаётся новое)
     
     Returns:
-        {
-            "uuid": str,
-            "vless_url": Optional[str],  # только если новый UUID
-            "subscription_end": datetime
-        }
+        Dict[str, Any] with keys:
+            - "uuid": Optional[str] - UUID (None for pending activation)
+            - "vless_url": Optional[str] - VLESS URL (None for renewal, present for new issuance)
+            - "subscription_end": datetime - Subscription expiration date
+            - "action": str - "renewal", "new_issuance", or "pending_activation"
         
-        Или None при ошибке
+        Guaranteed to return a dict. Never returns None.
     
     Raises:
-        Exception: При любых ошибках (не возвращает None, выбрасывает исключение)
+        Exception: При любых ошибках (транзакция откатывается, исключение пробрасывается)
     """
     if conn is None:
         pool = await get_pool()
@@ -5917,7 +5917,7 @@ async def get_ab_test_stats(broadcast_id: int) -> Optional[Dict[str, Any]]:
         }
 
 
-async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_id: int) -> Tuple[Optional[datetime], Optional[str]]:
+async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_id: int) -> Tuple[datetime, str]:
     """Атомарно выдать доступ пользователю на N дней (админ)
     
     Использует единую функцию grant_access (защищена от двойного создания ключей).
@@ -5928,7 +5928,13 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
         admin_telegram_id: Telegram ID администратора
     
     Returns:
-        (expires_at, vpn_key) или (None, None) при ошибке или отсутствии ключей
+        Tuple[datetime, str]: (expires_at, vpn_key)
+        - expires_at: Дата истечения подписки
+        - vpn_key: VPN ключ (vless_url для нового UUID, vpn_key из подписки для продления, или uuid как fallback)
+    
+    Raises:
+        Exception: При любых ошибках (транзакция откатывается, исключение пробрасывается)
+        Гарантированно возвращает значения или выбрасывает исключение. Никогда не возвращает None.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -6241,7 +6247,7 @@ async def finalize_balance_topup(
             }
 
 
-async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admin_telegram_id: int) -> Tuple[Optional[datetime], Optional[str]]:
+async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admin_telegram_id: int) -> Tuple[datetime, str]:
     """Атомарно выдать доступ пользователю на N минут (админ)
     
     Использует единую функцию grant_access (защищена от двойного создания ключей).
@@ -6252,7 +6258,13 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
         admin_telegram_id: Telegram ID администратора
     
     Returns:
-        (expires_at, vpn_key) или (None, None) при ошибке или отсутствии ключей
+        Tuple[datetime, str]: (expires_at, vpn_key)
+        - expires_at: Дата истечения подписки
+        - vpn_key: VPN ключ (vless_url для нового UUID, vpn_key из подписки для продления, или uuid как fallback)
+    
+    Raises:
+        Exception: При любых ошибках (транзакция откатывается, исключение пробрасывается)
+        Гарантированно возвращает значения или выбрасывает исключение. Никогда не возвращает None.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:

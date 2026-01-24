@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 # B4.1 - SYSTEM STATE TRANSITIONS: In-memory previous state tracking
 _previous_system_state: Optional[SystemState] = None
 
+# Alert spam protection: Track last sent time to prevent spam
+_health_alert_state: dict[str, datetime] = {}  # alert_key -> last_sent_at
+HEALTH_ALERT_COOLDOWN_SECONDS = 3600  # 1 hour minimum between alerts
+
 
 async def check_database_connection() -> Tuple[bool, str]:
     """Проверить подключение к PostgreSQL
@@ -319,13 +323,54 @@ async def send_health_alert(bot: Bot, messages: List[str]):
         messages: Список сообщений о проблемах
     
     NOTE: Read-only healthcheck - NO INSERT/UPDATE, NO audit_log writes
+    NOTE: Spam protection - only sends once per cooldown period
     """
+    global _health_alert_state
+    
+    # Check cooldown to prevent spam
+    now = datetime.utcnow()
+    alert_key = "health_check_failed"
+    last_sent = _health_alert_state.get(alert_key)
+    
+    if last_sent and (now - last_sent).total_seconds() < HEALTH_ALERT_COOLDOWN_SECONDS:
+        logger.debug(
+            f"Health check alert skipped (cooldown active, "
+            f"last_sent={last_sent.isoformat()}, "
+            f"cooldown={HEALTH_ALERT_COOLDOWN_SECONDS}s)"
+        )
+        return
+    
+    # Check incident context - track alerts per incident to prevent duplicates
+    incident_id = None
+    incident_alert_key = alert_key
+    try:
+        from app.core.audit_policy import get_incident_context
+        incident_context = get_incident_context()
+        incident_id = incident_context.get_incident_id()
+        
+        # Track incident-specific alerts: incident_id -> last_sent_at
+        if incident_id:
+            incident_alert_key = f"{alert_key}:{incident_id}"
+            
+            # If we already sent alert for this specific incident, skip
+            if incident_alert_key in _health_alert_state:
+                logger.debug(f"Health check alert skipped (already sent for incident {incident_id})")
+                return
+    except Exception:
+        # If incident context fails, continue anyway (non-blocking)
+        pass
+    
     try:
         alert_text = "🚨 Health Check Alert\n\nОбнаружены проблемы:\n\n"
         alert_text += "\n".join(f"• {msg}" for msg in messages)
         
         await bot.send_message(config.ADMIN_TELEGRAM_ID, alert_text)
-        logger.warning(f"Health check alert sent to admin: {alert_text}")
+        logger.error(f"Health check alert sent to admin: {alert_text}")  # ERROR for critical alerts
+        
+        # Update state tracking (both general and incident-specific)
+        _health_alert_state[alert_key] = now
+        if incident_id:
+            _health_alert_state[incident_alert_key] = now
         
         # НЕ записываем в audit_log - healthcheck должен быть read-only
         # Если audit_log таблица отсутствует, это не должно ломать healthcheck
@@ -335,20 +380,30 @@ async def send_health_alert(bot: Bot, messages: List[str]):
 
 async def health_check_task(bot: Bot):
     """Фоновая задача для health-check (выполняется каждые 10 минут)"""
+    global _health_alert_state
+    previous_all_ok = None
+    
     while True:
         try:
             all_ok, messages = await perform_health_check()
             
+            # Clear alert state if system recovered
+            if previous_all_ok is False and all_ok is True:
+                _health_alert_state.clear()
+                logger.info("Health check recovered - alert state cleared")
+            
             if not all_ok:
-                # Отправляем алерт только если есть проблемы
+                # Only send alert if state changed or cooldown expired (spam protection in send_health_alert)
                 await send_health_alert(bot, messages)
-                logger.warning(f"Health check failed: {messages}")
+                logger.error(f"Health check failed: {messages}")  # ERROR for system failures
             else:
                 logger.info("Health check passed: all components OK")
+            
+            previous_all_ok = all_ok
                 
         except Exception as e:
             logger.exception(f"Error in health_check_task: {e}")
-            # При критической ошибке тоже отправляем алерт
+            # При критической ошибке тоже отправляем алерт (with spam protection)
             try:
                 error_msg = f"Критическая ошибка health-check: {str(e)}"
                 await send_health_alert(bot, [error_msg])

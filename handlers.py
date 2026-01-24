@@ -3038,7 +3038,8 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
         from datetime import datetime
         request_date = datetime.now().strftime("%d.%m.%Y")
         
-        # Send admin notification
+        # Send admin notification using unified service
+        import admin_notifications
         admin_message = (
             f"📩 Новый запрос на корпоративный доступ\n\n"
             f"ID: {telegram_id}\n"
@@ -3048,16 +3049,12 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
             f"Дата регистрации в боте: {registration_date}"
         )
         
-        try:
-            await bot.send_message(
-                config.ADMIN_TELEGRAM_ID,
-                admin_message,
-                parse_mode=None
-            )
-            admin_notified = True
-        except Exception as e:
-            logger.critical(f"Failed to send corporate access request to admin: {e}")
-            admin_notified = False
+        admin_notified = await admin_notifications.send_admin_notification(
+            bot=bot,
+            message=admin_message,
+            notification_type="corporate_access_request",
+            parse_mode=None
+        )
         
         # Send user confirmation message
         user_confirmation_text = (
@@ -8263,14 +8260,19 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             
             # PART 6: Notify user if flag is True
             if notify_user and vpn_key:
-                try:
-                    user_lang = await database.get_user(user_id)
-                    language = user_lang.get("language", "ru") if user_lang else "ru"
-                    vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
-                    user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
-                    await bot.send_message(user_id, user_text, parse_mode="HTML")
-                except Exception as e:
-                    logger.exception(f"Error sending notification to user {user_id}: {e}")
+                import admin_notifications
+                user_lang = await database.get_user(user_id)
+                language = user_lang.get("language", "ru") if user_lang else "ru"
+                vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
+                user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
+                # Use unified notification service
+                await admin_notifications.send_user_notification(
+                    bot=bot,
+                    user_id=user_id,
+                    message=user_text,
+                    notification_type="admin_grant_custom",
+                    parse_mode="HTML"
+                )
             
             # PART 6: Audit log
             await database._log_audit_event_atomic_standalone(
@@ -8328,16 +8330,16 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
         
         # 4️⃣ IMPLEMENT NOTIFY LOGIC: For admin:notify:yes
         if notify:
-            try:
-                # 4️⃣ IMPLEMENT NOTIFY LOGIC: Send message to target user
-                user_text = f"Администратор выдал вам доступ на {minutes} минут"
-                await bot.send_message(user_id, user_text)
-                
-                # 4️⃣ ЛОГИРОВАНИЕ: при отправке уведомления
+            # Use unified notification service
+            import admin_notifications
+            success = await admin_notifications.send_user_notification(
+                bot=bot,
+                user_id=user_id,
+                message=f"Администратор выдал вам доступ на {minutes} минут",
+                notification_type="admin_grant_minutes"
+            )
+            if success:
                 logger.info(f"NOTIFICATION_SENT [type=admin_grant, user_id={user_id}, minutes={minutes}]")
-            except Exception as e:
-                logger.exception(f"Error sending notification to user {user_id}: {e}")
-                # 6️⃣ ERROR HANDLING: Don't crash, just log
         
         # 4️⃣ IMPLEMENT NOTIFY LOGIC: For admin:notify:no
         else:
@@ -8359,6 +8361,141 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
         # 6️⃣ ERROR HANDLING: NO generic Exception raises, graceful exit
         logger.warning(f"Unexpected error in callback_admin_grant_minutes_notify: {e}")
         await callback.answer("Ошибка", show_alert=True)
+
+
+@router.callback_query(
+    (F.data == "admin:notify:yes") | (F.data == "admin:notify:no"),
+    StateFilter(AdminGrantAccess.waiting_for_notify)
+)
+async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """
+    Handle notify choice for grant_days and grant_1_year (FSM-based flow).
+    This handler works WITH FSM state (unlike minutes handler which is FSM-free).
+    
+    FIX: Missing handler for admin:notify:yes and admin:notify:no used by grant_days and grant_1_year.
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав доступа", show_alert=True)
+        return
+    
+    await callback.answer()
+    
+    try:
+        notify = callback.data == "admin:notify:yes"
+        data = await state.get_data()
+        user_id = data.get("user_id")
+        action_type = data.get("action_type")
+        
+        if not user_id or not action_type:
+            logger.warning(f"Missing FSM data: user_id={user_id}, action_type={action_type}")
+            await callback.answer("Ошибка: данные не найдены", show_alert=True)
+            await state.clear()
+            return
+        
+        logger.info(f"ADMIN_GRANT_NOTIFY_SELECTED [notify={notify}, user_id={user_id}, action_type={action_type}]")
+        
+        # Execute grant based on action_type (treat as side-effect, don't check return value)
+        if action_type == "grant_days":
+            days = data.get("days")
+            if not days:
+                logger.error(f"Missing days in FSM for grant_days")
+                await callback.answer("Ошибка: данные не найдены", show_alert=True)
+                await state.clear()
+                return
+            
+            # FIX: Execute grant (treat as side-effect, don't check return value)
+            try:
+                await database.admin_grant_access_atomic(
+                    telegram_id=user_id,
+                    days=days,
+                    admin_telegram_id=callback.from_user.id
+                )
+                # If no exception → grant is successful (don't check return value)
+            except Exception as e:
+                logger.exception(f"Failed to grant access: {e}")
+                await callback.answer("Ошибка выдачи доступа", show_alert=True)
+                await state.clear()
+                return
+            
+            text = f"✅ Доступ выдан на {days} дней"
+            
+            if notify:
+                try:
+                    user_text = f"Администратор выдал вам доступ на {days} дней"
+                    await bot.send_message(user_id, user_text)
+                    logger.info(f"NOTIFICATION_SENT [type=admin_grant, user_id={user_id}, days={days}]")
+                    text += "\nПользователь уведомлён."
+                except Exception as e:
+                    logger.exception(f"Error sending notification: {e}")
+                    text += "\nОшибка отправки уведомления."
+            else:
+                logger.info(f"ADMIN_GRANT_NOTIFY_SKIPPED [user_id={user_id}, days={days}]")
+                text += "\nДействие выполнено без уведомления."
+            
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            
+            # Audit log
+            await database._log_audit_event_atomic_standalone(
+                "admin_grant_access",
+                callback.from_user.id,
+                user_id,
+                f"Admin granted {days} days access, notify_user={notify}"
+            )
+        
+        elif action_type == "grant_1_year":
+            # FIX: Execute grant (treat as side-effect, don't check return value)
+            try:
+                await database.admin_grant_access_atomic(
+                    telegram_id=user_id,
+                    days=365,
+                    admin_telegram_id=callback.from_user.id
+                )
+                # If no exception → grant is successful (don't check return value)
+            except Exception as e:
+                logger.exception(f"Failed to grant access: {e}")
+                await callback.answer("Ошибка выдачи доступа", show_alert=True)
+                await state.clear()
+                return
+            
+            text = "✅ Доступ на 1 год выдан"
+            
+            if notify:
+                # Use unified notification service
+                import admin_notifications
+                success = await admin_notifications.send_user_notification(
+                    bot=bot,
+                    user_id=user_id,
+                    message="Администратор выдал вам доступ на 1 год",
+                    notification_type="admin_grant_1_year"
+                )
+                if success:
+                    logger.info(f"NOTIFICATION_SENT [type=admin_grant, user_id={user_id}, duration=1_year]")
+                    text += "\nПользователь уведомлён."
+                    text += "\nОшибка отправки уведомления."
+            else:
+                logger.info(f"ADMIN_GRANT_NOTIFY_SKIPPED [user_id={user_id}, duration=1_year]")
+                text += "\nДействие выполнено без уведомления."
+            
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            
+            # Audit log
+            await database._log_audit_event_atomic_standalone(
+                "admin_grant_access_1_year",
+                callback.from_user.id,
+                user_id,
+                f"Admin granted 1 year access, notify_user={notify}"
+            )
+        
+        else:
+            logger.warning(f"Unknown action_type: {action_type}")
+            await callback.answer("Ошибка: неизвестный тип действия", show_alert=True)
+        
+        await state.clear()
+        
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_quick_notify_fsm: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("admin:revoke:user:"))
@@ -8483,14 +8620,21 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
                     try:
                         # 3️⃣ ОТПРАВКА УВЕДОМЛЕНИЯ: используем telegram_id из FSM (НЕ из callback)
                         # 3️⃣ ОТПРАВКА УВЕДОМЛЕНИЯ: текст без форматных рисков (фиксированный)
+                        # Use unified notification service
+                        import admin_notifications
                         user_text = (
                             "Ваш доступ был отозван администратором.\n"
                             "Если вы считаете это ошибкой — обратитесь в поддержку."
                         )
-                        await bot.send_message(user_id, user_text)
-                        
-                        # 4️⃣ ЛОГИРОВАНИЕ: при отправке уведомления
-                        logger.info(f"NOTIFICATION_SENT [type=admin_revoke, user_id={user_id}]")
+                        success = await admin_notifications.send_user_notification(
+                            bot=bot,
+                            user_id=user_id,
+                            message=user_text,
+                            notification_type="admin_revoke"
+                        )
+                        if success:
+                            # 4️⃣ ЛОГИРОВАНИЕ: при отправке уведомления
+                            logger.info(f"NOTIFICATION_SENT [type=admin_revoke, user_id={user_id}]")
                     except Exception as e:
                         logger.exception(f"Error sending notification to user {user_id}: {e}")
                         # Не прерываем выполнение - revoke уже выполнен

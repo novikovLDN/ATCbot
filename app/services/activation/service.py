@@ -299,10 +299,14 @@ async def attempt_activation(
     """
     Attempt to activate a subscription by calling VPN API.
     
+    IDEMPOTENCY: This function is idempotent - if subscription is already active,
+    it will not create duplicate UUIDs or overwrite existing activation.
+    
     This function:
-    - Calls VPN API to create UUID
+    - Checks subscription status (idempotency)
+    - Calls VPN API to create UUID (only if pending)
     - Validates UUID and vless_url
-    - Updates subscription in database
+    - Updates subscription in database (with idempotency check)
     - Returns activation result
     
     Args:
@@ -317,7 +321,66 @@ async def attempt_activation(
     Raises:
         VPNActivationError: If VPN API call fails
         ActivationFailedError: If activation fails for other reasons
+        ActivationNotAllowedError: If subscription is not in pending state
     """
+    if conn is None:
+        pool = await database.get_pool()
+        if pool is None:
+            raise ActivationFailedError("Database pool is not available")
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                return await _attempt_activation_with_idempotency(
+                    conn, subscription_id, telegram_id, current_attempts
+                )
+    else:
+        async with conn.transaction():
+            return await _attempt_activation_with_idempotency(
+                conn, subscription_id, telegram_id, current_attempts
+            )
+
+
+async def _attempt_activation_with_idempotency(
+    conn: Any,
+    subscription_id: int,
+    telegram_id: int,
+    current_attempts: int
+) -> ActivationResult:
+    """
+    Internal helper with idempotency check.
+    
+    Uses row-level locking (FOR UPDATE SKIP LOCKED) to prevent race conditions.
+    """
+    # IDEMPOTENCY CHECK: Verify subscription is still pending before proceeding
+    # Use row-level locking to prevent race conditions
+    subscription_row = await conn.fetchrow(
+        """SELECT activation_status, uuid, vpn_key, activation_attempts
+           FROM subscriptions
+           WHERE id = $1
+           FOR UPDATE SKIP LOCKED""",
+        subscription_id
+    )
+    
+    if not subscription_row:
+        raise ActivationFailedError(f"Subscription {subscription_id} not found")
+    
+    current_status = subscription_row["activation_status"]
+    
+    # IDEMPOTENCY: If already active, return existing activation (don't create duplicate UUID)
+    if current_status == "active":
+        return ActivationResult(
+            success=True,
+            uuid=subscription_row.get("uuid"),
+            vpn_key=subscription_row.get("vpn_key"),
+            activation_status="active",
+            attempts=subscription_row.get("activation_attempts", current_attempts)
+        )
+    
+    # Verify still pending
+    if current_status != "pending":
+        raise ActivationNotAllowedError(
+            f"Subscription {subscription_id} is not pending (status={current_status})"
+        )
+    
     # Check if VPN API is available
     if not config.VPN_ENABLED:
         raise VPNActivationError("VPN API is not enabled")
@@ -342,17 +405,39 @@ async def attempt_activation(
     if not vpn_utils.validate_vless_link(vless_url):
         raise VPNActivationError("VPN API returned invalid vless_url (contains flow=)")
     
-    # Update subscription in database
-    if conn is None:
-        pool = await database.get_pool()
-        if pool is None:
-            raise ActivationFailedError("Database pool is not available")
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await _update_subscription_activated(conn, subscription_id, new_uuid, vless_url, current_attempts + 1)
-    else:
-        async with conn.transaction():
-            await _update_subscription_activated(conn, subscription_id, new_uuid, vless_url, current_attempts + 1)
+    # Update subscription in database (with idempotency check in WHERE clause)
+    result = await conn.execute(
+        """UPDATE subscriptions
+           SET uuid = $1,
+               vpn_key = $2,
+               activation_status = 'active',
+               activation_attempts = $3,
+               last_activation_error = NULL
+           WHERE id = $4
+             AND activation_status = 'pending'""",
+        new_uuid, vless_url, current_attempts + 1, subscription_id
+    )
+    
+    # Verify update succeeded (check if rows were affected)
+    # asyncpg returns "UPDATE N" as string, where N is number of rows
+    rows_affected = int(result.split()[-1]) if result else 0
+    
+    if rows_affected == 0:
+        # Another worker already activated this subscription (race condition)
+        # Fetch current state and return it
+        updated_row = await conn.fetchrow(
+            "SELECT uuid, vpn_key, activation_status, activation_attempts FROM subscriptions WHERE id = $1",
+            subscription_id
+        )
+        if updated_row and updated_row["activation_status"] == "active":
+            return ActivationResult(
+                success=True,
+                uuid=updated_row.get("uuid"),
+                vpn_key=updated_row.get("vpn_key"),
+                activation_status="active",
+                attempts=updated_row.get("activation_attempts", current_attempts + 1)
+            )
+        raise ActivationFailedError(f"Failed to update subscription {subscription_id} (concurrent modification)")
     
     return ActivationResult(
         success=True,
@@ -370,7 +455,13 @@ async def _update_subscription_activated(
     vpn_key: str,
     new_attempts: int
 ) -> None:
-    """Internal helper to update subscription after successful activation"""
+    """
+    Internal helper to update subscription after successful activation.
+    
+    NOTE: This function is now deprecated - idempotency check is handled in
+    _attempt_activation_with_idempotency(). This function is kept for backward
+    compatibility but should not be called directly.
+    """
     await conn.execute(
         """UPDATE subscriptions
            SET uuid = $1,
@@ -378,7 +469,8 @@ async def _update_subscription_activated(
                activation_status = 'active',
                activation_attempts = $3,
                last_activation_error = NULL
-           WHERE id = $4""",
+           WHERE id = $4
+             AND activation_status = 'pending'""",
         uuid, vpn_key, new_attempts, subscription_id
     )
 
@@ -422,9 +514,16 @@ async def _update_subscription_failed(
     subscription_id: int,
     new_attempts: int,
     error_msg: str,
-    max_attempts: int
+    max_attempts: int,
+    mark_as_failed: bool = True
 ) -> None:
-    """Internal helper to update subscription after failed activation"""
+    """
+    Internal helper to update subscription after failed activation.
+    
+    Args:
+        mark_as_failed: If True and max attempts reached, mark as 'failed'.
+                       If False, keep as 'pending' for retry.
+    """
     # Update attempts and error
     await conn.execute(
         """UPDATE subscriptions
@@ -434,8 +533,9 @@ async def _update_subscription_failed(
         new_attempts, error_msg, subscription_id
     )
     
-    # If max attempts reached, mark as failed
-    if new_attempts >= max_attempts:
+    # If max attempts reached AND mark_as_failed=True, mark as failed
+    # Otherwise, keep as pending for retry
+    if new_attempts >= max_attempts and mark_as_failed:
         await conn.execute(
             """UPDATE subscriptions
                SET activation_status = 'failed'

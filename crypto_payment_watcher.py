@@ -74,6 +74,10 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
         Tuple of (items_processed, outcome) where outcome is "success" | "degraded" | "failed" | "skipped"
     """
     if not cryptobot.is_enabled():
+        logger.info(
+            f"PAYMENT_CHECK_SKIP_CRYPTOBOT_DISABLED [reason=cryptobot_not_configured, "
+            f"payments_safe=True, will_retry_when_enabled=True]"
+        )
         return (0, "skipped")
     
     items_processed = 0
@@ -84,10 +88,18 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
         pool = await database.get_pool()
     except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
         logger.warning(f"crypto_payment_watcher: Database temporarily unavailable (pool acquisition failed): {type(e).__name__}: {str(e)[:100]}")
+        logger.info(
+            f"PAYMENT_CHECK_SKIP_DB_UNAVAILABLE [reason=database_temporarily_unavailable, "
+            f"payments_safe=True, will_retry_next_iteration=True]"
+        )
         return (0, "skipped")
     except Exception as e:
         logger.error(f"crypto_payment_watcher: Unexpected error getting DB pool: {type(e).__name__}: {str(e)[:100]}")
-        return (0, "failed")
+        logger.info(
+            f"PAYMENT_CHECK_SKIP_DB_ERROR [reason=unexpected_error, "
+            f"payments_safe=True, will_retry_next_iteration=True]"
+        )
+        return (0, "skipped")  # Payments are safe, will retry - consistent with log message
     
     try:
         async with pool.acquire() as conn:
@@ -121,9 +133,25 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
                     # Преобразуем invoice_id в int для CryptoBot API
                     invoice_id = int(invoice_id_str)
                     
+                    # Log payment check attempt
+                    logger.debug(
+                        f"PAYMENT_CHECK_ATTEMPT [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"invoice_id={invoice_id}]"
+                    )
+                    
                     # Проверяем статус invoice через CryptoBot API
-                    invoice_status = await cryptobot.check_invoice_status(invoice_id)
-                    status = invoice_status.get("status")
+                    try:
+                        invoice_status = await cryptobot.check_invoice_status(invoice_id)
+                        status = invoice_status.get("status")
+                    except Exception as api_error:
+                        # CryptoBot API call failed - payment is safe, will retry
+                        logger.warning(
+                            f"PAYMENT_CHECK_API_FAILED [purchase_id={purchase_id}, user={telegram_id}, "
+                            f"invoice_id={invoice_id}, error={type(api_error).__name__}: {str(api_error)[:100]}, "
+                            f"payments_safe=True, will_retry_next_iteration=True]"
+                        )
+                        outcome = "degraded"
+                        continue  # Skip this purchase, continue with others
                     
                     if status != "paid":
                         # Оплата еще не выполнена
@@ -381,6 +409,16 @@ async def crypto_payment_watcher_task(bot: Bot):
                         f"[UNAVAILABLE] system_state — skipping iteration in crypto_payment_watcher "
                         f"(database={system_state.database.status.value})"
                     )
+                    outcome = "skipped"
+                    reason = f"system_state=UNAVAILABLE (database={system_state.database.status.value})"
+                    log_worker_iteration_end(
+                        worker_name="crypto_payment_watcher",
+                        outcome=outcome,
+                        items_processed=0,
+                        duration_ms=(time.time() - iteration_start_time) * 1000,
+                        reason=reason,
+                    )
+                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                     continue
                 
                 # PART D.4: Workers continue normally if DEGRADED
@@ -400,6 +438,16 @@ async def crypto_payment_watcher_task(bot: Bot):
                         f"[COOLDOWN] skipping crypto_payment_watcher task due to recent recovery "
                         f"(database cooldown: {remaining}s remaining)"
                     )
+                    outcome = "skipped"
+                    reason = f"database_cooldown (remaining={remaining}s)"
+                    log_worker_iteration_end(
+                        worker_name="crypto_payment_watcher",
+                        outcome=outcome,
+                        items_processed=0,
+                        duration_ms=(time.time() - iteration_start_time) * 1000,
+                        reason=reason,
+                    )
+                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                     continue
                 
                 # B4.4 - GRACEFUL BACKGROUND RECOVERY: Warm-up iteration after recovery

@@ -307,19 +307,23 @@ async def fast_expiry_cleanup_task():
                                 logger.info(f"cleanup: VPN_API_REMOVED [user={telegram_id}, uuid={uuid_preview}]")
                             else:
                                 # UUID removal was skipped (VPN API disabled or business logic decided not to remove)
-                                if not vpn_service.is_vpn_api_available():
+                                vpn_api_disabled = not vpn_service.is_vpn_api_available()
+                                if vpn_api_disabled:
                                     logger.warning(
                                         f"cleanup: VPN_API_DISABLED [user={telegram_id}, uuid={uuid_preview}] - "
-                                        "VPN API is not configured, skipping UUID removal"
+                                        "VPN API is not configured, UUID removal skipped but DB will be cleaned"
                                     )
+                                    # VPN_API disabled: Skip UUID removal but STILL mark subscription as expired in DB
+                                    # UUID will be cleared from DB (can't be removed from VPN API, but DB should be consistent)
+                                    # Continue to DB update section below
                                 else:
                                     # Business logic decided not to remove (shouldn't happen for expired subscriptions)
                                     logger.debug(
                                         f"cleanup: UUID_REMOVAL_SKIPPED [user={telegram_id}, uuid={uuid_preview}] - "
                                         "Service layer decided not to remove UUID"
                                     )
-                                # Skip DB update if UUID wasn't removed
-                                continue
+                                    # If business logic says don't remove, skip DB update (shouldn't happen for expired)
+                                    continue
                             
                             # VPN AUDIT LOG: Логируем успешное удаление UUID при автоматическом истечении
                             try:
