@@ -912,17 +912,19 @@ async def init_db() -> bool:
         DB_READY = True
         logger.info("Database fully initialized")
         
-        # PART A.1: After successful init_db(), IMMEDIATELY recompute SystemState
-        # PART A.2: Explicitly overwrite previous degraded state
-        # SystemState MUST NOT be monotonic (degraded forever)
+        # PART C.3: After successful init_db(), explicitly call SystemState.recalculate()
+        # PART E.6: Explicit logging on SystemState update (REQUIRED)
         try:
             from app.core.system_state import recalculate_from_runtime
             system_state = recalculate_from_runtime()
+            
+            # PART E.6: Explicit logging format: "SystemState updated: DEGRADED (db=healthy, payments=healthy, vpn_api=degraded)"
+            state_str = "HEALTHY" if system_state.is_healthy else ("DEGRADED" if system_state.is_degraded else "UNAVAILABLE")
             logger.info(
-                f"SystemState updated: {'HEALTHY' if system_state.is_healthy else 'DEGRADED' if system_state.is_degraded else 'UNAVAILABLE'} "
-                f"(database={system_state.database.status.value}, "
-                f"vpn_api={system_state.vpn_api.status.value}, "
-                f"payments={system_state.payments.status.value})"
+                f"SystemState updated: {state_str} "
+                f"(db={system_state.database.status.value}, "
+                f"payments={system_state.payments.status.value}, "
+                f"vpn_api={system_state.vpn_api.status.value})"
             )
         except Exception as e:
             # SystemState recalculation must not break init_db()
