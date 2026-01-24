@@ -53,10 +53,12 @@ async def notify_admin_degraded_mode(bot: Bot):
             "• Сетевые настройки"
         )
         
+        # PART 2 — ADMIN NOTIFICATION PARSE ERROR
+        # Use parse_mode=None to avoid parse errors with special characters
         await bot.send_message(
             config.ADMIN_TELEGRAM_ID,
             message,
-            parse_mode="Markdown"
+            parse_mode=None
         )
         
         _degraded_notification_sent = True
@@ -91,10 +93,12 @@ async def notify_admin_recovered(bot: Bot):
             "• Фоновые задачи запущены"
         )
         
+        # PART 2 — ADMIN NOTIFICATION PARSE ERROR
+        # Use parse_mode=None to avoid parse errors with special characters
         await bot.send_message(
             config.ADMIN_TELEGRAM_ID,
             message,
-            parse_mode="Markdown"
+            parse_mode=None
         )
         
         _recovered_notification_sent = True
@@ -171,10 +175,12 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
         
         message = "\n".join(message_lines)
         
+        # PART 2 — ADMIN NOTIFICATION PARSE ERROR
+        # Use parse_mode=None to avoid parse errors with special characters
         await bot.send_message(
             config.ADMIN_TELEGRAM_ID,
             message,
-            parse_mode="Markdown"
+            parse_mode=None
         )
         
         logger.info(

@@ -333,6 +333,16 @@ async def init_db() -> bool:
     DB_READY = False
     pool = await get_pool()
     
+    # PART 1 — DATABASE INITIALIZATION RACE CONDITION
+    # Ensure pool is fully initialized before running migrations
+    # Perform a lightweight readiness check
+    try:
+        async with pool.acquire() as test_conn:
+            await test_conn.fetchval("SELECT 1")
+    except Exception as e:
+        logger.error(f"Pool readiness check failed: {e}")
+        return False
+    
     # ====================================================================================
     # VERSIONED MIGRATIONS: Применяем миграции перед созданием таблиц
     # ====================================================================================
