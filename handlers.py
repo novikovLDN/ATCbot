@@ -206,6 +206,26 @@ def handler_exception_boundary(handler_name: str, operation: str = None):
                 correlation_id=correlation_id,
             )
             
+            # PART 3 — BUTTON HANDLING WHEN DB IS NOT READY
+            # Centralized early-exit guard for DB readiness
+            if not database.DB_READY:
+                # Extract message/callback for sending warning
+                message_or_query = args[0] if args else None
+                if message_or_query:
+                    try:
+                        warning_text = "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны."
+                        if hasattr(message_or_query, 'answer') and hasattr(message_or_query, 'text'):
+                            # This is a Message
+                            await message_or_query.answer(warning_text)
+                        elif hasattr(message_or_query, 'message') and hasattr(message_or_query, 'answer'):
+                            # This is a CallbackQuery
+                            await message_or_query.message.answer(warning_text)
+                            await message_or_query.answer()
+                    except Exception as e:
+                        logger.debug(f"Error sending DB not ready warning: {e}")
+                # Return early without executing handler
+                return
+            
             try:
                 # Execute handler
                 result = await func(*args, **kwargs)
