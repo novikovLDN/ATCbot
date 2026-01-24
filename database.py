@@ -331,17 +331,24 @@ async def init_db() -> bool:
     global DB_READY
     # Сбрасываем DB_READY перед инициализацией
     DB_READY = False
-    pool = await get_pool()
     
     # PART 1 — DATABASE INITIALIZATION RACE CONDITION
-    # Ensure pool is fully initialized before running migrations
-    # Perform a lightweight readiness check
-    try:
-        async with pool.acquire() as test_conn:
-            await test_conn.fetchval("SELECT 1")
-    except Exception as e:
-        logger.error(f"Pool readiness check failed: {e}")
+    # Use direct connection for readiness check (not pool.acquire())
+    # asyncpg Pool initializes lazily and raises InterfaceError until first loop tick
+    # Direct connection validates real DB availability without pool state dependency
+    if not DATABASE_URL:
+        logger.error("DATABASE_URL not configured")
         return False
+    
+    try:
+        test_conn = await asyncpg.connect(DATABASE_URL)
+        await test_conn.execute("SELECT 1")
+        await test_conn.close()
+    except Exception as e:
+        logger.error(f"Database readiness check failed: {e}")
+        return False
+    
+    pool = await get_pool()
     
     # ====================================================================================
     # VERSIONED MIGRATIONS: Применяем миграции перед созданием таблиц
