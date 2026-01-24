@@ -9,6 +9,7 @@ import asyncpg
 import database
 import localization
 import config
+from app.services.notifications import service as notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +253,9 @@ async def process_auto_renewals(bot: Bot):
                             continue
                         
                         # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
-                        notification_already_sent = await database.is_payment_notification_sent(payment_id, conn=conn)
+                        notification_already_sent = await notification_service.check_notification_idempotency(
+                            payment_id, conn=conn
+                        )
                         
                         if notification_already_sent:
                             logger.info(
@@ -291,7 +294,7 @@ async def process_auto_renewals(bot: Bot):
                         
                         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
                         try:
-                            sent = await database.mark_payment_notification_sent(payment_id, conn=conn)
+                            sent = await notification_service.mark_notification_sent(payment_id, conn=conn)
                             if sent:
                                 logger.info(
                                     f"NOTIFICATION_SENT [type=auto_renewal, payment_id={payment_id}, user={telegram_id}]"

@@ -1,13 +1,15 @@
 """Модуль для отправки напоминаний об окончании подписки"""
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
 import database
 import localization
 import config
+from app.services.notifications import service as notification_service
+from app.services.notifications.service import ReminderType
 # import outline_api  # DISABLED - мигрировали на Xray Core (VLESS)
 
 logger = logging.getLogger(__name__)
@@ -58,127 +60,70 @@ async def send_smart_reminders(bot: Bot):
         
         logger.info(f"Found {len(subscriptions)} subscriptions for reminders check")
         
-        now = datetime.now()
-        
         for subscription in subscriptions:
             telegram_id = subscription["telegram_id"]
-            expires_at = subscription["expires_at"]
-            if isinstance(expires_at, str):
-                expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-            
-            admin_grant_days = subscription.get("admin_grant_days")
-            last_action_type = subscription.get("last_action_type")
-            
-            # Определяем тип подписки
-            is_admin_grant = admin_grant_days is not None or last_action_type == "admin_grant"
             
             try:
-                # Получаем язык пользователя
+                # Use notification service to determine if reminder should be sent
+                decision = notification_service.should_send_reminder(subscription)
+                
+                if not decision.should_send:
+                    # Skip this subscription (already sent, not in time window, etc.)
+                    if decision.reason:
+                        logger.debug(f"Skipping reminder for user {telegram_id}: {decision.reason}")
+                    continue
+                
+                # Get user language
                 user = await database.get_user(telegram_id)
                 language = user.get("language", "ru") if user else "ru"
                 
-                time_until_expiry = expires_at - now
+                # Determine reminder text and keyboard based on reminder type
+                reminder_type = decision.reminder_type
+                text = None
+                keyboard = None
+                audit_message = None
                 
-                # АДМИН-ВЫДАННЫЙ ДОСТУП
-                if is_admin_grant:
-                    if admin_grant_days == 1:
-                        # 1 день - напоминание за 6 часов
-                        if (timedelta(hours=5.5) <= time_until_expiry <= timedelta(hours=6.5) and 
-                            not subscription.get("reminder_6h_sent", False)):
-                            text = localization.get_text(
-                                language, 
-                                "reminder_admin_1day_6h"
-                            )
-                            keyboard = get_subscription_keyboard(language)
-                            await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                            await database.mark_reminder_flag_sent(telegram_id, "reminder_6h_sent")
-                            # Логируем в audit_log
-                            await database._log_audit_event_atomic_standalone(
-                                "reminder_sent",
-                                telegram_id,
-                                telegram_id,
-                                f"Admin 1-day reminder (6h before expiry)"
-                            )
-                            logger.info(f"Admin 1-day reminder (6h) sent to user {telegram_id}")
-                    
-                    elif admin_grant_days == 7:
-                        # 7 дней - напоминание за 24 часа
-                        if (timedelta(hours=23) <= time_until_expiry <= timedelta(hours=25) and 
-                            not subscription.get("reminder_24h_sent", False)):
-                            text = localization.get_text(
-                                language, 
-                                "reminder_admin_7days_24h"
-                            )
-                            keyboard = get_tariff_1_month_keyboard(language)
-                            await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                            await database.mark_reminder_flag_sent(telegram_id, "reminder_24h_sent")
-                            # Логируем в audit_log
-                            await database._log_audit_event_atomic_standalone(
-                                "reminder_sent",
-                                telegram_id,
-                                telegram_id,
-                                f"Admin 7-day reminder (24h before expiry)"
-                            )
-                            logger.info(f"Admin 7-day reminder (24h) sent to user {telegram_id}")
+                if reminder_type == ReminderType.ADMIN_1DAY_6H:
+                    text = localization.get_text(language, "reminder_admin_1day_6h")
+                    keyboard = get_subscription_keyboard(language)
+                    audit_message = "Admin 1-day reminder (6h before expiry)"
                 
-                # ОПЛАЧЕННЫЕ ТАРИФЫ
-                else:
-                    # Напоминание за 3 дня
-                    if (timedelta(days=2.9) <= time_until_expiry <= timedelta(days=3.1) and 
-                        not subscription.get("reminder_3d_sent", False)):
-                        text = localization.get_text(
-                            language, 
-                            "reminder_paid_3d"
-                        )
-                        keyboard = get_renewal_keyboard(language)
-                        await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                        await database.mark_reminder_flag_sent(telegram_id, "reminder_3d_sent")
-                        # Логируем в audit_log
-                        await database._log_audit_event_atomic_standalone(
-                            "reminder_sent",
-                            telegram_id,
-                            telegram_id,
-                            f"Paid subscription reminder (3d before expiry)"
-                        )
-                        logger.info(f"Paid subscription reminder (3d) sent to user {telegram_id}")
+                elif reminder_type == ReminderType.ADMIN_7DAYS_24H:
+                    text = localization.get_text(language, "reminder_admin_7days_24h")
+                    keyboard = get_tariff_1_month_keyboard(language)
+                    audit_message = "Admin 7-day reminder (24h before expiry)"
+                
+                elif reminder_type == ReminderType.REMINDER_3D:
+                    text = localization.get_text(language, "reminder_paid_3d")
+                    keyboard = get_renewal_keyboard(language)
+                    audit_message = "Paid subscription reminder (3d before expiry)"
+                
+                elif reminder_type == ReminderType.REMINDER_24H:
+                    text = localization.get_text(language, "reminder_paid_24h")
+                    keyboard = get_renewal_keyboard(language)
+                    audit_message = "Paid subscription reminder (24h before expiry)"
+                
+                elif reminder_type == ReminderType.REMINDER_3H:
+                    text = localization.get_text(language, "reminder_paid_3h")
+                    keyboard = get_renewal_keyboard(language)
+                    audit_message = "Paid subscription reminder (3h before expiry)"
+                
+                if text and keyboard:
+                    # Send reminder
+                    await bot.send_message(telegram_id, text, reply_markup=keyboard)
                     
-                    # Напоминание за 24 часа
-                    elif (timedelta(hours=23) <= time_until_expiry <= timedelta(hours=25) and 
-                          not subscription.get("reminder_24h_sent", False)):
-                        text = localization.get_text(
-                            language, 
-                            "reminder_paid_24h"
-                        )
-                        keyboard = get_renewal_keyboard(language)
-                        await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                        await database.mark_reminder_flag_sent(telegram_id, "reminder_24h_sent")
-                        # Логируем в audit_log
-                        await database._log_audit_event_atomic_standalone(
-                            "reminder_sent",
-                            telegram_id,
-                            telegram_id,
-                            f"Paid subscription reminder (24h before expiry)"
-                        )
-                        logger.info(f"Paid subscription reminder (24h) sent to user {telegram_id}")
+                    # Mark reminder as sent using notification service
+                    await notification_service.mark_reminder_sent(telegram_id, reminder_type)
                     
-                    # Напоминание за 3 часа
-                    elif (timedelta(hours=2.5) <= time_until_expiry <= timedelta(hours=3.5) and 
-                          not subscription.get("reminder_3h_sent", False)):
-                        text = localization.get_text(
-                            language, 
-                            "reminder_paid_3h"
-                        )
-                        keyboard = get_renewal_keyboard(language)
-                        await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                        await database.mark_reminder_flag_sent(telegram_id, "reminder_3h_sent")
-                        # Логируем в audit_log
-                        await database._log_audit_event_atomic_standalone(
-                            "reminder_sent",
-                            telegram_id,
-                            telegram_id,
-                            f"Paid subscription reminder (3h before expiry)"
-                        )
-                        logger.info(f"Paid subscription reminder (3h) sent to user {telegram_id}")
+                    # Log to audit_log
+                    await database._log_audit_event_atomic_standalone(
+                        "reminder_sent",
+                        telegram_id,
+                        telegram_id,
+                        audit_message
+                    )
+                    
+                    logger.info(f"Reminder ({reminder_type.value}) sent to user {telegram_id}")
                 
             except TelegramForbiddenError:
                 # Пользователь заблокировал бота - это ожидаемое поведение, не ошибка
