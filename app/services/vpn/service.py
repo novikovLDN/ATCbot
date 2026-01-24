@@ -10,6 +10,12 @@ All functions are pure business logic:
 - No logging
 - No Telegram calls
 - Pure business logic only
+
+STEP 1.3 - EXTERNAL DEPENDENCIES POLICY:
+- VPN API unavailable → VPNApiDisabled raised (NOT an error state)
+- VPN API disabled (VPN_ENABLED=False) → remove_uuid_if_needed returns False (graceful)
+- VPN API removal failure → VPNRemovalError raised (actual error)
+- VPN API disabled is NOT treated as error → callers handle gracefully
 """
 
 from typing import Optional

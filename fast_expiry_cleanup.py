@@ -13,10 +13,29 @@ Fast Expiry Cleanup - автоматическое отключение истё
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime
 import asyncpg
 import database
+import config
 from app.services.vpn import service as vpn_service
+from app.core.system_state import (
+    SystemState,
+    healthy_component,
+    degraded_component,
+    unavailable_component,
+)
+from app.core.recovery_cooldown import (
+    get_recovery_cooldown,
+    ComponentName,
+)
+from app.core.metrics import get_metrics
+from app.core.cost_model import get_cost_model, CostCenter
+from app.utils.logging_helpers import (
+    log_worker_iteration_start,
+    log_worker_iteration_end,
+    classify_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +44,14 @@ logger = logging.getLogger(__name__)
 CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "60"))
 # Ограничиваем интервал от 60 секунд (1 минута) до 300 секунд (5 минут)
 CLEANUP_INTERVAL_SECONDS = max(60, min(300, CLEANUP_INTERVAL_SECONDS))
+
+# B4.4 - GRACEFUL BACKGROUND RECOVERY: Track recovery state for warm-up iterations
+_recovery_warmup_iterations: int = 0
+_recovery_warmup_threshold: int = 3  # Number of successful iterations before normal operation
+
+# STEP 3 — PART B: WORKER LOOP SAFETY
+# Minimum safe sleep on failure to prevent tight retry storms
+MINIMUM_SAFE_SLEEP_ON_FAILURE = 10  # seconds
 
 
 async def fast_expiry_cleanup_task():
@@ -63,9 +90,133 @@ async def fast_expiry_cleanup_task():
     # Множество для отслеживания UUID, которые мы уже обрабатываем (защита от race condition)
     processing_uuids = set()
     
+    iteration_number = 0
+    
     while True:
+        iteration_start_time = time.time()
+        iteration_number += 1
+        
+        # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration start
+        correlation_id = log_worker_iteration_start(
+            worker_name="fast_expiry_cleanup",
+            iteration_number=iteration_number
+        )
+        
+        items_processed = 0
+        outcome = "success"
+        
         try:
             await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+            
+            # STEP 6 — F5: BACKGROUND WORKER SAFETY
+            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            from app.core.feature_flags import get_feature_flags
+            feature_flags = get_feature_flags()
+            if not feature_flags.background_workers_enabled:
+                logger.warning(
+                    f"[FEATURE_FLAG] Background workers disabled, skipping iteration in fast_expiry_cleanup "
+                    f"(iteration={iteration_number})"
+                )
+                outcome = "skipped"
+                reason = "background_workers_enabled=false"
+                log_worker_iteration_end(
+                    worker_name="fast_expiry_cleanup",
+                    outcome=outcome,
+                    items_processed=0,
+                    duration_ms=(time.time() - iteration_start_time) * 1000,
+                    reason=reason,
+                )
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
+            
+            # READ-ONLY system state awareness: Skip iteration if system is unavailable
+            try:
+                now = datetime.utcnow()
+                db_ready = database.DB_READY
+                
+                # Build SystemState for awareness (read-only)
+                if db_ready:
+                    db_component = healthy_component(last_checked_at=now)
+                else:
+                    db_component = unavailable_component(
+                        error="DB not ready (degraded mode)",
+                        last_checked_at=now
+                    )
+                
+                # VPN API component
+                if config.VPN_ENABLED and config.XRAY_API_URL:
+                    vpn_component = healthy_component(last_checked_at=now)
+                else:
+                    vpn_component = degraded_component(
+                        error="VPN API not configured",
+                        last_checked_at=now
+                    )
+                
+                # Payments component (always healthy)
+                payments_component = healthy_component(last_checked_at=now)
+                
+                system_state = SystemState(
+                    database=db_component,
+                    vpn_api=vpn_component,
+                    payments=payments_component,
+                )
+                
+                # STEP 1.1 - RUNTIME GUARDRAILS: Workers read SystemState at iteration start
+                # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Skip iteration if system is UNAVAILABLE
+                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
+                if system_state.is_unavailable:
+                    logger.warning(
+                        f"[UNAVAILABLE] system_state — skipping iteration in fast_expiry_cleanup "
+                        f"(database={system_state.database.status.value})"
+                    )
+                    continue
+                
+                # STEP 1.2: DEGRADED state allows continuation (workers continue with reduced functionality)
+                if system_state.is_degraded:
+                    logger.info(
+                        f"[DEGRADED] system_state detected in fast_expiry_cleanup "
+                        f"(continuing with reduced functionality)"
+                    )
+                
+                # B4.2 - COOLDOWN & BACKOFF: Check cooldown before starting operations
+                recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
+                if recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
+                    remaining = recovery_cooldown.get_cooldown_remaining(ComponentName.DATABASE, now)
+                    logger.info(
+                        f"[COOLDOWN] skipping fast_expiry_cleanup task due to recent recovery "
+                        f"(database cooldown: {remaining}s remaining)"
+                    )
+                    continue
+                
+                # B4.4 - GRACEFUL BACKGROUND RECOVERY: Warm-up iteration after recovery
+                global _recovery_warmup_iterations
+                if system_state.database.status.value == "healthy" and _recovery_warmup_iterations < _recovery_warmup_threshold:
+                    if _recovery_warmup_iterations == 0:
+                        logger.info(
+                            "[RECOVERY] warm-up iteration started in fast_expiry_cleanup "
+                            "(minimal batch, no parallelism)"
+                        )
+                    _recovery_warmup_iterations += 1
+                elif system_state.database.status.value == "healthy" and _recovery_warmup_iterations == _recovery_warmup_threshold:
+                    logger.info(
+                        "[RECOVERY] normal operation resumed in fast_expiry_cleanup "
+                        f"(completed {_recovery_warmup_iterations} warm-up iterations)"
+                    )
+                    _recovery_warmup_iterations += 1  # Prevent repeated logging
+                elif system_state.database.status.value != "healthy":
+                    # Reset warmup counter if component becomes unhealthy again
+                    _recovery_warmup_iterations = 0
+            except Exception:
+                # Ignore system state errors - continue with normal flow
+                pass
+            
+            # C1.1 - METRICS: Increment background iterations counter
+            metrics = get_metrics()
+            metrics.increment_counter("background_iterations_total")
+            
+            # D2.1 - COST CENTERS: Track background iteration cost
+            cost_model = get_cost_model()
+            cost_model.record_cost(CostCenter.BACKGROUND_ITERATIONS, cost_units=1.0)
             
             # Получаем текущее UTC время для сравнения
             # PostgreSQL TIMESTAMP хранит без timezone, поэтому используем naive datetime
@@ -73,7 +224,8 @@ async def fast_expiry_cleanup_task():
             
             # Получаем истёкшие подписки с активными UUID
             # Используем expires_at (в БД) - это и есть subscription_end
-            # RESILIENCE FIX: Handle temporary DB unavailability gracefully
+            # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Each iteration is stateless, may be safely skipped
+            # STEP 1.3 - EXTERNAL DEPENDENCIES POLICY: DB unavailable → iteration skipped, no error raised
             try:
                 pool = await database.get_pool()
             except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
@@ -96,11 +248,20 @@ async def fast_expiry_cleanup_task():
                     )
                     
                     if not rows:
+                        # STEP 2.3 — OBSERVABILITY: Log iteration end with success (no items to process)
+                        duration_ms = (time.time() - iteration_start_time) * 1000
+                        log_worker_iteration_end(
+                            worker_name="fast_expiry_cleanup",
+                            outcome="success",
+                            items_processed=0,
+                            duration_ms=duration_ms
+                        )
                         continue
                     
                     logger.info(f"cleanup: FOUND_EXPIRED [count={len(rows)}]")
                     
                     for row in rows:
+                        items_processed += 1
                         telegram_id = row["telegram_id"]
                         uuid = row["uuid"]
                         expires_at = row["expires_at"]
@@ -304,12 +465,45 @@ async def fast_expiry_cleanup_task():
                         finally:
                             # Удаляем UUID из множества обрабатываемых
                             processing_uuids.discard(uuid)
+                
+                # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end (success)
+                # PART E — SLO SIGNAL IDENTIFICATION: Worker iteration success rate
+                # This iteration end log is an SLO signal for worker iteration success rate.
+                # Track: outcome="success" vs outcome="failed"/"degraded" for fast_expiry_cleanup iterations.
+                duration_ms = (time.time() - iteration_start_time) * 1000
+                log_worker_iteration_end(
+                    worker_name="fast_expiry_cleanup",
+                    outcome=outcome,
+                    items_processed=items_processed,
+                    duration_ms=duration_ms
+                )
             except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
                 # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
                 logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable in main loop: {type(e).__name__}: {str(e)[:100]}")
+                
+                # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
+                duration_ms = (time.time() - iteration_start_time) * 1000
+                log_worker_iteration_end(
+                    worker_name="fast_expiry_cleanup",
+                    outcome="degraded",
+                    items_processed=items_processed,
+                    error_type="infra_error",
+                    duration_ms=duration_ms
+                )
             except Exception as e:
                 logger.error(f"fast_expiry_cleanup: Unexpected error in main loop: {type(e).__name__}: {str(e)[:100]}")
                 logger.debug("fast_expiry_cleanup: Full traceback in main loop", exc_info=True)
+                
+                # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+                duration_ms = (time.time() - iteration_start_time) * 1000
+                error_type = classify_error(e)
+                log_worker_iteration_end(
+                    worker_name="fast_expiry_cleanup",
+                    outcome="failed",
+                    items_processed=items_processed,
+                    error_type=error_type,
+                    duration_ms=duration_ms
+                )
             
         except asyncio.CancelledError:
             logger.info("Fast expiry cleanup task cancelled")
@@ -317,13 +511,39 @@ async def fast_expiry_cleanup_task():
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task
             logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable in task loop: {type(e).__name__}: {str(e)[:100]}")
-            # Продолжаем работу даже при ошибке
-            await asyncio.sleep(10)  # Небольшая задержка перед следующей итерацией
+            
+            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            log_worker_iteration_end(
+                worker_name="fast_expiry_cleanup",
+                outcome="degraded",
+                items_processed=0,
+                error_type="infra_error",
+                duration_ms=duration_ms
+            )
+            # STEP 3 — PART B: WORKER LOOP SAFETY
+            # Minimum safe sleep on failure to prevent tight retry storms
+            # Worker always sleeps before next iteration, even on failure
+            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
         except Exception as e:
             logger.error(f"fast_expiry_cleanup: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
             logger.debug("fast_expiry_cleanup: Full traceback for task loop", exc_info=True)
-            # Продолжаем работу даже при ошибке
-            await asyncio.sleep(10)  # Небольшая задержка перед следующей итерацией
+            
+            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            error_type = classify_error(e)
+            log_worker_iteration_end(
+                worker_name="fast_expiry_cleanup",
+                outcome="failed",
+                items_processed=0,
+                error_type=error_type,
+                duration_ms=duration_ms
+            )
+            
+            # STEP 3 — PART B: WORKER LOOP SAFETY
+            # Minimum safe sleep on failure to prevent tight retry storms
+            # Worker always sleeps before next iteration, even on failure
+            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
 
 
 

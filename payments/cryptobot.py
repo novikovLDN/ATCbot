@@ -2,12 +2,20 @@
 Telegram CryptoBot (Crypto Pay API) Integration
 
 Handles invoice creation and status checking via polling (no webhooks).
+
+STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
+- All CryptoBot API calls are isolated inside try/except blocks
+- External failures are mapped to dependency_error
+- External failure does NOT break handler/worker
+- System continues degraded when CryptoBot API unavailable
+- Retries handled by retry_async (transient errors only)
 """
 import os
 import json
 import logging
 from typing import Optional, Dict, Any
 import httpx
+from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +28,21 @@ ALLOWED_ASSETS = [asset.strip().upper() for asset in CRYPTOBOT_ASSETS if asset.s
 
 # Exchange rate: RUB to USD (fixed rate for conversion)
 RUB_TO_USD_RATE = 95.0
+
+
+class CryptoBotError(Exception):
+    """Base class for CryptoBot API errors"""
+    pass
+
+
+class CryptoBotAuthError(CryptoBotError):
+    """Authentication error (401, 403)"""
+    pass
+
+
+class CryptoBotInvalidResponseError(CryptoBotError):
+    """Invalid response error (4xx)"""
+    pass
 
 
 def rub_kopecks_to_usd(kopecks: int) -> float:
@@ -90,16 +113,39 @@ async def create_invoice(
         "allow_anonymous": False,
     }
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{CRYPTOBOT_API_URL}/createInvoice",
-            headers=_get_auth_headers(),
-            json=request_body
-        )
+    # Use centralized retry utility for HTTP calls (only retries transient errors)
+    async def _make_request():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{CRYPTOBOT_API_URL}/createInvoice",
+                headers=_get_auth_headers(),
+                json=request_body
+            )
+            # Convert 401/403 to AuthError (should NOT be retried)
+            if response.status_code == 401 or response.status_code == 403:
+                error_msg = f"Authentication error: status={response.status_code}, response={response.text[:200]}"
+                logger.error(f"CryptoBot API error: {error_msg}")
+                raise CryptoBotAuthError(error_msg)
+            
+            # Convert 4xx to InvalidResponseError (should NOT be retried)
+            if 400 <= response.status_code < 500:
+                error_msg = f"Client error: status={response.status_code}, response={response.text[:200]}"
+                logger.error(f"CryptoBot API error: {error_msg}")
+                raise CryptoBotInvalidResponseError(error_msg)
+            
+            # Only 5xx/timeout/network errors will be retried
+            if response.status_code != 200:
+                # Let httpx raise HTTPStatusError for 5xx, which will be retried
+                response.raise_for_status()
+            return response
     
-    if response.status_code != 200:
-        logger.error(f"CryptoBot API error: {response.status_code} - {response.text}")
-        raise Exception(f"CryptoBot API error: {response.status_code} - {response.text}")
+    response = await retry_async(
+        _make_request,
+        retries=2,
+        base_delay=1.0,
+        max_delay=5.0,
+        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
+    )
     
     data = response.json()
     if not data.get("ok"):
@@ -141,16 +187,39 @@ async def check_invoice_status(invoice_id: int) -> Dict[str, Any]:
         "invoice_ids": [invoice_id]
     }
     
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{CRYPTOBOT_API_URL}/getInvoices",
-            headers=_get_auth_headers(),
-            json=request_body
-        )
+    # Use centralized retry utility for HTTP calls (only retries transient errors)
+    async def _make_request():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{CRYPTOBOT_API_URL}/getInvoices",
+                headers=_get_auth_headers(),
+                json=request_body
+            )
+            # Convert 401/403 to AuthError (should NOT be retried)
+            if response.status_code == 401 or response.status_code == 403:
+                error_msg = f"Authentication error: status={response.status_code}, response={response.text[:200]}"
+                logger.error(f"CryptoBot API error: {error_msg}")
+                raise CryptoBotAuthError(error_msg)
+            
+            # Convert 4xx to InvalidResponseError (should NOT be retried)
+            if 400 <= response.status_code < 500:
+                error_msg = f"Client error: status={response.status_code}, response={response.text[:200]}"
+                logger.error(f"CryptoBot API error: {error_msg}")
+                raise CryptoBotInvalidResponseError(error_msg)
+            
+            # Only 5xx/timeout/network errors will be retried
+            if response.status_code != 200:
+                # Let httpx raise HTTPStatusError for 5xx, which will be retried
+                response.raise_for_status()
+            return response
     
-    if response.status_code != 200:
-        logger.error(f"CryptoBot API error: {response.status_code} - {response.text}")
-        raise Exception(f"CryptoBot API error: {response.status_code} - {response.text}")
+    response = await retry_async(
+        _make_request,
+        retries=2,
+        base_delay=1.0,
+        max_delay=5.0,
+        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
+    )
     
     data = response.json()
     if not data.get("ok"):

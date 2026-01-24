@@ -24,12 +24,13 @@ IS_LOCAL = APP_ENV == "local"
 IS_STAGE = APP_ENV == "stage"
 IS_PROD = APP_ENV == "prod"
 
-def env(key: str) -> str:
+def env(key: str, default: str = "") -> str:
     """
     Получить переменную окружения с префиксом окружения
     
     Args:
         key: Имя переменной без префикса (например, "BOT_TOKEN")
+        default: Значение по умолчанию, если переменная не задана
     
     Returns:
         Значение переменной с префиксом (например, "STAGE_BOT_TOKEN")
@@ -37,9 +38,10 @@ def env(key: str) -> str:
     Example:
         env("BOT_TOKEN") -> "STAGE_BOT_TOKEN" (если APP_ENV=stage)
         env("DATABASE_URL") -> "PROD_DATABASE_URL" (если APP_ENV=prod)
+        env("CHAOS_ENABLED", default="false") -> "false" если не задано
     """
     env_key = f"{APP_ENV.upper()}_{key}"
-    return os.getenv(env_key, "")
+    return os.getenv(env_key, default)
 
 # Защита от прямого использования переменных без префикса
 # Это предотвращает случайное использование неправильных переменных
@@ -52,6 +54,14 @@ for var in _direct_usage_vars:
         sys.exit(1)
 
 print(f"INFO: Config loaded for environment: {APP_ENV.upper()}", flush=True)
+
+# ====================================================================================
+# STEP 4 — PART E: SECRET & CONFIG SAFETY
+# ====================================================================================
+# Secrets are validated at startup and never logged.
+# Required secrets: BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL
+# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, CRYPTOBOT_API_TOKEN
+# ====================================================================================
 
 # Telegram Bot Token (получить у @BotFather)
 BOT_TOKEN = env("BOT_TOKEN")

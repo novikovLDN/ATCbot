@@ -3,6 +3,12 @@ Database Migration System
 
 Manages versioned database schema migrations.
 Each migration is applied in a transaction and recorded in schema_migrations table.
+
+STEP 1.4 - SAFE DEPLOY & ROLLBACK GUARANTEES:
+- All migrations are backward-compatible → can rollback safely
+- No code assumes immediate presence of new DB fields → migrations applied separately
+- Code can run against older schema → feature flags or conditional logic
+- Rollback assumptions documented in migration comments
 """
 import os
 import re

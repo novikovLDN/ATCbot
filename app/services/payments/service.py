@@ -5,6 +5,13 @@ This module provides business logic for payment processing, verification, and fi
 It coordinates between payment providers, database, and subscription service.
 
 All functions are pure business logic - no aiogram imports or Telegram-specific types.
+
+STEP 1.3 - EXTERNAL DEPENDENCIES POLICY:
+- Payment provider unavailable → PaymentFinalizationError raised (retry later)
+- Payment idempotency → preserved (check_payment_idempotency prevents double-processing)
+- Payment amount mismatch → PaymentAmountMismatchError raised (NOT retried)
+- Payment already processed → PaymentAlreadyProcessedError raised (NOT retried)
+- Domain exceptions are NEVER retried → only transient infra errors are retried
 """
 
 from typing import Optional, Dict, Any, Tuple
@@ -77,8 +84,15 @@ async def verify_payment_payload(
     Raises:
         InvalidPaymentPayloadError: If payload format is invalid
     """
+    # STEP 4 — PART A: INPUT TRUST BOUNDARIES
+    # Validate payload length and format
     if not payload:
         raise InvalidPaymentPayloadError("Payment payload is empty")
+    
+    # Length check (prevent oversized payloads)
+    MAX_PAYLOAD_LENGTH = 256
+    if len(payload) > MAX_PAYLOAD_LENGTH:
+        raise InvalidPaymentPayloadError(f"Payment payload exceeds maximum length ({MAX_PAYLOAD_LENGTH})")
     
     # Balance topup format: "balance_topup_{telegram_id}_{amount}"
     if payload.startswith("balance_topup_"):
@@ -249,8 +263,15 @@ async def check_payment_idempotency(
     """
     Check if payment has already been processed (idempotency check).
     
+    STEP 3 — PART C: SIDE-EFFECT SAFETY
+    This function provides idempotency boundary for payment finalization.
+    - Payment finalization is guarded by this check
+    - Executed once per purchase_id (correlation_id)
+    - If already processed, returns existing subscription data
+    - Logs when side-effect is SKIPPED due to idempotency
+    
     Args:
-        purchase_id: Purchase ID to check
+        purchase_id: Purchase ID to check (acts as correlation_id)
         telegram_id: Telegram ID of the user
         
     Returns:
@@ -384,9 +405,20 @@ async def finalize_subscription_payment(
     expected_amount_rubles = pending_purchase["price_kopecks"] / 100.0
     await validate_payment_amount(amount_rubles, expected_amount_rubles)
     
-    # Check idempotency
+    # STEP 3 — PART C: SIDE-EFFECT SAFETY
+    # Check idempotency before executing side-effect (payment finalization)
+    # This ensures payment is processed only once per purchase_id
     is_already_processed, existing_subscription = await check_payment_idempotency(purchase_id, telegram_id)
     if is_already_processed:
+        # STEP 3 — PART C: SIDE-EFFECT SAFETY
+        # Payment already processed - side-effect SKIPPED due to idempotency
+        # Log idempotency skip (for observability)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"[IDEMPOTENCY] Payment finalization skipped: purchase_id={purchase_id}, "
+            f"telegram_id={telegram_id}, reason=already_processed"
+        )
         # Payment already processed - return existing subscription data
         if existing_subscription and existing_subscription.get("status") == "active":
             expires_at = existing_subscription.get("expires_at")

@@ -16,6 +16,47 @@ import admin_notifications
 import trial_notifications
 import activation_worker
 
+# ====================================================================================
+# STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
+# ====================================================================================
+# 
+# PART A — LOGGING CONTRACT (FOUNDATION)
+# 
+# Standard log fields (logical, not enforced by library):
+# - component        (handler / worker / service / infra)
+# - operation        (what is happening)
+# - correlation_id   (request / task / iteration id)
+# - outcome          (success | degraded | failed)
+# - duration_ms      (when applicable)
+# - reason           (short, non-PII explanation)
+# 
+# PART B — CORRELATION IDS:
+# - For handlers: correlation_id = update_id or message_id
+# - For workers: correlation_id = iteration_id (UUID or monotonic counter)
+# - For services: accept correlation_id if already present, do NOT generate new ones
+# 
+# PART C — ENTRY / EXIT LOGGING:
+# - Handlers: Log ENTRY (component=handler) and EXIT (success/degraded/failed)
+# - Workers: Log ITERATION_START and ITERATION_END
+# - DO NOT log per-item spam inside loops
+# 
+# PART D — FAILURE TAXONOMY:
+# - infra_error         (DB down, network, timeouts)
+# - dependency_error    (VPN API, payment provider)
+# - domain_error        (invalid state, business rule)
+# - unexpected_error     (bug, invariant violation)
+# 
+# PART E — SLO SIGNAL IDENTIFICATION (NO ENFORCEMENT):
+# - Payment success rate
+# - Subscription activation latency
+# - Worker iteration success rate
+# - System degraded vs unavailable ratio
+# 
+# SECURITY:
+# - DO NOT log secrets, PII, or full payloads
+# - DO NOT change logger configuration
+# ====================================================================================
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,

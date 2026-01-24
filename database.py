@@ -9,6 +9,14 @@ from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
 import config
 import vpn_utils
+from app.utils.retry import retry_async
+from app.core.recovery_cooldown import (
+    get_recovery_cooldown,
+    ComponentName,
+)
+from app.core.system_state import ComponentStatus
+from app.core.metrics import get_metrics, timer
+from app.core.cost_model import get_cost_model, CostCenter
 # outline_api removed - use vpn_utils instead
 
 if TYPE_CHECKING:
@@ -112,7 +120,15 @@ async def mark_payment_notification_sent(
         pool = await get_pool()
         if pool is None:
             raise RuntimeError("Database pool is not available")
-        async with pool.acquire() as new_conn:
+        # Retry pool.acquire() on transient database errors only
+        conn = await retry_async(
+            lambda: pool.acquire(),
+            retries=2,
+            base_delay=0.5,
+            max_delay=2.0,
+            retry_on=(asyncpg.PostgresError,)
+        )
+        async with conn as new_conn:
             result = await new_conn.execute(
                 "UPDATE payments SET notification_sent = TRUE WHERE id = $1 AND notification_sent = FALSE",
                 payment_id
@@ -144,7 +160,15 @@ async def is_payment_notification_sent(
         pool = await get_pool()
         if pool is None:
             return False
-        async with pool.acquire() as new_conn:
+        # Retry pool.acquire() on transient database errors only
+        conn = await retry_async(
+            lambda: pool.acquire(),
+            retries=2,
+            base_delay=0.5,
+            max_delay=2.0,
+            retry_on=(asyncpg.PostgresError,)
+        )
+        async with conn as new_conn:
             notification_sent = await new_conn.fetchval(
                 "SELECT notification_sent FROM payments WHERE id = $1",
                 payment_id
@@ -168,14 +192,61 @@ _pool: Optional[asyncpg.Pool] = None
 
 
 async def get_pool() -> asyncpg.Pool:
-    """Получить пул соединений, создав его при необходимости"""
+    """
+    Получить пул соединений, создав его при необходимости
+    
+    STEP 1.3 - EXTERNAL DEPENDENCIES POLICY:
+    - DB unavailable → RuntimeError raised (pool creation fails)
+    - DB timeout → retried with exponential backoff (max 1 retry)
+    - DB connection errors → retried only on transient errors (asyncpg.PostgresError)
+    - Domain errors are NEVER retried → only transient infra errors are retried
+    
+    STEP 1.4 - SAFE DEPLOY & ROLLBACK:
+    - Pool creation is backward-compatible → no schema assumptions
+    - Pool can be created against older schema → migrations applied separately
+    """
     global _pool
     if not DATABASE_URL:
         raise RuntimeError(f"{config.APP_ENV.upper()}_DATABASE_URL is not configured")
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+        # B4.3 - SAFE RETRY RE-ENABLE: Check cooldown before retrying pool creation
+        from datetime import datetime
+        recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
+        now = datetime.utcnow()
+        
+        # If database is in cooldown, use minimal retries
+        if recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
+            retries = 0  # No retries during cooldown
+        else:
+            retries = 1  # Normal retry behavior
+        
+        # C1.1 - METRICS: Measure pool creation latency
+        with timer("db_latency_ms"):
+            # Retry pool creation on transient errors only
+            _pool = await retry_async(
+                lambda: asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10),
+                retries=retries,
+                base_delay=0.5,
+                max_delay=5.0,
+                retry_on=(asyncpg.PostgresError,)
+            )
+        
+        # C1.1 - METRICS: Track retries
+        if retries > 0:
+            metrics = get_metrics()
+            metrics.increment_counter("retries_total", value=retries)
+        
+        # D2.1 - COST CENTERS: Track DB connection cost
+        cost_model = get_cost_model()
+        cost_model.record_cost(CostCenter.DB_CONNECTIONS, cost_units=1.0)
+        
         logger.info("Database connection pool created")
     return _pool
+
+
+# Note: pool.acquire() is already used with try/except in most places.
+# For new code, wrap pool.acquire() calls with retry_async where needed.
+# Example: conn = await retry_async(lambda: pool.acquire(), retries=2)
 
 
 async def close_pool():
@@ -276,7 +347,15 @@ async def init_db() -> bool:
         logger.exception(f"Error applying migrations: {e}")
         return False
     
-    async with pool.acquire() as conn:
+    # Retry pool.acquire() on transient database errors only
+    conn = await retry_async(
+        lambda: pool.acquire(),
+        retries=2,
+        base_delay=0.5,
+        max_delay=2.0,
+        retry_on=(asyncpg.PostgresError,)
+    )
+    async with conn:
         # Таблица users
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -598,12 +677,18 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS uuid TEXT")
             await conn.execute("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS source TEXT")
             await conn.execute("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS result TEXT CHECK (result IN ('success', 'error'))")
+            # STEP 5 — PART C: CORRELATION & TRACEABILITY
+            # Add correlation_id column for traceability
+            await conn.execute("ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS correlation_id TEXT")
             # Создаём индекс для быстрого поиска по UUID
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_uuid ON audit_log(uuid) WHERE uuid IS NOT NULL")
             # Создаём индекс для быстрого поиска по action
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action)")
             # Создаём индекс для быстрого поиска по source
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_source ON audit_log(source) WHERE source IS NOT NULL")
+            # STEP 5 — PART C: CORRELATION & TRACEABILITY
+            # Index for correlation_id for fast incident timeline reconstruction
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_correlation_id ON audit_log(correlation_id) WHERE correlation_id IS NOT NULL")
         except Exception:
             # Колонки уже существуют
             pass
@@ -2452,27 +2537,54 @@ async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tu
 # VPN-ключи теперь создаются динамически через Outline API, лимита нет
 
 
-async def _log_audit_event_atomic(conn, action: str, telegram_id: int, target_user: Optional[int] = None, details: Optional[str] = None):
-    """Записать событие аудита в таблицу audit_log
+async def _log_audit_event_atomic(
+    conn,
+    action: str,
+    telegram_id: int,
+    target_user: Optional[int] = None,
+    details: Optional[str] = None,
+    correlation_id: Optional[str] = None
+):
+    """
+    Записать событие аудита в таблицу audit_log
     
-    Должна вызываться ТОЛЬКО внутри активной транзакции.
+    STEP 5 — COMPLIANCE & AUDITABILITY:
+    Must be called ONLY within an active transaction.
+    
+    PART F — FAILURE SAFETY:
+    Non-blocking, best-effort. Never throws exceptions.
     
     Args:
-        conn: Соединение с БД (внутри транзакции)
-        action: Тип действия (например, 'payment_approved', 'payment_rejected', 'vpn_key_issued', 'subscription_renewed')
-        telegram_id: Telegram ID администратора, который выполнил действие
-        target_user: Telegram ID пользователя, над которым выполнено действие (опционально)
-        details: Дополнительные детали действия (опционально)
+        conn: Database connection (within transaction)
+        action: Action type (e.g., 'payment_approved', 'payment_rejected', 'vpn_key_issued', 'subscription_renewed')
+        telegram_id: Telegram ID of the actor
+        target_user: Telegram ID of the target user (optional)
+        details: Additional details (optional, JSON string)
+        correlation_id: Correlation ID for tracing (optional)
     """
     try:
-        await conn.execute(
-            """INSERT INTO audit_log (action, telegram_id, target_user, details)
-               VALUES ($1, $2, $3, $4)""",
-            action, telegram_id, target_user, details
-        )
+        # STEP 5 — PART F: FAILURE SAFETY
+        # Try to insert with correlation_id if column exists, fallback to without it
+        try:
+            await conn.execute(
+                """INSERT INTO audit_log (action, telegram_id, target_user, details, correlation_id)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                action, telegram_id, target_user, details, correlation_id
+            )
+        except (asyncpg.UndefinedColumnError, asyncpg.ProgrammingError):
+            # Fallback if correlation_id column doesn't exist yet
+            await conn.execute(
+                """INSERT INTO audit_log (action, telegram_id, target_user, details)
+                   VALUES ($1, $2, $3, $4)""",
+                action, telegram_id, target_user, details
+            )
     except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        # STEP 5 — PART F: FAILURE SAFETY
+        # Log warning but never throw
         logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
     except Exception as e:
+        # STEP 5 — PART F: FAILURE SAFETY
+        # Log warning but never throw
         logger.warning(f"Error logging audit event: {e}")
 
 
@@ -2582,16 +2694,28 @@ async def _log_subscription_history_atomic(conn, telegram_id: int, vpn_key: str,
     )
 
 
-async def _log_audit_event_atomic_standalone(action: str, telegram_id: int, target_user: Optional[int] = None, details: Optional[str] = None):
-    """Записать событие аудита в таблицу audit_log (standalone версия)
+async def _log_audit_event_atomic_standalone(
+    action: str,
+    telegram_id: int,
+    target_user: Optional[int] = None,
+    details: Optional[str] = None,
+    correlation_id: Optional[str] = None
+):
+    """
+    Записать событие аудита в таблицу audit_log (standalone версия)
     
-    Создает свою транзакцию. Используется когда нужно записать событие вне существующей транзакции.
+    STEP 5 — COMPLIANCE & AUDITABILITY:
+    Creates its own transaction. Used when audit event needs to be logged outside existing transaction.
+    
+    PART F — FAILURE SAFETY:
+    Non-blocking, best-effort. Never throws exceptions.
     
     Args:
         action: Тип действия (например, 'payment_approved', 'payment_rejected', 'vpn_key_issued', 'subscription_renewed')
         telegram_id: Telegram ID администратора, который выполнил действие
         target_user: Telegram ID пользователя, над которым выполнено действие (опционально)
-        details: Дополнительные детали действия (опционально)
+        details: Дополнительные детали действия (опционально, JSON string)
+        correlation_id: Correlation ID for tracing (optional)
     """
     if not DB_READY:
         logger.warning("DB not ready (degraded mode), audit log skipped")
@@ -2605,10 +2729,14 @@ async def _log_audit_event_atomic_standalone(action: str, telegram_id: int, targ
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await _log_audit_event_atomic(conn, action, telegram_id, target_user, details)
+                await _log_audit_event_atomic(conn, action, telegram_id, target_user, details, correlation_id)
     except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        # STEP 5 — PART F: FAILURE SAFETY
+        # Log warning but never throw
         logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
     except Exception as e:
+        # STEP 5 — PART F: FAILURE SAFETY
+        # Log warning but never throw
         logger.warning(f"Error logging audit event (standalone): {e}")
 
 

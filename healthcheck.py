@@ -1,15 +1,40 @@
 """Модуль для health-check основных компонентов системы"""
 import asyncio
 import logging
-from typing import Tuple, List
+from datetime import datetime
+from typing import Tuple, List, Optional
 from aiogram import Bot
 import database
 import config
+from app.core.system_state import (
+    SystemState,
+    ComponentStatus,
+    healthy_component,
+    degraded_component,
+    unavailable_component,
+)
+from app.core.recovery_cooldown import (
+    get_recovery_cooldown,
+    ComponentName,
+)
+from app.core.metrics import get_metrics
+from app.core.slo import get_slo
+from app.core.alerts import get_alert_rules, send_alert
+from app.core.performance_budget import get_performance_budget, OperationType
+from app.core.cost_model import get_cost_model, CostCenter, DEFAULT_COST_THRESHOLDS
+from app.core.audit_policy import (
+    get_audit_policy_engine,
+    get_incident_context,
+    AuditEventType,
+)
 
 logger = logging.getLogger(__name__)
 
 # Минимальное количество свободных VPN-ключей больше не используется
 # VPN-ключи создаются динамически через Xray API (VLESS + REALITY)
+
+# B4.1 - SYSTEM STATE TRANSITIONS: In-memory previous state tracking
+_previous_system_state: Optional[SystemState] = None
 
 
 async def check_database_connection() -> Tuple[bool, str]:
@@ -93,6 +118,7 @@ async def perform_health_check() -> Tuple[bool, list]:
     """
     messages = []
     all_ok = True
+    now = datetime.utcnow()
     
     # Проверка PostgreSQL
     db_ok, db_msg = await check_database_connection()
@@ -111,6 +137,175 @@ async def perform_health_check() -> Tuple[bool, list]:
     messages.append(keys_msg)
     if not keys_ok:
         all_ok = False
+    
+    # STEP 1.1 - RUNTIME GUARDRAILS: SystemState is constructed centrally in healthcheck
+    # SystemState is a READ-ONLY snapshot of system health
+    # Build SystemState based on current checks (internal computation only)
+    # Database component state
+    if database.DB_READY and db_ok and pool_ok:
+        db_component = healthy_component(last_checked_at=now)
+    else:
+        # Extract error message from db_msg or pool_msg
+        error_msg = db_msg if not db_ok else pool_msg
+        db_component = unavailable_component(error=error_msg, last_checked_at=now)
+    
+    # VPN API component state
+    if keys_ok:
+        vpn_component = healthy_component(last_checked_at=now)
+    else:
+        # VPN API missing or error - degraded (not unavailable, as system can work without it)
+        vpn_component = degraded_component(error=keys_msg, last_checked_at=now)
+    
+    # Payments component state (always healthy - no logic change)
+    payments_component = healthy_component(last_checked_at=now)
+    
+    # Create SystemState instance (for internal use, not exposed)
+    system_state = SystemState(
+        database=db_component,
+        vpn_api=vpn_component,
+        payments=payments_component,
+    )
+    
+    # B4.1 - SYSTEM STATE TRANSITIONS: Track state transitions (observed, not forced)
+    global _previous_system_state
+    if _previous_system_state is not None:
+        # Check for transitions in each component
+        components = [
+            ("database", _previous_system_state.database, system_state.database, ComponentName.DATABASE),
+            ("vpn_api", _previous_system_state.vpn_api, system_state.vpn_api, ComponentName.VPN_API),
+            ("payments", _previous_system_state.payments, system_state.payments, ComponentName.PAYMENTS),
+        ]
+        
+        recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
+        
+        for comp_name, prev_comp, curr_comp, comp_enum in components:
+            prev_status = prev_comp.status
+            curr_status = curr_comp.status
+            
+            # Detect transitions
+            if prev_status != curr_status:
+                # D3.2 - AUDIT TRAIL HARDENING: Log system degradation transitions
+                audit_policy = get_audit_policy_engine()
+                incident_context = get_incident_context()
+                correlation_id = incident_context.get_correlation_id()
+                
+                # Log transition with audit policy
+                transition_data = {
+                    "component": comp_name,
+                    "prev_status": prev_status.value,
+                    "curr_status": curr_status.value,
+                    "timestamp": now.isoformat(),
+                    "correlation_id": correlation_id,
+                }
+                
+                # Sanitize for audit (no sensitive data in this case)
+                sanitized_data = audit_policy.sanitize_for_audit(
+                    AuditEventType.SYSTEM_DEGRADATION,
+                    transition_data
+                )
+                
+                logger.info(
+                    f"[RECOVERY] component={comp_name} transitioned from {prev_status.value} to {curr_status.value} "
+                    f"[INCIDENT {correlation_id}]"
+                )
+                
+                # D3.2 - AUDIT TRAIL: Log to audit trail (if audit policy requires)
+                if audit_policy.should_audit(AuditEventType.SYSTEM_DEGRADATION):
+                    logger.info(
+                        f"[AUDIT] SYSTEM_DEGRADATION: {sanitized_data}"
+                    )
+                
+                # B4.2 - COOLDOWN & BACKOFF: Mark unavailable and start cooldown
+                if curr_status == ComponentStatus.UNAVAILABLE:
+                    recovery_cooldown.mark_unavailable(comp_enum, now)
+                elif prev_status == ComponentStatus.UNAVAILABLE and curr_status != ComponentStatus.UNAVAILABLE:
+                    # Component recovered from unavailable - clear cooldown after a delay
+                    # Cooldown will naturally expire, but we log recovery
+                    logger.info(
+                        f"[RECOVERY] component={comp_name} recovered from UNAVAILABLE to {curr_status.value} "
+                        f"[INCIDENT {correlation_id}]"
+                    )
+    
+    # Update previous state for next iteration
+    _previous_system_state = system_state
+    
+    # C1.1 - METRICS: Update metrics based on system state
+    # PART E — SLO SIGNAL IDENTIFICATION: System degraded vs unavailable ratio
+    # This system_state_status gauge is an SLO signal for system health.
+    # Track: system_state_status = 0 (healthy), 1 (degraded), 2 (unavailable).
+    # SLO: system_state != UNAVAILABLE ≥ 99.9%, DEGRADED ≤ 5% of time.
+    metrics = get_metrics()
+    system_state_status = 2.0 if system_state.is_unavailable else (1.0 if system_state.is_degraded else 0.0)
+    metrics.set_gauge("system_state_status", system_state_status)
+    
+    # Update recovery and cooldown gauges
+    recovery_cooldown = get_recovery_cooldown()
+    recovery_in_progress = any(
+        recovery_cooldown.is_in_cooldown(comp, now)
+        for comp in [ComponentName.DATABASE, ComponentName.VPN_API, ComponentName.PAYMENTS]
+    )
+    metrics.set_gauge("recovery_in_progress", 1.0 if recovery_in_progress else 0.0)
+    metrics.set_gauge("cooldown_active", 1.0 if recovery_in_progress else 0.0)
+    
+    # C2.2 - ALERT RULES: Evaluate alert rules (does not affect return value)
+    try:
+        alert_rules = get_alert_rules()
+        alerts = alert_rules.evaluate_all_rules(system_state, recovery_attempts=0)
+        for alert in alerts:
+            # Log alerts (actual sending would be done by health_check_task)
+            send_alert(alert)
+    except Exception as e:
+        # Alert evaluation must not break health check
+        logger.debug(f"Error evaluating alerts: {e}")
+    
+    # D1.1 - LATENCY BUDGETING: Check performance budgets (observability only)
+    try:
+        performance_budget = get_performance_budget()
+        budget_results = performance_budget.check_all_budgets()
+        # Log budget violations (for observability, not blocking)
+        for op_type, result in budget_results.items():
+            if result.get("is_compliant") is False:
+                logger.warning(
+                    f"[PERFORMANCE] Budget violation: {op_type.value} "
+                    f"P95={result.get('actual_p95_ms')}ms > budget={result.get('budget_p95_ms')}ms"
+                )
+    except Exception as e:
+        logger.debug(f"Error checking performance budgets: {e}")
+    
+    # D2.3 - COST ANOMALY DETECTION: Check for cost anomalies
+    try:
+        cost_model = get_cost_model()
+        cost_model.check_and_alert_cost_anomalies()
+    except Exception as e:
+        logger.debug(f"Error checking cost anomalies: {e}")
+    
+    # D3.3 - INCIDENT READINESS: Track system degradation transitions
+    try:
+        incident_context = get_incident_context()
+        audit_policy = get_audit_policy_engine()
+        
+        # Start incident context if system becomes unavailable
+        if system_state.is_unavailable and incident_context.get_incident_id() is None:
+            incident_id = incident_context.start_incident()
+            logger.warning(
+                f"[INCIDENT] Started incident context: {incident_id} "
+                f"(system_state=UNAVAILABLE)"
+            )
+        
+        # Clear incident context if system recovers
+        if not system_state.is_unavailable and incident_context.get_incident_id() is not None:
+            incident_id = incident_context.get_incident_id()
+            incident_context.clear_incident()
+            logger.info(
+                f"[INCIDENT] Cleared incident context: {incident_id} "
+                f"(system_state recovered)"
+            )
+    except Exception as e:
+        logger.debug(f"Error managing incident context: {e}")
+    
+    # Use SystemState properties internally but preserve external behavior
+    # all_ok is already computed above, but we can verify with system_state
+    # Note: We preserve the original all_ok computation to maintain exact behavior
     
     return all_ok, messages
 

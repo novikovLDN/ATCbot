@@ -133,9 +133,14 @@ def is_activation_allowed(
     if now is None:
         now = datetime.now()
     
-    # Check activation status
+    # STEP 3 — PART C: SIDE-EFFECT SAFETY
+    # Check activation status - provides idempotency boundary
+    # Activation is only allowed if status is 'pending'
+    # If already activated (status='active'), side-effect is SKIPPED
     activation_status = subscription.get("activation_status")
     if activation_status != "pending":
+        # STEP 3 — PART C: SIDE-EFFECT SAFETY
+        # Activation side-effect SKIPPED due to idempotency (already activated)
         return False, f"Subscription is not pending (status={activation_status})"
     
     # Check if subscription expired
