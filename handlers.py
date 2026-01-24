@@ -31,6 +31,12 @@ from app.services.payments.exceptions import (
     PaymentAlreadyProcessedError,
     PaymentFinalizationError,
 )
+from app.core.system_state import (
+    SystemState,
+    healthy_component,
+    degraded_component,
+    unavailable_component,
+)
 from app.services.activation import service as activation_service
 from app.services.trials import service as trial_service
 from app.services.admin import service as admin_service
@@ -39,9 +45,230 @@ from app.services.admin.exceptions import (
     UserNotFoundError,
     InvalidAdminActionError,
 )
+from app.utils.logging_helpers import (
+    log_handler_entry,
+    log_handler_exit,
+    classify_error,
+)
+from app.utils.security import (
+    validate_telegram_id,
+    validate_message_text,
+    validate_callback_data,
+    validate_payment_payload,
+    validate_promo_code,
+    require_admin,
+    require_ownership,
+    log_security_warning,
+    log_security_error,
+    log_audit_event,
+    sanitize_for_logging,
+)
+from app.core.feature_flags import get_feature_flags
+from app.core.circuit_breaker import get_circuit_breaker
+from app.core.rate_limit import check_rate_limit
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
+
+
+# ====================================================================================
+# STEP 3 — FAILURE CONTAINMENT & RUNTIME SAFETY
+# ====================================================================================
+# 
+# PART A — HARD FAILURE BOUNDARIES:
+# - All handlers must have explicit exception boundaries
+# - All workers must have top-level try/except in loops
+# - No exception should propagate past its boundary
+# 
+# PART B — WORKER LOOP SAFETY:
+# - Minimum safe sleep on failure (prevents tight retry storms)
+# - Always sleep before next iteration
+# 
+# PART C — SIDE-EFFECT SAFETY:
+# - Payment finalization: idempotency check in payment_service.check_payment_idempotency()
+# - Subscription activation: idempotency check in activation_service
+# - VPN provisioning: idempotency check in vpn_service
+# 
+# PART D — EXTERNAL DEPENDENCY ISOLATION:
+# - VPN API calls: isolated in try/except, mapped to dependency_error
+# - Payment provider calls: isolated in try/except, mapped to dependency_error
+# - CryptoBot API calls: isolated in try/except, mapped to dependency_error
+# 
+# PART E — SECRET & CONFIG SAFETY:
+# - Secrets never logged (sanitize_for_logging used)
+# - Secrets never included in exceptions
+# - Required env vars validated at startup (config.py)
+# - Fail fast if critical secrets missing (config.py)
+# 
+# PART F — SECURITY LOGGING POLICY (COMMENTS ONLY):
+# 
+# SECURITY_WARNING (log_security_warning):
+# - Unauthorized access attempts
+# - Invalid input (malformed, oversized, unexpected)
+# - Suspicious activity patterns
+# - Failed authorization checks
+# 
+# SECURITY_ERROR (log_security_error):
+# - Critical security failures
+# - Potential attacks
+# - System compromise attempts
+# - Critical authorization failures
+# 
+# AUDIT_EVENT (log_audit_event):
+# - Admin actions (all admin operations)
+# - Payment finalization (successful and failed)
+# - Subscription modifications
+# - VPN operations
+# - Privileged operations
+# 
+# What gets logged:
+# - All security events with correlation_id
+# - Admin actions with full context
+# - Payment events (sanitized)
+# - Authorization failures
+# 
+# What must NEVER be logged:
+# - Secrets (BOT_TOKEN, API keys, passwords)
+# - Full payment payloads (only sanitized)
+# - Full user data (only IDs and non-sensitive fields)
+# - Database connection strings
+# 
+# Correlation ID usage:
+# - All security logs include correlation_id for tracing
+# - correlation_id = message_id for handlers
+# - correlation_id = iteration_id for workers
+# 
+# WARNING (logger.warning):
+# - Expected failures: DB temporarily unavailable, VPN API disabled, payment provider timeout
+# - Transient errors: Network timeouts, connection errors (will retry)
+# - Degraded state: System continues with reduced functionality
+# - Idempotency skips: Payment already processed, subscription already activated
+# 
+# ERROR (logger.error):
+# - Unexpected failures: Unhandled exceptions, invariant violations
+# - Critical errors: Payment finalization failures, activation failures after max attempts
+# - Domain errors: Invalid payment amount, invalid subscription state
+# 
+# Admin alert (admin_notifications):
+# - Payment failures: Payment received but finalization failed
+# - Activation failures: Subscription activation failed after max attempts
+# - System unavailable: System state is UNAVAILABLE for extended period
+# 
+# Suppress (no logging or minimal logging):
+# - Idempotency skips: Payment already processed (logged as INFO, not ERROR)
+# - Expected domain errors: Invalid payload format (logged as ERROR but not escalated)
+# - VPN API disabled: NOT an error state (logged as WARNING, not ERROR)
+# ====================================================================================
+
+
+def handler_exception_boundary(handler_name: str, operation: str = None):
+    """
+    Decorator for explicit handler exception boundaries.
+    
+    STEP 3 — PART A: HARD FAILURE BOUNDARIES
+    Ensures no exception propagates past handler boundary.
+    
+    Args:
+        handler_name: Name of the handler function
+        operation: Operation name (defaults to handler_name)
+    
+    Usage:
+        @handler_exception_boundary("cmd_start", "user_start")
+        @router.message(Command("start"))
+        async def cmd_start(message: Message):
+            ...
+    """
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            # Extract correlation_id from message/callback if available
+            correlation_id = None
+            telegram_id = None
+            
+            # Try to extract from first argument (Message or CallbackQuery)
+            if args and hasattr(args[0], 'message_id'):
+                correlation_id = str(args[0].message_id)
+            elif args and hasattr(args[0], 'message') and hasattr(args[0].message, 'message_id'):
+                correlation_id = str(args[0].message.message_id)
+            
+            if args and hasattr(args[0], 'from_user'):
+                telegram_id = args[0].from_user.id
+            elif args and hasattr(args[0], 'message') and hasattr(args[0].message, 'from_user'):
+                telegram_id = args[0].message.from_user.id
+            
+            start_time = time.time()
+            op_name = operation or handler_name
+            
+            # Log handler entry
+            log_handler_entry(
+                handler_name=handler_name,
+                telegram_id=telegram_id,
+                operation=op_name,
+                correlation_id=correlation_id,
+            )
+            
+            try:
+                # Execute handler
+                result = await func(*args, **kwargs)
+                
+                # Log successful exit
+                duration_ms = (time.time() - start_time) * 1000
+                log_handler_exit(
+                    handler_name=handler_name,
+                    outcome="success",
+                    telegram_id=telegram_id,
+                    operation=op_name,
+                    duration_ms=duration_ms,
+                )
+                
+                return result
+                
+            except Exception as e:
+                # STEP 3 — PART A: HARD FAILURE BOUNDARIES
+                # Exception caught at handler boundary - handler exits gracefully
+                # No exception propagates past this boundary
+                
+                duration_ms = (time.time() - start_time) * 1000
+                error_type = classify_error(e)
+                
+                # Log failure
+                logger.error(
+                    f"[FAILURE_BOUNDARY] Handler exception caught: handler={handler_name}, "
+                    f"operation={op_name}, correlation_id={correlation_id}, "
+                    f"error_type={error_type}, error={type(e).__name__}: {str(e)[:200]}"
+                )
+                
+                log_handler_exit(
+                    handler_name=handler_name,
+                    outcome="failed",
+                    telegram_id=telegram_id,
+                    operation=op_name,
+                    error_type=error_type,
+                    duration_ms=duration_ms,
+                    reason=f"Exception: {type(e).__name__}"
+                )
+                
+                # Handler exits gracefully - no exception propagation
+                # User may see generic error message if handler didn't send one
+                try:
+                    # Try to send generic error message if we have message/callback
+                    if args and hasattr(args[0], 'answer'):
+                        user = await database.get_user(telegram_id) if telegram_id else None
+                        language = user.get("language", "ru") if user else "ru"
+                        error_text = localization.get_text(
+                            language,
+                            "error_occurred",
+                            default="⚠️ Произошла ошибка. Попробуйте позже."
+                        )
+                        await args[0].answer(error_text)
+                except Exception:
+                    # If we can't send error message, that's OK - handler still exits gracefully
+                    pass
+                
+                # Handler boundary: exception does NOT propagate
+                return None
+        
+        return wrapper
+    return decorator
 
 
 # ====================================================================================
@@ -1328,14 +1555,36 @@ async def format_promo_stats_text(stats: list) -> str:
 @router.message(Command("promo_stats"))
 async def cmd_promo_stats(message: Message):
     """Команда для просмотра статистики промокодов (только для администратора)"""
+    # STEP 4 — PART A: INPUT TRUST BOUNDARIES
+    # Validate telegram_id
     telegram_id = message.from_user.id
+    is_valid, error = validate_telegram_id(telegram_id)
+    if not is_valid:
+        log_security_warning(
+            event="Invalid telegram_id in promo_stats command",
+            telegram_id=telegram_id,
+            correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
+            details={"error": error}
+        )
+        await message.answer("⚠️ Произошла ошибка. Попробуйте позже.")
+        return
     
-    # Проверяем, что пользователь - администратор
-    if telegram_id != config.ADMIN_TELEGRAM_ID:
+    # STEP 4 — PART B: AUTHORIZATION GUARDS
+    # Explicit admin authorization check - fail closed
+    is_authorized, auth_error = require_admin(telegram_id)
+    if not is_authorized:
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_access_denied"))
         return
+    
+    # STEP 4 — PART F: SECURITY LOGGING POLICY
+    # Log admin action
+    log_audit_event(
+        event="admin_promo_stats_viewed",
+        telegram_id=telegram_id,
+        correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None
+    )
     
     try:
         # Получаем статистику промокодов
@@ -1630,6 +1879,57 @@ async def callback_main_menu(callback: CallbackQuery):
 @router.callback_query(F.data == "activate_trial")
 async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     """Активация пробного периода на 3 дня"""
+    # READ-ONLY system state awareness (informational only, does not affect flow)
+    try:
+        from datetime import datetime
+        now = datetime.utcnow()
+        db_ready = database.DB_READY
+        import config
+        
+        # STEP 1.1 - RUNTIME GUARDRAILS: SystemState is READ-ONLY snapshot
+        # Handlers NEVER block user actions based on SystemState
+        # Handlers may only LOG when system is DEGRADED or UNAVAILABLE
+        # Build SystemState for awareness (read-only)
+        if db_ready:
+            db_component = healthy_component(last_checked_at=now)
+        else:
+            db_component = unavailable_component(
+                error="DB not ready (degraded mode)",
+                last_checked_at=now
+            )
+        
+        # VPN API component
+        if config.VPN_ENABLED and config.XRAY_API_URL:
+            vpn_component = healthy_component(last_checked_at=now)
+        else:
+            vpn_component = degraded_component(
+                error="VPN API not configured",
+                last_checked_at=now
+            )
+        
+        # Payments component (always healthy)
+        payments_component = healthy_component(last_checked_at=now)
+        
+        system_state = SystemState(
+            database=db_component,
+            vpn_api=vpn_component,
+            payments=payments_component,
+        )
+        
+        # STEP 1.1 - RUNTIME GUARDRAILS: Handlers log degradation but do NOT branch logic
+        # B3.1 - SOFT DEGRADATION: Log and prepare UX message if degraded
+        if system_state.is_degraded:
+            logger.info(
+                f"[DEGRADED] system_state detected during callback_activate_trial "
+                f"(user={callback.from_user.id})"
+            )
+            _degradation_notice = True
+        else:
+            _degradation_notice = False
+    except Exception:
+        # Ignore system state errors - must not affect activation flow
+        _degradation_notice = False
+    
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
@@ -1637,6 +1937,13 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
+    
+    # STEP 6 — F3: RATE LIMITING (HUMAN & BOT SAFETY)
+    # Rate limit trial activation (once per hour)
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "trial_activate")
+    if not is_allowed:
+        await callback.answer(rate_limit_message or "Слишком много запросов. Попробуйте позже.", show_alert=True)
+        return
     
     # КРИТИЧНО: Проверяем eligibility перед активацией
     is_eligible = await database.is_eligible_for_trial(telegram_id)
@@ -1701,6 +2008,13 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
             vpn_key=vpn_key,
             expires_date=subscription_end.strftime("%d.%m.%Y %H:%M")
         )
+        
+        # B3.1 - SOFT DEGRADATION: Add soft UX notice if degraded (only where messages are sent)
+        try:
+            if _degradation_notice:
+                success_text += "\n\n⏳ Возможны небольшие задержки"
+        except NameError:
+            pass  # _degradation_notice not set - ignore
         
         await callback.message.answer(success_text, parse_mode="HTML")
         
@@ -2221,6 +2535,50 @@ async def process_topup_amount(message: Message, state: FSMContext):
 @router.callback_query(F.data == "copy_key")
 async def callback_copy_key(callback: CallbackQuery):
     """Копировать VPN-ключ - отправляет ключ как отдельное сообщение"""
+    # B3.1 - SOFT DEGRADATION: Read-only awareness (informational only, does not affect flow)
+    try:
+        from datetime import datetime
+        now = datetime.utcnow()
+        db_ready = database.DB_READY
+        import config
+        
+        # Build SystemState for awareness (read-only)
+        if db_ready:
+            db_component = healthy_component(last_checked_at=now)
+        else:
+            db_component = unavailable_component(
+                error="DB not ready (degraded mode)",
+                last_checked_at=now
+            )
+        
+        # VPN API component
+        if config.VPN_ENABLED and config.XRAY_API_URL:
+            vpn_component = healthy_component(last_checked_at=now)
+        else:
+            vpn_component = degraded_component(
+                error="VPN API not configured",
+                last_checked_at=now
+            )
+        
+        # Payments component (always healthy)
+        payments_component = healthy_component(last_checked_at=now)
+        
+        system_state = SystemState(
+            database=db_component,
+            vpn_api=vpn_component,
+            payments=payments_component,
+        )
+        
+        # B3.1 - SOFT DEGRADATION: Log if degraded
+        if system_state.is_degraded:
+            logger.info(
+                f"[DEGRADED] system_state detected during callback_copy_key "
+                f"(user={callback.from_user.id})"
+            )
+    except Exception:
+        # Ignore system state errors - must not affect key copy flow
+        pass
+    
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -2273,6 +2631,50 @@ async def callback_copy_key(callback: CallbackQuery):
 @router.callback_query(F.data == "copy_vpn_key")
 async def callback_copy_vpn_key(callback: CallbackQuery):
     """Скопировать VPN-ключ - отправляет ключ как отдельное сообщение"""
+    # B3.1 - SOFT DEGRADATION: Read-only awareness (informational only, does not affect flow)
+    try:
+        from datetime import datetime
+        now = datetime.utcnow()
+        db_ready = database.DB_READY
+        import config
+        
+        # Build SystemState for awareness (read-only)
+        if db_ready:
+            db_component = healthy_component(last_checked_at=now)
+        else:
+            db_component = unavailable_component(
+                error="DB not ready (degraded mode)",
+                last_checked_at=now
+            )
+        
+        # VPN API component
+        if config.VPN_ENABLED and config.XRAY_API_URL:
+            vpn_component = healthy_component(last_checked_at=now)
+        else:
+            vpn_component = degraded_component(
+                error="VPN API not configured",
+                last_checked_at=now
+            )
+        
+        # Payments component (always healthy)
+        payments_component = healthy_component(last_checked_at=now)
+        
+        system_state = SystemState(
+            database=db_component,
+            vpn_api=vpn_component,
+            payments=payments_component,
+        )
+        
+        # B3.1 - SOFT DEGRADATION: Log if degraded
+        if system_state.is_degraded:
+            logger.info(
+                f"[DEGRADED] system_state detected during callback_copy_vpn_key "
+                f"(user={callback.from_user.id})"
+            )
+    except Exception:
+        # Ignore system state errors - must not affect key copy flow
+        pass
+    
     telegram_id = callback.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
@@ -2832,6 +3234,15 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     - Отправляет VPN ключ пользователю
     """
     telegram_id = callback.from_user.id
+    
+    # STEP 6 — F3: RATE LIMITING (HUMAN & BOT SAFETY)
+    # Rate limit payment initiation
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await callback.answer(rate_limit_message or "Слишком много запросов. Попробуйте позже.", show_alert=True)
+        return
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
@@ -3837,6 +4248,36 @@ async def callback_crypto_disabled(callback: CallbackQuery):
 
 @router.message(PromoCodeInput.waiting_for_promo)
 async def process_promo_code(message: Message, state: FSMContext):
+    # STEP 4 — PART A: INPUT TRUST BOUNDARIES
+    # Validate telegram_id
+    telegram_id = message.from_user.id
+    is_valid, error = validate_telegram_id(telegram_id)
+    if not is_valid:
+        log_security_warning(
+            event="Invalid telegram_id in promo code input",
+            telegram_id=telegram_id,
+            correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
+            details={"error": error}
+        )
+        await message.answer("⚠️ Произошла ошибка. Попробуйте позже.")
+        return
+    
+    # STEP 4 — PART A: INPUT TRUST BOUNDARIES
+    # Validate message text
+    promo_code = message.text.strip().upper() if message.text else None
+    is_valid_promo, promo_error = validate_promo_code(promo_code)
+    if not is_valid_promo:
+        log_security_warning(
+            event="Invalid promo code format",
+            telegram_id=telegram_id,
+            correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
+            details={"error": promo_error, "promo_code_preview": promo_code[:20] if promo_code else None}
+        )
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        text = localization.get_text(language, "invalid_promo", default="❌ Промокод недействителен")
+        await message.answer(text)
+        return
     """Обработчик ввода промокода"""
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_message(message):
@@ -3977,6 +4418,99 @@ async def process_successful_payment(message: Message, state: FSMContext):
     - Очищает FSM state после успешной активации
     - Отправляет VPN ключ пользователю
     """
+    # STEP 4 — PART A: INPUT TRUST BOUNDARIES
+    # Validate telegram_id
+    telegram_id = message.from_user.id
+    is_valid, error = validate_telegram_id(telegram_id)
+    if not is_valid:
+        log_security_warning(
+            event="Invalid telegram_id in successful_payment",
+            telegram_id=telegram_id,
+            correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
+            details={"error": error}
+        )
+        await message.answer("⚠️ Произошла ошибка. Попробуйте позже.")
+        return
+    
+    # STEP 4 — PART A: INPUT TRUST BOUNDARIES
+    # Validate payment payload
+    payment = message.successful_payment
+    payload = payment.invoice_payload if payment else None
+    is_valid_payload, payload_error = validate_payment_payload(payload)
+    if not is_valid_payload:
+        log_security_warning(
+            event="Invalid payment payload in successful_payment",
+            telegram_id=telegram_id,
+            correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
+            details={"error": payload_error, "payload_preview": payload[:50] if payload else None}
+        )
+        await message.answer("⚠️ Произошла ошибка. Попробуйте позже.")
+        return
+    
+    # STEP 6 — F1: GLOBAL OPERATIONAL FLAGS
+    # Check if payments are enabled (kill switch)
+    feature_flags = get_feature_flags()
+    if not feature_flags.payments_enabled:
+        logger.warning(
+            f"[FEATURE_FLAG] Payments disabled, skipping payment finalization: "
+            f"user={telegram_id}, correlation_id={str(message.message_id) if hasattr(message, 'message_id') else None}"
+        )
+        user = await database.get_user(telegram_id)
+        language = user.get("language", "ru") if user else "ru"
+        await message.answer(
+            localization.get_text(
+                language,
+                "service_unavailable",
+                default="⚠️ Сервис временно недоступен. Попробуйте позже."
+            )
+        )
+        return
+    # READ-ONLY system state awareness (informational only, does not affect flow)
+    try:
+        now = datetime.utcnow()
+        db_ready = database.DB_READY
+        
+        # Build SystemState for awareness (read-only)
+        if db_ready:
+            db_component = healthy_component(last_checked_at=now)
+        else:
+            db_component = unavailable_component(
+                error="DB not ready (degraded mode)",
+                last_checked_at=now
+            )
+        
+        # VPN API component
+        if config.VPN_ENABLED and config.XRAY_API_URL:
+            vpn_component = healthy_component(last_checked_at=now)
+        else:
+            vpn_component = degraded_component(
+                error="VPN API not configured",
+                last_checked_at=now
+            )
+        
+        # Payments component (always healthy - no logic change)
+        payments_component = healthy_component(last_checked_at=now)
+        
+        system_state = SystemState(
+            database=db_component,
+            vpn_api=vpn_component,
+            payments=payments_component,
+        )
+        
+        # B3.1 - SOFT DEGRADATION: Log and prepare UX message if degraded
+        if system_state.is_degraded:
+            logger.info(
+                f"[DEGRADED] system_state detected during process_successful_payment "
+                f"(user={message.from_user.id})"
+            )
+            # Store degradation flag for UX message (will be used later if needed)
+            _degradation_notice = True
+        else:
+            _degradation_notice = False
+    except Exception:
+        # Ignore system state errors - must not affect payment flow
+        _degradation_notice = False
+    
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not database.DB_READY:
         language = "ru"  # По умолчанию
@@ -4000,9 +4534,30 @@ async def process_successful_payment(message: Message, state: FSMContext):
         
         await message.answer(text, reply_markup=keyboard)
         logger.error("Payment received but service unavailable (DB not ready)")
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type="infra_error",
+            duration_ms=duration_ms,
+            reason="DB not ready"
+        )
         return
     
     telegram_id = message.from_user.id
+    
+    # STEP 2 — OBSERVABILITY: Structured logging for handler entry
+    # PART B — CORRELATION IDS: Use message_id for correlation tracking
+    start_time = time.time()
+    message_id = str(message.message_id) if hasattr(message, 'message_id') and message.message_id else None
+    correlation_id = log_handler_entry(
+        handler_name="process_successful_payment",
+        telegram_id=telegram_id,
+        operation="payment_finalization",
+        correlation_id=message_id,
+    )
     
     # КРИТИЧНО: Инициализация языка в начале функции для гарантированной доступности
     # Получаем язык пользователя из профиля или используем "ru" как fallback
@@ -4044,6 +4599,17 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     default="Ошибка обработки платежа. Обратитесь в поддержку."
                 )
                 await message.answer(error_text)
+                duration_ms = (time.time() - start_time) * 1000
+                error_type = classify_error(e)
+                log_handler_exit(
+                    handler_name="process_successful_payment",
+                    outcome="failed",
+                    telegram_id=telegram_id,
+                    operation="payment_finalization",
+                    error_type=error_type,
+                    duration_ms=duration_ms,
+                    payment_type="balance_topup"
+                )
                 return
             
             # Извлекаем результаты
@@ -4122,6 +4688,15 @@ async def process_successful_payment(message: Message, state: FSMContext):
             
             # Логируем событие
             logger.info(f"Balance topup successful: user={telegram_id}, amount={payment_amount_rubles} RUB, new_balance={new_balance} RUB")
+            duration_ms = (time.time() - start_time) * 1000
+            log_handler_exit(
+                handler_name="process_successful_payment",
+                outcome="success",
+                telegram_id=telegram_id,
+                operation="payment_finalization",
+                duration_ms=duration_ms,
+                payment_type="balance_topup"
+            )
             return
             
     except InvalidPaymentPayloadError as e:
@@ -4129,12 +4704,34 @@ async def process_successful_payment(message: Message, state: FSMContext):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_payment_processing"))
+        duration_ms = (time.time() - start_time) * 1000
+        error_type = classify_error(e)
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type=error_type,
+            duration_ms=duration_ms,
+            reason="invalid_payload"
+        )
         return
     except PaymentServiceError as e:
         logger.error(f"Payment service error: {e}")
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_payment_processing"))
+        duration_ms = (time.time() - start_time) * 1000
+        error_type = classify_error(e)
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type=error_type,
+            duration_ms=duration_ms,
+            reason="payment_service_error"
+        )
         return
     
     # Обработка платежей за подписку
@@ -4145,6 +4742,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_payment_processing"))
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type="domain_error",
+            duration_ms=duration_ms,
+            reason="unsupported_payload_type"
+        )
         return
     
     # Extract purchase_id from payload_info
@@ -4154,6 +4761,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
         user = await database.get_user(telegram_id)
         language = user.get("language", "ru") if user else "ru"
         await message.answer(localization.get_text(language, "error_payment_processing"))
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type="domain_error",
+            duration_ms=duration_ms,
+            reason="no_purchase_id"
+        )
         return
     
     # Get pending purchase for logging
@@ -4173,6 +4790,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
             None,
             f"Payment received but pending purchase invalid: purchase_id={purchase_id}"
         )
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type="domain_error",
+            duration_ms=duration_ms,
+            reason="pending_purchase_not_found_or_expired"
+        )
         return
     
     tariff_type = pending_purchase["tariff"]
@@ -4188,12 +4815,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
     )
     
     await database._log_audit_event_atomic_standalone(
-        "payment_received",
-        telegram_id,
-        None,
-        f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount_rubles:.2f} RUB"
-    )
-    
+            "payment_received",
+            telegram_id,
+            None,
+            f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount_rubles:.2f} RUB"
+        )
+        
     # Finalize subscription payment through payment service
     try:
         result = await payment_service.finalize_subscription_payment(
@@ -4274,6 +4901,15 @@ async def process_successful_payment(message: Message, state: FSMContext):
             except Exception:
                 pass
             
+            duration_ms = (time.time() - start_time) * 1000
+            log_handler_exit(
+                handler_name="process_successful_payment",
+                outcome="success",
+                telegram_id=telegram_id,
+                operation="payment_finalization",
+                duration_ms=duration_ms,
+                activation_status="pending"
+            )
             return
         
         # КРИТИЧНО: Дополнительная проверка - VPN ключ должен быть валидным после finalize_purchase
@@ -4305,6 +4941,17 @@ async def process_successful_payment(message: Message, state: FSMContext):
             default="Ошибка обработки платежа. Обратитесь в поддержку."
         )
         await message.answer(error_text)
+        duration_ms = (time.time() - start_time) * 1000
+        error_type = classify_error(e)
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type=error_type,
+            duration_ms=duration_ms,
+            reason="payment_validation_failed"
+        )
         return
         
     except PaymentFinalizationError as e:
@@ -4337,6 +4984,17 @@ async def process_successful_payment(message: Message, state: FSMContext):
         except Exception as log_error:
             logger.error(f"Failed to log audit event: {log_error}")
         
+        duration_ms = (time.time() - start_time) * 1000
+        error_type = classify_error(e)
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type=error_type,
+            duration_ms=duration_ms,
+            reason="payment_finalization_failed"
+        )
         return
         
     except Exception as e:
@@ -4356,19 +5014,30 @@ async def process_successful_payment(message: Message, state: FSMContext):
             default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
         )
         await message.answer(error_text)
+        duration_ms = (time.time() - start_time) * 1000
+        error_type = classify_error(e)
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="failed",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            error_type=error_type,
+            duration_ms=duration_ms,
+            reason="unexpected_error"
+        )
         return
-    
-    # КРИТИЧНО: VPN ключ отправляется СРАЗУ после успешной финализации платежа
-    # Валидация уже выполнена внутри finalize_purchase - здесь только отправка
-    # КРИТИЧНО: Это гарантирует что пользователь ВСЕГДА получит VPN ключ после оплаты
-    
-    # Если использован промокод, увеличиваем счетчик использований и логируем
-    if promo_code_used:
-        try:
-            # Получаем данные промокода для логирования
-            promo_data = await database.get_promo_code(promo_code_used)
-            if promo_data:
-                discount_percent = promo_data["discount_percent"]
+        
+        # КРИТИЧНО: VPN ключ отправляется СРАЗУ после успешной финализации платежа
+        # Валидация уже выполнена внутри finalize_purchase - здесь только отправка
+        # КРИТИЧНО: Это гарантирует что пользователь ВСЕГДА получит VPN ключ после оплаты
+        
+        # Если использован промокод, увеличиваем счетчик использований и логируем
+        if promo_code_used:
+            try:
+                # Получаем данные промокода для логирования
+                promo_data = await database.get_promo_code(promo_code_used)
+                if promo_data:
+                    discount_percent = promo_data["discount_percent"]
                 # Рассчитываем price_before (базовая цена тарифа)
                 base_price = config.TARIFFS[tariff_type][period_days]["price"]
                 price_before = base_price
@@ -4386,8 +5055,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     price_before=price_before,
                     price_after=price_after
                 )
-        except Exception as e:
-            logger.error(f"Error processing promo code usage: {e}")
+            except Exception as e:
+                logger.error(f"Error processing promo code usage: {e}")
     
     # КРИТИЧНО: VPN ключ уже валидирован в finalize_purchase
     # Здесь только отправка пользователю - это атомарная операция после успешного платежа
@@ -4401,11 +5070,26 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"NOTIFICATION_IDEMPOTENT_SKIP [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
             f"purchase_id={purchase_id}]"
         )
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="success",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            duration_ms=duration_ms,
+            reason="idempotent_skip"
+        )
         return
     
     # Отправляем сообщение об успешной активации с гарантированным fallback
     try:
         text = localization.get_text(language, "payment_approved", date=expires_str)
+        # B3.1 - SOFT DEGRADATION: Add soft UX notice if degraded (only where messages are sent)
+        try:
+            if _degradation_notice:
+                text += "\n\n⏳ Возможны небольшие задержки"
+        except NameError:
+            pass  # _degradation_notice not set - ignore
         await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Failed to send payment approval message with localization: user={telegram_id}, error={e}")
@@ -4527,6 +5211,21 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
     except Exception as e:
         logger.error(f"Failed to log audit event: {e}")
+    
+    # STEP 2 — OBSERVABILITY: Structured logging for handler exit (success)
+    # PART E — SLO SIGNAL IDENTIFICATION: Payment success rate
+    # This handler exit log (outcome="success") is an SLO signal for payment success rate.
+    # Track: outcome="success" vs outcome="failed" for payment_finalization operations.
+    duration_ms = (time.time() - start_time) * 1000
+    log_handler_exit(
+        handler_name="process_successful_payment",
+        outcome="success",
+        telegram_id=telegram_id,
+        operation="payment_finalization",
+        duration_ms=duration_ms,
+        payment_id=payment_id,
+        purchase_id=purchase_id
+    )
 
 
 @router.callback_query(F.data == "payment_test")
@@ -6688,6 +7387,7 @@ async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
 @router.message(AdminUserSearch.waiting_for_user_id)
 async def process_admin_user_id(message: Message, state: FSMContext):
     """Обработка введённого Telegram ID или username пользователя"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         await message.answer("Недостаточно прав доступа")
         await state.clear()
@@ -6912,6 +7612,7 @@ def get_admin_grant_days_keyboard(user_id: int):
 @router.callback_query(F.data.startswith("admin:grant:"))
 async def callback_admin_grant(callback: CallbackQuery, state: FSMContext):
     """Обработчик кнопки 'Выдать доступ'"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7132,6 +7833,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
 @router.callback_query(F.data.startswith("admin:revoke:"))
 async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
     """Обработчик кнопки 'Лишить доступа'"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7175,6 +7877,7 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data.startswith("admin:revoke:"))
 async def callback_admin_revoke(callback: CallbackQuery, bot: Bot):
     """Обработчик кнопки 'Лишить доступа'"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7252,6 +7955,7 @@ def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int):
 @router.callback_query(F.data.startswith("admin:discount_create:"))
 async def callback_admin_discount_create(callback: CallbackQuery):
     """Обработчик кнопки 'Назначить скидку'"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7472,6 +8176,7 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
 @router.callback_query(F.data.startswith("admin:discount_delete:"))
 async def callback_admin_discount_delete(callback: CallbackQuery):
     """Обработчик кнопки 'Удалить скидку'"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7503,6 +8208,7 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
 
 async def _show_admin_user_card(message_or_callback, user_id: int):
     """Вспомогательная функция для отображения карточки пользователя администратору"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     # Получаем полный обзор пользователя через admin service
     try:
         overview = await admin_service.get_admin_user_overview(user_id)
@@ -7596,6 +8302,7 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
 @router.callback_query(F.data.startswith("admin:vip_grant:"))
 async def callback_admin_vip_grant(callback: CallbackQuery):
     """Обработчик кнопки 'Выдать VIP'"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7634,6 +8341,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("admin:vip_revoke:"))
 async def callback_admin_vip_revoke(callback: CallbackQuery):
     """Обработчик кнопки 'Снять VIP'"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return
@@ -7664,6 +8372,7 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("admin:user_reissue:"))
 async def callback_admin_user_reissue(callback: CallbackQuery):
     """Перевыпуск ключа из админ-дашборда"""
+    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
         return

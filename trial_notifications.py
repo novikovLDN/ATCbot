@@ -3,6 +3,7 @@
 """
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Tuple
 from aiogram import Bot
@@ -12,6 +13,17 @@ import database
 import localization
 import config
 from app.services.trials import service as trial_service
+from app.core.system_state import (
+    SystemState,
+    healthy_component,
+    degraded_component,
+    unavailable_component,
+)
+from app.utils.logging_helpers import (
+    log_worker_iteration_start,
+    log_worker_iteration_end,
+    classify_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +32,10 @@ _TRIAL_SCHEDULER_STARTED = False
 
 # Расписание уведомлений получается из service layer
 TRIAL_NOTIFICATION_SCHEDULE = trial_service.get_notification_schedule()
+
+# STEP 3 — PART B: WORKER LOOP SAFETY
+# Minimum safe sleep on failure to prevent tight retry storms
+MINIMUM_SAFE_SLEEP_ON_FAILURE = 60  # seconds (1 minute, less than normal 5-minute interval)
 
 
 def get_trial_buy_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -468,20 +484,147 @@ async def run_trial_scheduler(bot: Bot):
     _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
     
+    iteration_number = 0
+    
     while True:
+        iteration_start_time = time.time()
+        iteration_number += 1
+        
+        # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration start
+        correlation_id = log_worker_iteration_start(
+            worker_name="trial_notifications",
+            iteration_number=iteration_number
+        )
+        
         try:
+            # STEP 6 — F5: BACKGROUND WORKER SAFETY
+            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            from app.core.feature_flags import get_feature_flags
+            feature_flags = get_feature_flags()
+            if not feature_flags.background_workers_enabled:
+                logger.warning(
+                    f"[FEATURE_FLAG] Background workers disabled, skipping iteration in trial_notifications "
+                    f"(iteration={iteration_number})"
+                )
+                outcome = "skipped"
+                reason = "background_workers_enabled=false"
+                log_worker_iteration_end(
+                    worker_name="trial_notifications",
+                    outcome=outcome,
+                    items_processed=0,
+                    duration_ms=(time.time() - iteration_start_time) * 1000,
+                    reason=reason,
+                )
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
+            
+            # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
+            # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
+            try:
+                now = datetime.utcnow()
+                db_ready = database.DB_READY
+                
+                # Build SystemState for awareness (read-only)
+                if db_ready:
+                    db_component = healthy_component(last_checked_at=now)
+                else:
+                    db_component = unavailable_component(
+                        error="DB not ready (degraded mode)",
+                        last_checked_at=now
+                    )
+                
+                # VPN API component (not critical for trial notifications)
+                if config.VPN_ENABLED and config.XRAY_API_URL:
+                    vpn_component = healthy_component(last_checked_at=now)
+                else:
+                    vpn_component = degraded_component(
+                        error="VPN API not configured",
+                        last_checked_at=now
+                    )
+                
+                # Payments component (always healthy)
+                payments_component = healthy_component(last_checked_at=now)
+                
+                system_state = SystemState(
+                    database=db_component,
+                    vpn_api=vpn_component,
+                    payments=payments_component,
+                )
+                
+                # STEP 1.2: Skip iteration if system is UNAVAILABLE
+                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
+                if system_state.is_unavailable:
+                    logger.warning(
+                        f"[UNAVAILABLE] system_state — skipping iteration in trial_notifications scheduler "
+                        f"(database={system_state.database.status.value})"
+                    )
+                    await asyncio.sleep(300)  # Sleep before next check
+                    continue
+                
+                # STEP 1.2: DEGRADED state allows continuation (workers continue with reduced functionality)
+                if system_state.is_degraded:
+                    logger.info(
+                        f"[DEGRADED] system_state detected in trial_notifications scheduler "
+                        f"(continuing with reduced functionality)"
+                    )
+            except Exception:
+                # Ignore system state errors - continue with normal flow
+                pass
+            
             # Обрабатываем уведомления
             await process_trial_notifications(bot)
             
             # Завершаем истёкшие trial-подписки
             await expire_trial_subscriptions(bot)
             
+            # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end (success)
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            log_worker_iteration_end(
+                worker_name="trial_notifications",
+                outcome="success",
+                items_processed=0,  # Trial notifications don't track items per iteration
+                duration_ms=duration_ms
+            )
+            
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"trial_notifications: Database temporarily unavailable in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
+            
+            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            log_worker_iteration_end(
+                worker_name="trial_notifications",
+                outcome="degraded",
+                items_processed=0,
+                error_type="infra_error",
+                duration_ms=duration_ms
+            )
+            
+            # STEP 3 — PART B: WORKER LOOP SAFETY
+            # Minimum safe sleep on failure to prevent tight retry storms
+            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+            continue  # Skip normal sleep after failure
         except Exception as e:
             logger.error(f"trial_notifications: Unexpected error in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
             logger.debug("trial_notifications: Full traceback for scheduler loop", exc_info=True)
+            
+            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            error_type = classify_error(e)
+            log_worker_iteration_end(
+                worker_name="trial_notifications",
+                outcome="failed",
+                items_processed=0,
+                error_type=error_type,
+                duration_ms=duration_ms
+            )
+            
+            # STEP 3 — PART B: WORKER LOOP SAFETY
+            # Minimum safe sleep on failure to prevent tight retry storms
+            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+            continue  # Skip normal sleep after failure
         
+        # STEP 3 — PART B: WORKER LOOP SAFETY
+        # Worker always sleeps before next iteration (normal operation)
         # Ждём 5 минут до следующей проверки
         await asyncio.sleep(300)

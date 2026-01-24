@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,6 +11,17 @@ import database
 import localization
 import config
 from app.services.notifications import service as notification_service
+from app.core.system_state import (
+    SystemState,
+    healthy_component,
+    degraded_component,
+    unavailable_component,
+)
+from app.utils.logging_helpers import (
+    log_worker_iteration_start,
+    log_worker_iteration_end,
+    classify_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +37,10 @@ RENEWAL_WINDOW_HOURS = int(os.getenv("RENEWAL_WINDOW_HOURS", "6"))
 if RENEWAL_WINDOW_HOURS < 1:
     RENEWAL_WINDOW_HOURS = 1
 RENEWAL_WINDOW = timedelta(hours=RENEWAL_WINDOW_HOURS)
+
+# STEP 3 — PART B: WORKER LOOP SAFETY
+# Minimum safe sleep on failure to prevent tight retry storms
+MINIMUM_SAFE_SLEEP_ON_FAILURE = 300  # seconds (half of AUTO_RENEWAL_INTERVAL_SECONDS minimum)
 
 
 async def process_auto_renewals(bot: Bot):
@@ -350,12 +366,106 @@ async def auto_renewal_task(bot: Bot):
         logger.error(f"auto_renewal: Unexpected error in initial check: {type(e).__name__}: {str(e)[:100]}")
         logger.debug("auto_renewal: Full traceback for initial check", exc_info=True)
     
+    iteration_number = 0
+    
     while True:
+        iteration_start_time = time.time()
+        iteration_number += 1
+        
+        # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration start
+        correlation_id = log_worker_iteration_start(
+            worker_name="auto_renewal",
+            iteration_number=iteration_number
+        )
+        
         try:
             # Ждем до следующей проверки (5-15 минут, по умолчанию 10 минут)
             await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS)
             
+            # STEP 6 — F5: BACKGROUND WORKER SAFETY
+            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            from app.core.feature_flags import get_feature_flags
+            feature_flags = get_feature_flags()
+            if not feature_flags.background_workers_enabled or not feature_flags.auto_renewal_enabled:
+                logger.warning(
+                    f"[FEATURE_FLAG] Auto-renewal disabled, skipping iteration in auto_renewal "
+                    f"(iteration={iteration_number}, workers_enabled={feature_flags.background_workers_enabled}, "
+                    f"auto_renewal_enabled={feature_flags.auto_renewal_enabled})"
+                )
+                outcome = "skipped"
+                reason = f"background_workers_enabled={feature_flags.background_workers_enabled}, auto_renewal_enabled={feature_flags.auto_renewal_enabled}"
+                log_worker_iteration_end(
+                    worker_name="auto_renewal",
+                    outcome=outcome,
+                    items_processed=0,
+                    duration_ms=(time.time() - iteration_start_time) * 1000,
+                    reason=reason,
+                )
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
+            
+            # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
+            # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
+            try:
+                now = datetime.utcnow()
+                db_ready = database.DB_READY
+                
+                # Build SystemState for awareness (read-only)
+                if db_ready:
+                    db_component = healthy_component(last_checked_at=now)
+                else:
+                    db_component = unavailable_component(
+                        error="DB not ready (degraded mode)",
+                        last_checked_at=now
+                    )
+                
+                # VPN API component (not critical for auto-renewal)
+                if config.VPN_ENABLED and config.XRAY_API_URL:
+                    vpn_component = healthy_component(last_checked_at=now)
+                else:
+                    vpn_component = degraded_component(
+                        error="VPN API not configured",
+                        last_checked_at=now
+                    )
+                
+                # Payments component (always healthy)
+                payments_component = healthy_component(last_checked_at=now)
+                
+                system_state = SystemState(
+                    database=db_component,
+                    vpn_api=vpn_component,
+                    payments=payments_component,
+                )
+                
+                # STEP 1.2: Skip iteration if system is UNAVAILABLE
+                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
+                if system_state.is_unavailable:
+                    logger.warning(
+                        f"[UNAVAILABLE] system_state — skipping iteration in auto_renewal_task "
+                        f"(database={system_state.database.status.value})"
+                    )
+                    continue
+                
+                # STEP 1.2: DEGRADED state allows continuation (workers continue with reduced functionality)
+                if system_state.is_degraded:
+                    logger.info(
+                        f"[DEGRADED] system_state detected in auto_renewal_task "
+                        f"(continuing with reduced functionality)"
+                    )
+            except Exception:
+                # Ignore system state errors - continue with normal flow
+                pass
+            
             await process_auto_renewals(bot)
+            
+            # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end (success)
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            log_worker_iteration_end(
+                worker_name="auto_renewal",
+                outcome="success",
+                items_processed=0,  # Auto-renewal doesn't track items per iteration
+                duration_ms=duration_ms
+            )
             
         except asyncio.CancelledError:
             logger.info("Auto-renewal task cancelled")
@@ -363,11 +473,37 @@ async def auto_renewal_task(bot: Bot):
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"auto_renewal: DB temporarily unavailable: {type(e).__name__}: {str(e)[:100]}")
-            # При ошибке ждем половину интервала перед повтором (не блокируем надолго)
-            await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS // 2)
+            
+            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            log_worker_iteration_end(
+                worker_name="auto_renewal",
+                outcome="degraded",
+                items_processed=0,
+                error_type="infra_error",
+                duration_ms=duration_ms
+            )
+            # STEP 3 — PART B: WORKER LOOP SAFETY
+            # Minimum safe sleep on failure to prevent tight retry storms
+            # Worker always sleeps before next iteration, even on failure
+            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
         except Exception as e:
             logger.error(f"auto_renewal: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
             logger.debug("auto_renewal: Full traceback for task loop", exc_info=True)
-            # При ошибке ждем половину интервала перед повтором (не блокируем надолго)
-            await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS // 2)
+            
+            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+            duration_ms = (time.time() - iteration_start_time) * 1000
+            error_type = classify_error(e)
+            log_worker_iteration_end(
+                worker_name="auto_renewal",
+                outcome="failed",
+                items_processed=0,
+                error_type=error_type,
+                duration_ms=duration_ms
+            )
+            
+            # STEP 3 — PART B: WORKER LOOP SAFETY
+            # Minimum safe sleep on failure to prevent tight retry storms
+            # Worker always sleeps before next iteration, even on failure
+            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
 
