@@ -209,6 +209,7 @@ async def main():
                         # PART B.4: init_db() already sets DB_READY = True internally
                         # PART B.4: if returns True → STOP retry loop
                         # PART B.4: NEVER re-run migrations once DB_READY=True
+                        # PART A.2: init_db() already recalculates SystemState internally
                         logger.info("✅ DATABASE RECOVERY SUCCESSFUL — RESUMING FULL FUNCTIONALITY")
                         
                         # Уведомляем администратора о восстановлении

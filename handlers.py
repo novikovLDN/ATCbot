@@ -1942,8 +1942,10 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         )
         
         # STEP 1.1 - RUNTIME GUARDRAILS: Handlers log degradation but do NOT branch logic
-        # B3.1 - SOFT DEGRADATION: Log and prepare UX message if degraded
-        if system_state.is_degraded:
+        # PART C.7: Continue to LOG degraded if VPN missing, but only if CRITICAL components are degraded
+        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
+        # VPN-only degradation ≠ system degradation
+        if system_state.is_degraded and not system_state.is_healthy:
             logger.info(
                 f"[DEGRADED] system_state detected during callback_activate_trial "
                 f"(user={callback.from_user.id})"
@@ -2594,8 +2596,9 @@ async def callback_copy_key(callback: CallbackQuery):
             payments=payments_component,
         )
         
-        # B3.1 - SOFT DEGRADATION: Log if degraded
-        if system_state.is_degraded:
+        # PART C.7: Continue to LOG degraded, but only if CRITICAL components are degraded
+        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
+        if system_state.is_degraded and not system_state.is_healthy:
             logger.info(
                 f"[DEGRADED] system_state detected during callback_copy_key "
                 f"(user={callback.from_user.id})"
@@ -2690,8 +2693,9 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
             payments=payments_component,
         )
         
-        # B3.1 - SOFT DEGRADATION: Log if degraded
-        if system_state.is_degraded:
+        # PART C.7: Continue to LOG degraded, but only if CRITICAL components are degraded
+        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
+        if system_state.is_degraded and not system_state.is_healthy:
             logger.info(
                 f"[DEGRADED] system_state detected during callback_copy_vpn_key "
                 f"(user={callback.from_user.id})"
@@ -4522,8 +4526,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
             payments=payments_component,
         )
         
-        # B3.1 - SOFT DEGRADATION: Log and prepare UX message if degraded
-        if system_state.is_degraded:
+        # PART C.7: Continue to LOG degraded, but only if CRITICAL components are degraded
+        # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
+        if system_state.is_degraded and not system_state.is_healthy:
             logger.info(
                 f"[DEGRADED] system_state detected during process_successful_payment "
                 f"(user={message.from_user.id})"

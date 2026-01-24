@@ -113,30 +113,31 @@ async def check_vpn_keys() -> Tuple[bool, str]:
 async def perform_health_check() -> Tuple[bool, list]:
     """Выполнить health-check всех компонентов
     
+    PART B.4: Healthcheck MUST return DEGRADED (not FAILED) if VPN API missing.
+    Return HEALTHY if DB = OK and Pool = OK.
+    
     Returns:
         Кортеж (all_ok, messages) - общий статус и список сообщений
+        all_ok = False ONLY if CRITICAL components (DB, Pool) are down
+        VPN API missing → all_ok = True (system is HEALTHY, VPN is non-critical)
     """
     messages = []
-    all_ok = True
     now = datetime.utcnow()
     
     # Проверка PostgreSQL
     db_ok, db_msg = await check_database_connection()
     messages.append(db_msg)
-    if not db_ok:
-        all_ok = False
     
     # Проверка пула соединений
     pool_ok, pool_msg = await check_connection_pool()
     messages.append(pool_msg)
-    if not pool_ok:
-        all_ok = False
     
-    # Проверка VPN-ключей
+    # Проверка VPN-ключей (NON-CRITICAL)
     keys_ok, keys_msg = await check_vpn_keys()
     messages.append(keys_msg)
-    if not keys_ok:
-        all_ok = False
+    
+    # PART B.4: all_ok = True if DB and Pool are OK (VPN is non-critical)
+    all_ok = db_ok and pool_ok
     
     # STEP 1.1 - RUNTIME GUARDRAILS: SystemState is constructed centrally in healthcheck
     # SystemState is a READ-ONLY snapshot of system health

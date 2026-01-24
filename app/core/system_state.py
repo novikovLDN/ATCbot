@@ -93,18 +93,25 @@ class SystemState:
         """
         Check if system is in degraded mode.
         
+        PART A.3: is_degraded MUST be true ONLY if a CRITICAL component is degraded.
+        VPN API is NON-CRITICAL, so VPN-only degradation ≠ system degradation.
+        
         Returns:
-            True if at least one component is DEGRADED but none are UNAVAILABLE
+            True if at least one CRITICAL component (database, payments) is DEGRADED
+            but none are UNAVAILABLE. VPN API degradation is ignored.
         """
-        has_degraded = any(
+        # CRITICAL components: database, payments
+        # NON-CRITICAL: vpn_api (system can work without it)
+        critical_components = [self.database, self.payments]
+        has_critical_degraded = any(
             component.status == ComponentStatus.DEGRADED
-            for component in [self.database, self.vpn_api, self.payments]
+            for component in critical_components
         )
         has_unavailable = any(
             component.status == ComponentStatus.UNAVAILABLE
             for component in [self.database, self.vpn_api, self.payments]
         )
-        return has_degraded and not has_unavailable
+        return has_critical_degraded and not has_unavailable
     
     @property
     def is_unavailable(self) -> bool:
@@ -247,4 +254,67 @@ def create_default_system_state() -> SystemState:
         database=healthy_component(),
         vpn_api=healthy_component(),
         payments=healthy_component(),
+    )
+
+
+def recalculate_from_runtime() -> SystemState:
+    """
+    PART A.2: Recalculate SystemState from current runtime state.
+    
+    Called after:
+    - init_db() success
+    - retry success
+    - on startup if DB_READY=True
+    
+    PART A.1: After successful database.init_db():
+    - database = healthy
+    - vpn_api = degraded ONLY if XRAY_API_* missing
+    - payments = healthy
+    
+    Returns:
+        SystemState reflecting current runtime health
+    """
+    from datetime import datetime
+    import config
+    
+    now = datetime.utcnow()
+    
+    # Database: healthy if DB_READY=True
+    try:
+        import database
+        if database.DB_READY:
+            db_component = healthy_component(last_checked_at=now)
+        else:
+            db_component = unavailable_component(
+                error="Database not ready (DB_READY=False)",
+                last_checked_at=now
+            )
+    except Exception as e:
+        db_component = unavailable_component(
+            error=f"Database check failed: {e}",
+            last_checked_at=now
+        )
+    
+    # VPN API: degraded ONLY if XRAY_API_* missing (non-critical)
+    try:
+        if not config.XRAY_API_URL or not config.XRAY_API_KEY:
+            vpn_component = degraded_component(
+                error="XRAY_API_URL or XRAY_API_KEY not configured (non-critical)",
+                last_checked_at=now
+            )
+        else:
+            vpn_component = healthy_component(last_checked_at=now)
+    except Exception as e:
+        vpn_component = degraded_component(
+            error=f"VPN API check failed: {e}",
+            last_checked_at=now
+        )
+    
+    # Payments: always healthy
+    payments_component = healthy_component(last_checked_at=now)
+    
+    return SystemState(
+        database=db_component,
+        vpn_api=vpn_component,
+        payments=payments_component,
     )
