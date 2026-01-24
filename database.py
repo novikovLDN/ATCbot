@@ -329,55 +329,56 @@ async def init_db() -> bool:
     Raises:
         Любые исключения пробрасываются наверх для обработки в startup guard
     """
-    global DB_READY
+    global DB_READY, _pool
     # Сбрасываем DB_READY перед инициализацией
     DB_READY = False
     
-    # PART 1 — DATABASE INITIALIZATION RACE CONDITION
-    # Use direct connection for readiness check (not pool.acquire())
-    # asyncpg Pool initializes lazily and raises InterfaceError until first loop tick
-    # Direct connection validates real DB availability without pool state dependency
     if not DATABASE_URL:
         logger.error("DATABASE_URL not configured")
         return False
     
-    # 1️⃣ Eager DB probe BEFORE pool creation
+    # 1️⃣ AT THE VERY TOP: Explicit DB connectivity probe
     try:
-        test_conn = await asyncpg.connect(DATABASE_URL)
-        await test_conn.execute("SELECT 1")
-        await test_conn.close()
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("SELECT 1")
+        await conn.close()
+        logger.info("DB connectivity probe successful")
     except Exception as e:
-        logger.error(f"Database readiness check failed: {e}")
+        logger.error(f"DB connectivity probe failed: {e}")
         return False
     
-    # 2️⃣ Yield control to event loop after successful probe
+    # 2️⃣ CREATE POOL — AND NOTHING ELSE
+    try:
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=5
+        )
+        logger.info("Database connection pool created")
+    except Exception as e:
+        logger.error(f"Failed to create database pool: {e}")
+        return False
+    
+    # 3️⃣ FORCE EVENT LOOP YIELD (CRITICAL — DO NOT SKIP)
     await asyncio.sleep(0)
     
-    # 3️⃣ Create pool AFTER probe and loop yield
-    pool = await get_pool()
-    
-    # 4️⃣ Yield again after pool creation to ensure pool is initialized
-    # CRITICAL: pool.acquire() MUST NOT be called before this yield completes
-    await asyncio.sleep(0)
-    
-    # 5️⃣ ONLY AFTER BOTH event loop yields, run migrations
-    # ====================================================================================
-    # VERSIONED MIGRATIONS: Применяем миграции перед созданием таблиц
-    # ====================================================================================
+    # 4️⃣ ONLY AFTER yield — RUN MIGRATIONS
     try:
         import migrations
-        migrations_success = await migrations.run_migrations_safe(pool)
+        migrations_success = await migrations.run_migrations_safe(_pool)
         if not migrations_success:
-            logger.error("Failed to apply database migrations")
+            logger.error("Migration execution failed")
             return False
         logger.info("Database migrations applied successfully")
     except Exception as e:
-        logger.exception(f"Error applying migrations: {e}")
+        logger.error(f"Migration execution failed: {e}")
         return False
     
+    # 5️⃣ IF migrations_success IS FALSE → already returned False above
+    # Now proceed with table creation (pool.acquire() is safe after yield)
     # Retry pool.acquire() on transient database errors only
     conn = await retry_async(
-        lambda: pool.acquire(),
+        lambda: _pool.acquire(),
         retries=2,
         base_delay=0.5,
         max_delay=2.0,
@@ -906,10 +907,10 @@ async def init_db() -> bool:
         except Exception as e:
             logger.warning(f"Could not log database info: {e}")
         
-        # 7️⃣ If migrations and table creation succeed, mark DB_READY = True
+        # 6️⃣ IF SUCCESS: set DB_READY = True and log
         # ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ВСЕХ ТАБЛИЦ И users устанавливаем DB_READY = True
         DB_READY = True
-        logger.info("DB initialized successfully")
+        logger.info("Database fully initialized")
         return True
 
 
