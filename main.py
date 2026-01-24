@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sys
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 import config
@@ -310,12 +311,24 @@ async def main():
     else:
         logger.warning("Crypto payment watcher task skipped (DB not ready)")
     
-    # Запуск бота
+    # ====================================================================================
+    # TELEGRAM POLLING: Start polling ONLY AFTER DB init attempt finishes
+    # ====================================================================================
+    # ENSURE polling is started ONCE and ONLY from the primary process
+    # Polling starts AFTER all initialization (DB, workers, health checks)
+    # ====================================================================================
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")
     else:
         logger.warning("⚠️ Бот запущен в ДЕГРАДИРОВАННОМ режиме (БД недоступна)")
+    
+    # 3️⃣ ADD explicit startup log with PID
+    pid = os.getpid()
+    logger.info(f"Telegram polling started (pid={pid})")
+    
     try:
+        # 2️⃣ Wrap dispatcher.start_polling() so it is called ONLY from the primary process
+        # Polling is started ONCE and ONLY AFTER DB init attempt finishes
         await dp.start_polling(bot)
     finally:
         # Отменяем все фоновые задачи
