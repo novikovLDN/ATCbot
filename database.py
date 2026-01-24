@@ -2871,7 +2871,25 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                         # Продолжаем, даже если не удалось удалить старый UUID (идемпотентность)
                 
                 # 3. Создаем новый UUID через Xray API (POST /add-user)
+                # PART D.7: If vpn_api != healthy, NEVER call VPN API
                 try:
+                    from app.core.system_state import recalculate_from_runtime, ComponentStatus
+                    system_state = recalculate_from_runtime()
+                    if system_state.vpn_api.status != ComponentStatus.HEALTHY:
+                        logger.warning(
+                            f"reissue_vpn_access: VPN_API_DISABLED [user={telegram_id}] - "
+                            f"VPN API is {system_state.vpn_api.status.value}, skipping VPN call"
+                        )
+                        # PART D.7: Cannot reissue if VPN API is disabled
+                        raise Exception(f"VPN API is {system_state.vpn_api.status.value}, cannot reissue access")
+                    else:
+                        vless_result = await vpn_utils.add_vless_user()
+                        new_uuid = vless_result["uuid"]
+                        new_vpn_key = vless_result["vless_url"]
+                except Exception as e:
+                    if "VPN API is" in str(e):
+                        raise  # Re-raise VPN API disabled errors
+                    # Fallback for other errors
                     vless_result = await vpn_utils.add_vless_user()
                     new_uuid = vless_result["uuid"]
                     new_vpn_key = vless_result["vless_url"]
@@ -3383,9 +3401,31 @@ async def grant_access(
                 await asyncio.sleep(delay)
             
             try:
-                vless_result = await vpn_utils.add_vless_user()
-                new_uuid = vless_result.get("uuid")
-                vless_url = vless_result.get("vless_url")
+                # PART D.7: If vpn_api != healthy, NEVER call VPN API
+                # Mark cleanup as pending, log SKIPPED (VPN_API_DISABLED)
+                try:
+                    from app.core.system_state import recalculate_from_runtime, ComponentStatus
+                    system_state = recalculate_from_runtime()
+                    if system_state.vpn_api.status != ComponentStatus.HEALTHY:
+                        logger.warning(
+                            f"grant_access: VPN_API_DISABLED [user={telegram_id}] - "
+                            f"VPN API is {system_state.vpn_api.status.value}, skipping VPN call, marking as pending"
+                        )
+                        # PART D.7: Mark cleanup as pending (activation_status = 'pending')
+                        # UUID will be created later when VPN API is healthy
+                        vless_result = None
+                        new_uuid = None
+                        vless_url = None
+                        # Skip VPN API call, will be handled in activation worker
+                    else:
+                        vless_result = await vpn_utils.add_vless_user()
+                        new_uuid = vless_result.get("uuid")
+                        vless_url = vless_result.get("vless_url")
+                except Exception as e:
+                    logger.warning(f"grant_access: VPN_API_CHECK_FAILED [user={telegram_id}]: {e}, proceeding with VPN call")
+                    vless_result = await vpn_utils.add_vless_user()
+                    new_uuid = vless_result.get("uuid")
+                    vless_url = vless_result.get("vless_url")
                 
                 # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены
                 if not new_uuid:
@@ -3452,11 +3492,35 @@ async def grant_access(
                         pass  # Не блокируем при ошибке логирования
                     raise Exception(error_msg) from e
         
-        # Проверяем что UUID и VLESS URL получены после retry
+        # PART D.7: Handle case where VPN API is disabled (new_uuid is None)
+        # If VPN API is disabled, set activation_status to 'pending' instead of raising error
         if not new_uuid or not vless_url:
-            error_msg = f"VPN API failed to return UUID/vless_url after retries for user {telegram_id}"
-            logger.error(f"grant_access: CRITICAL_VPN_API_FAILURE [user={telegram_id}, error={error_msg}]")
-            raise Exception(error_msg)
+            # Check if VPN API is disabled (not just failed)
+            try:
+                from app.core.system_state import recalculate_from_runtime, ComponentStatus
+                system_state = recalculate_from_runtime()
+                if system_state.vpn_api.status != ComponentStatus.HEALTHY:
+                    # PART D.7: VPN API is disabled - mark as pending
+                    logger.info(
+                        f"grant_access: VPN_API_DISABLED_PENDING [user={telegram_id}] - "
+                        f"VPN API is {system_state.vpn_api.status.value}, setting activation_status='pending'"
+                    )
+                    # Will set activation_status='pending' in DB insert below
+                    pending_activation = True
+                else:
+                    # VPN API is healthy but failed - this is an error
+                    error_msg = f"VPN API failed to return UUID/vless_url after retries for user {telegram_id}"
+                    logger.error(f"grant_access: CRITICAL_VPN_API_FAILURE [user={telegram_id}, error={error_msg}]")
+                    raise Exception(error_msg)
+            except Exception as e:
+                if "VPN API failed" in str(e):
+                    raise  # Re-raise VPN API failure errors
+                # If system_state check failed, treat as error
+                error_msg = f"VPN API failed to return UUID/vless_url after retries for user {telegram_id}"
+                logger.error(f"grant_access: CRITICAL_VPN_API_FAILURE [user={telegram_id}, error={error_msg}]")
+                raise Exception(error_msg)
+        else:
+            pending_activation = False
         
         # Вычисляем даты
         subscription_start = now
@@ -3503,11 +3567,11 @@ async def grant_access(
                    )
                    VALUES ($1, $2, $3, $4, 'active', $5, FALSE, FALSE, FALSE, FALSE, FALSE, $6, $7, 0,
                            FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
-                           'active', 0, NULL)
+                           $8, 0, NULL)
                    ON CONFLICT (telegram_id) 
                    DO UPDATE SET 
-                       uuid = $2,
-                       vpn_key = $3,
+                       uuid = COALESCE($2, subscriptions.uuid),
+                       vpn_key = COALESCE($3, subscriptions.vpn_key),
                        expires_at = $4,
                        status = 'active',
                        source = $5,
@@ -3517,7 +3581,7 @@ async def grant_access(
                        reminder_3h_sent = FALSE,
                        reminder_6h_sent = FALSE,
                        admin_grant_days = $6,
-                       activated_at = $7,
+                       activated_at = COALESCE($7, subscriptions.activated_at),
                        last_bytes = 0,
                        trial_notif_6h_sent = FALSE,
                        trial_notif_18h_sent = FALSE,
@@ -3526,10 +3590,12 @@ async def grant_access(
                        trial_notif_54h_sent = FALSE,
                        trial_notif_60h_sent = FALSE,
                        trial_notif_71h_sent = FALSE,
-                       activation_status = 'active',
+                       activation_status = $8,
                        activation_attempts = 0,
                        last_activation_error = NULL""",
-                telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start
+                telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start,
+                'pending' if pending_activation else 'active',
+                'pending' if pending_activation else 'active'
             )
             
             # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
