@@ -6,7 +6,6 @@ This package provides business logic for notifications, reminders, and idempoten
 
 from app.services.notifications.service import (
     should_send_reminder,
-    get_reminder_type,
     check_notification_idempotency,
     mark_notification_sent,
     ReminderDecision,
@@ -22,7 +21,6 @@ from app.services.notifications.exceptions import (
 
 __all__ = [
     "should_send_reminder",
-    "get_reminder_type",
     "check_notification_idempotency",
     "mark_notification_sent",
     "ReminderDecision",
