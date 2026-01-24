@@ -1431,7 +1431,7 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
         # Кнопки выдачи и лишения доступа (всегда доступны)
         buttons.append([
             InlineKeyboardButton(text="🟢 Выдать доступ", callback_data=f"admin:grant:{user_id}"),
-            InlineKeyboardButton(text="🔴 Лишить доступа", callback_data=f"admin:revoke:{user_id}")
+            InlineKeyboardButton(text="🔴 Лишить доступа", callback_data=f"admin:revoke:user:{user_id}")
         ])
         # Кнопки управления скидками
         if has_discount:
@@ -8451,10 +8451,14 @@ async def callback_admin_grant_quick_notify(callback: CallbackQuery, state: FSMC
         await state.clear()
 
 
-@router.callback_query(F.data.startswith("admin:revoke:"))
+@router.callback_query(F.data.startswith("admin:revoke:user:"))
 async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """
-    PART 4: Admin revoke access - ask for notify choice first.
+    1️⃣ CALLBACK DATA SCHEMA (точечно)
+    2️⃣ FIX handler callback_admin_revoke
+    
+    Admin revoke access - ask for notify choice first.
+    Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:user:<id>
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
@@ -8463,9 +8467,16 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
     await callback.answer()
     
     try:
-        user_id = int(callback.data.split(":")[2])
+        # 2️⃣ FIX: Строгий guard - парсим только admin:revoke:user:<id>
+        parts = callback.data.split(":")
+        if len(parts) != 4 or parts[2] != "user":
+            logger.warning(f"Invalid revoke callback format: {callback.data}")
+            await callback.answer("Ошибка формата команды", show_alert=True)
+            return
         
-        # PART 4: Save user_id and ask for notify choice
+        user_id = int(parts[3])
+        
+        # 4️⃣ FSM CONSISTENCY: Save user_id and ask for notify choice
         await state.update_data(user_id=user_id)
         
         text = "❌ Лишить доступа\n\nУведомить пользователя?"
@@ -8477,8 +8488,14 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminRevokeAccess.waiting_for_notify_choice)
         
+        # 5️⃣ ЛОГИРОВАНИЕ: выбран user_id
+        logger.info(f"Admin {callback.from_user.id} initiated revoke for user {user_id}")
         logger.debug(f"FSM: AdminRevokeAccess.waiting_for_notify_choice set for user {user_id}")
         
+    except ValueError as e:
+        logger.error(f"Invalid user_id in revoke callback: {callback.data}, error: {e}")
+        await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
+        await state.clear()
     except Exception as e:
         logger.exception(f"Error in callback_admin_revoke: {e}")
         await callback.answer("Ошибка", show_alert=True)
@@ -8488,7 +8505,10 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
 @router.callback_query(F.data.startswith("admin:revoke:notify:"), StateFilter(AdminRevokeAccess.waiting_for_notify_choice))
 async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """
-    PART 4: Execute revoke with notify_user choice.
+    3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler для notify
+    
+    Execute revoke with notify_user choice.
+    Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:notify:yes|no
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав доступа", show_alert=True)
@@ -8497,18 +8517,30 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     await callback.answer()
     
     try:
-        notify_user = callback.data.split(":")[3] == "yes"
+        # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: читаем notify=yes|no
+        parts = callback.data.split(":")
+        if len(parts) != 4 or parts[2] != "notify":
+            logger.warning(f"Invalid revoke notify callback format: {callback.data}")
+            await callback.answer("Ошибка формата команды", show_alert=True)
+            await state.clear()
+            return
+        
+        notify_user = parts[3] == "yes"
+        
+        # 4️⃣ FSM CONSISTENCY: используем сохраненный user_id
         data = await state.get_data()
         user_id = data.get("user_id")
         
         if not user_id:
+            logger.error(f"user_id not found in FSM state for revoke notify")
             await callback.answer("Ошибка: user_id не найден", show_alert=True)
             await state.clear()
             return
         
-        logger.debug(f"FSM: Executing revoke for user {user_id}, notify_user={notify_user}")
+        # 5️⃣ ЛОГИРОВАНИЕ: выбран notify флаг
+        logger.info(f"Admin {callback.from_user.id} executing revoke for user {user_id}, notify_user={notify_user}")
         
-        # PART 4: Execute revoke
+        # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: вызываем финальный revoke action
         revoked = await database.admin_revoke_access_atomic(
             telegram_id=user_id,
             admin_telegram_id=callback.from_user.id
@@ -8526,7 +8558,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
                 text += "\nДействие выполнено без уведомления."
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
-            # PART 6: Notify user if flag is True
+            # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: notify user if flag is True
             if notify_user:
                 try:
                     user_lang = await database.get_user(user_id)
@@ -8540,7 +8572,10 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
                 except Exception as e:
                     logger.exception(f"Error sending notification to user {user_id}: {e}")
             
-            # PART 6: Audit log
+            # 5️⃣ ЛОГИРОВАНИЕ: revoke выполнен
+            logger.info(f"Revoke completed for user {user_id}, notify_user={notify_user}")
+            
+            # Audit log
             await database._log_audit_event_atomic_standalone(
                 "admin_revoke_access",
                 callback.from_user.id,
@@ -8548,6 +8583,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
                 f"Admin revoked access, notify_user={notify_user}"
             )
         
+        # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: корректно завершаем FSM
         await state.clear()
         logger.debug(f"FSM: AdminRevokeAccess cleared after revoke")
         
