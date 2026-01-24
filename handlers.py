@@ -8517,7 +8517,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     await callback.answer()
     
     try:
-        # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: читаем notify=yes|no
+        # 1️⃣ НОРМАЛИЗАЦИЯ notify (КРИТИЧНО): читаем notify=yes|no
         parts = callback.data.split(":")
         if len(parts) != 4 or parts[2] != "notify":
             logger.warning(f"Invalid revoke notify callback format: {callback.data}")
@@ -8525,7 +8525,9 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             await state.clear()
             return
         
-        notify_user = parts[3] == "yes"
+        # 1️⃣ НОРМАЛИЗАЦИЯ notify: явно приводим к bool
+        notify_raw = parts[3]  # "yes" or "no"
+        notify = notify_raw == "yes"  # bool: True or False
         
         # 4️⃣ FSM CONSISTENCY: используем сохраненный user_id
         data = await state.get_data()
@@ -8537,8 +8539,11 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             await state.clear()
             return
         
-        # 5️⃣ ЛОГИРОВАНИЕ: выбран notify флаг
-        logger.info(f"Admin {callback.from_user.id} executing revoke for user {user_id}, notify_user={notify_user}")
+        # 1️⃣ НОРМАЛИЗАЦИЯ notify: сохраняем в FSM ТОЛЬКО bool
+        await state.update_data(notify=notify)
+        
+        # 4️⃣ ЛОГИРОВАНИЕ: при выборе notify
+        logger.info(f"ADMIN_REVOKE_NOTIFY_SELECTED [user_id={user_id}, notify={notify}]")
         
         # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: вызываем финальный revoke action
         revoked = await database.admin_revoke_access_atomic(
@@ -8552,35 +8557,43 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
             text = "✅ Доступ отозван"
-            if notify_user:
+            if notify:
                 text += "\nПользователь уведомлён."
             else:
                 text += "\nДействие выполнено без уведомления."
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
-            # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: notify user if flag is True
-            if notify_user:
-                try:
-                    user_lang = await database.get_user(user_id)
-                    language = user_lang.get("language", "ru") if user_lang else "ru"
-                    user_text = localization.get_text(
-                        language,
-                        "admin_revoke_user_notification",
-                        default="❌ Ваш доступ был отозван администратором."
-                    )
-                    await bot.send_message(user_id, user_text)
-                except Exception as e:
-                    logger.exception(f"Error sending notification to user {user_id}: {e}")
-            
-            # 5️⃣ ЛОГИРОВАНИЕ: revoke выполнен
-            logger.info(f"Revoke completed for user {user_id}, notify_user={notify_user}")
+            # 2️⃣ ПРОВЕРКА notify В ФИНАЛЬНОМ revoke: используем ТОЛЬКО if notify:
+            # 3️⃣ ОТПРАВКА УВЕДОМЛЕНИЯ (ЯВНО): если notify=True
+            if notify:
+                # 5️⃣ ЗАЩИТА ОТ ТИХОГО ПРОПУСКА: проверяем telegram_id
+                if not user_id:
+                    logger.warning(f"ADMIN_REVOKE_NOTIFY_SKIP: user_id missing, notify=True but cannot send")
+                else:
+                    try:
+                        # 3️⃣ ОТПРАВКА УВЕДОМЛЕНИЯ: используем telegram_id из FSM (НЕ из callback)
+                        # 3️⃣ ОТПРАВКА УВЕДОМЛЕНИЯ: текст без форматных рисков (фиксированный)
+                        user_text = (
+                            "Ваш доступ был отозван администратором.\n"
+                            "Если вы считаете это ошибкой — обратитесь в поддержку."
+                        )
+                        await bot.send_message(user_id, user_text)
+                        
+                        # 4️⃣ ЛОГИРОВАНИЕ: при отправке уведомления
+                        logger.info(f"NOTIFICATION_SENT [type=admin_revoke, user_id={user_id}]")
+                    except Exception as e:
+                        logger.exception(f"Error sending notification to user {user_id}: {e}")
+                        # Не прерываем выполнение - revoke уже выполнен
+            else:
+                # 4️⃣ ЛОГИРОВАНИЕ: если notify=False
+                logger.info(f"ADMIN_REVOKE_NOTIFY_SKIPPED [user_id={user_id}]")
             
             # Audit log
             await database._log_audit_event_atomic_standalone(
                 "admin_revoke_access",
                 callback.from_user.id,
                 user_id,
-                f"Admin revoked access, notify_user={notify_user}"
+                f"Admin revoked access, notify_user={notify}"
             )
         
         # 3️⃣ ДОБАВИТЬ ОТДЕЛЬНЫЙ handler: корректно завершаем FSM
