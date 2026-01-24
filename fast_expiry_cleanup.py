@@ -16,8 +16,7 @@ import os
 from datetime import datetime
 import asyncpg
 import database
-import vpn_utils
-from vpn_utils import VPNAPIError, TimeoutError, AuthError
+from app.services.vpn import service as vpn_service
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +132,31 @@ async def fast_expiry_cleanup_task():
                                 f"expires_at={expires_at.isoformat()}]"
                             )
                             
-                            # Вызываем POST /remove-user/{uuid} (идемпотентно)
-                            # Если UUID уже удалён - это не ошибка
-                            await vpn_utils.remove_vless_user(uuid)
-                            logger.info(f"cleanup: VPN_API_REMOVED [user={telegram_id}, uuid={uuid_preview}]")
+                            # Service layer handles ALL business decisions: should remove, VPN API availability, removal
+                            # Returns True if removed, False if skipped or VPN API disabled
+                            uuid_removed = await vpn_service.remove_uuid_if_needed(
+                                uuid=uuid,
+                                subscription_status='active',  # Subscription is still 'active' in DB, but expired
+                                subscription_expired=True  # Subscription has expired (expires_at < now_utc)
+                            )
+                            
+                            if uuid_removed:
+                                logger.info(f"cleanup: VPN_API_REMOVED [user={telegram_id}, uuid={uuid_preview}]")
+                            else:
+                                # UUID removal was skipped (VPN API disabled or business logic decided not to remove)
+                                if not vpn_service.is_vpn_api_available():
+                                    logger.warning(
+                                        f"cleanup: VPN_API_DISABLED [user={telegram_id}, uuid={uuid_preview}] - "
+                                        "VPN API is not configured, skipping UUID removal"
+                                    )
+                                else:
+                                    # Business logic decided not to remove (shouldn't happen for expired subscriptions)
+                                    logger.debug(
+                                        f"cleanup: UUID_REMOVAL_SKIPPED [user={telegram_id}, uuid={uuid_preview}] - "
+                                        "Service layer decided not to remove UUID"
+                                    )
+                                # Skip DB update if UUID wasn't removed
+                                continue
                             
                             # VPN AUDIT LOG: Логируем успешное удаление UUID при автоматическом истечении
                             try:
@@ -248,21 +268,13 @@ async def fast_expiry_cleanup_task():
                                 logger.error(f"fast_expiry_cleanup: Unexpected error during DB update: {type(e).__name__}: {str(e)[:100]}")
                                 logger.debug(f"fast_expiry_cleanup: Full traceback for DB update", exc_info=True)
                         
-                        except vpn_utils.AuthError as e:
-                            # Ошибка аутентификации - критическая, не retry
+                        except vpn_service.VPNRemovalError as e:
+                            # VPN removal failed - log as ERROR, will retry in next cycle
                             logger.error(
-                                f"cleanup: AUTH_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}] - "
-                                "VPN API authentication failed"
-                            )
-                            # Не удаляем из processing_uuids, чтобы не повторять попытки с неверными креденшелами
-                        
-                        except (vpn_utils.TimeoutError, vpn_utils.VPNAPIError) as e:
-                            # VPN API ошибки - логируем и пропускаем (не чистим БД, повторим в следующем цикле)
-                            logger.error(
-                                f"cleanup: VPN_API_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}, "
+                                f"cleanup: VPN_REMOVAL_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}, "
                                 f"error_type={type(e).__name__}] - will retry in next cycle"
                             )
-                            # VPN AUDIT LOG: Логируем ошибку удаления UUID при автоматическом истечении
+                            # VPN AUDIT LOG: Log removal failure
                             try:
                                 await database._log_vpn_lifecycle_audit_async(
                                     action="vpn_expire",
@@ -273,19 +285,13 @@ async def fast_expiry_cleanup_task():
                                     details=f"Failed to remove UUID via VPN API: {str(e)}, will retry"
                                 )
                             except Exception:
-                                pass  # Не блокируем при ошибке логирования
+                                pass  # Don't block on audit log errors
                         
                         except ValueError as e:
-                            # VPN API не настроен - пропускаем
-                            if "VPN API is not configured" in str(e):
-                                logger.warning(
-                                    f"cleanup: VPN_API_DISABLED [user={telegram_id}, uuid={uuid_preview}] - "
-                                    "VPN API is not configured, skipping"
-                                )
-                            else:
-                                logger.error(
-                                    f"cleanup: VALUE_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}]"
-                                )
+                            # Invalid UUID or other ValueError
+                            logger.error(
+                                f"cleanup: VALUE_ERROR [user={telegram_id}, uuid={uuid_preview}, error={str(e)}]"
+                            )
                         
                         except Exception as e:
                             # При любой другой ошибке - логируем и пропускаем (не чистим БД)
