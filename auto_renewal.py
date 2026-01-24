@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncpg
 import database
 import localization
 import config
@@ -339,8 +340,12 @@ async def auto_renewal_task(bot: Bot):
     # Первая проверка сразу при запуске
     try:
         await process_auto_renewals(bot)
+    except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+        # RESILIENCE FIX: Temporary DB failures don't crash the task
+        logger.warning(f"auto_renewal: Initial check failed (DB temporarily unavailable): {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
-        logger.exception(f"Error in initial auto-renewal check: {e}")
+        logger.error(f"auto_renewal: Unexpected error in initial check: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("auto_renewal: Full traceback for initial check", exc_info=True)
     
     while True:
         try:
@@ -352,8 +357,14 @@ async def auto_renewal_task(bot: Bot):
         except asyncio.CancelledError:
             logger.info("Auto-renewal task cancelled")
             break
+        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+            # RESILIENCE FIX: Temporary DB failures don't crash the task loop
+            logger.warning(f"auto_renewal: DB temporarily unavailable: {type(e).__name__}: {str(e)[:100]}")
+            # При ошибке ждем половину интервала перед повтором (не блокируем надолго)
+            await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS // 2)
         except Exception as e:
-            logger.exception(f"Error in auto-renewal task: {e}")
+            logger.error(f"auto_renewal: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
+            logger.debug("auto_renewal: Full traceback for task loop", exc_info=True)
             # При ошибке ждем половину интервала перед повтором (не блокируем надолго)
             await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS // 2)
 
