@@ -911,6 +911,23 @@ async def init_db() -> bool:
         # ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ВСЕХ ТАБЛИЦ И users устанавливаем DB_READY = True
         DB_READY = True
         logger.info("Database fully initialized")
+        
+        # PART A.1: After successful init_db(), IMMEDIATELY recompute SystemState
+        # PART A.2: Explicitly overwrite previous degraded state
+        # SystemState MUST NOT be monotonic (degraded forever)
+        try:
+            from app.core.system_state import recalculate_from_runtime
+            system_state = recalculate_from_runtime()
+            logger.info(
+                f"SystemState updated: {'HEALTHY' if system_state.is_healthy else 'DEGRADED' if system_state.is_degraded else 'UNAVAILABLE'} "
+                f"(database={system_state.database.status.value}, "
+                f"vpn_api={system_state.vpn_api.status.value}, "
+                f"payments={system_state.payments.status.value})"
+            )
+        except Exception as e:
+            # SystemState recalculation must not break init_db()
+            logger.debug(f"Error recalculating SystemState: {e}")
+        
         return True
 
 
@@ -6610,7 +6627,10 @@ async def get_ltv() -> float:
                ) as user_ltvs"""
         ) or 0
         
-        return avg_ltv_kopecks / 100.0  # Конвертируем из копеек в рубли
+        # PART D.8: Fix Decimal arithmetic bug
+        # avg_ltv_kopecks may be Decimal from PostgreSQL
+        # Use float() conversion to avoid TypeError: unsupported operand type(s) for /: 'Decimal' and 'float'
+        return float(avg_ltv_kopecks) / 100.0  # Конвертируем из копеек в рубли
 
 
 async def get_referral_analytics() -> Dict[str, Any]:

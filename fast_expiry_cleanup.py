@@ -171,8 +171,10 @@ async def fast_expiry_cleanup_task():
                     )
                     continue
                 
-                # STEP 1.2: DEGRADED state allows continuation (workers continue with reduced functionality)
-                if system_state.is_degraded:
+                # PART C.6: MUST NOT log [DEGRADED] if system_state.is_healthy
+                # VPN-only degradation ≠ system degradation
+                # Only log if CRITICAL components are degraded
+                if system_state.is_degraded and not system_state.is_healthy:
                     logger.info(
                         f"[DEGRADED] system_state detected in fast_expiry_cleanup "
                         f"(continuing with reduced functionality)"
