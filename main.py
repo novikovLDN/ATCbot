@@ -206,8 +206,9 @@ async def main():
                 try:
                     success = await database.init_db()
                     if success:
-                        # Успешная инициализация
-                        database.DB_READY = True
+                        # PART B.4: init_db() already sets DB_READY = True internally
+                        # PART B.4: if returns True → STOP retry loop
+                        # PART B.4: NEVER re-run migrations once DB_READY=True
                         logger.info("✅ DATABASE RECOVERY SUCCESSFUL — RESUMING FULL FUNCTIONALITY")
                         
                         # Уведомляем администратора о восстановлении
