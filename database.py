@@ -452,6 +452,22 @@ async def init_db() -> bool:
             )
         """)
         
+        # P0 HOTFIX: Ensure idempotency columns exist (migration 012 compatibility)
+        # These columns are added by migration 012, but if table is recreated,
+        # we need to add them here to prevent schema drift
+        try:
+            await conn.execute("""
+                ALTER TABLE payments
+                ADD COLUMN IF NOT EXISTS telegram_payment_charge_id TEXT
+            """)
+            await conn.execute("""
+                ALTER TABLE payments
+                ADD COLUMN IF NOT EXISTS cryptobot_payment_id TEXT
+            """)
+        except Exception:
+            # Columns may already exist or migration handles this
+            pass
+        
         # Таблица subscriptions
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
@@ -6390,7 +6406,29 @@ async def finalize_balance_topup(
     
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # STEP 1: IDEMPOTENCY CHECK (CRITICAL - at the very start)
+            # STEP 1: SCHEMA SAFETY CHECK (P0 HOTFIX - prevent silent failures)
+            # Defensive check: ensure idempotency columns exist before querying
+            column_exists = await conn.fetchval(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'payments'
+                  AND column_name = $1
+                """,
+                'telegram_payment_charge_id' if provider == 'telegram' else 'cryptobot_payment_id'
+            )
+            
+            if not column_exists:
+                error_msg = (
+                    f"CRITICAL_SCHEMA_MISMATCH: payments.{'telegram_payment_charge_id' if provider == 'telegram' else 'cryptobot_payment_id'} "
+                    f"column missing. Migration 012 may not have been applied correctly. "
+                    f"Provider: {provider}, provider_charge_id: {provider_charge_id}"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            
+            # STEP 2: IDEMPOTENCY CHECK (CRITICAL - at the very start)
             existing_payment = await conn.fetchrow(
                 """
                 SELECT id, telegram_id, amount, status
@@ -6421,7 +6459,7 @@ async def finalize_balance_topup(
                     "reason": "already_processed"
                 }
             
-            # STEP 2: Проверяем существование пользователя
+            # STEP 3: Проверяем существование пользователя
             user_exists = await conn.fetchval(
                 "SELECT telegram_id FROM users WHERE telegram_id = $1", telegram_id
             )
@@ -6429,7 +6467,7 @@ async def finalize_balance_topup(
             if user_exists is None:
                 raise ValueError(f"User {telegram_id} not found")
             
-            # STEP 3: ATOMIC INSERT + CREDIT (payment record FIRST, then balance)
+            # STEP 4: ATOMIC INSERT + CREDIT (payment record FIRST, then balance)
             # Insert payment record with idempotency key
             payment_id = await conn.fetchval(
                 """
@@ -6458,13 +6496,13 @@ async def finalize_balance_topup(
             if not payment_id:
                 raise ValueError(f"Failed to create payment record for user {telegram_id}")
             
-            # STEP 4: Пополняем баланс (AFTER payment record created)
+            # STEP 5: Пополняем баланс (AFTER payment record created)
             await conn.execute(
                 "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
                 amount_kopecks, telegram_id
             )
             
-            # STEP 5: Записываем транзакцию баланса
+            # STEP 6: Записываем транзакцию баланса
             transaction_description = description or f"Пополнение баланса через {provider}"
             transaction_type = "topup"
             await conn.execute(
@@ -6473,7 +6511,7 @@ async def finalize_balance_topup(
                 telegram_id, amount_kopecks, transaction_type, provider, transaction_description
             )
             
-            # STEP 6: Обрабатываем реферальный кешбэк
+            # STEP 7: Обрабатываем реферальный кешбэк
             purchase_id = f"balance_topup_{payment_id}"
             referral_reward_result = None
             
@@ -6492,7 +6530,7 @@ async def finalize_balance_topup(
                 )
                 raise
             
-            # STEP 7: Получаем новый баланс
+            # STEP 8: Получаем новый баланс
             new_balance_kopecks = await conn.fetchval(
                 "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
             )
