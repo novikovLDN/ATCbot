@@ -281,7 +281,13 @@ def classify_error(exception: Exception) -> str:
     import asyncio
     from app.services.payments.exceptions import PaymentServiceError
     from app.services.activation.exceptions import ActivationServiceError
-    from app.services.vpn.exceptions import VPNServiceError
+    # P0 HOTFIX: VPNServiceError is defined in service.py, not exceptions.py
+    try:
+        from app.services.vpn.service import VPNServiceError
+    except ImportError:
+        # Fallback: define minimal exception class if import fails
+        class VPNServiceError(Exception):
+            pass
     from app.services.subscriptions.exceptions import SubscriptionServiceError
     from app.services.trials.exceptions import TrialServiceError
     from app.services.admin.exceptions import AdminServiceError
