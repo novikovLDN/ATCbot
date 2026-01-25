@@ -311,36 +311,63 @@ async def check_payment_idempotency(
 async def finalize_balance_topup_payment(
     telegram_id: int,
     amount_rubles: float,
-    description: Optional[str] = None
+    provider: str,
+    provider_charge_id: str,
+    description: Optional[str] = None,
+    correlation_id: Optional[str] = None
 ) -> BalanceTopupResult:
     """
-    Finalize balance topup payment.
+    Finalize balance topup payment with idempotency protection.
     
     This handles the complete balance topup flow:
-    - Validates amount
+    - Validates amount and provider_charge_id
+    - Checks idempotency (prevents duplicate credits)
     - Finalizes balance topup in database
     - Returns result with payment_id and new balance
     
     Args:
         telegram_id: Telegram ID of the user
         amount_rubles: Amount to topup in rubles
+        provider: Payment provider ('telegram' or 'cryptobot')
+        provider_charge_id: Unique charge ID from provider (for idempotency)
         description: Optional description for the transaction
+        correlation_id: Optional correlation ID for logging
         
     Returns:
         BalanceTopupResult with payment details
         
     Raises:
         PaymentFinalizationError: If finalization fails
+        ValueError: If provider_charge_id is missing
     """
     if amount_rubles <= 0:
         raise PaymentFinalizationError(f"Invalid amount for balance topup: {amount_rubles}")
+    
+    if not provider_charge_id:
+        raise PaymentFinalizationError("provider_charge_id is required for idempotency")
+    
+    if provider not in ("telegram", "cryptobot"):
+        raise PaymentFinalizationError(f"Invalid provider: {provider}. Must be 'telegram' or 'cryptobot'")
     
     try:
         result = await database.finalize_balance_topup(
             telegram_id=telegram_id,
             amount_rubles=amount_rubles,
-            description=description or "Пополнение баланса через Telegram Payments"
+            provider=provider,
+            provider_charge_id=provider_charge_id,
+            description=description or f"Пополнение баланса через {provider}",
+            correlation_id=correlation_id
         )
+        
+        # Handle idempotent skip (already processed)
+        if result.get("reason") == "already_processed":
+            # Return success with existing payment info
+            return BalanceTopupResult(
+                success=True,
+                payment_id=result["payment_id"],
+                new_balance=result["new_balance"],
+                referral_reward=result.get("referral_reward")
+            )
         
         if not result or not result.get("success"):
             raise PaymentFinalizationError(f"finalize_balance_topup returned failure: {result}")
