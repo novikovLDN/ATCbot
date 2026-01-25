@@ -130,15 +130,24 @@ if not TG_PROVIDER_TOKEN:
 # Xray Core API Configuration (OPTIONAL - бот работает без VPN API, но VPN-операции блокируются)
 XRAY_API_URL = env("XRAY_API_URL")
 XRAY_API_KEY = env("XRAY_API_KEY")
+# Timeout для XRAY API запросов (в секундах, default 5s)
+XRAY_API_TIMEOUT = float(env("XRAY_API_TIMEOUT", default="5.0"))
 
 # Флаг доступности VPN API
 VPN_ENABLED = bool(XRAY_API_URL and XRAY_API_KEY)
+
+# Feature flag для VPN provisioning (по умолчанию true в STAGE, false если VPN_ENABLED=False)
+VPN_PROVISIONING_ENABLED = env("VPN_PROVISIONING_ENABLED", default="true").lower() == "true" if VPN_ENABLED else False
 
 if not VPN_ENABLED:
     print("WARNING: XRAY_API_URL or XRAY_API_KEY is not set!", file=sys.stderr)
     print("WARNING: VPN operations will be BLOCKED until XRAY_API_URL and XRAY_API_KEY are configured", file=sys.stderr)
     print("WARNING: Bot will continue running, but subscriptions cannot be activated", file=sys.stderr)
 else:
+    print(f"INFO: Using XRAY_API_URL from {APP_ENV.upper()}_XRAY_API_URL", flush=True)
+    print(f"INFO: Using XRAY_API_KEY from {APP_ENV.upper()}_XRAY_API_KEY", flush=True)
+    print(f"INFO: XRAY_API_TIMEOUT={XRAY_API_TIMEOUT}s", flush=True)
+    print(f"INFO: VPN_PROVISIONING_ENABLED={VPN_PROVISIONING_ENABLED}", flush=True)
     print("INFO: VPN API configured successfully (VLESS + REALITY)", file=sys.stderr)
 
 # Xray VLESS REALITY Server Constants (REQUIRED)

@@ -94,7 +94,7 @@ async def check_connection_pool() -> Tuple[bool, str]:
 
 
 async def check_vpn_keys() -> Tuple[bool, str]:
-    """Проверить доступность Xray API
+    """Проверить доступность Xray API через реальный health-check.
     
     Returns:
         Кортеж (is_ok, message) - статус проверки и сообщение
@@ -104,14 +104,17 @@ async def check_vpn_keys() -> Tuple[bool, str]:
         import vpn_utils
         
         # Проверяем, что XRAY_API_URL настроен
-        if not config.XRAY_API_URL:
-            return False, "VPN API: XRAY_API_URL не настроен"
+        if not config.XRAY_API_URL or not config.XRAY_API_KEY:
+            return False, "VPN API: XRAY_API_URL или XRAY_API_KEY не настроен"
         
-        # VPN-ключи создаются динамически через Xray API (VLESS + REALITY)
-        # Проверка пула ключей больше не актуальна
-        return True, "VPN-ключи: Создаются через Xray API (VLESS + REALITY, без лимита)"
+        # Выполняем реальный health-check через XRAY API /health endpoint
+        is_healthy = await vpn_utils.check_xray_health()
+        if is_healthy:
+            return True, "VPN API: Доступен (health-check успешен)"
+        else:
+            return False, "VPN API: Health-check failed (недоступен)"
     except Exception as e:
-        return False, f"VPN-ключи: Ошибка проверки ({str(e)})"
+        return False, f"VPN API: Ошибка health-check ({str(e)})"
 
 
 async def perform_health_check() -> Tuple[bool, list]:

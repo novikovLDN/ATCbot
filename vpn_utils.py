@@ -32,7 +32,8 @@ from app.core.cost_model import get_cost_model, CostCenter
 logger = logging.getLogger(__name__)
 
 # HTTP клиент с таймаутами для API запросов
-HTTP_TIMEOUT = 10.0  # секунды (≥ 10 секунд по требованию)
+# Используем XRAY_API_TIMEOUT из config (default 5s), но не менее 3s для надежности
+HTTP_TIMEOUT = max(float(config.XRAY_API_TIMEOUT) if hasattr(config, 'XRAY_API_TIMEOUT') else 5.0, 3.0)
 MAX_RETRIES = 2  # Количество повторных попыток при ошибке (2 retry = 3 попытки всего)
 RETRY_DELAY = 1.0  # Задержка между попытками в секундах (backoff будет: 1s, 2s)
 
@@ -55,6 +56,39 @@ class AuthError(VPNAPIError):
 class InvalidResponseError(VPNAPIError):
     """Некорректный ответ от VPN API"""
     pass
+
+
+async def check_xray_health() -> bool:
+    """
+    Проверить доступность XRAY API через health-check endpoint.
+    
+    Вызывает GET /health на XRAY API сервере.
+    Не бросает исключения - возвращает False при ошибках.
+    
+    Returns:
+        True если XRAY API доступен и отвечает, False в противном случае
+    """
+    if not config.VPN_ENABLED:
+        return False
+    
+    if not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        return False
+    
+    api_url = config.XRAY_API_URL.rstrip('/')
+    health_url = f"{api_url}/health"
+    
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            response = await client.get(health_url)
+            if response.status_code == 200:
+                logger.debug("XRAY health check: SUCCESS")
+                return True
+            else:
+                logger.warning(f"XRAY health check: FAILED [status={response.status_code}]")
+                return False
+    except Exception as e:
+        logger.debug(f"XRAY health check: FAILED [error={str(e)}]")
+        return False
 
 
 def validate_vless_link(vless_link: str) -> bool:
@@ -154,9 +188,11 @@ async def add_vless_user() -> Dict[str, str]:
     Вызывает POST /add-user на локальном FastAPI VPN API сервере.
     API возвращает только UUID, а VLESS URL генерируется локально.
     
+    В STAGE окружении UUID получает префикс "stage-" для изоляции.
+    
     Returns:
         Словарь с ключами:
-        - "uuid": UUID пользователя (str)
+        - "uuid": UUID пользователя (str, с префиксом "stage-" в STAGE)
         - "vless_url": VLESS URL для подключения (str, сгенерирован локально)
     
     Raises:
@@ -165,6 +201,12 @@ async def add_vless_user() -> Dict[str, str]:
         httpx.HTTPStatusError: При ошибках HTTP (4xx, 5xx)
         Exception: При других ошибках
     """
+    # Проверяем feature flag
+    if not config.VPN_PROVISIONING_ENABLED:
+        error_msg = "VPN provisioning is disabled (VPN_PROVISIONING_ENABLED=false)"
+        logger.warning(error_msg)
+        raise ValueError(error_msg)
+    
     # Проверяем доступность VPN API
     if not config.VPN_ENABLED:
         error_msg = (
@@ -184,6 +226,14 @@ async def add_vless_user() -> Dict[str, str]:
         error_msg = "XRAY_API_KEY environment variable is not set"
         logger.error(error_msg)
         raise ValueError(error_msg)
+    
+    # STAGE изоляция: проверяем окружение
+    if config.IS_STAGE:
+        logger.info("XRAY_CALL_START [operation=add_user, environment=stage]")
+    elif config.IS_PROD:
+        logger.info("XRAY_CALL_START [operation=add_user, environment=prod]")
+    else:
+        logger.info("XRAY_CALL_START [operation=add_user, environment=local]")
     
     # Проверяем что URL правильный и не является private IP
     api_url = config.XRAY_API_URL.rstrip('/')
@@ -225,8 +275,13 @@ async def add_vless_user() -> Dict[str, str]:
         "Content-Type": "application/json"
     }
     
+    # STAGE изоляция: добавляем заголовок для отдельного inbound/tag
+    if config.IS_STAGE:
+        headers["X-Environment"] = "stage"
+        headers["X-Inbound-Tag"] = "stage"
+    
     # Логируем начало операции
-    logger.info(f"vpn_api add_user: START [url={url}]")
+    logger.info(f"vpn_api add_user: START [url={url}, environment={config.APP_ENV}]")
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
     async def _make_request():
@@ -305,16 +360,24 @@ async def add_vless_user() -> Dict[str, str]:
                 logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
                 raise InvalidResponseError(error_msg)
             
+            # STAGE изоляция: добавляем префикс к UUID
+            original_uuid = str(uuid)
+            if config.IS_STAGE:
+                # В STAGE добавляем префикс для изоляции
+                uuid = f"stage-{original_uuid}"
+                logger.info(f"XRAY_CALL_STAGE_ISOLATION [original_uuid={original_uuid[:8]}..., prefixed_uuid={uuid[:14]}...]")
+            
             # Use vless_link from API response if available, otherwise generate locally
             if vless_link:
                 vless_url = vless_link
             else:
                 # Generate VLESS URL locally based on UUID + server constants (fallback)
-                vless_url = generate_vless_url(str(uuid))
+                # Используем оригинальный UUID для генерации URL (XRAY API работает с оригинальным UUID)
+                vless_url = generate_vless_url(original_uuid)
             
             # Safe UUID logging (first 8 characters only)
             uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
-            logger.info(f"vpn_api add_user: SUCCESS [uuid={uuid_preview}]")
+            logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
             
             # VPN AUDIT LOG: Log successful UUID creation (non-blocking)
             try:
@@ -345,6 +408,7 @@ async def add_vless_user() -> Dict[str, str]:
             # Domain exceptions should NOT be retried - raise immediately
             # STEP 6 — F2: CIRCUIT BREAKER LITE
             # Don't record failure for domain errors (not transient)
+            logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=domain_error, environment={config.APP_ENV}, error={str(e)[:100]}]")
             raise
         except Exception as e:
             # All other exceptions are wrapped by retry_async or are unexpected
@@ -352,7 +416,7 @@ async def add_vless_user() -> Dict[str, str]:
             # Record failure for transient errors
             vpn_breaker.record_failure()
             error_msg = f"Failed to create VLESS user: {e}"
-            logger.error(f"vpn_api add_user: ERROR [{error_msg}]")
+            logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
             raise VPNAPIError(error_msg) from e
 
 
@@ -362,8 +426,11 @@ async def remove_vless_user(uuid: str) -> None:
     
     Вызывает POST /remove-user на Xray API сервере для удаления пользователя.
     
+    В STAGE окружении UUID должен иметь префикс "stage-" для изоляции.
+    При удалении префикс удаляется перед отправкой в XRAY API.
+    
     Args:
-        uuid: UUID пользователя для удаления (str)
+        uuid: UUID пользователя для удаления (str, может быть с префиксом "stage-" в STAGE)
     
     Raises:
         ValueError: Если XRAY_API_URL или XRAY_API_KEY не настроены, или uuid пустой
@@ -375,6 +442,12 @@ async def remove_vless_user(uuid: str) -> None:
         Функция НЕ игнорирует ошибки. Если удаление не удалось,
         будет выброшено исключение.
     """
+    # Проверяем feature flag
+    if not config.VPN_PROVISIONING_ENABLED:
+        error_msg = "VPN provisioning is disabled (VPN_PROVISIONING_ENABLED=false)"
+        logger.warning(error_msg)
+        raise ValueError(error_msg)
+    
     # Проверяем доступность VPN API
     if not config.VPN_ENABLED:
         error_msg = (
@@ -399,6 +472,21 @@ async def remove_vless_user(uuid: str) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
+    # STAGE изоляция: удаляем префикс перед отправкой в XRAY API
+    uuid_clean = uuid.strip()
+    original_uuid = uuid_clean
+    if config.IS_STAGE and uuid_clean.startswith("stage-"):
+        uuid_clean = uuid_clean[6:]  # Удаляем "stage-" префикс
+        logger.info(f"XRAY_CALL_STAGE_ISOLATION [prefixed_uuid={original_uuid[:14]}..., original_uuid={uuid_clean[:8]}...]")
+    
+    # STAGE изоляция: логируем начало операции
+    if config.IS_STAGE:
+        logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={original_uuid[:14]}..., environment=stage]")
+    elif config.IS_PROD:
+        logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=prod]")
+    else:
+        logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=local]")
+    
     # Проверяем что URL правильный и не является private IP
     api_url = config.XRAY_API_URL.rstrip('/')
     if not api_url.startswith('http://') and not api_url.startswith('https://'):
@@ -420,16 +508,21 @@ async def remove_vless_user(uuid: str) -> None:
             raise RuntimeError(error_msg)
     
     # Используем формат /remove-user/{uuid} (UUID в пути, не в body)
-    uuid_clean = uuid.strip()
+    # uuid_clean уже обработан выше (префикс удален в STAGE)
     url = f"{api_url}/remove-user/{uuid_clean}"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
     }
     
+    # STAGE изоляция: добавляем заголовок для отдельного inbound/tag
+    if config.IS_STAGE:
+        headers["X-Environment"] = "stage"
+        headers["X-Inbound-Tag"] = "stage"
+    
     # Безопасное логирование UUID
     uuid_preview = f"{uuid_clean[:8]}..." if uuid_clean and len(uuid_clean) > 8 else (uuid_clean or "N/A")
-    logger.info(f"vpn_api remove_user: START [uuid={uuid_preview}, url={url}]")
+    logger.info(f"vpn_api remove_user: START [uuid={uuid_preview}, url={url}, environment={config.APP_ENV}]")
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
     async def _make_request():
@@ -511,9 +604,10 @@ async def remove_vless_user(uuid: str) -> None:
             
             # If we got here and response is 404, it was handled in _make_request
             if response.status_code == 404:
+                logger.info(f"XRAY_CALL_SUCCESS [operation=remove_user, uuid={uuid_preview}, environment={config.APP_ENV}, status=idempotent_404]")
                 return
             
-            logger.info(f"vpn_api remove_user: SUCCESS [uuid={uuid_preview}]")
+            logger.info(f"XRAY_CALL_SUCCESS [operation=remove_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
             
             # VPN AUDIT LOG: Log successful UUID removal (non-blocking)
             # Note: Full audit log will be written by caller with correct telegram_id and source
@@ -539,11 +633,12 @@ async def remove_vless_user(uuid: str) -> None:
             
         except (AuthError, ValueError):
             # Domain exceptions should NOT be retried - raise immediately
+            logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=domain_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={str(e)[:100]}]")
             raise
         except Exception as e:
             # All other exceptions are wrapped by retry_async or are unexpected
             error_msg = f"Failed to remove VLESS user: {e}"
-            logger.error(f"vpn_api remove_user: ERROR [uuid={uuid_preview}, {error_msg}]")
+            logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=transient_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={error_msg[:100]}]")
             raise VPNAPIError(error_msg) from e
 
 
