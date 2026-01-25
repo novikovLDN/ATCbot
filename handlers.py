@@ -1,3 +1,14 @@
+# === STAGE STABLE SNAPSHOT ===
+# Date: 2026-01-25
+# Environment: STAGE
+# WARNING:
+# Business logic below is considered STABLE.
+# Do NOT change behavior without:
+#  - test case
+#  - log proof
+#  - rollback plan
+# ==========================================
+
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, LabeledPrice, PreCheckoutQuery
 from aiogram.exceptions import TelegramBadRequest
@@ -71,6 +82,81 @@ from app.core.rate_limit import check_rate_limit
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
+
+
+# ====================================================================================
+# SAFE USERNAME RESOLUTION HELPER
+# ====================================================================================
+
+def safe_resolve_username(user_obj, telegram_id: int = None) -> str:
+    """
+    Безопасное разрешение username для отображения.
+    
+    Priority:
+    1. user_obj.username (Telegram username)
+    2. user_obj.first_name (имя пользователя)
+    3. "пользователь" (fallback)
+    
+    Args:
+        user_obj: Telegram user object (Message.from_user, CallbackQuery.from_user, etc.)
+        telegram_id: Optional telegram ID for logging
+    
+    Returns:
+        Строка для отображения (никогда не None)
+    """
+    if not user_obj:
+        return "пользователь"
+    
+    # Priority 1: Telegram username
+    if hasattr(user_obj, 'username') and user_obj.username:
+        return user_obj.username
+    
+    # Priority 2: First name
+    if hasattr(user_obj, 'first_name') and user_obj.first_name:
+        return user_obj.first_name
+    
+    # Priority 3: Fallback
+    return "пользователь"
+
+
+def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = None) -> str:
+    """
+    Безопасное разрешение username из словаря пользователя из БД.
+    
+    Priority:
+    1. user_dict.get("username")
+    2. user_dict.get("first_name")
+    3. "ID: <telegram_id>" if telegram_id provided
+    4. "пользователь" (fallback)
+    
+    Args:
+        user_dict: Словарь пользователя из БД
+        telegram_id: Optional telegram ID for fallback
+    
+    Returns:
+        Строка для отображения (никогда не None)
+    """
+    if not user_dict:
+        if telegram_id:
+            return f"ID: {telegram_id}"
+        return "пользователь"
+    
+    # Priority 1: Username from DB
+    username = user_dict.get("username")
+    if username:
+        return username
+    
+    # Priority 2: First name from DB (if exists)
+    first_name = user_dict.get("first_name")
+    if first_name:
+        return first_name
+    
+    # Priority 3: Telegram ID fallback
+    if telegram_id:
+        return f"ID: {telegram_id}"
+    
+    # Priority 4: Generic fallback
+    return "пользователь"
 
 
 # ====================================================================================
@@ -1320,9 +1406,9 @@ async def send_referral_cashback_notification(
         True если уведомление отправлено, False если ошибка
     """
     try:
-        # Получаем информацию о реферале (username)
+        # Получаем информацию о реферале (username or first_name or "пользователь")
         referred_user = await database.get_user(referred_id)
-        referred_username = referred_user.get("username") if referred_user else None
+        referred_username = safe_resolve_username_from_db(referred_user, referred_id)
         
         # Используем единый сервис для форматирования
         from app.services.notifications.service import format_referral_notification_text
@@ -1354,7 +1440,17 @@ async def send_referral_cashback_notification(
         return True
         
     except Exception as e:
-        logger.error(f"Failed to send referral cashback notification: referrer={referrer_id}, error={e}")
+        logger.warning(
+            "NOTIFICATION_FAILED",
+            extra={
+                "type": "referral_cashback",
+                "referrer": referrer_id,
+                "referred": referred_id,
+                "amount": purchase_amount,
+                "cashback": cashback_amount,
+                "error": str(e)
+            }
+        )
         return False
 
 
@@ -1490,8 +1586,8 @@ async def cmd_start(message: Message):
         return
     """Обработчик команды /start"""
     telegram_id = message.from_user.id
-    # Safe username extraction: can be None
-    username = message.from_user.username if message.from_user else None
+    # Safe username resolution: username or first_name or "пользователь"
+    username = safe_resolve_username(message.from_user, telegram_id)
     
     # Создаем пользователя если его нет
     user = await database.get_user(telegram_id)
@@ -1525,10 +1621,10 @@ async def cmd_start(message: Message):
                 referrer_user = await database.get_user(referrer_id)
                 referrer_username = referrer_user.get("username") if referrer_user else None
                 
-                # Get referred user info (safe: username can be None)
-                referred_username = username if username else f"ID: {telegram_id}"
+                # Get referred user info (safe: username or first_name or "пользователь")
+                referred_username = username  # Already resolved via safe_resolve_username
                 # Format display name: add @ prefix if username exists and doesn't have it
-                if referred_username and not referred_username.startswith("ID:"):
+                if referred_username and not referred_username.startswith("ID:") and referred_username != "пользователь":
                     referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
                 else:
                     referred_display = referred_username
@@ -1551,7 +1647,15 @@ async def cmd_start(message: Message):
                 )
         except Exception as e:
             # Non-critical - log but don't fail
-            logger.warning(f"Failed to send referral registration notification: {e}")
+            logger.warning(
+                "NOTIFICATION_FAILED",
+                extra={
+                    "type": "referral_registration",
+                    "referrer": referrer_id,
+                    "referred": telegram_id,
+                    "error": str(e)
+                }
+            )
     
     # Экран выбора языка
     await message.answer(
@@ -2044,15 +2148,13 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                     try:
                         # Get referred user info (user who activated trial)
                         referred_user = await database.get_user(telegram_id)
-                        referred_username = referred_user.get("username") if referred_user else None
+                        referred_username = safe_resolve_username_from_db(referred_user, telegram_id)
                         
-                        # Safe display name: use @username if available, otherwise "ID: <telegram_id>"
-                        if referred_username:
-                            referred_display = f"@{referred_username}"
-                            logger.debug(f"Trial activation notification: using username @{referred_username} for user {telegram_id}")
+                        # Format display name: add @ prefix if username exists and doesn't have it
+                        if referred_username and not referred_username.startswith("ID:") and referred_username != "пользователь":
+                            referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
                         else:
-                            referred_display = f"ID: {telegram_id}"
-                            logger.warning(f"Trial activation notification: username not available for user {telegram_id}, using ID fallback")
+                            referred_display = referred_username
                         
                         notification_text = (
                             f"🎉 Ваш реферал активировал пробный период!\n\n"
@@ -2071,7 +2173,15 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                             f"referred={telegram_id}, referred_display={referred_display}]"
                         )
                     except Exception as e:
-                        logger.warning(f"Failed to send trial activation notification: referrer={referrer_id}, referred={telegram_id}, error={e}")
+                        logger.warning(
+                            "NOTIFICATION_FAILED",
+                            extra={
+                                "type": "trial_activation",
+                                "referrer": referrer_id,
+                                "referred": telegram_id,
+                                "error": str(e)
+                            }
+                        )
         except Exception as e:
             # Non-critical - log but don't fail trial activation
             logger.warning(f"Failed to activate referral for trial: user={telegram_id}, error={e}")
@@ -3633,7 +3743,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # Отправляем уведомление о кешбэке (если начислен)
         if referral_reward_result and referral_reward_result.get("success"):
             try:
-                await send_referral_cashback_notification(
+                notification_sent = await send_referral_cashback_notification(
                     bot=callback.message.bot,
                     referrer_id=referral_reward_result.get("referrer_id"),
                     referred_id=telegram_id,
@@ -3644,9 +3754,18 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     referrals_needed=referral_reward_result.get("referrals_needed", 0),
                     action_type="покупка" if not is_renewal else "продление"
                 )
-                logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={final_price_rubles} RUB")
+                if notification_sent:
+                    logger.info(f"Referral cashback processed for balance payment: user={telegram_id}, amount={final_price_rubles} RUB")
             except Exception as e:
-                logger.exception(f"Error sending referral cashback notification for balance payment: user={telegram_id}: {e}")
+                logger.warning(
+                    "NOTIFICATION_FAILED",
+                    extra={
+                        "type": "balance_payment_referral",
+                        "user": telegram_id,
+                        "referrer": referral_reward_result.get("referrer_id") if referral_reward_result else None,
+                        "error": str(e)
+                    }
+                )
         
         # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
         # Для продлений vpn_key может быть пустым - получаем из подписки
@@ -5447,9 +5566,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # КРИТИЧНО: pending_purchase уже помечен как paid в finalize_purchase
     # Реферальный кешбэк уже обработан в finalize_purchase через process_referral_reward
     # Отправляем уведомление рефереру (если кешбэк был начислен)
-    try:
-        referral_reward = result.referral_reward
-        if referral_reward and referral_reward.get("success"):
+    referral_reward = result.referral_reward
+    if referral_reward and referral_reward.get("success"):
+        try:
             # Формируем период подписки для уведомления
             subscription_period = None
             if period_days:
@@ -5487,11 +5606,26 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )
             else:
                 logger.warning(
-                    f"REFERRAL_NOTIFICATION_FAILED [type=purchase, referrer={referral_reward.get('referrer_id')}, "
-                    f"referred={telegram_id}, purchase_id={purchase_id}]"
+                    "NOTIFICATION_FAILED",
+                    extra={
+                        "type": "purchase",
+                        "referrer": referral_reward.get("referrer_id"),
+                        "referred": telegram_id,
+                        "purchase_id": purchase_id,
+                        "error": "send_referral_cashback_notification returned False"
+                    }
                 )
-    except Exception as e:
-        logger.warning(f"Failed to send referral notification: {e}")
+        except Exception as e:
+            logger.warning(
+                "NOTIFICATION_FAILED",
+                extra={
+                    "type": "purchase",
+                    "referred": telegram_id,
+                    "purchase_id": purchase_id if 'purchase_id' in locals() else None,
+                    "referrer": referral_reward.get("referrer_id") if referral_reward else None,
+                    "error": str(e)
+                }
+            )
     
     logger.info(
         f"process_successful_payment: PAYMENT_COMPLETE [user={telegram_id}, payment_id={payment_id}, "
@@ -6220,7 +6354,7 @@ async def approve_payment(callback: CallbackQuery):
                             subscription_period = f"{months} месяц" + ("а" if months in [2, 3, 4] else ("ев" if months > 4 else ""))
                             
                             # Send notification
-                            await send_referral_cashback_notification(
+                            notification_sent = await send_referral_cashback_notification(
                                 bot=callback.bot,
                                 referrer_id=referrer_id,
                                 referred_id=telegram_id,
@@ -6232,9 +6366,30 @@ async def approve_payment(callback: CallbackQuery):
                                 action_type="покупку",
                                 subscription_period=subscription_period
                             )
-                            logger.info(f"REFERRAL_NOTIFICATION_SENT [admin_approve, referrer={referrer_id}, referred={telegram_id}, payment_id={payment_id}]")
+                            if notification_sent:
+                                logger.info(f"REFERRAL_NOTIFICATION_SENT [admin_approve, referrer={referrer_id}, referred={telegram_id}, payment_id={payment_id}]")
+                            else:
+                                logger.warning(
+                                    "NOTIFICATION_FAILED",
+                                    extra={
+                                        "type": "admin_approve_referral",
+                                        "referrer": referrer_id,
+                                        "referred": telegram_id,
+                                        "payment_id": payment_id,
+                                        "error": "send_referral_cashback_notification returned False"
+                                    }
+                                )
             except Exception as e:
-                logger.warning(f"Failed to send referral notification for admin-approved payment: payment_id={payment_id}, error={e}")
+                logger.warning(
+                    "NOTIFICATION_FAILED",
+                    extra={
+                        "type": "admin_approve_referral",
+                        "payment_id": payment_id,
+                        "referrer": referrer_id if 'referrer_id' in locals() else None,
+                        "referred": telegram_id if 'telegram_id' in locals() else None,
+                        "error": str(e)
+                    }
+                )
         
         # Логируем продление, если было
         if is_renewal:
