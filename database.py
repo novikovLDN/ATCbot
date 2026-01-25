@@ -1750,6 +1750,115 @@ async def get_total_cashback_earned(partner_id: int) -> float:
         return 0.0
 
 
+async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
+    """
+    Получить полную статистику рефералов для партнёра.
+    
+    Returns:
+        {
+            "total_invited": int,  # Всего приглашено
+            "active_referrals": int,  # Активных (активировали trial или оплатили)
+            "total_cashback_earned": float,  # Общий кешбэк в рублях
+            "last_activity_at": Optional[datetime],  # Последняя активность реферала
+            "paid_referrals_count": int,  # Оплативших рефералов
+            "current_level": int,  # Текущий уровень (10, 25, 45)
+            "referrals_to_next": Optional[int]  # До следующего уровня
+        }
+    """
+    if not DB_READY:
+        return {
+            "total_invited": 0,
+            "active_referrals": 0,
+            "total_cashback_earned": 0.0,
+            "last_activity_at": None,
+            "paid_referrals_count": 0,
+            "current_level": 10,
+            "referrals_to_next": 25
+        }
+    
+    pool = await get_pool()
+    if pool is None:
+        return {
+            "total_invited": 0,
+            "active_referrals": 0,
+            "total_cashback_earned": 0.0,
+            "last_activity_at": None,
+            "paid_referrals_count": 0,
+            "current_level": 10,
+            "referrals_to_next": 25
+        }
+    
+    try:
+        async with pool.acquire() as conn:
+            # Total invited
+            total_invited_val = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
+                partner_id
+            )
+            total_invited = safe_int(total_invited_val)
+            
+            # Active referrals (have first_paid_at OR activated trial)
+            active_referrals_val = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL",
+                partner_id
+            )
+            active_referrals = safe_int(active_referrals_val)
+            
+            # Paid referrals count (same as active for now)
+            paid_referrals_count = active_referrals
+            
+            # Total cashback earned
+            total_cashback_kopecks_val = await conn.fetchval(
+                """SELECT COALESCE(SUM(amount), 0) 
+                   FROM balance_transactions 
+                   WHERE user_id = $1 AND type = 'cashback'""",
+                partner_id
+            )
+            total_cashback_kopecks = safe_int(total_cashback_kopecks_val)
+            total_cashback_earned = total_cashback_kopecks / 100.0
+            
+            # Last activity timestamp
+            last_activity_row = await conn.fetchrow(
+                """SELECT MAX(first_paid_at) as last_activity
+                   FROM referrals 
+                   WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL""",
+                partner_id
+            )
+            last_activity_at = last_activity_row.get("last_activity") if last_activity_row else None
+            
+            # Current level and progress
+            if paid_referrals_count >= 50:
+                current_level = 45
+                referrals_to_next = None
+            elif paid_referrals_count >= 25:
+                current_level = 25
+                referrals_to_next = 50 - paid_referrals_count
+            else:
+                current_level = 10
+                referrals_to_next = 25 - paid_referrals_count
+            
+            return {
+                "total_invited": total_invited,
+                "active_referrals": active_referrals,
+                "total_cashback_earned": total_cashback_earned,
+                "last_activity_at": last_activity_at,
+                "paid_referrals_count": paid_referrals_count,
+                "current_level": current_level,
+                "referrals_to_next": referrals_to_next
+            }
+    except Exception as e:
+        logger.exception(f"Error getting referral statistics for partner_id={partner_id}: {e}")
+        return {
+            "total_invited": 0,
+            "active_referrals": 0,
+            "total_cashback_earned": 0.0,
+            "last_activity_at": None,
+            "paid_referrals_count": 0,
+            "current_level": 10,
+            "referrals_to_next": 25
+        }
+
+
 async def process_referral_reward_cashback(referred_user_id: int, payment_amount_rubles: float) -> bool:
     """
     DEPRECATED: Используйте process_referral_reward вместо этой функции.

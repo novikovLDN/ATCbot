@@ -48,6 +48,9 @@ from app.services.admin.exceptions import (
 from app.utils.logging_helpers import (
     log_handler_entry,
     log_handler_exit,
+)
+from app.utils.referral_middleware import process_referral_on_first_interaction
+from app.services.referrals import activate_referral, ReferralState
     classify_error,
 )
 from app.utils.security import (
@@ -1508,59 +1511,41 @@ async def cmd_start(message: Message):
                     referral_code, telegram_id
                 )
     
-    # Обработка реферальной ссылки
-    # КРИТИЧНО: referrer_id сохраняется ОДИН РАЗ и НЕ перезаписывается
-    command_args = message.text.split(" ", 1) if message.text else []
-    if len(command_args) > 1:
-        arg = command_args[1]
-        if arg.startswith("ref_"):
-            referral_code = arg[4:]  # Убираем префикс "ref_"
-            
-            # Находим реферера по коду
-            referrer = await database.find_user_by_referral_code(referral_code)
-            
-            if referrer:
-                referrer_user_id = referrer["telegram_id"]
+    # 1. REFERRAL REGISTRATION: Process on FIRST interaction
+    # This uses the new deterministic referral service
+    referral_result = await process_referral_on_first_interaction(message, telegram_id)
+    
+    # Send notification to referrer if just registered
+    if referral_result and referral_result.get("should_notify"):
+        try:
+            referrer_id = referral_result.get("referrer_id")
+            if referrer_id:
+                # Get referrer info
+                referrer_user = await database.get_user(referrer_id)
+                referrer_username = referrer_user.get("username") if referrer_user else None
                 
-                # ЗАЩИТА ОТ РЕФЕРАЛЬНОГО ФРОДА:
-                # 1. Это не тот же пользователь (self-referral запрещен)
-                # 2. У текущего пользователя referrer_id IS NULL (еще не был приглашен)
-                # 3. Защита от циклов: проверяем, что реферер не является рефералом текущего пользователя
+                # Get referred user info
+                referred_username = username or f"ID: {telegram_id}"
                 
-                # ПРОВЕРКА 1: Self-referral запрещен
-                if referrer_user_id == telegram_id:
-                    logger.warning(
-                        f"REFERRAL_SELF_ATTEMPT [user_id={telegram_id}, "
-                        f"referral_code={referral_code}]"
-                    )
-                    # Игнорируем попытку, не отправляем сообщение пользователю
-                else:
-                    user = await database.get_user(telegram_id)
-                    if user:
-                        # ПРОВЕРКА 2: referrer_id можно установить только один раз
-                        if not user.get("referrer_id") and not user.get("referred_by"):
-                            # ПРОВЕРКА 3: Защита от циклов - реферер не должен быть рефералом текущего пользователя
-                            referrer_user = await database.get_user(referrer_user_id)
-                            if referrer_user:
-                                referrer_referrer = referrer_user.get("referrer_id") or referrer_user.get("referred_by")
-                                if referrer_referrer == telegram_id:
-                                    logger.warning(f"REFERRAL FRAUD: Referral loop detected - user {telegram_id} -> {referrer_user_id} -> {telegram_id}")
-                                else:
-                                    # A) START HANDLER: Регистрируем реферала (сохраняет referrer_id ОДИН РАЗ)
-                                    success = await database.register_referral(referrer_user_id, telegram_id)
-                                    if success:
-                                        logger.info(
-                                            f"REFERRAL_REGISTERED [referrer={referrer_user_id}, "
-                                            f"referred={telegram_id}, code={referral_code}, source=/start]"
-                                        )
-                                    else:
-                                        logger.debug(
-                                            f"REFERRAL_REGISTRATION_SKIPPED [referrer={referrer_user_id}, "
-                                            f"referred={telegram_id}, reason=already_exists]"
-                                        )
-                        else:
-                            existing_referrer = user.get("referrer_id") or user.get("referred_by")
-                            logger.debug(f"REFERRAL FRAUD PREVENTION: User {telegram_id} already has a referrer (referrer_id={existing_referrer}), skipping registration. Attempted referral_code={referral_code}")
+                notification_text = (
+                    f"🎉 Новый реферал зарегистрирован!\n\n"
+                    f"👤 Пользователь: @{referred_username if referred_username.startswith('@') else referred_username}\n"
+                    f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
+                    f"Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
+                )
+                
+                await message.bot.send_message(
+                    chat_id=referrer_id,
+                    text=notification_text
+                )
+                
+                logger.info(
+                    f"REFERRAL_NOTIFICATION_SENT [type=registration, referrer={referrer_id}, "
+                    f"referred={telegram_id}]"
+                )
+        except Exception as e:
+            # Non-critical - log but don't fail
+            logger.warning(f"Failed to send referral registration notification: {e}")
     
     # Экран выбора языка
     await message.answer(
@@ -2037,14 +2022,44 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         if not uuid or not vpn_key:
             raise Exception("Failed to create VPN access for trial")
         
-        # C) TRIAL ACTIVATION: Mark referral as active (no cashback for trial)
-        # This ensures the referral is tracked even if user never pays
+        # 2. REFERRAL LIFECYCLE: Activate referral (REGISTERED → ACTIVATED)
+        # Trial activation marks referral as active (no cashback for trial)
         try:
-            await database.mark_referral_active(telegram_id)
-            logger.info(f"REFERRAL_MARKED_ACTIVE [referred={telegram_id}, source=trial]")
+            activation_result = await activate_referral(telegram_id, activation_type="trial")
+            if activation_result.get("success") and activation_result.get("was_activated"):
+                logger.info(
+                    f"REFERRAL_ACTIVATED [referrer={activation_result.get('referrer_id')}, "
+                    f"referred={telegram_id}, type=trial, state=ACTIVATED]"
+                )
+                
+                # Send notification to referrer about trial activation
+                referrer_id = activation_result.get("referrer_id")
+                if referrer_id:
+                    try:
+                        referrer_user = await database.get_user(referrer_id)
+                        referrer_username = referrer_user.get("username") if referrer_user else None
+                        
+                        notification_text = (
+                            f"🎉 Ваш реферал активировал пробный период!\n\n"
+                            f"👤 Пользователь: @{username if username else f'ID: {telegram_id}'}\n"
+                            f"⏰ Пробный период: 3 дня\n\n"
+                            f"Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
+                        )
+                        
+                        await callback.bot.send_message(
+                            chat_id=referrer_id,
+                            text=notification_text
+                        )
+                        
+                        logger.info(
+                            f"REFERRAL_NOTIFICATION_SENT [type=trial_activation, referrer={referrer_id}, "
+                            f"referred={telegram_id}]"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send trial activation notification: {e}")
         except Exception as e:
             # Non-critical - log but don't fail trial activation
-            logger.warning(f"Failed to mark referral as active for trial: user={telegram_id}, error={e}")
+            logger.warning(f"Failed to activate referral for trial: user={telegram_id}, error={e}")
         
         # Логируем активацию trial
         logger.info(
@@ -5920,59 +5935,45 @@ async def callback_referral_stats(callback: CallbackQuery):
         logger.warning(f"Error getting user in referral_stats: {e}")
     
     try:
-        # Получаем информацию об уровне и прогрессе
-        level_info = await database.get_referral_level_info(telegram_id)
-        if not level_info:
-            level_info = {
-                "current_level": 10,
-                "referrals_count": 0,
-                "paid_referrals_count": 0,
-                "next_level": 25,
-                "referrals_to_next": 25
-            }
+        # 5. STATISTICS: Get complete referral statistics
+        stats = await database.get_referral_statistics(telegram_id)
         
-        # Получаем количество приглашённых пользователей (для определения уровня)
-        current_referrals = database.safe_int(level_info.get("referrals_count", 0))
+        total_invited = stats.get("total_invited", 0)
+        active_referrals = stats.get("active_referrals", 0)
+        total_cashback = stats.get("total_cashback_earned", 0.0)
+        current_level = stats.get("current_level", 10)
+        referrals_to_next = stats.get("referrals_to_next")
+        last_activity_at = stats.get("last_activity_at")
         
-        # Определяем текущий уровень кешбэка на основе количества приглашённых
-        if current_referrals < 25:
-            current_percent = 10
-            next_threshold = 25
-            is_max_level = False
-        elif current_referrals < 50:
-            current_percent = 25
-            next_threshold = 50
-            is_max_level = False
-        else:
-            current_percent = 45
-            next_threshold = None
-            is_max_level = True
+        # Format last activity
+        last_activity_str = "—"
+        if last_activity_at:
+            if isinstance(last_activity_at, str):
+                try:
+                    last_activity_at = datetime.fromisoformat(last_activity_at.replace('Z', '+00:00'))
+                except:
+                    pass
+            if isinstance(last_activity_at, datetime):
+                last_activity_str = last_activity_at.strftime("%d.%m.%Y")
         
-        # Вычисляем оставшихся друзей до следующего уровня
-        if is_max_level:
-            remaining_count = None
-        else:
-            remaining_count = next_threshold - current_referrals
-        
-        # Получаем общий кешбэк
-        total_cashback = await database.get_total_cashback_earned(telegram_id)
-        if total_cashback is None:
-            total_cashback = 0.0
-        
-        # Формируем текст статистики (без жирного форматирования)
+        # Формируем текст статистики
         text = (
             f"📊 Статистика приглашений\n\n"
-            f"👤 Приглашено друзей: {current_referrals}\n"
-            f"💰 Общий кешбэк: {total_cashback:.2f} ₽\n\n"
-            f"🎁 Твой уровень кешбэка: {current_percent}%"
+            f"👤 Всего приглашено: {total_invited}\n"
+            f"✅ Активных рефералов: {active_referrals}\n"
+            f"💰 Общий кешбэк: {total_cashback:.2f} ₽\n"
+            f"🎁 Твой уровень: {current_level}%\n"
         )
         
         # Добавляем информацию о прогрессе до следующего уровня
-        if is_max_level:
-            text += "\n💎 Максимальный уровень достигнут"
+        if referrals_to_next is None:
+            text += "💎 Максимальный уровень достигнут\n"
         else:
-            friends_word = _pluralize_friends(remaining_count)
-            text += f"\n🔥 До следующего уровня осталось: {remaining_count} {friends_word}"
+            friends_word = _pluralize_friends(referrals_to_next)
+            text += f"🔥 До следующего уровня: {referrals_to_next} {friends_word}\n"
+        
+        # Добавляем последнюю активность
+        text += f"\n📅 Последняя активность: {last_activity_str}"
         
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
