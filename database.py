@@ -1358,7 +1358,7 @@ async def find_user_by_referral_code(referral_code: str) -> Optional[Dict[str, A
                 "SELECT * FROM users WHERE referral_code = $1", referral_code
             )
             return dict(row) if row else None
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"users table missing or referral_code column missing — skipping: {e}")
         return None
     except Exception as e:
@@ -1412,10 +1412,10 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
             
             # Обновляем referrer_id у пользователя (IMMUTABLE - устанавливается только один раз)
             # Также обновляем referred_by для обратной совместимости
-            # referred_at устанавливается при первой регистрации
+            # DO NOT use referred_at - column doesn't exist in schema
             result = await conn.execute(
                 """UPDATE users 
-                   SET referrer_id = $1, referred_by = $1, referred_at = COALESCE(referred_at, NOW())
+                   SET referrer_id = $1, referred_by = $1
                    WHERE telegram_id = $2 
                    AND referrer_id IS NULL 
                    AND referred_by IS NULL""",
@@ -1426,23 +1426,45 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
             if result == "UPDATE 1":
                 # Double-check by reading back
                 saved_user = await conn.fetchrow(
-                    "SELECT referrer_id FROM users WHERE telegram_id = $1",
+                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
                     referred_user_id
                 )
-                if saved_user and saved_user.get("referrer_id") == referrer_user_id:
+                if saved_user and (saved_user.get("referrer_id") == referrer_user_id or saved_user.get("referred_by") == referrer_user_id):
                     logger.info(
                         f"REFERRAL_SAVED [referrer={referrer_user_id}, referred={referred_user_id}, "
                         f"referrer_id_persisted=True]"
                     )
+                    logger.info(f"REFERRAL_REGISTERED [referrer={referrer_user_id}, referred={referred_user_id}]")
+                    return True
                 else:
                     logger.error(
                         f"REFERRAL_SAVE_FAILED [referrer={referrer_user_id}, referred={referred_user_id}, "
                         f"referrer_id_not_persisted]"
                     )
-            
-            logger.info(f"REFERRAL_REGISTERED [referrer={referrer_user_id}, referred={referred_user_id}]")
-            return True
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+                    return False
+            else:
+                # UPDATE 0 means referrer_id was already set (idempotent - this is OK)
+                # Check if it matches expected referrer
+                existing_user = await conn.fetchrow(
+                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
+                    referred_user_id
+                )
+                if existing_user:
+                    existing_referrer = existing_user.get("referrer_id") or existing_user.get("referred_by")
+                    if existing_referrer == referrer_user_id:
+                        logger.debug(
+                            f"REFERRAL_ALREADY_EXISTS [referrer={referrer_user_id}, referred={referred_user_id}, "
+                            f"referrer_id_already_set]"
+                        )
+                        return False  # Already registered with same referrer (idempotent)
+                    else:
+                        logger.warning(
+                            f"REFERRAL_CONFLICT [referrer={referrer_user_id}, referred={referred_user_id}, "
+                            f"existing_referrer={existing_referrer}]"
+                        )
+                        return False  # Different referrer already set (immutable)
+                return False
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals or users table missing or inaccessible — skipping referral registration: {e}")
         return False
     except Exception as e:
@@ -1516,7 +1538,7 @@ async def _mark_referral_active_internal(referred_user_id: int, conn: asyncpg.Co
             logger.info(f"REFERRAL_MARKED_ACTIVE [referrer={referrer_user_id}, referred={referred_user_id}]")
             return True
             
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals table missing or inaccessible — skipping mark_referral_active: {e}")
         return False
     except Exception as e:
@@ -1553,7 +1575,7 @@ async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
                 "total_referred": total_referred or 0,
                 "total_rewarded": total_rewarded or 0
             }
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals table missing or inaccessible — skipping: {e}")
         return {"total_referred": 0, "total_rewarded": 0}
     except Exception as e:
@@ -1604,7 +1626,7 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
             return 25
         else:
             return 10
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referral_rewards table missing or inaccessible — skipping: {e}")
         return 10
     except Exception as e:
@@ -1717,7 +1739,7 @@ async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
                 "next_level": next_level,
                 "referrals_to_next": referrals_to_next
             }
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals or referral_rewards table missing or inaccessible — skipping: {e}")
         return {
             "current_level": 10,
@@ -2834,14 +2856,14 @@ async def _log_audit_event_atomic(
                    VALUES ($1, $2, $3, $4, $5)""",
                 action, telegram_id, target_user, details, correlation_id
             )
-        except (asyncpg.UndefinedColumnError, asyncpg.ProgrammingError):
+        except (asyncpg.UndefinedColumnError, asyncpg.PostgresError):
             # Fallback if correlation_id column doesn't exist yet
             await conn.execute(
                 """INSERT INTO audit_log (action, telegram_id, target_user, details)
                    VALUES ($1, $2, $3, $4)""",
                 action, telegram_id, target_user, details
             )
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         # STEP 5 — PART F: FAILURE SAFETY
         # Log warning but never throw
         logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
@@ -2993,7 +3015,7 @@ async def _log_audit_event_atomic_standalone(
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await _log_audit_event_atomic(conn, action, telegram_id, target_user, details, correlation_id)
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         # STEP 5 — PART F: FAILURE SAFETY
         # Log warning but never throw
         logger.warning(f"audit_log table missing or inaccessible — skipping audit log: action={action}, telegram_id={telegram_id}")
@@ -4512,8 +4534,7 @@ async def get_admin_referral_stats(
                 continue  # Пропускаем проблемные строки, но продолжаем обработку
         
         return result
-    except asyncpg.exceptions.PostgresError as e:
-        # FIX: asyncpg.ProgrammingError не существует, используем PostgresError
+    except asyncpg.PostgresError as e:
         logger.warning(f"referrals or related tables missing or inaccessible — skipping admin referral stats: {e}")
         return []
     except Exception as e:
@@ -4606,7 +4627,7 @@ async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]
                 "username": referrer["username"] or f"ID{referrer_id}",
                 "invited_list": invited_list
             }
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals or related tables missing or inaccessible — skipping admin referral detail: {e}")
         return None
     except Exception as e:
@@ -4734,7 +4755,7 @@ async def get_referral_overall_stats(
                 "total_cashback_paid": round(total_cashback_paid, 2),
                 "avg_cashback_per_referrer": round(avg_cashback_per_referrer, 2)
             }
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals or referral_rewards tables missing or inaccessible — skipping referral overall stats: {e}")
         return {
             "total_referrers": 0,
@@ -5743,7 +5764,7 @@ async def get_last_audit_logs(limit: int = 10) -> list:
                 limit
             )
             return [dict(row) for row in rows]
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"audit_log table missing or inaccessible — skipping: {e}")
         return []
     except Exception as e:
@@ -5895,7 +5916,7 @@ async def get_incident_settings() -> Dict[str, Any]:
             if row:
                 return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
             return {"is_active": False, "incident_text": None}
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
         return {"is_active": False, "incident_text": None}
     except Exception as e:
@@ -5935,7 +5956,7 @@ async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None
                        WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
                     is_active
                 )
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
     except Exception as e:
         logger.warning(f"Error setting incident mode: {e}")
@@ -5980,7 +6001,7 @@ async def get_incident_settings() -> Dict[str, Any]:
             if row:
                 return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
             return {"is_active": False, "incident_text": None}
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
         return {"is_active": False, "incident_text": None}
     except Exception as e:
@@ -6020,7 +6041,7 @@ async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None
                        WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
                     is_active
                 )
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
     except Exception as e:
         logger.warning(f"Error setting incident mode: {e}")
@@ -6958,7 +6979,7 @@ async def get_referral_analytics() -> Dict[str, Any]:
             "referred_users_count": referred_users_count,
             "active_referrals": active_referrals
         }
-    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals or related tables missing or inaccessible — skipping referral analytics: {e}")
         return {
             "referral_revenue": 0.0,
