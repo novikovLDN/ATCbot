@@ -111,10 +111,14 @@ async def process_referral_registration(
             "reason": "referrer_id_already_set"
         }
     
-    # Verify referrer exists
-    referrer = await database.find_user_by_referral_code(referral_code)
-    if not referrer:
-        logger.warning(f"REFERRAL_REFERRER_NOT_FOUND [user={telegram_id}, code={referral_code}]")
+    # Verify referrer exists - use telegram_id directly (not referral_code lookup)
+    # The referral_code format is "ref_<telegram_id>", so we already have the ID
+    referrer_user = await database.get_user(referrer_telegram_id)
+    if not referrer_user:
+        logger.warning(
+            f"REFERRAL_REFERRER_NOT_FOUND [user={telegram_id}, referrer_telegram_id={referrer_telegram_id}, "
+            f"code={referral_code}]"
+        )
         return {
             "success": False,
             "state": ReferralState.NONE,
@@ -122,7 +126,7 @@ async def process_referral_registration(
             "reason": "referrer_not_found"
         }
     
-    referrer_user_id = referrer["telegram_id"]
+    referrer_user_id = referrer_telegram_id
     
     # Check for referral loop
     referrer_user = await database.get_user(referrer_user_id)
@@ -176,6 +180,10 @@ async def process_referral_registration(
             success = False
     
     if success:
+        logger.info(
+            f"REFERRAL_SAVED [referrer={referrer_user_id}, referred={telegram_id}, "
+            f"code={referral_code}, state=REGISTERED]"
+        )
         logger.info(
             f"REFERRAL_REGISTERED [referrer={referrer_user_id}, referred={telegram_id}, "
             f"code={referral_code}, state=REGISTERED]"

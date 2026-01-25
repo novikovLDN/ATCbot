@@ -4926,7 +4926,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             # Отправляем уведомление о кешбэке (если начислен)
             if referral_reward_result and referral_reward_result.get("success"):
                 try:
-                    await send_referral_cashback_notification(
+                    notification_sent = await send_referral_cashback_notification(
                         bot=message.bot,
                         referrer_id=referral_reward_result.get("referrer_id"),
                         referred_id=telegram_id,
@@ -4937,7 +4937,17 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         referrals_needed=referral_reward_result.get("referrals_needed", 0),
                         action_type="пополнение"
                     )
-                    logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
+                    if notification_sent:
+                        logger.info(
+                            f"REFERRAL_NOTIFICATION_SENT [type=balance_topup, referrer={referral_reward_result.get('referrer_id')}, "
+                            f"referred={telegram_id}, amount={payment_amount_rubles} RUB]"
+                        )
+                        logger.info(f"Referral cashback processed for balance topup: user={telegram_id}, amount={payment_amount_rubles} RUB")
+                    else:
+                        logger.warning(
+                            f"REFERRAL_NOTIFICATION_FAILED [type=balance_topup, referrer={referral_reward_result.get('referrer_id')}, "
+                            f"referred={telegram_id}]"
+                        )
                 except Exception as e:
                     logger.exception(f"Error sending referral cashback notification for balance topup: user={telegram_id}: {e}")
             
@@ -5442,7 +5452,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     else:
                         subscription_period = f"{period_days} дней"
             
-            await send_referral_cashback_notification(
+            notification_sent = await send_referral_cashback_notification(
                 bot=message.bot,
                 referrer_id=referral_reward.get("referrer_id"),
                 referred_id=telegram_id,
@@ -5454,7 +5464,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 action_type="покупку",
                 subscription_period=subscription_period
             )
-            logger.info(f"REFERRAL_NOTIFICATION_SENT [referrer={referral_reward.get('referrer_id')}, referred={telegram_id}, purchase_id={purchase_id}]")
+            if notification_sent:
+                logger.info(
+                    f"REFERRAL_NOTIFICATION_SENT [type=purchase, referrer={referral_reward.get('referrer_id')}, "
+                    f"referred={telegram_id}, purchase_id={purchase_id}]"
+                )
+            else:
+                logger.warning(
+                    f"REFERRAL_NOTIFICATION_FAILED [type=purchase, referrer={referral_reward.get('referrer_id')}, "
+                    f"referred={telegram_id}, purchase_id={purchase_id}]"
+                )
     except Exception as e:
         logger.warning(f"Failed to send referral notification: {e}")
     
