@@ -166,9 +166,10 @@ async def process_referral_registration(
                 )
                 
                 # Update referrer_id (IMMUTABLE - only if NULL)
+                # Use referred_by column (referred_at doesn't exist in schema)
                 await conn.execute(
                     """UPDATE users 
-                       SET referrer_id = $1, referred_by = $1, referred_at = NOW()
+                       SET referrer_id = $1, referred_by = $1
                        WHERE telegram_id = $2 
                        AND referrer_id IS NULL 
                        AND referred_by IS NULL""",
