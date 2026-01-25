@@ -1490,15 +1490,17 @@ async def cmd_start(message: Message):
         return
     """Обработчик команды /start"""
     telegram_id = message.from_user.id
-    username = message.from_user.username
+    # Safe username extraction: can be None
+    username = message.from_user.username if message.from_user else None
     
     # Создаем пользователя если его нет
     user = await database.get_user(telegram_id)
     if not user:
         await database.create_user(telegram_id, username, "ru")
     else:
-        # Обновляем username если изменился
-        await database.update_username(telegram_id, username)
+        # Обновляем username если изменился (safe: username can be None)
+        if username is not None:
+            await database.update_username(telegram_id, username)
         # Убеждаемся, что у пользователя есть referral_code
         if not user.get("referral_code"):
             # Генерируем код для существующего пользователя
@@ -1523,12 +1525,17 @@ async def cmd_start(message: Message):
                 referrer_user = await database.get_user(referrer_id)
                 referrer_username = referrer_user.get("username") if referrer_user else None
                 
-                # Get referred user info
-                referred_username = username or f"ID: {telegram_id}"
+                # Get referred user info (safe: username can be None)
+                referred_username = username if username else f"ID: {telegram_id}"
+                # Format display name: add @ prefix if username exists and doesn't have it
+                if referred_username and not referred_username.startswith("ID:"):
+                    referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
+                else:
+                    referred_display = referred_username
                 
                 notification_text = (
                     f"🎉 Новый реферал зарегистрирован!\n\n"
-                    f"👤 Пользователь: @{referred_username if referred_username.startswith('@') else referred_username}\n"
+                    f"👤 Пользователь: {referred_display}\n"
                     f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
                     f"Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
                 )
@@ -3053,8 +3060,8 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
     language = user.get("language", "ru") if user else "ru"
     
     try:
-        # Get user data
-        username = callback.from_user.username
+        # Get user data (safe: username can be None)
+        username = callback.from_user.username if callback.from_user else None
         username_display = f"@{username}" if username else "не указан"
         
         # Get subscription status
@@ -5656,7 +5663,8 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
         logger.error(error_msg)
         tariff_data = {"price": 149}  # Дефолтная цена
     
-    username = callback.from_user.username or "не указан"
+    # Safe username extraction: can be None
+    username = (callback.from_user.username if callback.from_user else None) or "не указан"
     
     # Используем локализацию для админ-уведомления
     admin_text = localization.get_text(
@@ -5978,7 +5986,8 @@ async def callback_referral_stats(callback: CallbackQuery):
             if isinstance(last_activity_at, str):
                 try:
                     last_activity_at = datetime.fromisoformat(last_activity_at.replace('Z', '+00:00'))
-                except:
+                except Exception:
+                    # Invalid date format - skip formatting
                     pass
             if isinstance(last_activity_at, datetime):
                 last_activity_str = last_activity_at.strftime("%d.%m.%Y")
@@ -6712,15 +6721,17 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
         
         # Показываем топ-10 рефереров
         for idx, stat in enumerate(stats_list[:10], 1):
-            username = stat["username"]
-            invited_count = stat["invited_count"]
-            paid_count = stat["paid_count"]
-            conversion = stat["conversion_percent"]
-            revenue = stat["total_invited_revenue"]
-            cashback = stat["total_cashback_paid"]
-            cashback_percent = stat["current_cashback_percent"]
+            # Safe extraction: use .get() to avoid KeyError
+            username = stat.get("username") or f"ID{stat.get('referrer_id', 'N/A')}"
+            invited_count = stat.get("invited_count", 0)
+            paid_count = stat.get("paid_count", 0)
+            conversion = stat.get("conversion_percent", 0.0)
+            revenue = stat.get("total_invited_revenue", 0.0)
+            cashback = stat.get("total_cashback_paid", 0.0)
+            cashback_percent = stat.get("current_cashback_percent", 0.0)
+            referrer_id = stat.get("referrer_id", "N/A")
             
-            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+            text += f"{idx}. @{username} (ID: {referrer_id})\n"
             text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
             text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
         
@@ -6800,15 +6811,17 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
         
         # Показываем результаты поиска
         for idx, stat in enumerate(stats_list[:10], 1):
-            username = stat["username"]
-            invited_count = stat["invited_count"]
-            paid_count = stat["paid_count"]
-            conversion = stat["conversion_percent"]
-            revenue = stat["total_invited_revenue"]
-            cashback = stat["total_cashback_paid"]
-            cashback_percent = stat["current_cashback_percent"]
+            # Safe extraction: use .get() to avoid KeyError
+            username = stat.get("username") or f"ID{stat.get('referrer_id', 'N/A')}"
+            invited_count = stat.get("invited_count", 0)
+            paid_count = stat.get("paid_count", 0)
+            conversion = stat.get("conversion_percent", 0.0)
+            revenue = stat.get("total_invited_revenue", 0.0)
+            cashback = stat.get("total_cashback_paid", 0.0)
+            cashback_percent = stat.get("current_cashback_percent", 0.0)
+            referrer_id = stat.get("referrer_id", "N/A")
             
-            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+            text += f"{idx}. @{username} (ID: {referrer_id})\n"
             text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
             text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
         
@@ -7085,15 +7098,17 @@ async def callback_admin_referral_top(callback: CallbackQuery):
         text = "🏆 Топ рефереров\n\n"
         
         for idx, stat in enumerate(top_referrers, 1):
-            username = stat["username"]
-            invited_count = stat["invited_count"]
-            paid_count = stat["paid_count"]
-            conversion = stat["conversion_percent"]
-            revenue = stat["total_invited_revenue"]
-            cashback = stat["total_cashback_paid"]
-            cashback_percent = stat["current_cashback_percent"]
+            # Safe extraction: use .get() to avoid KeyError
+            username = stat.get("username") or f"ID{stat.get('referrer_id', 'N/A')}"
+            invited_count = stat.get("invited_count", 0)
+            paid_count = stat.get("paid_count", 0)
+            conversion = stat.get("conversion_percent", 0.0)
+            revenue = stat.get("total_invited_revenue", 0.0)
+            cashback = stat.get("total_cashback_paid", 0.0)
+            cashback_percent = stat.get("current_cashback_percent", 0.0)
+            referrer_id = stat.get("referrer_id", "N/A")
             
-            text += f"{idx}. @{username} (ID: {stat['referrer_id']})\n"
+            text += f"{idx}. @{username} (ID: {referrer_id})\n"
             text += f"   Приглашено: {invited_count} | Оплатили: {paid_count} ({conversion}%)\n"
             text += f"   Доход: {revenue:.2f} ₽ | Кешбэк: {cashback:.2f} ₽ ({cashback_percent}%)\n\n"
         
