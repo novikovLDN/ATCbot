@@ -48,11 +48,10 @@ from app.services.admin.exceptions import (
 from app.utils.logging_helpers import (
     log_handler_entry,
     log_handler_exit,
+    classify_error,
 )
 from app.utils.referral_middleware import process_referral_on_first_interaction
 from app.services.referrals import activate_referral, ReferralState
-    classify_error,
-)
 from app.utils.security import (
     validate_telegram_id,
     validate_message_text,
