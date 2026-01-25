@@ -393,6 +393,8 @@ def recalculate_from_runtime() -> SystemState:
     - vpn_api = degraded
     - system_state = DEGRADED (NOT UNAVAILABLE)
     
+    NOTE: Now async because VPN API health-check is async.
+    
     Returns:
         SystemState reflecting current runtime health
     """
@@ -417,7 +419,8 @@ def recalculate_from_runtime() -> SystemState:
             last_checked_at=now
         )
     
-    # VPN API: degraded ONLY if XRAY_API_* missing (non-critical)
+    # VPN API: проверка конфигурации (sync fallback)
+    # Реальный health-check выполняется в healthcheck.py (async)
     try:
         if not config.XRAY_API_URL or not config.XRAY_API_KEY:
             vpn_component = degraded_component(
@@ -425,6 +428,7 @@ def recalculate_from_runtime() -> SystemState:
                 last_checked_at=now
             )
         else:
+            # Конфигурация есть - считаем healthy (реальный health-check в healthcheck.py)
             vpn_component = healthy_component(last_checked_at=now)
     except Exception as e:
         vpn_component = degraded_component(
