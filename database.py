@@ -1410,16 +1410,35 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
                 referrer_user_id, referred_user_id
             )
             
-            # Обновляем referrer_id у пользователя (устанавливается только один раз)
+            # Обновляем referrer_id у пользователя (IMMUTABLE - устанавливается только один раз)
             # Также обновляем referred_by для обратной совместимости
-            await conn.execute(
+            # referred_at устанавливается при первой регистрации
+            result = await conn.execute(
                 """UPDATE users 
-                   SET referrer_id = $1, referred_by = $1 
+                   SET referrer_id = $1, referred_by = $1, referred_at = COALESCE(referred_at, NOW())
                    WHERE telegram_id = $2 
                    AND referrer_id IS NULL 
                    AND referred_by IS NULL""",
                 referrer_user_id, referred_user_id
             )
+            
+            # Verify that referrer_id was actually saved
+            if result == "UPDATE 1":
+                # Double-check by reading back
+                saved_user = await conn.fetchrow(
+                    "SELECT referrer_id FROM users WHERE telegram_id = $1",
+                    referred_user_id
+                )
+                if saved_user and saved_user.get("referrer_id") == referrer_user_id:
+                    logger.info(
+                        f"REFERRAL_SAVED [referrer={referrer_user_id}, referred={referred_user_id}, "
+                        f"referrer_id_persisted=True]"
+                    )
+                else:
+                    logger.error(
+                        f"REFERRAL_SAVE_FAILED [referrer={referrer_user_id}, referred={referred_user_id}, "
+                        f"referrer_id_not_persisted]"
+                    )
             
             logger.info(f"REFERRAL_REGISTERED [referrer={referrer_user_id}, referred={referred_user_id}]")
             return True
@@ -1923,7 +1942,7 @@ async def process_referral_reward(
     try:
         # 1. Получаем реферера покупателя
         user = await conn.fetchrow(
-            "SELECT referrer_id FROM users WHERE telegram_id = $1",
+            "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
             buyer_id
         )
         
@@ -1938,7 +1957,8 @@ async def process_referral_reward(
                 "reason": "user_not_found"
             }
         
-        referrer_id = user.get("referrer_id")
+        # Use referrer_id, fallback to referred_by for backward compatibility
+        referrer_id = user.get("referrer_id") or user.get("referred_by")
         
         if not referrer_id:
             # Пользователь не был приглашён через реферальную программу
@@ -1951,6 +1971,12 @@ async def process_referral_reward(
                 "message": "No referrer",
                 "reason": "no_referrer"
             }
+        
+        # Log referrer resolution
+        logger.info(
+            f"REFERRAL_RESOLVED [buyer={buyer_id}, referrer={referrer_id}, "
+            f"purchase_id={purchase_id}]"
+        )
         
         # 2. ЗАЩИТА ОТ САМОРЕФЕРАЛА
         if referrer_id == buyer_id:
@@ -2097,6 +2123,11 @@ async def process_referral_reward(
             details
         )
         
+        logger.info(
+            f"REFERRAL_REWARD_APPLIED [referrer={referrer_id}, buyer={buyer_id}, "
+            f"purchase_id={purchase_id}, percent={percent}%, amount={reward_amount_rubles:.2f} RUB, "
+            f"paid_referrals_count={paid_referrals_count}]"
+        )
         logger.info(
             f"Referral reward awarded: referrer={referrer_id}, buyer={buyer_id}, "
             f"percent={percent}%, amount={reward_amount_rubles:.2f} RUB, "
