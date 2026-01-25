@@ -2035,12 +2035,21 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 referrer_id = activation_result.get("referrer_id")
                 if referrer_id:
                     try:
-                        referrer_user = await database.get_user(referrer_id)
-                        referrer_username = referrer_user.get("username") if referrer_user else None
+                        # Get referred user info (user who activated trial)
+                        referred_user = await database.get_user(telegram_id)
+                        referred_username = referred_user.get("username") if referred_user else None
+                        
+                        # Safe display name: use @username if available, otherwise "ID: <telegram_id>"
+                        if referred_username:
+                            referred_display = f"@{referred_username}"
+                            logger.debug(f"Trial activation notification: using username @{referred_username} for user {telegram_id}")
+                        else:
+                            referred_display = f"ID: {telegram_id}"
+                            logger.warning(f"Trial activation notification: username not available for user {telegram_id}, using ID fallback")
                         
                         notification_text = (
                             f"🎉 Ваш реферал активировал пробный период!\n\n"
-                            f"👤 Пользователь: @{username if username else f'ID: {telegram_id}'}\n"
+                            f"👤 Пользователь: {referred_display}\n"
                             f"⏰ Пробный период: 3 дня\n\n"
                             f"Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
                         )
@@ -2052,10 +2061,10 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                         
                         logger.info(
                             f"REFERRAL_NOTIFICATION_SENT [type=trial_activation, referrer={referrer_id}, "
-                            f"referred={telegram_id}]"
+                            f"referred={telegram_id}, referred_display={referred_display}]"
                         )
                     except Exception as e:
-                        logger.warning(f"Failed to send trial activation notification: {e}")
+                        logger.warning(f"Failed to send trial activation notification: referrer={referrer_id}, referred={telegram_id}, error={e}")
         except Exception as e:
             # Non-critical - log but don't fail trial activation
             logger.warning(f"Failed to activate referral for trial: user={telegram_id}, error={e}")
