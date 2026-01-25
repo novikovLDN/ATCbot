@@ -8905,7 +8905,57 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     await callback.answer()
     
     try:
-        user_id = int(callback.data.split(":")[2])
+        # P1 FIX: Safe callback parsing with validation
+        # Expected format: admin_revoke:{notify|skip}:{telegram_user_id}
+        parts = callback.data.split(":")
+        
+        if len(parts) != 3:
+            logger.error(
+                "INVALID_ADMIN_REVOKE_CALLBACK",
+                extra={
+                    "callback_data": callback.data,
+                    "parts_count": len(parts),
+                    "admin_id": callback.from_user.id,
+                    "correlation_id": str(callback.message.message_id) if callback.message else None
+                }
+            )
+            await callback.answer("Ошибка формата команды", show_alert=True)
+            return
+        
+        _, notify_flag, user_id_raw = parts
+        
+        # Validate notify_flag
+        if notify_flag not in ("notify", "skip"):
+            logger.error(
+                "INVALID_ADMIN_REVOKE_NOTIFY_FLAG",
+                extra={
+                    "callback_data": callback.data,
+                    "notify_flag": notify_flag,
+                    "admin_id": callback.from_user.id,
+                    "correlation_id": str(callback.message.message_id) if callback.message else None
+                }
+            )
+            await callback.answer("Ошибка формата команды", show_alert=True)
+            return
+        
+        # Parse user_id safely
+        try:
+            user_id = int(user_id_raw)
+        except ValueError:
+            logger.error(
+                "INVALID_ADMIN_REVOKE_USER_ID",
+                extra={
+                    "callback_data": callback.data,
+                    "user_id_raw": user_id_raw,
+                    "notify_flag": notify_flag,
+                    "admin_id": callback.from_user.id,
+                    "correlation_id": str(callback.message.message_id) if callback.message else None
+                }
+            )
+            await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
+            return
+        
+        notify = notify_flag == "notify"
         
         # Лишаем доступа
         revoked = await database.admin_revoke_access_atomic(
@@ -8920,21 +8970,70 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
             # Успешно
-            text = "✅ Доступ отозван\nПользователь уведомлён."
+            if notify:
+                text = "✅ Доступ отозван\nПользователь уведомлён."
+            else:
+                text = "✅ Доступ отозван"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
             
-            # Уведомляем пользователя
-            try:
-                user_lang = await database.get_user(user_id)
-                language = user_lang.get("language", "ru") if user_lang else "ru"
-                
-                user_text = localization.get_text(language, "admin_revoke_user_notification")
-                await bot.send_message(user_id, user_text)
-            except Exception as e:
-                logging.exception(f"Error sending notification to user {user_id}: {e}")
+            # Уведомляем пользователя только если notify=True
+            if notify:
+                try:
+                    user_lang = await database.get_user(user_id)
+                    language = user_lang.get("language", "ru") if user_lang else "ru"
+                    
+                    user_text = localization.get_text(language, "admin_revoke_user_notification")
+                    await bot.send_message(user_id, user_text)
+                    logger.info(
+                        "ADMIN_REVOKE_NOTIFICATION_SENT",
+                        extra={
+                            "admin_id": callback.from_user.id,
+                            "user_id": user_id,
+                            "correlation_id": str(callback.message.message_id) if callback.message else None
+                        }
+                    )
+                except Exception as e:
+                    logger.exception(
+                        "ADMIN_REVOKE_NOTIFICATION_FAILED",
+                        extra={
+                            "admin_id": callback.from_user.id,
+                            "user_id": user_id,
+                            "error": str(e),
+                            "correlation_id": str(callback.message.message_id) if callback.message else None
+                        }
+                    )
+            else:
+                logger.info(
+                    "ADMIN_REVOKE_NOTIFY_SKIPPED",
+                    extra={
+                        "admin_id": callback.from_user.id,
+                        "user_id": user_id,
+                        "correlation_id": str(callback.message.message_id) if callback.message else None
+                    }
+                )
         
+    except ValueError as e:
+        # P1 FIX: ValueError уже обработан выше, но на всякий случай
+        logger.error(
+            "ADMIN_REVOKE_VALUE_ERROR",
+            extra={
+                "callback_data": callback.data if hasattr(callback, 'data') else None,
+                "error": str(e),
+                "admin_id": callback.from_user.id if hasattr(callback, 'from_user') else None,
+                "correlation_id": str(callback.message.message_id) if callback.message else None
+            }
+        )
+        await callback.answer("Ошибка: неверный формат команды", show_alert=True)
     except Exception as e:
-        logging.exception(f"Error in callback_admin_revoke: {e}")
+        logger.exception(
+            "ADMIN_REVOKE_ERROR",
+            extra={
+                "callback_data": callback.data if hasattr(callback, 'data') else None,
+                "error": str(e),
+                "admin_id": callback.from_user.id if hasattr(callback, 'from_user') else None,
+                "correlation_id": str(callback.message.message_id) if callback.message else None
+            }
+        )
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
