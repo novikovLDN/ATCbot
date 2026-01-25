@@ -1421,13 +1421,87 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
                 referrer_user_id, referred_user_id
             )
             
-            logger.info(f"Referral registered: referrer={referrer_user_id}, referred={referred_user_id}")
+            logger.info(f"REFERRAL_REGISTERED [referrer={referrer_user_id}, referred={referred_user_id}]")
             return True
     except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
         logger.warning(f"referrals or users table missing or inaccessible — skipping referral registration: {e}")
         return False
     except Exception as e:
         logger.exception(f"Error registering referral: referrer_id={referrer_user_id}, referred_id={referred_user_id}")
+        return False
+
+
+async def mark_referral_active(referred_user_id: int, conn: Optional[asyncpg.Connection] = None) -> bool:
+    """
+    Пометить реферала как активного (активировал trial или подписку).
+    
+    Это обновляет запись в referrals, чтобы реферал считался активным.
+    Вызывается при активации trial или первой подписки.
+    
+    Args:
+        referred_user_id: Telegram ID реферала
+        conn: Соединение с БД (если None, создаётся новое)
+    
+    Returns:
+        True если успешно, False иначе
+    """
+    if not DB_READY:
+        logger.warning("DB not ready (degraded mode), mark_referral_active skipped")
+        return False
+    
+    if conn is None:
+        pool = await get_pool()
+        if pool is None:
+            return False
+        async with pool.acquire() as conn:
+            return await _mark_referral_active_internal(referred_user_id, conn)
+    else:
+        return await _mark_referral_active_internal(referred_user_id, conn)
+
+
+async def _mark_referral_active_internal(referred_user_id: int, conn: asyncpg.Connection) -> bool:
+    """Internal helper for marking referral as active"""
+    try:
+        # Проверяем, существует ли запись о реферале
+        referral_row = await conn.fetchrow(
+            "SELECT referrer_user_id FROM referrals WHERE referred_user_id = $1",
+            referred_user_id
+        )
+        
+        if referral_row:
+            # Запись существует - просто логируем (уже активен)
+            logger.debug(f"Referral already exists: referred={referred_user_id}")
+            return True
+        else:
+            # Записи нет - получаем referrer_id из users
+            user_row = await conn.fetchrow(
+                "SELECT referrer_id FROM users WHERE telegram_id = $1",
+                referred_user_id
+            )
+            
+            if not user_row or not user_row.get("referrer_id"):
+                # Нет реферера - это нормально (не все пользователи приглашены)
+                logger.debug(f"No referrer for user: referred={referred_user_id}")
+                return False
+            
+            referrer_user_id = user_row["referrer_id"]
+            
+            # Создаем запись о реферале (если её нет)
+            await conn.execute(
+                """INSERT INTO referrals (referrer_user_id, referred_user_id, is_rewarded, reward_amount)
+                   VALUES ($1, $2, FALSE, 0)
+                   ON CONFLICT (referred_user_id) DO NOTHING""",
+                referrer_user_id, referred_user_id
+            )
+            
+            logger.info(f"REFERRAL_MARKED_ACTIVE [referrer={referrer_user_id}, referred={referred_user_id}]")
+            return True
+            
+    except (asyncpg.UndefinedTableError, asyncpg.ProgrammingError) as e:
+        logger.warning(f"referrals table missing or inaccessible — skipping mark_referral_active: {e}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error marking referral as active: referred_id={referred_user_id}")
         return False
 
 
@@ -3782,117 +3856,49 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 await _log_audit_event_atomic(conn, audit_action_type, admin_telegram_id, telegram_id, details)
                 
                 # 8. Обрабатываем реферальный кешбэк (только при первой оплате, не при продлении)
+                # E) PURCHASE FLOW: Use unified process_referral_reward function
                 if not is_renewal:
-                    # Проверяем, есть ли у пользователя реферер
-                    user_row = await conn.fetchrow(
-                        "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1", telegram_id
-                    )
-                    if user_row:
-                        # Используем referrer_id, если есть, иначе referred_by (для обратной совместимости)
-                        referrer_id = user_row.get("referrer_id") or user_row.get("referred_by")
+                    try:
+                        # Получаем сумму платежа в рублях
+                        payment_amount_rubles = payment.get("amount", 0) / 100.0  # Конвертируем из копеек
                         
-                        if referrer_id:
-                            # ЗАЩИТА ОТ РЕФЕРАЛЬНОГО ФРОДА: invited_user_id НЕ должен быть равен referrer_id
-                            if referrer_id == telegram_id:
-                                logger.warning(
-                                    f"REFERRAL FRAUD: Cashback blocked - invited_user_id ({telegram_id}) == referrer_id ({referrer_id}). "
-                                    f"Payment ID: {payment_id}, Amount: {payment.get('amount', 0) / 100.0:.2f} RUB"
-                                )
-                            else:
-                                # Проверяем, что кешбэк еще не был начислен за этого пользователя
-                                referral_row = await conn.fetchrow(
-                                    "SELECT is_rewarded FROM referrals WHERE referrer_user_id = $1 AND referred_user_id = $2",
-                                    referrer_id, telegram_id
+                        if payment_amount_rubles > 0:
+                            # Используем единую функцию process_referral_reward
+                            # purchase_id = f"admin_approve_{payment_id}" для уникальности
+                            purchase_id = f"admin_approve_{payment_id}"
+                            referral_reward_result = await process_referral_reward(
+                                buyer_id=telegram_id,
+                                purchase_id=purchase_id,
+                                amount_rubles=payment_amount_rubles,
+                                conn=conn
+                            )
+                            
+                            if referral_reward_result.get("success"):
+                                logger.info(
+                                    f"REFERRAL_CASHBACK_GRANTED [payment_id={payment_id}, "
+                                    f"referrer={referral_reward_result.get('referrer_id')}, "
+                                    f"amount={referral_reward_result.get('reward_amount')} RUB, "
+                                    f"percent={referral_reward_result.get('percent')}%]"
                                 )
                                 
-                                # Начисляем кешбэк только если он еще не был начислен (is_rewarded = FALSE)
-                                if referral_row and not referral_row.get("is_rewarded"):
-                                    try:
-                                        # Получаем сумму платежа в рублях
-                                        payment_amount_rubles = payment.get("amount", 0) / 100.0  # Конвертируем из копеек
-                                        
-                                        if payment_amount_rubles > 0:
-                                            # Получаем процент кешбэка на основе количества приглашённых
-                                            referrals_count = await conn.fetchval(
-                                                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
-                                                referrer_id
-                                            ) or 0
-                                            
-                                            # Определяем процент кешбэка (прогрессивная шкала)
-                                            if referrals_count >= 50:
-                                                cashback_percent = 45
-                                            elif referrals_count >= 25:
-                                                cashback_percent = 25
-                                            else:
-                                                cashback_percent = 10
-                                            
-                                            # Рассчитываем кешбэк (в копейках)
-                                            cashback_rubles = payment_amount_rubles * (cashback_percent / 100.0)
-                                            cashback_kopecks = int(cashback_rubles * 100)
-                                            
-                                            if cashback_kopecks > 0:
-                                                # Начисляем кешбэк на баланс реферера
-                                                await conn.execute(
-                                                    "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
-                                                    cashback_kopecks, referrer_id
-                                                )
-                                                
-                                                # Записываем транзакцию баланса
-                                                await conn.execute(
-                                                    """INSERT INTO balance_transactions (user_id, amount, type, source, description, related_user_id)
-                                                       VALUES ($1, $2, $3, $4, $5, $6)""",
-                                                    referrer_id, cashback_kopecks, "cashback", "referral",
-                                                    f"Реферальный кешбэк {cashback_percent}% за оплату пользователя {telegram_id}",
-                                                    telegram_id
-                                                )
-                                                
-                                                # Помечаем кешбэк как начисленный (только один раз за пользователя)
-                                                await conn.execute(
-                                                    "UPDATE referrals SET is_rewarded = TRUE, reward_amount = $1 WHERE referrer_user_id = $2 AND referred_user_id = $3",
-                                                    cashback_kopecks, referrer_id, telegram_id
-                                                )
-                                                
-                                                # Получаем обновлённый баланс реферера для уведомления
-                                                referrer_balance_row = await conn.fetchrow(
-                                                    "SELECT balance FROM users WHERE telegram_id = $1", referrer_id
-                                                )
-                                                referrer_balance = referrer_balance_row["balance"] / 100.0 if referrer_balance_row else 0.0
-                                                
-                                                # Логируем событие
-                                                details = f"Referral cashback awarded: referrer={referrer_id} ({cashback_percent}%), referred={telegram_id}, payment={payment_amount_rubles:.2f} RUB, cashback={cashback_rubles:.2f} RUB ({cashback_kopecks} kopecks)"
-                                                await _log_audit_event_atomic(
-                                                    conn,
-                                                    "referral_cashback",
-                                                    referrer_id,
-                                                    telegram_id,
-                                                    details
-                                                )
-                                                
-                                                logger.info(f"Referral cashback awarded: referrer_id={referrer_id}, referred_id={telegram_id}, percent={cashback_percent}%, amount={cashback_rubles:.2f} RUB")
-                                                
-                                                # Отправляем уведомление рефереру о начислении кешбэка (вне транзакции)
-                                                if bot:
-                                                    try:
-                                                        notification_text = (
-                                                            f"🔥 Вам начислен кешбэк!\n"
-                                                            f"Ваш друг оформил подписку.\n"
-                                                            f"💰 Начислено: {cashback_rubles:.2f} ₽\n"
-                                                            f"Баланс: {referrer_balance:.2f} ₽"
-                                                        )
-                                                        await bot.send_message(
-                                                            chat_id=referrer_id,
-                                                            text=notification_text
-                                                        )
-                                                        logger.info(f"Referral cashback notification sent to referrer_id={referrer_id}, cashback={cashback_rubles:.2f} RUB")
-                                                    except Exception as e:
-                                                        # Не блокируем транзакцию при ошибке отправки уведомления
-                                                        logger.warning(f"Failed to send referral cashback notification to referrer_id={referrer_id}: {e}")
-                                            else:
-                                                logger.warning(f"Invalid cashback amount: {cashback_kopecks} kopecks for payment {payment_amount_rubles} RUB")
-                                    except Exception as e:
-                                        logger.exception(f"Error processing referral cashback for referred_id={telegram_id}")
-                                else:
-                                    logger.debug(f"Referral cashback already awarded for referrer_id={referrer_id}, referred_id={telegram_id}")
+                                # Отправляем уведомление рефереру (вне транзакции)
+                                # NOTE: Notification is sent from handler, not from database layer
+                                # This keeps database layer clean (no bot dependencies)
+                                logger.info(
+                                    f"REFERRAL_CASHBACK_GRANTED [payment_id={payment_id}, "
+                                    f"referrer={referral_reward_result.get('referrer_id')}, "
+                                    f"referred={telegram_id}, amount={referral_reward_result.get('reward_amount')} RUB]"
+                                )
+                            else:
+                                # BUSINESS LOGIC ERROR: Reward skipped but payment continues
+                                reason = referral_reward_result.get("reason", "unknown")
+                                logger.debug(
+                                    f"Referral reward skipped for payment {payment_id}: "
+                                    f"user={telegram_id}, reason={reason}"
+                                )
+                    except Exception as e:
+                        # Не блокируем транзакцию при ошибке обработки реферального кешбэка
+                        logger.exception(f"Error processing referral reward for payment {payment_id}: {e}")
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
                 return expires_at, is_renewal, final_vpn_key
@@ -5166,6 +5172,28 @@ async def finalize_purchase(
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
                 
+                # D) BALANCE TOP-UP FLOW: Process referral reward
+                referral_reward_result = await process_referral_reward(
+                    buyer_id=telegram_id,
+                    purchase_id=purchase_id,
+                    amount_rubles=amount_rubles,
+                    conn=conn
+                )
+                
+                if referral_reward_result.get("success"):
+                    logger.info(
+                        f"finalize_purchase: REFERRAL_CASHBACK_GRANTED [BALANCE_TOPUP] "
+                        f"purchase_id={purchase_id}, user={telegram_id}, "
+                        f"referrer={referral_reward_result.get('referrer_id')}, "
+                        f"amount={referral_reward_result.get('reward_amount')} RUB"
+                    )
+                else:
+                    reason = referral_reward_result.get("reason", "unknown")
+                    logger.debug(
+                        f"finalize_purchase: Referral reward skipped for balance topup: "
+                        f"purchase_id={purchase_id}, user={telegram_id}, reason={reason}"
+                    )
+                
                 logger.info(
                     f"balance_topup_completed: purchase_id={purchase_id}, user={telegram_id}, "
                     f"provider={payment_provider}, payment_id={payment_id}, amount={amount_rubles:.2f} RUB"
@@ -5184,7 +5212,8 @@ async def finalize_purchase(
                     "vpn_key": None,  # Нет VPN ключа
                     "is_renewal": False,
                     "is_balance_topup": True,
-                    "amount": amount_rubles
+                    "amount": amount_rubles,
+                    "referral_reward": referral_reward_result
                 }
             
             # STEP 5: ОБРАБОТКА ПОДПИСКИ (period_days > 0)

@@ -1293,10 +1293,14 @@ async def send_referral_cashback_notification(
     cashback_percent: int,
     paid_referrals_count: int,
     referrals_needed: int,
-    action_type: str = "покупку"
+    action_type: str = "покупку",
+    subscription_period: Optional[str] = None
 ) -> bool:
     """
-    Отправить уведомление рефереру о начислении кешбэка
+    F) NOTIFICATIONS: Unified referral notification helper.
+    
+    Отправить уведомление рефереру о начислении кешбэка.
+    Использует единый сервис для форматирования текста.
     
     Args:
         bot: Экземпляр бота
@@ -1308,6 +1312,7 @@ async def send_referral_cashback_notification(
         paid_referrals_count: Количество оплативших рефералов
         referrals_needed: Сколько рефералов нужно до следующего уровня
         action_type: Тип действия ("покупку", "продление", "пополнение")
+        subscription_period: Период подписки (опционально, например "1 месяц")
     
     Returns:
         True если уведомление отправлено, False если ошибка
@@ -1316,22 +1321,20 @@ async def send_referral_cashback_notification(
         # Получаем информацию о реферале (username)
         referred_user = await database.get_user(referred_id)
         referred_username = referred_user.get("username") if referred_user else None
-        referred_display = f"@{referred_username}" if referred_username else f"ID: {referred_id}"
         
-        # Формируем текст уведомления
-        if referrals_needed > 0:
-            progress_text = f"👥 До следующего уровня: осталось пригласить {referrals_needed} друга"
-        else:
-            progress_text = "🎯 Вы достигли максимального уровня!"
+        # Используем единый сервис для форматирования
+        from app.services.notifications.service import format_referral_notification_text
         
-        notification_text = (
-            f"🎉 Ваш реферал совершил {action_type}!\n\n"
-            f"👤 Реферал: {referred_display}\n"
-            f"💳 Сумма {action_type}: {purchase_amount:.2f} ₽\n"
-            f"💰 Начислен кешбэк: {cashback_amount:.2f} ₽ ({cashback_percent}%)\n\n"
-            f"📊 Ваш уровень: {cashback_percent}%\n"
-            f"{progress_text}\n\n"
-            f"Баланс пополнен автоматически."
+        notification_text = format_referral_notification_text(
+            referred_username=referred_username,
+            referred_id=referred_id,
+            purchase_amount=purchase_amount,
+            cashback_amount=cashback_amount,
+            cashback_percent=cashback_percent,
+            paid_referrals_count=paid_referrals_count,
+            referrals_needed=referrals_needed,
+            action_type=action_type,
+            subscription_period=subscription_period
         )
         
         # Отправляем уведомление
@@ -1341,8 +1344,9 @@ async def send_referral_cashback_notification(
         )
         
         logger.info(
-            f"Referral cashback notification sent: referrer={referrer_id}, "
-            f"referred={referred_id}, amount={cashback_amount:.2f} RUB, percent={cashback_percent}%"
+            f"REFERRAL_NOTIFICATION_SENT [referrer={referrer_id}, "
+            f"referred={referred_id}, amount={cashback_amount:.2f} RUB, percent={cashback_percent}%, "
+            f"action={action_type}]"
         )
         
         return True
@@ -1542,12 +1546,18 @@ async def cmd_start(message: Message):
                                 if referrer_referrer == telegram_id:
                                     logger.warning(f"REFERRAL FRAUD: Referral loop detected - user {telegram_id} -> {referrer_user_id} -> {telegram_id}")
                                 else:
-                                    # Регистрируем реферала (сохраняет referrer_id ОДИН РАЗ)
+                                    # A) START HANDLER: Регистрируем реферала (сохраняет referrer_id ОДИН РАЗ)
                                     success = await database.register_referral(referrer_user_id, telegram_id)
                                     if success:
-                                        logger.info(f"Referral registered: referrer_id={referrer_user_id}, referred_id={telegram_id}, code={referral_code}")
+                                        logger.info(
+                                            f"REFERRAL_REGISTERED [referrer={referrer_user_id}, "
+                                            f"referred={telegram_id}, code={referral_code}, source=/start]"
+                                        )
                                     else:
-                                        logger.debug(f"Referral registration failed (may already exist): referrer_id={referrer_user_id}, referred_id={telegram_id}")
+                                        logger.debug(
+                                            f"REFERRAL_REGISTRATION_SKIPPED [referrer={referrer_user_id}, "
+                                            f"referred={telegram_id}, reason=already_exists]"
+                                        )
                         else:
                             existing_referrer = user.get("referrer_id") or user.get("referred_by")
                             logger.debug(f"REFERRAL FRAUD PREVENTION: User {telegram_id} already has a referrer (referrer_id={existing_referrer}), skipping registration. Attempted referral_code={referral_code}")
@@ -2026,6 +2036,15 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         
         if not uuid or not vpn_key:
             raise Exception("Failed to create VPN access for trial")
+        
+        # C) TRIAL ACTIVATION: Mark referral as active (no cashback for trial)
+        # This ensures the referral is tracked even if user never pays
+        try:
+            await database.mark_referral_active(telegram_id)
+            logger.info(f"REFERRAL_MARKED_ACTIVE [referred={telegram_id}, source=trial]")
+        except Exception as e:
+            # Non-critical - log but don't fail trial activation
+            logger.warning(f"Failed to mark referral as active for trial: user={telegram_id}, error={e}")
         
         # Логируем активацию trial
         logger.info(
@@ -5391,6 +5410,24 @@ async def process_successful_payment(message: Message, state: FSMContext):
     try:
         referral_reward = result.referral_reward
         if referral_reward and referral_reward.get("success"):
+            # Формируем период подписки для уведомления
+            subscription_period = None
+            if period_days:
+                if period_days == 30:
+                    subscription_period = "1 месяц"
+                elif period_days == 90:
+                    subscription_period = "3 месяца"
+                elif period_days == 180:
+                    subscription_period = "6 месяцев"
+                elif period_days == 365:
+                    subscription_period = "12 месяцев"
+                else:
+                    months = period_days // 30
+                    if months > 0:
+                        subscription_period = f"{months} месяц" + ("а" if months in [2, 3, 4] else ("ев" if months > 4 else ""))
+                    else:
+                        subscription_period = f"{period_days} дней"
+            
             await send_referral_cashback_notification(
                 bot=message.bot,
                 referrer_id=referral_reward.get("referrer_id"),
@@ -5400,8 +5437,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 cashback_percent=referral_reward.get("percent"),
                 paid_referrals_count=referral_reward.get("paid_referrals_count", 0),
                 referrals_needed=referral_reward.get("referrals_needed", 0),
-                action_type="покупку"
+                action_type="покупку",
+                subscription_period=subscription_period
             )
+            logger.info(f"REFERRAL_NOTIFICATION_SENT [referrer={referral_reward.get('referrer_id')}, referred={telegram_id}, purchase_id={purchase_id}]")
     except Exception as e:
         logger.warning(f"Failed to send referral notification: {e}")
     
@@ -6101,6 +6140,64 @@ async def approve_payment(callback: CallbackQuery):
             logging.error(f"Failed to approve payment {payment_id} atomically")
             await callback.answer("Ошибка создания VPN-ключа. Проверь логи.", show_alert=True)
             return
+        
+        # E) PURCHASE FLOW: Send referral notification for admin-approved payments
+        # process_referral_reward was called in approve_payment_atomic, get reward details
+        if not is_renewal:
+            try:
+                # Get payment amount
+                payment_row = await database.get_payment(payment_id)
+                if payment_row:
+                    payment_amount_rubles = (payment_row.get("amount", 0) or 0) / 100.0
+                    
+                    # Get referral reward from referral_rewards table
+                    pool = await database.get_pool()
+                    async with pool.acquire() as conn:
+                        purchase_id_str = f"admin_approve_{payment_id}"
+                        reward_row = await conn.fetchrow(
+                            """SELECT referrer_id, percent, reward_amount, 
+                               (SELECT COUNT(DISTINCT referred_user_id) FROM referrals 
+                                WHERE referrer_user_id = referral_rewards.referrer_id 
+                                AND first_paid_at IS NOT NULL) as paid_count
+                               FROM referral_rewards 
+                               WHERE buyer_id = $1 AND purchase_id = $2
+                               ORDER BY id DESC LIMIT 1""",
+                            telegram_id, purchase_id_str
+                        )
+                        
+                        if reward_row:
+                            referrer_id = reward_row.get("referrer_id")
+                            cashback_percent = reward_row.get("percent", 0)
+                            cashback_amount = (reward_row.get("reward_amount", 0) or 0) / 100.0
+                            paid_referrals_count = reward_row.get("paid_count", 0) or 0
+                            
+                            # Calculate referrals needed
+                            if paid_referrals_count < 25:
+                                referrals_needed = 25 - paid_referrals_count
+                            elif paid_referrals_count < 50:
+                                referrals_needed = 50 - paid_referrals_count
+                            else:
+                                referrals_needed = 0
+                            
+                            # Format subscription period
+                            subscription_period = f"{months} месяц" + ("а" if months in [2, 3, 4] else ("ев" if months > 4 else ""))
+                            
+                            # Send notification
+                            await send_referral_cashback_notification(
+                                bot=callback.bot,
+                                referrer_id=referrer_id,
+                                referred_id=telegram_id,
+                                purchase_amount=payment_amount_rubles,
+                                cashback_amount=cashback_amount,
+                                cashback_percent=cashback_percent,
+                                paid_referrals_count=paid_referrals_count,
+                                referrals_needed=referrals_needed,
+                                action_type="покупку",
+                                subscription_period=subscription_period
+                            )
+                            logger.info(f"REFERRAL_NOTIFICATION_SENT [admin_approve, referrer={referrer_id}, referred={telegram_id}, payment_id={payment_id}]")
+            except Exception as e:
+                logger.warning(f"Failed to send referral notification for admin-approved payment: payment_id={payment_id}, error={e}")
         
         # Логируем продление, если было
         if is_renewal:
