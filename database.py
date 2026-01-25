@@ -6335,35 +6335,52 @@ async def finalize_balance_purchase(
 async def finalize_balance_topup(
     telegram_id: int,
     amount_rubles: float,
-    description: Optional[str] = None
+    provider: str,
+    provider_charge_id: str,
+    description: Optional[str] = None,
+    correlation_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Атомарно обработать пополнение баланса.
+    Атомарно обработать пополнение баланса с идемпотентностью.
+    
+    КРИТИЧЕСКИ ВАЖНО: Эта функция идемпотентна по provider_charge_id.
+    Повторный вызов с тем же provider_charge_id НЕ увеличит баланс.
     
     Выполняет в одной транзакции:
-    - Пополняет баланс
+    - Проверяет идемпотентность (по provider_charge_id)
+    - Пополняет баланс (если не дубликат)
     - Создает запись о платеже
     - Обрабатывает реферальный кешбэк
     
     Args:
         telegram_id: Telegram ID пользователя
         amount_rubles: Сумма пополнения в рублях
+        provider: Провайдер платежа ('telegram' или 'cryptobot')
+        provider_charge_id: Уникальный ID платежа от провайдера (для идемпотентности)
         description: Описание платежа (опционально)
+        correlation_id: ID для корреляции логов (опционально)
     
     Returns:
         {
             "success": bool,
             "payment_id": Optional[int],
             "new_balance": float,
-            "referral_reward": Optional[Dict[str, Any]]
+            "referral_reward": Optional[Dict[str, Any]],
+            "reason": Optional[str]  # "already_processed" if duplicate
         }
     
     Raises:
-        ValueError: При некорректной сумме
+        ValueError: При некорректной сумме или отсутствии provider_charge_id
         asyncpg exceptions: При финансовых ошибках (откат транзакции)
     """
     if amount_rubles <= 0:
         raise ValueError(f"Invalid amount for balance topup: {amount_rubles}")
+    
+    if not provider_charge_id:
+        raise ValueError("provider_charge_id is required for idempotency")
+    
+    if provider not in ("telegram", "cryptobot"):
+        raise ValueError(f"Invalid provider: {provider}. Must be 'telegram' or 'cryptobot'")
     
     amount_kopecks = int(amount_rubles * 100)
     pool = await get_pool()
@@ -6373,7 +6390,38 @@ async def finalize_balance_topup(
     
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # STEP 1: Проверяем существование пользователя
+            # STEP 1: IDEMPOTENCY CHECK (CRITICAL - at the very start)
+            existing_payment = await conn.fetchrow(
+                """
+                SELECT id, telegram_id, amount, status
+                FROM payments
+                WHERE telegram_payment_charge_id = $1
+                   OR cryptobot_payment_id = $1
+                """,
+                provider_charge_id
+            )
+            
+            if existing_payment:
+                logger.warning(
+                    f"BALANCE_TOPUP_DUPLICATE_SKIPPED [provider={provider}, "
+                    f"provider_charge_id={provider_charge_id}, telegram_id={telegram_id}, "
+                    f"correlation_id={correlation_id}, existing_payment_id={existing_payment['id']}]"
+                )
+                # Return existing payment info without modifying balance
+                existing_balance_kopecks = await conn.fetchval(
+                    "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+                )
+                existing_balance = (existing_balance_kopecks or 0) / 100.0
+                
+                return {
+                    "success": False,
+                    "payment_id": existing_payment["id"],
+                    "new_balance": existing_balance,
+                    "referral_reward": None,
+                    "reason": "already_processed"
+                }
+            
+            # STEP 2: Проверяем существование пользователя
             user_exists = await conn.fetchval(
                 "SELECT telegram_id FROM users WHERE telegram_id = $1", telegram_id
             )
@@ -6381,31 +6429,51 @@ async def finalize_balance_topup(
             if user_exists is None:
                 raise ValueError(f"User {telegram_id} not found")
             
-            # STEP 2: Пополняем баланс
-            await conn.execute(
-                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
-                amount_kopecks, telegram_id
-            )
-            
-            # STEP 3: Записываем транзакцию баланса
-            transaction_description = description or "Пополнение баланса через Telegram Payments"
-            transaction_type = "topup"
-            await conn.execute(
-                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
-                   VALUES ($1, $2, $3, $4, $5)""",
-                telegram_id, amount_kopecks, transaction_type, "telegram_payment", transaction_description
-            )
-            
-            # STEP 4: Создаем запись о платеже
+            # STEP 3: ATOMIC INSERT + CREDIT (payment record FIRST, then balance)
+            # Insert payment record with idempotency key
             payment_id = await conn.fetchval(
-                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
-                telegram_id, "balance_topup", amount_kopecks
+                """
+                INSERT INTO payments (
+                    telegram_id,
+                    tariff,
+                    amount,
+                    status,
+                    telegram_payment_charge_id,
+                    cryptobot_payment_id
+                )
+                VALUES (
+                    $1, $2, $3, 'approved',
+                    CASE WHEN $4 = 'telegram' THEN $5 ELSE NULL END,
+                    CASE WHEN $4 = 'cryptobot' THEN $5 ELSE NULL END
+                )
+                RETURNING id
+                """,
+                telegram_id,
+                "balance_topup",
+                amount_kopecks,
+                provider,
+                provider_charge_id
             )
             
             if not payment_id:
                 raise ValueError(f"Failed to create payment record for user {telegram_id}")
             
-            # STEP 5: Обрабатываем реферальный кешбэк
+            # STEP 4: Пополняем баланс (AFTER payment record created)
+            await conn.execute(
+                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                amount_kopecks, telegram_id
+            )
+            
+            # STEP 5: Записываем транзакцию баланса
+            transaction_description = description or f"Пополнение баланса через {provider}"
+            transaction_type = "topup"
+            await conn.execute(
+                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                telegram_id, amount_kopecks, transaction_type, provider, transaction_description
+            )
+            
+            # STEP 6: Обрабатываем реферальный кешбэк
             purchase_id = f"balance_topup_{payment_id}"
             referral_reward_result = None
             
@@ -6424,16 +6492,18 @@ async def finalize_balance_topup(
                 )
                 raise
             
-            # STEP 6: Получаем новый баланс
+            # STEP 7: Получаем новый баланс
             new_balance_kopecks = await conn.fetchval(
                 "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
             )
             new_balance = (new_balance_kopecks or 0) / 100.0
             
             logger.info(
-                f"finalize_balance_topup: SUCCESS [user={telegram_id}, payment_id={payment_id}, "
+                f"BALANCE_TOPUP_SUCCESS [user={telegram_id}, payment_id={payment_id}, "
+                f"provider={provider}, provider_charge_id={provider_charge_id}, "
                 f"amount={amount_rubles:.2f} RUB, new_balance={new_balance:.2f} RUB, "
-                f"referral_reward_success={referral_reward_result.get('success') if referral_reward_result else False}]"
+                f"referral_reward_success={referral_reward_result.get('success') if referral_reward_result else False}, "
+                f"correlation_id={correlation_id}]"
             )
             
             return {

@@ -4899,11 +4899,30 @@ async def process_successful_payment(message: Message, state: FSMContext):
             # Пополнение баланса - используем payment service
             payment_amount_rubles = payment.total_amount / 100.0
             
+            # КРИТИЧНО: Извлекаем provider_charge_id для идемпотентности
+            # Telegram гарантирует уникальность telegram_payment_charge_id
+            provider_charge_id = getattr(payment, 'telegram_payment_charge_id', None)
+            if not provider_charge_id:
+                logger.error(
+                    f"BALANCE_TOPUP_MISSING_CHARGE_ID [user={telegram_id}, "
+                    f"payment_total={payment.total_amount}, correlation_id={message.message_id}]"
+                )
+                error_text = localization.get_text(
+                    language,
+                    "error_payment_processing",
+                    default="Ошибка обработки платежа. Обратитесь в поддержку."
+                )
+                await message.answer(error_text)
+                return
+            
             try:
                 result = await payment_service.finalize_balance_topup_payment(
                     telegram_id=telegram_id,
                     amount_rubles=payment_amount_rubles,
-                    description="Пополнение баланса через Telegram Payments"
+                    provider="telegram",
+                    provider_charge_id=provider_charge_id,
+                    description="Пополнение баланса через Telegram Payments",
+                    correlation_id=str(message.message_id)
                 )
             except PaymentFinalizationError as e:
                 logger.error(f"Balance topup finalization failed: user={telegram_id}, error={e}")
