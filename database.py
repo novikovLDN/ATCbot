@@ -3554,6 +3554,15 @@ async def grant_access(
         
         # Сохраняем/обновляем подписку
         try:
+            # DEBUG: Валидация количества аргументов
+            activation_status_value = 'pending' if pending_activation else 'active'
+            args = (telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start, activation_status_value)
+            logger.debug(
+                f"grant_access: SQL_ARGS_COUNT [user={telegram_id}, "
+                f"placeholders=8, args_count={len(args)}, "
+                f"activation_status={activation_status_value}]"
+            )
+            
             await conn.execute(
                 """INSERT INTO subscriptions (
                        telegram_id, uuid, vpn_key, expires_at, status, source,
@@ -3593,9 +3602,7 @@ async def grant_access(
                        activation_status = $8,
                        activation_attempts = 0,
                        last_activation_error = NULL""",
-                telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start,
-                'pending' if pending_activation else 'active',
-                'pending' if pending_activation else 'active'
+                *args
             )
             
             # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
