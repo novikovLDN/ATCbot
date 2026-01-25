@@ -324,3 +324,64 @@ async def mark_reminder_sent(
             f"UPDATE subscriptions SET {flag_name} = TRUE WHERE telegram_id = $1",
             telegram_id
         )
+
+
+# ====================================================================================
+# Referral Notification Logic
+# ====================================================================================
+
+def format_referral_notification_text(
+    referred_username: Optional[str],
+    referred_id: int,
+    purchase_amount: float,
+    cashback_amount: float,
+    cashback_percent: int,
+    paid_referrals_count: int,
+    referrals_needed: int,
+    action_type: str = "покупку",
+    subscription_period: Optional[str] = None
+) -> str:
+    """
+    Format referral cashback notification text.
+    
+    Args:
+        referred_username: Username of referred user (optional)
+        referred_id: Telegram ID of referred user
+        purchase_amount: Purchase amount in rubles
+        cashback_amount: Cashback amount in rubles
+        cashback_percent: Cashback percentage
+        paid_referrals_count: Number of paid referrals
+        referrals_needed: Referrals needed to next level
+        action_type: Action type ("покупку", "пополнение", "продление")
+        subscription_period: Subscription period (e.g., "1 месяц") if applicable
+    
+    Returns:
+        Formatted notification text
+    """
+    referred_display = f"@{referred_username}" if referred_username else f"ID: {referred_id}"
+    
+    # Progress text
+    if referrals_needed > 0:
+        progress_text = f"👥 До следующего уровня: осталось пригласить {referrals_needed} друга"
+    else:
+        progress_text = "🎯 Вы достигли максимального уровня!"
+    
+    # Build notification
+    notification_text = (
+        f"🎉 Ваш реферал совершил {action_type}!\n\n"
+        f"👤 Реферал: {referred_display}\n"
+        f"💳 Сумма {action_type}: {purchase_amount:.2f} ₽\n"
+    )
+    
+    # Add subscription period if applicable
+    if subscription_period:
+        notification_text += f"⏰ Период подписки: {subscription_period}\n"
+    
+    notification_text += (
+        f"💰 Начислен кешбэк: {cashback_amount:.2f} ₽ ({cashback_percent}%)\n\n"
+        f"📊 Ваш уровень: {cashback_percent}%\n"
+        f"{progress_text}\n\n"
+        f"Баланс пополнен автоматически."
+    )
+    
+    return notification_text
