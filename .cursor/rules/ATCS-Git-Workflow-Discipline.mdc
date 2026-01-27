@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+---
+
+Git workflow rules:
+- Never push directly to main unless explicitly instructed.
+- All work is done in stage or feature branches.
+- Every logical change must end with: commit & push.
+- Commits must be atomic and descriptive.
+- No mixed refactors + features in a single change.
+- If asked for a prompt, produce a precise Cursor-ready prompt, not code unless requested.
