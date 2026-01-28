@@ -276,6 +276,28 @@ async def fast_expiry_cleanup_task():
                             )
                             continue
                         
+                        # CRITICAL FIX: Check if user has active paid subscription BEFORE revoking access
+                        # Paid subscription must always dominate trial/expired subscription state
+                        paid_subscription = await conn.fetchrow("""
+                            SELECT expires_at FROM subscriptions
+                            WHERE telegram_id = $1
+                              AND source = 'payment'
+                              AND status = 'active'
+                              AND expires_at > $2
+                            LIMIT 1
+                        """, telegram_id, now_utc)
+                        
+                        if paid_subscription:
+                            paid_expires_at = paid_subscription["expires_at"]
+                            uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+                            logger.info(
+                                f"cleanup: SKIP_DUE_TO_ACTIVE_PAID_SUBSCRIPTION [user={telegram_id}, uuid={uuid_preview}, "
+                                f"expired_subscription_expires_at={expires_at.isoformat()}, "
+                                f"paid_subscription_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}] - "
+                                "User has active paid subscription, skipping expired subscription cleanup"
+                            )
+                            continue
+                        
                         # ЗАЩИТА ОТ ПОВТОРНОГО УДАЛЕНИЯ: проверяем что UUID не обрабатывается
                         if uuid in processing_uuids:
                             uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
