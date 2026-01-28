@@ -143,16 +143,22 @@ async def process_trial_notifications(bot: Bot):
             
             # Получаем только пользователей с АКТИВНОЙ trial-подпиской
             # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
+            # P1 FIX: Исключаем пользователей с активной платной подпиской
             rows = await conn.fetch("""
                 SELECT u.telegram_id, u.trial_expires_at,
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
-                       s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent
+                       s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
+                       paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id 
                     AND s.source = 'trial' 
                     AND s.status = 'active'
                     AND s.expires_at > $1
+                LEFT JOIN subscriptions paid_s ON u.telegram_id = paid_s.telegram_id
+                    AND paid_s.source = 'payment'
+                    AND paid_s.status = 'active'
+                    AND paid_s.expires_at > $1
                 WHERE u.trial_used_at IS NOT NULL
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at > $1
@@ -162,6 +168,15 @@ async def process_trial_notifications(bot: Bot):
                 telegram_id = row["telegram_id"]
                 trial_expires_at = row["trial_expires_at"]
                 subscription_expires_at = row["subscription_expires_at"]
+                paid_subscription_expires_at = row.get("paid_subscription_expires_at")
+                
+                # P1 FIX: Пропускаем пользователей с активной платной подпиской
+                if paid_subscription_expires_at:
+                    logger.info(
+                        f"TRIAL_NOTIFICATION_SKIPPED_DUE_TO_ACTIVE_SUBSCRIPTION: "
+                        f"telegram_id={telegram_id}, subscription_expires_at={paid_subscription_expires_at.isoformat() if paid_subscription_expires_at else None}"
+                    )
+                    continue
                 
                 # Basic validation - service layer handles business logic
                 if not trial_expires_at or not subscription_expires_at:
