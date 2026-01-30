@@ -5930,7 +5930,7 @@ async def callback_referral(callback: CallbackQuery):
         
         try:
             # Single atomic message: photo + caption if file_id configured, else text only.
-            file_id = get_loyalty_screen_attachment(current_status_name, config.APP_ENV)
+            file_id = get_loyalty_screen_attachment(current_status_name)
             chat_id = callback.message.chat.id
             if file_id:
                 await callback.bot.send_photo(
