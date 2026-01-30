@@ -5832,9 +5832,8 @@ async def callback_instruction(callback: CallbackQuery):
 @router.callback_query(F.data == "menu_referral")
 async def callback_referral(callback: CallbackQuery):
     """
-    Экран «Программа лояльности» (реферальная программа).
-    Статусы: Silver / Gold / Platinum по количеству оплативших рефералов.
-    Future: можно перейти на send_photo + caption через get_loyalty_screen_attachment().
+    Экран «Программа лояльности» — короткий статусный обзор (статистика + статус).
+    Кнопка «Подробнее» ведёт на расширенный презентационный экран.
     """
     telegram_id = callback.from_user.id
     language = "ru"
@@ -5847,66 +5846,64 @@ async def callback_referral(callback: CallbackQuery):
         logger.warning(f"Error getting user in referral screen: {e}, using default language")
     
     try:
-        level_info = await database.get_referral_level_info(telegram_id)
-        if not level_info:
-            logger.error(f"get_referral_level_info returned None for telegram_id={telegram_id}")
-            level_info = {
-                "current_level": 10,
-                "referrals_count": 0,
-                "paid_referrals_count": 0,
-                "next_level": 25,
-                "referrals_to_next": 25
-            }
+        stats = await database.get_referral_statistics(telegram_id)
+        total_invited = stats.get("total_invited", 0)
+        total_cashback = stats.get("total_cashback_earned", 0.0)
+        current_level = stats.get("current_level", 10)
+        referrals_to_next = stats.get("referrals_to_next")
+        last_activity_at = stats.get("last_activity_at")
+        paid_referrals_count = stats.get("paid_referrals_count", 0)
         
-        paid_referrals_count = database.safe_int(level_info.get("paid_referrals_count", 0))
-        referrals_to_next = level_info.get("referrals_to_next")
+        current_status_name, next_status_name = get_loyalty_status_names(paid_referrals_count)
         
-        total_cashback = await database.get_total_cashback_earned(telegram_id)
-        if total_cashback is None:
-            total_cashback = 0.0
+        last_activity_str = "—"
+        if last_activity_at:
+            if isinstance(last_activity_at, str):
+                try:
+                    last_activity_at = datetime.fromisoformat(last_activity_at.replace("Z", "+00:00"))
+                except Exception:
+                    pass
+            if isinstance(last_activity_at, datetime):
+                last_activity_str = last_activity_at.strftime("%d.%m.%Y")
         
-        bot_info = await callback.bot.get_me()
-        referral_link = f"https://t.me/{bot_info.username}?start=ref_{telegram_id}"
-        
-        current_status_name, _ = get_loyalty_status_names(paid_referrals_count)
-        if referrals_to_next is None:
-            status_footer = ""
+        if referrals_to_next is None or next_status_name is None:
+            next_level_line = ""
         else:
-            status_footer = localization.get_text(
+            next_level_line = localization.get_text(
                 language,
-                "referral_program_status_footer",
+                "referral_stats_next_level_line",
+                next_status_name=next_status_name,
                 remaining_invites=referrals_to_next,
-                default=f"🚀 До следующего уровня: осталось {referrals_to_next} приглашений"
+                default=f"🚀 До уровня {next_status_name}:\nосталось {referrals_to_next} подключений"
             )
         
         text = localization.get_text(
             language,
             "referral_program_screen",
-            referral_link=referral_link,
+            total_referred=total_invited,
+            total_cashback=total_cashback,
             current_status_name=current_status_name,
-            status_footer=status_footer,
+            cashback_percent=current_level,
+            next_level_line=next_level_line,
+            last_activity_date=last_activity_str,
             default=(
-                "🔐 Программа лояльности Atlas Secure\n\n"
-                "💎 Ваш статус открывает больше возможностей.\n"
-                "Получайте вознаграждение за участие в экосистеме Atlas Secure — без лимитов и ограничений.\n\n"
-                "⸻\n\n"
-                "🔗 Ваша персональная ссылка:\n"
-                "{referral_link}\n\n"
-                "🪙 Вознаграждение автоматически зачисляется на баланс аккаунта.\n\n"
-                "⸻\n\n"
-                "📊 Текущий статус: {current_status_name}\n"
-                "{status_footer}"
+                "📊 Активность и статус доступа\n\n"
+                "👤 Подключённых аккаунтов: {total_referred}\n\n"
+                "💎 Начислено вознаграждений: {total_cashback:.2f} ₽\n"
+                "🏆 Текущий статус: {current_status_name}\n"
+                "📈 Уровень возврата: {cashback_percent}%\n\n"
+                "{next_level_line}\n\n"
+                "📅 Последняя активность: {last_activity_date}"
             )
         )
         
-        # Клавиатура согласно требованиям
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=localization.get_text(language, "referral_share_link_button", default="📤 Поделиться ссылкой"),
                 callback_data="share_referral_link"
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "referral_stats_button", default="📊 Активность и статус доступа"),
+                text=localization.get_text(language, "referral_stats_button", default="Подробнее"),
                 callback_data="referral_stats"
             )],
             [InlineKeyboardButton(
@@ -5923,8 +5920,8 @@ async def callback_referral(callback: CallbackQuery):
             
             logger.debug(
                 f"Referral screen opened: user={telegram_id}, "
-                f"invited={level_info.get('referrals_count', 0)}, paid={paid_referrals_count}, "
-                f"percent={level_info.get('current_level', 10)}%, cashback={total_cashback:.2f} RUB"
+                f"invited={total_invited}, paid={paid_referrals_count}, "
+                f"percent={current_level}%, cashback={total_cashback:.2f} RUB"
             )
         except Exception as e:
             logger.exception(f"Error editing message in referral screen: user={telegram_id}: {e}")
@@ -6006,7 +6003,7 @@ def _pluralize_friends(count: int) -> str:
 
 @router.callback_query(F.data == "referral_stats")
 async def callback_referral_stats(callback: CallbackQuery):
-    """Экран «Активность и статус доступа» — статистика и статус лояльности (Silver/Gold/Platinum)."""
+    """Экран «Подробнее» — расширенный презентационный текст программы лояльности (уровни, ссылка, статус)."""
     telegram_id = callback.from_user.id
     language = "ru"
     
@@ -6019,53 +6016,41 @@ async def callback_referral_stats(callback: CallbackQuery):
     
     try:
         stats = await database.get_referral_statistics(telegram_id)
-        total_invited = stats.get("total_invited", 0)
-        total_cashback = stats.get("total_cashback_earned", 0.0)
-        current_level = stats.get("current_level", 10)
         referrals_to_next = stats.get("referrals_to_next")
-        last_activity_at = stats.get("last_activity_at")
         paid_referrals_count = stats.get("paid_referrals_count", 0)
         
-        current_status_name, next_status_name = get_loyalty_status_names(paid_referrals_count)
+        current_status_name, _ = get_loyalty_status_names(paid_referrals_count)
         
-        last_activity_str = "—"
-        if last_activity_at:
-            if isinstance(last_activity_at, str):
-                try:
-                    last_activity_at = datetime.fromisoformat(last_activity_at.replace('Z', '+00:00'))
-                except Exception:
-                    pass
-            if isinstance(last_activity_at, datetime):
-                last_activity_str = last_activity_at.strftime("%d.%m.%Y")
-        
-        if referrals_to_next is None or next_status_name is None:
-            next_level_line = ""
+        if referrals_to_next is None:
+            status_footer = ""
         else:
-            next_level_line = localization.get_text(
+            status_footer = localization.get_text(
                 language,
-                "referral_stats_next_level_line",
-                next_status_name=next_status_name,
+                "referral_program_status_footer",
                 remaining_invites=referrals_to_next,
-                default=f"🚀 До уровня {next_status_name}:\nосталось {referrals_to_next} подключений"
+                default=f"🚀 До следующего уровня: осталось {referrals_to_next} приглашений"
             )
+        
+        bot_info = await callback.bot.get_me()
+        referral_link = f"https://t.me/{bot_info.username}?start=ref_{telegram_id}"
         
         text = localization.get_text(
             language,
             "referral_stats_screen",
-            total_referred=total_invited,
-            total_cashback=total_cashback,
+            referral_link=referral_link,
             current_status_name=current_status_name,
-            cashback_percent=current_level,
-            next_level_line=next_level_line,
-            last_activity_date=last_activity_str,
+            status_footer=status_footer,
             default=(
-                "📊 Активность и статус доступа\n\n"
-                "👤 Подключённых аккаунтов: {total_referred}\n\n"
-                "💎 Начислено вознаграждений: {total_cashback:.2f} ₽\n"
-                "🏆 Текущий статус: {current_status_name}\n"
-                "📈 Уровень возврата: {cashback_percent}%\n\n"
-                "{next_level_line}\n\n"
-                "📅 Последняя активность: {last_activity_date}"
+                "🔐 Программа лояльности Atlas Secure\n\n"
+                "💎 Ваш статус открывает больше возможностей.\n"
+                "Получайте вознаграждение за участие в экосистеме Atlas Secure — без лимитов и ограничений.\n\n"
+                "⸻\n\n"
+                "🔗 Ваша персональная ссылка:\n"
+                "{referral_link}\n\n"
+                "🪙 Вознаграждение автоматически зачисляется на баланс аккаунта.\n\n"
+                "⸻\n\n"
+                "📊 Текущий статус: {current_status_name}\n"
+                "{status_footer}"
             )
         )
         
