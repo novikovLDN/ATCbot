@@ -240,7 +240,7 @@ async def fast_expiry_cleanup_task():
             try:
                 async with pool.acquire() as conn:
                     rows = await conn.fetch(
-                        """SELECT telegram_id, uuid, vpn_key, expires_at, status 
+                        """SELECT telegram_id, uuid, vpn_key, expires_at, status, source 
                            FROM subscriptions 
                            WHERE status = 'active'
                            AND expires_at < $1
@@ -267,6 +267,7 @@ async def fast_expiry_cleanup_task():
                         telegram_id = row["telegram_id"]
                         uuid = row["uuid"]
                         expires_at = row["expires_at"]
+                        source = row.get("source", "unknown")
                         
                         # ЗАЩИТА: Проверяем что подписка действительно истекла (используем UTC)
                         if expires_at >= now_utc:
@@ -278,6 +279,7 @@ async def fast_expiry_cleanup_task():
                         
                         # CRITICAL FIX: Check if user has active paid subscription BEFORE revoking access
                         # Paid subscription must always dominate trial/expired subscription state
+                        # Trial expiration must be treated as a NO-OP if paid subscription exists
                         paid_subscription = await conn.fetchrow("""
                             SELECT expires_at FROM subscriptions
                             WHERE telegram_id = $1
@@ -289,11 +291,12 @@ async def fast_expiry_cleanup_task():
                         
                         if paid_subscription:
                             paid_expires_at = paid_subscription["expires_at"]
-                            uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+                            # Log with required format: SKIP_TRIAL_EXPIRY_PAID_USER
                             logger.info(
-                                f"cleanup: SKIP_DUE_TO_ACTIVE_PAID_SUBSCRIPTION [user={telegram_id}, uuid={uuid_preview}, "
-                                f"expired_subscription_expires_at={expires_at.isoformat()}, "
-                                f"paid_subscription_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}] - "
+                                f"SKIP_TRIAL_EXPIRY_PAID_USER: user_id={telegram_id}, "
+                                f"trial_expires_at={expires_at.isoformat() if expires_at else None}, "
+                                f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}, "
+                                f"expired_subscription_source={source} - "
                                 "User has active paid subscription, skipping expired subscription cleanup"
                             )
                             continue
