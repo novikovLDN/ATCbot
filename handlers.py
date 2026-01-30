@@ -80,6 +80,7 @@ from app.core.feature_flags import get_feature_flags
 from app.core.circuit_breaker import get_circuit_breaker
 from app.constants.loyalty import get_loyalty_status_names, get_loyalty_photo_id
 from app.core.rate_limit import check_rate_limit
+from app.utils.message_guard import safe_replace_screen
 
 # Время запуска бота (для uptime)
 _bot_start_time = time.time()
