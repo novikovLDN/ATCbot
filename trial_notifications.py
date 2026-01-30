@@ -143,7 +143,7 @@ async def process_trial_notifications(bot: Bot):
             
             # Получаем только пользователей с АКТИВНОЙ trial-подпиской
             # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
-            # P1 FIX: Исключаем пользователей с активной платной подпиской
+            # Canonical guard: paid overrides trial — LEFT JOIN matches database.get_active_paid_subscription logic.
             rows = await conn.fetch("""
                 SELECT u.telegram_id, u.trial_expires_at,
                        s.id as subscription_id,
@@ -170,11 +170,12 @@ async def process_trial_notifications(bot: Bot):
                 subscription_expires_at = row["subscription_expires_at"]
                 paid_subscription_expires_at = row.get("paid_subscription_expires_at")
                 
-                # Защита: trial не отменяет платную подписку. Если есть активная подписка с source != trial — не слать уведомления.
+                # Canonical guard: paid subscription ALWAYS overrides trial (same as database.get_active_paid_subscription).
                 if paid_subscription_expires_at:
                     logger.info(
                         f"trial_expired_skipped_due_to_active_paid_subscription: "
-                        f"telegram_id={telegram_id}, paid_subscription_expires_at={paid_subscription_expires_at.isoformat() if paid_subscription_expires_at else None}, "
+                        f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                        f"paid_subscription_expires_at={paid_subscription_expires_at.isoformat() if paid_subscription_expires_at else None}, "
                         "reason=active_paid_subscription_exists"
                     )
                     continue
@@ -379,24 +380,15 @@ async def expire_trial_subscriptions(bot: Bot):
                 trial_expires_at = row["trial_expires_at"]
                 
                 try:
-                    # Защита: trial не может отменить подписку, если у пользователя есть активная подписка с source != trial и expires_at > now.
-                    # Проверка ПЕРЕД любыми действиями: не менять статус, не трогать VPN, не слать уведомления.
-                    active_non_trial = await conn.fetchrow("""
-                        SELECT expires_at FROM subscriptions
-                        WHERE telegram_id = $1
-                          AND source != 'trial'
-                          AND status = 'active'
-                          AND expires_at > $2
-                        LIMIT 1
-                    """, telegram_id, now)
-                    
-                    if active_non_trial:
-                        paid_expires_at = active_non_trial["expires_at"]
+                    # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
+                    # Guard: status='active', expires_at > now(), source != 'trial'. Single source of truth.
+                    active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
+                    if active_paid:
+                        paid_expires_at = active_paid["expires_at"]
                         logger.info(
-                            f"trial_expired_skipped_due_to_active_paid_subscription: "
+                            "Trial cleanup skipped: user has active paid subscription; "
                             f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                            f"paid_subscription_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}, "
-                            "reason=active_paid_subscription_exists"
+                            f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
                         )
                         continue
                     
@@ -421,7 +413,19 @@ async def expire_trial_subscriptions(bot: Bot):
                         f"decision=EXECUTED"
                     )
                     
-                    # I/O: Remove UUID from VPN API (if subscription exists)
+                    # VPN safety invariant: never revoke if active paid exists (re-check immediately before destructive action).
+                    active_paid_recheck = await database.get_active_paid_subscription(conn, telegram_id, now)
+                    if active_paid_recheck:
+                        paid_expires_at = active_paid_recheck["expires_at"]
+                        logger.info(
+                            "Trial cleanup skipped: user has active paid subscription; "
+                            f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                            f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
+                        )
+                        continue
+                    
+                    # I/O: Remove UUID from VPN API (if subscription exists).
+                    # Only reached when no active paid subscription (guard above prevents trial-overriding-paid bug).
                     if uuid:
                         import vpn_utils
                         try:
