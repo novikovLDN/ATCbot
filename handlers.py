@@ -78,7 +78,7 @@ from app.utils.security import (
 )
 from app.core.feature_flags import get_feature_flags
 from app.core.circuit_breaker import get_circuit_breaker
-from app.constants.loyalty import get_loyalty_status_names, get_loyalty_screen_attachment
+from app.constants.loyalty import get_loyalty_status_names, get_loyalty_photo_id
 from app.core.rate_limit import check_rate_limit
 
 # Время запуска бота (для uptime)
@@ -5954,30 +5954,29 @@ async def callback_referral(callback: CallbackQuery):
             )],
         ])
         
+        chat_id = callback.message.chat.id
+        photo_id = get_loyalty_photo_id(current_status_name)
         try:
-            # Single atomic message: photo + caption if file_id configured, else text only.
-            file_id = get_loyalty_screen_attachment(current_status_name)
-            chat_id = callback.message.chat.id
-            if file_id:
+            if photo_id:
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
                 await callback.bot.send_photo(
                     chat_id=chat_id,
-                    photo=file_id,
+                    photo=photo_id,
                     caption=text,
                     reply_markup=keyboard,
                     parse_mode=None,
                 )
             else:
-                await callback.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    reply_markup=keyboard,
-                )
+                await safe_replace_screen(callback, text, keyboard, screen_name="referral_loyalty")
             await callback.answer()
             
             logger.debug(
                 f"Referral screen opened: user={telegram_id}, "
                 f"invited={total_invited}, paid={paid_referrals_count}, "
-                f"percent={current_level}%, cashback={total_cashback:.2f} RUB, with_photo={bool(file_id)}"
+                f"percent={current_level}%, cashback={total_cashback:.2f} RUB, with_photo={bool(photo_id)}"
             )
         except Exception as e:
             logger.exception(f"Error sending loyalty screen: user={telegram_id}: {e}")
@@ -6070,6 +6069,7 @@ async def callback_referral_stats(callback: CallbackQuery):
         logger.warning(f"Error getting user in referral_stats: {e}")
     
     try:
+        chat_id = callback.message.chat.id
         try:
             await callback.message.delete()
         except Exception:
@@ -6121,7 +6121,7 @@ async def callback_referral_stats(callback: CallbackQuery):
             )]
         ])
         
-        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
+        await callback.bot.send_message(chat_id, text, reply_markup=keyboard)
         await callback.answer()
         
     except Exception as e:
