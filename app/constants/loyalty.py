@@ -1,10 +1,10 @@
 """
-Loyalty program status names (UI layer).
+Loyalty program status names and screen assets (UI layer).
 
 Mapping: paid_referrals_count → status_name. Percent and thresholds are unchanged.
 Tiers: 0–24 → Silver Access (10%), 25–49 → Gold Access (25%), 50+ → Platinum Access (45%).
 
-Future: get_loyalty_screen_attachment() can return photo by status for the loyalty screen.
+Images: Telegram file_id per status and env (stage/prod). No local files.
 """
 
 from typing import Optional, Tuple
@@ -15,6 +15,14 @@ LOYALTY_TIERS = (
     (25, 49, "Gold Access", 25),
     (50, None, "Platinum Access", 45),
 )
+
+# Telegram file_id per status and environment. Placeholders until real file_ids are set.
+# Inject real file_ids (e.g. from bot.send_photo in a setup chat) for stage/prod.
+LOYALTY_IMAGES: dict[str, dict[str, Optional[str]]] = {
+    "Silver Access": {"stage": None, "prod": None},
+    "Gold Access": {"stage": None, "prod": None},
+    "Platinum Access": {"stage": None, "prod": None},
+}
 
 
 def get_loyalty_status_names(paid_referrals_count: int) -> Tuple[str, Optional[str]]:
@@ -30,11 +38,18 @@ def get_loyalty_status_names(paid_referrals_count: int) -> Tuple[str, Optional[s
     return ("Silver Access", "Gold Access")
 
 
-def get_loyalty_screen_attachment(telegram_id: int) -> Tuple[Optional[str], str]:
+def get_loyalty_screen_attachment(status_name: str, env: str) -> Optional[str]:
     """
-    Placeholder for future: return (photo_file_id_or_path, caption) for loyalty screen.
-    Currently returns (None, "") so the handler keeps using edit_message_text.
-    When photos are added: return (file_id or path for Silver/Gold/Platinum image, caption).
+    Return Telegram file_id for the loyalty screen image for the given status and environment.
+    Uses LOYALTY_IMAGES; no local files. Returns None if no image is configured (placeholder or missing).
+    env: "stage" | "prod" | "local" (local falls back to stage).
     """
-    _ = telegram_id
-    return (None, "")
+    env_key = (env or "prod").lower()
+    if env_key == "local":
+        env_key = "stage"
+    if env_key not in ("stage", "prod"):
+        env_key = "prod"
+    mapping = LOYALTY_IMAGES.get(status_name)
+    if not mapping:
+        return None
+    return mapping.get(env_key)

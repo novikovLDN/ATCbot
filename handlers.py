@@ -78,7 +78,7 @@ from app.utils.security import (
 )
 from app.core.feature_flags import get_feature_flags
 from app.core.circuit_breaker import get_circuit_breaker
-from app.constants.loyalty import get_loyalty_status_names
+from app.constants.loyalty import get_loyalty_status_names, get_loyalty_screen_attachment
 from app.core.rate_limit import check_rate_limit
 
 # Время запуска бота (для uptime)
@@ -5913,19 +5913,32 @@ async def callback_referral(callback: CallbackQuery):
         ])
         
         try:
-            # Future: if get_loyalty_screen_attachment(telegram_id) returns (photo_path_or_id, caption),
-            # send photo with caption instead of edit_text to show status image (Silver/Gold/Platinum).
-            await safe_edit_text(callback.message, text, reply_markup=keyboard)
+            # Single atomic message: photo + caption if file_id configured, else text only.
+            file_id = get_loyalty_screen_attachment(current_status_name, config.APP_ENV)
+            chat_id = callback.message.chat.id
+            if file_id:
+                await callback.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file_id,
+                    caption=text,
+                    reply_markup=keyboard,
+                    parse_mode=None,
+                )
+            else:
+                await callback.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=keyboard,
+                )
             await callback.answer()
             
             logger.debug(
                 f"Referral screen opened: user={telegram_id}, "
                 f"invited={total_invited}, paid={paid_referrals_count}, "
-                f"percent={current_level}%, cashback={total_cashback:.2f} RUB"
+                f"percent={current_level}%, cashback={total_cashback:.2f} RUB, with_photo={bool(file_id)}"
             )
         except Exception as e:
-            logger.exception(f"Error editing message in referral screen: user={telegram_id}: {e}")
-            # Показываем минимальный fallback, чтобы экран всегда открывался
+            logger.exception(f"Error sending loyalty screen: user={telegram_id}: {e}")
             error_text = localization.get_text(
                 language,
                 "error_profile_load",
