@@ -1948,12 +1948,17 @@ async def callback_language(callback: CallbackQuery):
 
 @router.callback_query(F.data == "menu_main")
 async def callback_main_menu(callback: CallbackQuery):
-    """Главное меню"""
+    """Главное меню. Delete + answer to support navigation from photo message (loyalty screen)."""
     # SAFE STARTUP GUARD: Главное меню может работать в деградированном режиме
     # В STAGE разрешаем read-only операции (навигация, меню)
     # В PROD блокируем если БД не готова
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
+    
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     
     telegram_id = callback.from_user.id
     language = "ru"  # По умолчанию
@@ -1964,7 +1969,7 @@ async def callback_main_menu(callback: CallbackQuery):
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
     keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
     await callback.answer()
 
 
@@ -6053,7 +6058,7 @@ def _pluralize_friends(count: int) -> str:
 
 @router.callback_query(F.data == "referral_stats")
 async def callback_referral_stats(callback: CallbackQuery):
-    """Экран «Подробнее» — расширенный презентационный текст программы лояльности (уровни, ссылка, статус)."""
+    """Экран «Подробнее» — расширенный презентационный текст. Delete + answer to support navigation from photo (loyalty screen)."""
     telegram_id = callback.from_user.id
     language = "ru"
     
@@ -6065,6 +6070,11 @@ async def callback_referral_stats(callback: CallbackQuery):
         logger.warning(f"Error getting user in referral_stats: {e}")
     
     try:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        
         stats = await database.get_referral_statistics(telegram_id)
         referrals_to_next = stats.get("referrals_to_next")
         paid_referrals_count = stats.get("paid_referrals_count", 0)
@@ -6111,7 +6121,7 @@ async def callback_referral_stats(callback: CallbackQuery):
             )]
         ])
         
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
         await callback.answer()
         
     except Exception as e:
