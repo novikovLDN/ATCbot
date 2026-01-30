@@ -4,7 +4,7 @@ Loyalty program status names and screen assets (UI layer).
 Mapping: paid_referrals_count → status_name. Percent and thresholds are unchanged.
 Tiers: 0–24 → Silver Access (10%), 25–49 → Gold Access (25%), 50+ → Platinum Access (45%).
 
-Images: Telegram file_id per status and env (stage/prod). No local files.
+Images: Telegram file_id per status key (silver / gold / platinum). No local files.
 """
 
 from typing import Optional, Tuple
@@ -16,12 +16,11 @@ LOYALTY_TIERS = (
     (50, None, "Platinum Access", 45),
 )
 
-# Telegram file_id per status and environment. Placeholders until real file_ids are set.
-# Inject real file_ids (e.g. from bot.send_photo in a setup chat) for stage/prod.
-LOYALTY_IMAGES: dict[str, dict[str, Optional[str]]] = {
-    "Silver Access": {"stage": None, "prod": None},
-    "Gold Access": {"stage": None, "prod": None},
-    "Platinum Access": {"stage": None, "prod": None},
+# Telegram file_id per status key. Keys strictly: "silver", "gold", "platinum".
+LOYALTY_IMAGES: dict[str, str] = {
+    "silver": "AgACAgQAAxkBAAIFR2l83vc0VyWMkiU3YQP_v2RQt5pDAALLDGsb51fpU-ytODFi2C2hAQADAgADeQADOAQ",
+    "gold": "AgACAgQAAxkBAAIFSGl83vzATEG07e6g1ZU_h-dpUxnVAALMDGsb51fpU-pySOZ_r8NKAQADAgADeQADOAQ",
+    "platinum": "AgACAgQAAxkBAAIFSWl83v8rPqut4fSs938PSQNQDYWHAALNDGsb51fpU3Q1WPlW2XSvAQADAgADeQADOAQ",
 }
 
 
@@ -38,18 +37,14 @@ def get_loyalty_status_names(paid_referrals_count: int) -> Tuple[str, Optional[s
     return ("Silver Access", "Gold Access")
 
 
-def get_loyalty_screen_attachment(status_name: str, env: str) -> Optional[str]:
+def get_loyalty_screen_attachment(current_status_key: str) -> Optional[str]:
     """
-    Return Telegram file_id for the loyalty screen image for the given status and environment.
-    Uses LOYALTY_IMAGES; no local files. Returns None if no image is configured (placeholder or missing).
-    env: "stage" | "prod" | "local" (local falls back to stage).
+    Return Telegram file_id for the loyalty screen image for the given status.
+    current_status_key: status name ("Silver Access" / "Gold Access" / "Platinum Access")
+                        or key ("silver" / "gold" / "platinum"). Normalized to key internally.
+    No dependencies on telegram_id, DB, or handlers.
     """
-    env_key = (env or "prod").lower()
-    if env_key == "local":
-        env_key = "stage"
-    if env_key not in ("stage", "prod"):
-        env_key = "prod"
-    mapping = LOYALTY_IMAGES.get(status_name)
-    if not mapping:
+    if not current_status_key:
         return None
-    return mapping.get(env_key)
+    key = current_status_key.lower().split()[0]
+    return LOYALTY_IMAGES.get(key)
