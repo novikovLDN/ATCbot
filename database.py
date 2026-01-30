@@ -2584,6 +2584,18 @@ async def get_trial_info(telegram_id: int) -> Optional[Dict[str, Any]]:
         }
 
 
+async def get_active_paid_subscription(conn, telegram_id: int, now: datetime):
+    """Single source of truth: does user have an active paid (non-trial) subscription?
+    Paid subscription ALWAYS overrides trial logic. Used by trial_notifications and
+    fast_expiry_cleanup to skip trial notifications and trial cleanup when paid exists.
+    Returns: row with expires_at or None. Caller must pass existing conn (same transaction)."""
+    return await conn.fetchrow("""
+        SELECT expires_at FROM subscriptions
+        WHERE telegram_id = $1 AND source != 'trial' AND status = 'active' AND expires_at > $2
+        LIMIT 1
+    """, telegram_id, now)
+
+
 async def mark_trial_used(telegram_id: int, trial_expires_at: datetime) -> bool:
     """Пометить trial как использованный
     
@@ -3385,19 +3397,21 @@ async def grant_access(
                 # КРИТИЧЕСКИ ВАЖНО: Обновляем БД БЕЗ вызова VPN API
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
                 # activation_status остается 'active' при продлении
+                # WHY: При оплате во время trial подписка должна стать source='payment', иначе trial_notifications/cleanup могут её затронуть
                 try:
                     await conn.execute(
                         """UPDATE subscriptions 
                            SET expires_at = $1, 
                                status = 'active',
+                               source = $2,
                                reminder_sent = FALSE,
                                reminder_3d_sent = FALSE,
                                reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE,
                                reminder_6h_sent = FALSE,
                                activation_status = 'active'
-                           WHERE telegram_id = $2""",
-                        subscription_end, telegram_id
+                           WHERE telegram_id = $3""",
+                        subscription_end, source, telegram_id
                     )
                     
                     # ВАЛИДАЦИЯ: Проверяем что запись обновлена
@@ -3418,6 +3432,21 @@ async def grant_access(
                 except Exception as e:
                     logger.error(f"grant_access: RENEWAL_SAVE_FAILED [user={telegram_id}, error={str(e)}]")
                     raise Exception(f"Failed to renew subscription in database: {e}") from e
+                
+                # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
+                if source == "payment":
+                    user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
+                    old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
+                    if old_trial_expires_at and old_trial_expires_at > now:
+                        await conn.execute(
+                            "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
+                            now, telegram_id
+                        )
+                        logger.info(
+                            f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
+                            f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
+                            f"paid_subscription_expires_at={subscription_end.isoformat()}"
+                        )
                 
                 # Определяем action_type для истории
                 if source == "payment":
@@ -3876,6 +3905,21 @@ async def grant_access(
                 f"grant_access: DB_SAVE_FAILED [user={telegram_id}, uuid={uuid_preview}, error={str(e)}]"
             )
             raise Exception(f"Failed to save subscription to database: {e}") from e
+        
+        # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
+        if source == "payment":
+            user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
+            old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
+            if old_trial_expires_at and old_trial_expires_at > now:
+                await conn.execute(
+                    "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
+                    now, telegram_id
+                )
+                logger.info(
+                    f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
+                    f"old_trial_expires_at={old_trial_expires_at.isoformat()}, "
+                    f"paid_subscription_expires_at={subscription_end.isoformat()}"
+                )
         
         # Записываем в историю подписок
         await _log_subscription_history_atomic(conn, telegram_id, vless_url, subscription_start, subscription_end, history_action_type)
