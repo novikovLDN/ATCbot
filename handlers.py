@@ -469,6 +469,27 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
                 # Контент идентичен - не вызываем edit
                 return
     
+    # Photo message: edit caption instead of text (e.g. loyalty screen sent as send_photo).
+    # Prevents TelegramBadRequest "there is no text in the message to edit".
+    has_photo = getattr(message, "photo", None) and len(message.photo) > 0
+    if has_photo:
+        try:
+            await message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+            return
+        except TelegramBadRequest as e:
+            err = str(e).lower()
+            if "message is not modified" in err:
+                logger.debug(f"Caption not modified (expected): {e}")
+                return
+            if any(k in err for k in ["message to edit not found", "message can't be edited", "chat not found", "message is inaccessible"]):
+                if bot is not None:
+                    chat_id = getattr(getattr(message, "chat", None), "id", None) or (getattr(getattr(message, "from_user", None), "id", None) if getattr(message, "from_user", None) else None)
+                    if chat_id:
+                        await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+                        logger.info(f"Photo message inaccessible, sent new message instead: chat_id={chat_id}")
+                return
+            raise
+
     try:
         await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except TelegramBadRequest as e:
