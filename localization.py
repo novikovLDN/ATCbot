@@ -21,9 +21,9 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
-        "referral_program": "🤝 Пригласить друга",
+        "referral_program": "💎 Программа лояльности",
         "referral_program_text": (
-            "🤝 Пригласить друга\n\n"
+            "💎 Программа лояльности\n\n"
             "Приглашайте друзей и получайте кешбэк\n"
             "на баланс за их оплаты.\n\n"
             "📊 Ваша статистика:\n"
@@ -38,24 +38,43 @@ TEXTS: Dict[str, Dict[str, str]] = {
             "• 50+ друзей → 45% кешбэк"
         ),
         "referral_program_screen": (
-            "🎁 Реферальная программа\n\n"
-            "💡 Приглашай друзей — получай кешбэк за каждую их покупку без ограничений!\n\n"
-            "📈 Уровни:\n"
-            "✨ 0–24 друга — 10% кешбэк\n"
-            "🔥 25–49 друзей — 25% кешбэк\n"
-            "💎 50+ друзей — 45% кешбэк\n\n"
-            "📍 Твоя реферальная ссылка:\n"
+            "🔐 Программа лояльности Atlas Secure\n\n"
+            "💎 Ваш статус открывает больше возможностей.\n"
+            "Получайте вознаграждение за участие в экосистеме Atlas Secure — без лимитов и ограничений.\n\n"
+            "⸻\n\n"
+            "🏆 Уровни доступа\n\n"
+            "Silver Access\n"
+            "— до 24 приглашённых\n"
+            "— 10% возврат средств на баланс\n\n"
+            "Gold Access\n"
+            "— 25–49 приглашённых\n"
+            "— 25% возврат средств\n"
+            "— расширенные привилегии\n\n"
+            "Platinum Access\n"
+            "— 50+ приглашённых\n"
+            "— 45% возврат средств\n"
+            "— максимальный уровень доступа\n\n"
+            "⸻\n\n"
+            "🔗 Ваша персональная ссылка:\n"
             "{referral_link}\n\n"
-            "🪙 Кешбэк автоматически начисляется на баланс."
+            "🪙 Вознаграждение автоматически зачисляется на баланс аккаунта.\n\n"
+            "⸻\n\n"
+            "📊 Текущий статус: {current_status_name}\n"
+            "{status_footer}"
         ),
+        "referral_program_status_footer": "🚀 До следующего уровня: осталось {remaining_invites} приглашений",
         "referral_share_link_button": "📤 Поделиться ссылкой",
-        "referral_stats_button": "📊 Статистика приглашений",
+        "referral_stats_button": "📊 Активность и статус доступа",
         "referral_stats_screen": (
-            "📊 <b>Статистика приглашений</b>\n\n"
-            "👤 Приглашено друзей: {invited_count}\n"
-            "💰 Общий кешбэк: {total_cashback:.2f} ₽\n\n"
-            "🎁 Твой уровень кешбэка: {cashback_percent}%"
+            "📊 Активность и статус доступа\n\n"
+            "👤 Подключённых аккаунтов: {total_referred}\n\n"
+            "💎 Начислено вознаграждений: {total_cashback:.2f} ₽\n"
+            "🏆 Текущий статус: {current_status_name}\n"
+            "📈 Уровень возврата: {cashback_percent}%\n\n"
+            "{next_level_line}\n\n"
+            "📅 Последняя активность: {last_activity_date}"
         ),
+        "referral_stats_next_level_line": "🚀 До уровня {next_status_name}:\nосталось {remaining_invites} подключений",
         "referral_level_progress": "\n\n📈 Ваш уровень: {current_level}%\nДо уровня {next_level}% осталось {referrals_to_next} рефералов",
         "referral_max_level": "\n\n🎉 Вы достигли максимального уровня {current_level}%!",
         "referral_how_it_works": "📊 Как работает программа",
@@ -432,9 +451,9 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
-        "referral_program": "🤝 Invite Friend",
+        "referral_program": "💎 Loyalty Program",
         "referral_program_text": (
-            "👥 Referral Program\n\n"
+            "💎 Loyalty Program\n\n"
             "Invite friends and get bonuses\n"
             "to your balance for their first payment.\n\n"
             "Your bonus:\n"
@@ -451,22 +470,43 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "referral_link_copied": "Link sent",
         "referral_reward_notification": "🔥 You've earned referral cashback!\n\nYour friend has purchased a subscription.\n💰 Awarded: {amount:.2f} ₽\nBalance: {balance:.2f} ₽",
         "referral_share_link_button": "📤 Share link",
-        "referral_stats_button": "📊 Referral stats",
+        "referral_stats_button": "📊 Activity & Access Status",
         "referral_stats_screen": (
-            "📊 <b>Referral Stats</b>\n\n"
-            "👤 Friends invited: {invited_count}\n"
-            "💰 Total cashback: {total_cashback:.2f} ₽\n\n"
-            "🎁 Your cashback level: {cashback_percent}%"
+            "📊 Activity & Access Status\n\n"
+            "👤 Connected accounts: {total_referred}\n\n"
+            "💎 Rewards credited: {total_cashback:.2f} ₽\n"
+            "🏆 Current status: {current_status_name}\n"
+            "📈 Cashback level: {cashback_percent}%\n\n"
+            "{next_level_line}\n\n"
+            "📅 Last activity: {last_activity_date}"
         ),
+        "referral_stats_next_level_line": "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
         "referral_program_screen": (
-            "👥 Invite Friend\n\n"
-            "Invite friends and get cashback\n"
-            "from each of their purchases.\n\n"
-            "🎁 Your cashback: {cashback_percent}%\n"
-            "👤 Invited: {invited_count}\n"
-            "💰 Earned: {total_cashback:.2f} ₽\n\n"
-            "🔗 Your link:\n{referral_link}"
+            "🔐 Atlas Secure Loyalty Program\n\n"
+            "💎 Your status unlocks more benefits.\n"
+            "Earn rewards for participating in the Atlas Secure ecosystem — no limits.\n\n"
+            "⸻\n\n"
+            "🏆 Access levels\n\n"
+            "Silver Access\n"
+            "— up to 24 invited\n"
+            "— 10% cashback to balance\n\n"
+            "Gold Access\n"
+            "— 25–49 invited\n"
+            "— 25% cashback\n"
+            "— extended privileges\n\n"
+            "Platinum Access\n"
+            "— 50+ invited\n"
+            "— 45% cashback\n"
+            "— maximum access level\n\n"
+            "⸻\n\n"
+            "🔗 Your personal link:\n"
+            "{referral_link}\n\n"
+            "🪙 Rewards are credited to your account balance automatically.\n\n"
+            "⸻\n\n"
+            "📊 Current status: {current_status_name}\n"
+            "{status_footer}"
         ),
+        "referral_program_status_footer": "🚀 To next level: {remaining_invites} invites left",
         "referral_level_progress": "\n\n📈 Your level: {current_level}% cashback\n{referrals_to_next} referrals left to reach {next_level}% level",
         "referral_max_level": "\n\n🎉 You've reached the maximum level {current_level}%!",
         "referral_how_it_works": "📊 How the program works",
@@ -808,9 +848,9 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
         "home_welcome_text": "🔐 Atlas Secure\n\nSizni Atlas Secure-da ko'rganimizdan xursandmiz 🤝\n\nBiz ta'minlaymiz:\n⚙️ tanish xizmatlarning barqaror ishlashi\n⚡ tez va ishonchli ulanish\n🛡 maxfiylik sukut bo'yicha\n\nSiz internetdan odatdagidek foydalanasiz —\nbarqarorlik va himoyani biz ko'rib chiqamiz.",
-        "referral_program": "🤝 Do'stni taklif qilish",
+        "referral_program": "💎 Loyalty dasturi",
         "referral_program_text": (
-            "👥 Taklif dasturi\n\n"
+            "💎 Loyalty dasturi\n\n"
             "Do'stlaringizni taklif qiling va ularning\n"
             "birinchi to'lovi uchun balansingizga bonus oling.\n\n"
             "Sizning bonusingiz:\n"
@@ -833,13 +873,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "renew_subscription": "🔁 Kirishni uzaytirish",
         "no_active_subscription": "Faol obuna topilmadi.",
         "referral_share_link_button": "📤 Havolani ulashish",
-        "referral_stats_button": "📊 Taklif statistikasi",
+        "referral_stats_button": "📊 Faoliyat va status",
         "referral_stats_screen": (
-            "📊 <b>Taklif statistikasi</b>\n\n"
-            "👤 Taklif qilingan do'stlar: {invited_count}\n"
-            "💰 Umumiy cashback: {total_cashback:.2f} ₽\n\n"
-            "🎁 Sizning cashback darajangiz: {cashback_percent}%"
+            "📊 Faoliyat va status\n\n"
+            "👤 Ulangan akkauntlar: {total_referred}\n\n"
+            "💎 Hisoblangan mukofotlar: {total_cashback:.2f} ₽\n"
+            "🏆 Joriy status: {current_status_name}\n"
+            "📈 Qaytarish darajasi: {cashback_percent}%\n\n"
+            "{next_level_line}\n\n"
+            "📅 So'nggi faoliyat: {last_activity_date}"
         ),
+        "referral_stats_next_level_line": "🚀 {next_status_name} darajasiga: {remaining_invites} ulanish qoldi",
+        "referral_program_status_footer": "🚀 Keyingi darajaga: {remaining_invites} taklif qoldi",
         "referral_how_it_works": "📊 Dastur qanday ishlaydi",
         "referral_how_it_works_text": (
             "📊 Taklif dasturi qanday ishlaydi\n\n"
@@ -858,15 +903,29 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "referral_level_progress": "\n\n📈 Sizning darajangiz: {current_level}% cashback\n{next_level}% darajasiga {referrals_to_next} taklif qolgan",
         "referral_max_level": "\n\n🎉 Siz maksimal {current_level}% darajaga yetdingiz!",
         "referral_program_screen": (
-            "🎁 Taklif dasturi\n\n"
-            "💡 Do'stlarni taklif qiling — har bir xaridlaridan cheksiz cashback oling!\n\n"
-            "📈 Darajalar:\n"
-            "✨ 0–24 do'st — 10% cashback\n"
-            "🔥 25–49 do'st — 25% cashback\n"
-            "💎 50+ do'st — 45% cashback\n\n"
-            "📍 Sizning taklif havolangiz:\n"
+            "🔐 Atlas Secure Loyalty dasturi\n\n"
+            "💎 Statusingiz ko'proq imkoniyatlar beradi.\n"
+            "Atlas Secure ekotizimida qatnashish uchun mukofot oling — cheklovsiz.\n\n"
+            "⸻\n\n"
+            "🏆 Kirish darajalari\n\n"
+            "Silver Access\n"
+            "— 24 gacha taklif\n"
+            "— 10% balansga qaytarish\n\n"
+            "Gold Access\n"
+            "— 25–49 taklif\n"
+            "— 25% qaytarish\n"
+            "— kengaytirilgan imtiyozlar\n\n"
+            "Platinum Access\n"
+            "— 50+ taklif\n"
+            "— 45% qaytarish\n"
+            "— maksimal daraja\n\n"
+            "⸻\n\n"
+            "🔗 Shaxsiy havolangiz:\n"
             "{referral_link}\n\n"
-            "🪙 Cashback avtomatik ravishda balansga qo'shiladi."
+            "🪙 Mukofotlar balansga avtomatik hisoblanadi.\n\n"
+            "⸻\n\n"
+            "📊 Joriy status: {current_status_name}\n"
+            "{status_footer}"
         ),
         # Профиль - новый формат
         "profile_welcome": "Atlas Secure-ga xush kelibsiz!\n\n👤 {username}\n\n💰 Balans: {balance:.2f} ₽",
@@ -1158,9 +1217,9 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "instruction_device_ios": "📱 iOS",
         "instruction_device_android": "🤖 Android",
         "instruction_device_desktop": "💻 Windows / macOS",
-        "referral_program": "🤝 Дӯстро даъват кардан",
+        "referral_program": "💎 Барномаи вафодорӣ",
         "referral_program_text": (
-            "👥 Барномаи таклифӣ\n\n"
+            "💎 Барномаи вафодорӣ\n\n"
             "Дӯстронро даъват кунед ва барои\n"
             "аввалин пардохти онҳо ба балланси худ бонус гиред.\n\n"
             "Бонуси шумо:\n"
@@ -1177,14 +1236,31 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "referral_link_copied": "Пайванд фиристода шуд",
         "referral_reward_notification": "🔥 Ба шумо cashback-и рефералӣ баҳо дода шуд!\n\nДӯсти шумо обуна харидааст.\n💰 Баҳодиҳӣ: {amount:.2f} ₽\nБалланс: {balance:.2f} ₽",
         "referral_program_screen": (
-            "👥 Дӯстро даъват кардан\n\n"
-            "Дӯстронро даъват кунед ва аз\n"
-            "ҳар як харидашон cashback гиред.\n\n"
-            "🎁 Cashback-и шумо: {cashback_percent}%\n"
-            "👤 Даъватшуда: {invited_count}\n"
-            "💰 Ҳосилшуда: {total_cashback:.2f} ₽\n\n"
-            "🔗 Ҳаволаи шумо:\n{referral_link}"
+            "🔐 Барномаи вафодорӣ Atlas Secure\n\n"
+            "💎 Статуси шумо имкониятҳои зиёдтар медиҳад.\n"
+            "Барои иштирок дар экосистемаи Atlas Secure мукофот гиред — бе маҳдудият.\n\n"
+            "⸻\n\n"
+            "🏆 Сатҳҳои дастрасӣ\n\n"
+            "Silver Access\n"
+            "— то 24 даъватшуда\n"
+            "— 10% баргашт ба балланс\n\n"
+            "Gold Access\n"
+            "— 25–49 даъватшуда\n"
+            "— 25% баргашт\n"
+            "— имтиёзҳои васеъ\n\n"
+            "Platinum Access\n"
+            "— 50+ даъватшуда\n"
+            "— 45% баргашт\n"
+            "— сатҳи максималӣ\n\n"
+            "⸻\n\n"
+            "🔗 Ҳаволаи шахсии шумо:\n"
+            "{referral_link}\n\n"
+            "🪙 Мукофот ба балланси ҳисоб ба таври худкор ворид мешавад.\n\n"
+            "⸻\n\n"
+            "📊 Статуси ҷорӣ: {current_status_name}\n"
+            "{status_footer}"
         ),
+        "referral_program_status_footer": "🚀 Ба сатҳи оянда: {remaining_invites} даъват боқӣ мондааст",
         "referral_level_progress": "\n\n📈 Сатҳи шумо: {current_level}% cashback\nБарои расидан ба сатҳи {next_level}% {referrals_to_next} даъват боқӣ мондааст",
         "referral_max_level": "\n\n🎉 Шумо ба сатҳи максималӣ {current_level}% расидед!",
         "referral_how_it_works": "📊 Барнома чӣ тавр кор мекунад",
@@ -1209,13 +1285,17 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "renew_subscription": "🔁 Дастрасиро васеъ кардан",
         "no_active_subscription": "Обунаи фаъол ёфт нашуд.",
         "referral_share_link_button": "📤 Пайвандро мубодила кардан",
-        "referral_stats_button": "📊 Омори таклиф",
+        "referral_stats_button": "📊 Фаъолият ва статуси дастрасӣ",
         "referral_stats_screen": (
-            "📊 <b>Омори таклиф</b>\n\n"
-            "👤 Таклифшудаи дӯстон: {invited_count}\n"
-            "💰 Cashback-и умумӣ: {total_cashback:.2f} ₽\n\n"
-            "🎁 Сатҳи cashback-и шумо: {cashback_percent}%"
+            "📊 Фаъолият ва статуси дастрасӣ\n\n"
+            "👤 Ҳисобҳои пайвастшуда: {total_referred}\n\n"
+            "💎 Мукофотҳои ҳисобшуда: {total_cashback:.2f} ₽\n"
+            "🏆 Статуси ҷорӣ: {current_status_name}\n"
+            "📈 Сатҳи баргашт: {cashback_percent}%\n\n"
+            "{next_level_line}\n\n"
+            "📅 Фаъолияти охирин: {last_activity_date}"
         ),
+        "referral_stats_next_level_line": "🚀 Ба сатҳи {next_status_name}: {remaining_invites} пайвастшавӣ боқӣ мондааст",
         # Профиль - новый формат
         "profile_welcome": "Хуш омадед ба Atlas Secure!\n\n👤 {username}\n\n💰 Балланс: {balance:.2f} ₽",
         "profile_subscription_active": "Обуна:\n— 🟢 То {date} фаъол аст",
