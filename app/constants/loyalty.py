@@ -23,6 +23,13 @@ LOYALTY_IMAGES: dict[str, str] = {
     "platinum": "AgACAgQAAxkBAAIFSWl83v8rPqut4fSs938PSQNQDYWHAALNDGsb51fpU3Q1WPlW2XSvAQADAgADeQADOAQ",
 }
 
+# PROD file_id для экрана «Программа лояльности» (Silver / Gold / Platinum).
+LOYALTY_PHOTOS: dict[str, str] = {
+    "silver": "AgACAgQAAxkBAAJScml9A0BApbtV9A4KZIxOm9tzpc4cAALLDGsb51fpU3JUrQ2oI_pHAQADAgADeQADOAQ",
+    "gold": "AgACAgQAAxkBAAJSc2l9A1o_OygFNFIZltf6yE-LihBXAALMDGsb51fpUzDZ_QtvyjkgAQADAgADeQADOAQ",
+    "platinum": "AgACAgQAAxkBAAJSdGl9A20VE6seuPTglngaDvNj5zBZAALNDGsb51fpUxWyM5gXzGqCAQADAgADeQADOAQ",
+}
+
 
 def get_loyalty_status_names(paid_referrals_count: int) -> Tuple[str, Optional[str]]:
     """
@@ -48,3 +55,15 @@ def get_loyalty_screen_attachment(current_status_key: str) -> Optional[str]:
         return None
     key = current_status_key.lower().split()[0]
     return LOYALTY_IMAGES.get(key)
+
+
+def get_loyalty_photo_id(status_name: str) -> Optional[str]:
+    """
+    Return PROD Telegram file_id for the loyalty screen by status name.
+    status_name: "Silver Access" / "Gold Access" / "Platinum Access" (or key).
+    Used only for «Программа лояльности» screen; no handlers logic.
+    """
+    if not status_name:
+        return None
+    key = status_name.lower().split()[0]
+    return LOYALTY_PHOTOS.get(key)
