@@ -4723,6 +4723,22 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
         logger.error(f"Error logging pre-checkout query: {e}")
 
 
+# --- Incoming photo file_id logging (non-intrusive, no reply). Remove after collecting file_ids. ---
+@router.message(F.photo)
+async def log_incoming_photo_file_id(message: Message):
+    """Log file_id of incoming photos for later use (e.g. loyalty images). Does not send reply."""
+    try:
+        telegram_id = message.from_user.id if message.from_user else 0
+        file_id = message.photo[-1].file_id
+        logger.info(
+            "PHOTO_FILE_ID_RECEIVED [telegram_id=%s, file_id=%s]",
+            telegram_id,
+            file_id,
+        )
+    except Exception as e:
+        logger.warning("PHOTO_FILE_ID_RECEIVED log failed: %s", e)
+
+
 @router.message(F.successful_payment)
 async def process_successful_payment(message: Message, state: FSMContext):
     """Обработчик successful_payment - успешная оплата картой
