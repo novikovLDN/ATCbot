@@ -2584,6 +2584,18 @@ async def get_trial_info(telegram_id: int) -> Optional[Dict[str, Any]]:
         }
 
 
+async def get_active_paid_subscription(conn, telegram_id: int, now: datetime):
+    """Single source of truth: does user have an active paid (non-trial) subscription?
+    Paid subscription ALWAYS overrides trial logic. Used by trial_notifications and
+    fast_expiry_cleanup to skip trial notifications and trial cleanup when paid exists.
+    Returns: row with expires_at or None. Caller must pass existing conn (same transaction)."""
+    return await conn.fetchrow("""
+        SELECT expires_at FROM subscriptions
+        WHERE telegram_id = $1 AND source != 'trial' AND status = 'active' AND expires_at > $2
+        LIMIT 1
+    """, telegram_id, now)
+
+
 async def mark_trial_used(telegram_id: int, trial_expires_at: datetime) -> bool:
     """Пометить trial как использованный
     

@@ -277,20 +277,10 @@ async def fast_expiry_cleanup_task():
                             )
                             continue
                         
-                        # CRITICAL FIX: Check if user has active paid subscription BEFORE revoking access
-                        # Paid subscription must always dominate trial/expired subscription state
-                        # Trial expiration must be treated as a NO-OP if paid subscription exists
-                        paid_subscription = await conn.fetchrow("""
-                            SELECT expires_at FROM subscriptions
-                            WHERE telegram_id = $1
-                              AND source = 'payment'
-                              AND status = 'active'
-                              AND expires_at > $2
-                            LIMIT 1
-                        """, telegram_id, now_utc)
-                        
-                        if paid_subscription:
-                            paid_expires_at = paid_subscription["expires_at"]
+                        # Canonical guard: paid subscription ALWAYS overrides trial (single source of truth).
+                        active_paid = await database.get_active_paid_subscription(conn, telegram_id, now_utc)
+                        if active_paid:
+                            paid_expires_at = active_paid["expires_at"]
                             # Log with required format: SKIP_TRIAL_EXPIRY_PAID_USER
                             logger.info(
                                 f"SKIP_TRIAL_EXPIRY_PAID_USER: user_id={telegram_id}, "
