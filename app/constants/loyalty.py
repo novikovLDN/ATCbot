@@ -16,14 +16,14 @@ LOYALTY_TIERS = (
     (50, None, "Platinum Access", 45),
 )
 
-# Telegram file_id per status key. Keys strictly: "silver", "gold", "platinum".
+# PROD Telegram file_id для экранов лояльности. Silver Access / Gold Access / Platinum Access.
+# Ключи: первый токен статуса в lower case (silver, gold, platinum).
 LOYALTY_IMAGES: dict[str, str] = {
-    "silver": "AgACAgQAAxkBAAIFR2l83vc0VyWMkiU3YQP_v2RQt5pDAALLDGsb51fpU-ytODFi2C2hAQADAgADeQADOAQ",
-    "gold": "AgACAgQAAxkBAAIFSGl83vzATEG07e6g1ZU_h-dpUxnVAALMDGsb51fpU-pySOZ_r8NKAQADAgADeQADOAQ",
-    "platinum": "AgACAgQAAxkBAAIFSWl83v8rPqut4fSs938PSQNQDYWHAALNDGsb51fpU3Q1WPlW2XSvAQADAgADeQADOAQ",
+    "silver": "AgACAgQAAxkBAAJScml9A0BApbtV9A4KZIxOm9tzpc4cAALLDGsb51fpU3JUrQ2oI_pHAQADAgADeQADOAQ",
+    "gold": "AgACAgQAAxkBAAJSc2l9A1o_OygFNFIZltf6yE-LihBXAALMDGsb51fpUzDZ_QtvyjkgAQADAgADeQADOAQ",
+    "platinum": "AgACAgQAAxkBAAJSdGl9A20VE6seuPTglngaDvNj5zBZAALNDGsb51fpUxWyM5gXzGqCAQADAgADeQADOAQ",
 }
 
-# PROD file_id для экрана «Программа лояльности» (Silver / Gold / Platinum).
 LOYALTY_PHOTOS: dict[str, str] = {
     "silver": "AgACAgQAAxkBAAJScml9A0BApbtV9A4KZIxOm9tzpc4cAALLDGsb51fpU3JUrQ2oI_pHAQADAgADeQADOAQ",
     "gold": "AgACAgQAAxkBAAJSc2l9A1o_OygFNFIZltf6yE-LihBXAALMDGsb51fpUzDZ_QtvyjkgAQADAgADeQADOAQ",

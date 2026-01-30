@@ -5955,6 +5955,7 @@ async def callback_referral(callback: CallbackQuery):
         ])
         
         chat_id = callback.message.chat.id
+        # Только file_id из констант (Silver/Gold/Platinum). Никаких avatar, url, input_file, fallback.
         photo_id = get_loyalty_photo_id(current_status_name)
         try:
             if photo_id:
@@ -5970,6 +5971,11 @@ async def callback_referral(callback: CallbackQuery):
                     parse_mode=None,
                 )
             else:
+                logger.warning(
+                    "LOYALTY_SCREEN_NO_PHOTO_ID tier not found for status, sending text only [telegram_id=%s, current_status_name=%s]",
+                    telegram_id,
+                    current_status_name,
+                )
                 await safe_replace_screen(callback, text, keyboard, screen_name="referral_loyalty")
             await callback.answer()
             
