@@ -166,7 +166,7 @@ def generate_vless_url(uuid: str) -> str:
     query_string = "&".join(query_parts)
     
     # Формируем полный URL
-    fragment = "AtlasSecure"
+    fragment = "🇪🇺 Atlas Secure ⚡️"
     vless_url = f"vless://{server_address}?{query_string}#{quote(fragment)}"
     
     # ЗАЩИТА ОТ РЕГРЕССА: Валидируем сгенерированную ссылку
