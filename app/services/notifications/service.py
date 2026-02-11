@@ -338,114 +338,65 @@ def format_referral_notification_text(
     cashback_percent: int,
     paid_referrals_count: int,
     referrals_needed: int,
-    action_type: str = "покупку",
+    action_type: str,
     subscription_period: Optional[str] = None,
     language: str = "ru"
 ) -> str:
     """
     Format referral cashback notification text.
-    
-    Args:
-        referred_username: Username of referred user (optional)
-        referred_id: Telegram ID of referred user
-        purchase_amount: Purchase amount in rubles
-        cashback_amount: Cashback amount in rubles
-        cashback_percent: Cashback percentage
-        paid_referrals_count: Number of paid referrals
-        referrals_needed: Referrals needed to next level
-        action_type: Action type (localized string)
-        subscription_period: Subscription period (e.g., "1 месяц") if applicable
-        language: User language code
-    
-    Returns:
-        Formatted notification text
     """
-    import localization
-    
+    from app.i18n import get_text as i18n_get_text
+
     referred_display = f"@{referred_username}" if referred_username else f"ID: {referred_id}"
-    
-    # Pluralize friends for progress text
+
     if referrals_needed > 0:
-        # Use Russian declension helper for now (can be extended for other languages)
         if language == "ru":
             if referrals_needed % 10 == 1 and referrals_needed % 100 != 11:
-                friend_word = localization.get_text(language, "friend_singular", default="друг")
+                friend_word = i18n_get_text(language, "referral.friend_singular")
             elif 2 <= referrals_needed % 10 <= 4 and (referrals_needed % 100 < 10 or referrals_needed % 100 >= 20):
-                friend_word = localization.get_text(language, "friend_dual", default="друга")
+                friend_word = i18n_get_text(language, "referral.friend_dual")
             else:
-                friend_word = localization.get_text(language, "friend_plural", default="друзей")
+                friend_word = i18n_get_text(language, "referral.friend_plural")
         else:
-            friend_word = localization.get_text(language, "friend_plural", default="friends")
-        
-        progress_text = localization.get_text(
+            friend_word = i18n_get_text(language, "referral.friend_plural")
+
+        progress_text = i18n_get_text(
             language,
-            "referral_cashback_progress",
+            "referral.cashback_progress",
             needed=referrals_needed,
-            friend=friend_word,
-            default=f"👥 До следующего уровня: осталось пригласить {referrals_needed} {friend_word}"
+            friend=friend_word
         )
     else:
-        progress_text = localization.get_text(
-            language,
-            "referral_cashback_max_level",
-            default="🎯 Вы достигли максимального уровня!"
-        )
-    
-    # Build notification
-    title = localization.get_text(
+        progress_text = i18n_get_text(language, "referral.cashback_max_level")
+
+    title = i18n_get_text(language, "referral.cashback_title", action_type=action_type)
+    referred_line = i18n_get_text(language, "referral.cashback_referred", referred=referred_display)
+    amount_line = i18n_get_text(
         language,
-        "referral_cashback_title",
+        "referral.cashback_amount",
         action_type=action_type,
-        default=f"🎉 Ваш реферал совершил {action_type}!"
+        amount=purchase_amount
     )
-    
-    referred_line = localization.get_text(
-        language,
-        "referral_cashback_referred",
-        referred=referred_display,
-        default=f"👤 Реферал: {referred_display}"
-    )
-    
-    amount_line = localization.get_text(
-        language,
-        "referral_cashback_amount",
-        action_type=action_type,
-        amount=purchase_amount,
-        default=f"💳 Сумма {action_type}: {purchase_amount:.2f} ₽"
-    )
-    
+
     notification_text = f"{title}\n\n{referred_line}\n{amount_line}\n"
-    
-    # Add subscription period if applicable
+
     if subscription_period:
-        period_line = localization.get_text(
+        period_line = i18n_get_text(
             language,
-            "referral_cashback_subscription_period",
-            period=subscription_period,
-            default=f"⏰ Период подписки: {subscription_period}"
+            "referral.cashback_subscription_period",
+            period=subscription_period
         )
         notification_text += f"{period_line}\n"
-    
-    reward_line = localization.get_text(
+
+    reward_line = i18n_get_text(
         language,
-        "referral_cashback_reward",
+        "referral.cashback_reward",
         amount=cashback_amount,
-        percent=cashback_percent,
-        default=f"💰 Начислен кешбэк: {cashback_amount:.2f} ₽ ({cashback_percent}%)"
+        percent=cashback_percent
     )
-    
-    level_line = localization.get_text(
-        language,
-        "referral_cashback_level",
-        percent=cashback_percent,
-        default=f"📊 Ваш уровень: {cashback_percent}%"
-    )
-    
-    balance_line = localization.get_text(
-        language,
-        "referral_cashback_balance_auto",
-        default="Баланс пополнен автоматически."
-    )
+
+    level_line = i18n_get_text(language, "referral.cashback_level", percent=cashback_percent)
+    balance_line = i18n_get_text(language, "referral.cashback_balance_auto")
     
     notification_text += (
         f"{reward_line}\n\n"
