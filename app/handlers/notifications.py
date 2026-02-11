@@ -48,11 +48,26 @@ async def send_referral_cashback_notification(
         True если уведомление отправлено, False если ошибка
     """
     try:
+        # Получаем язык реферера для локализации уведомления
+        referrer_user = await database.get_user(referrer_id)
+        referrer_language = referrer_user.get("language", "ru") if referrer_user else "ru"
+        
         # Получаем информацию о реферале (username or first_name or "пользователь")
         referred_user = await database.get_user(referred_id)
         # Import helper function at runtime to avoid circular dependency
         import handlers
         referred_username = handlers.safe_resolve_username_from_db(referred_user, referred_id)
+        
+        # Локализуем action_type
+        import localization
+        if action_type == "покупка" or action_type == "покупку":
+            localized_action_type = localization.get_text(referrer_language, "action_purchase", default="покупку")
+        elif action_type == "продление":
+            localized_action_type = localization.get_text(referrer_language, "action_renewal", default="продление")
+        elif action_type == "пополнение":
+            localized_action_type = localization.get_text(referrer_language, "action_topup", default="пополнение")
+        else:
+            localized_action_type = action_type
         
         # Используем единый сервис для форматирования
         from app.services.notifications.service import format_referral_notification_text
@@ -65,8 +80,9 @@ async def send_referral_cashback_notification(
             cashback_percent=cashback_percent,
             paid_referrals_count=paid_referrals_count,
             referrals_needed=referrals_needed,
-            action_type=action_type,
-            subscription_period=subscription_period
+            action_type=localized_action_type,
+            subscription_period=subscription_period,
+            language=referrer_language
         )
         
         # Отправляем уведомление

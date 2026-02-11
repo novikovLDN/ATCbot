@@ -339,7 +339,8 @@ def format_referral_notification_text(
     paid_referrals_count: int,
     referrals_needed: int,
     action_type: str = "покупку",
-    subscription_period: Optional[str] = None
+    subscription_period: Optional[str] = None,
+    language: str = "ru"
 ) -> str:
     """
     Format referral cashback notification text.
@@ -352,36 +353,105 @@ def format_referral_notification_text(
         cashback_percent: Cashback percentage
         paid_referrals_count: Number of paid referrals
         referrals_needed: Referrals needed to next level
-        action_type: Action type ("покупку", "пополнение", "продление")
+        action_type: Action type (localized string)
         subscription_period: Subscription period (e.g., "1 месяц") if applicable
+        language: User language code
     
     Returns:
         Formatted notification text
     """
+    import localization
+    
     referred_display = f"@{referred_username}" if referred_username else f"ID: {referred_id}"
     
-    # Progress text
+    # Pluralize friends for progress text
     if referrals_needed > 0:
-        progress_text = f"👥 До следующего уровня: осталось пригласить {referrals_needed} друга"
+        # Use Russian declension helper for now (can be extended for other languages)
+        if language == "ru":
+            if referrals_needed % 10 == 1 and referrals_needed % 100 != 11:
+                friend_word = localization.get_text(language, "friend_singular", default="друг")
+            elif 2 <= referrals_needed % 10 <= 4 and (referrals_needed % 100 < 10 or referrals_needed % 100 >= 20):
+                friend_word = localization.get_text(language, "friend_dual", default="друга")
+            else:
+                friend_word = localization.get_text(language, "friend_plural", default="друзей")
+        else:
+            friend_word = localization.get_text(language, "friend_plural", default="friends")
+        
+        progress_text = localization.get_text(
+            language,
+            "referral_cashback_progress",
+            needed=referrals_needed,
+            friend=friend_word,
+            default=f"👥 До следующего уровня: осталось пригласить {referrals_needed} {friend_word}"
+        )
     else:
-        progress_text = "🎯 Вы достигли максимального уровня!"
+        progress_text = localization.get_text(
+            language,
+            "referral_cashback_max_level",
+            default="🎯 Вы достигли максимального уровня!"
+        )
     
     # Build notification
-    notification_text = (
-        f"🎉 Ваш реферал совершил {action_type}!\n\n"
-        f"👤 Реферал: {referred_display}\n"
-        f"💳 Сумма {action_type}: {purchase_amount:.2f} ₽\n"
+    title = localization.get_text(
+        language,
+        "referral_cashback_title",
+        action_type=action_type,
+        default=f"🎉 Ваш реферал совершил {action_type}!"
     )
+    
+    referred_line = localization.get_text(
+        language,
+        "referral_cashback_referred",
+        referred=referred_display,
+        default=f"👤 Реферал: {referred_display}"
+    )
+    
+    amount_line = localization.get_text(
+        language,
+        "referral_cashback_amount",
+        action_type=action_type,
+        amount=purchase_amount,
+        default=f"💳 Сумма {action_type}: {purchase_amount:.2f} ₽"
+    )
+    
+    notification_text = f"{title}\n\n{referred_line}\n{amount_line}\n"
     
     # Add subscription period if applicable
     if subscription_period:
-        notification_text += f"⏰ Период подписки: {subscription_period}\n"
+        period_line = localization.get_text(
+            language,
+            "referral_cashback_subscription_period",
+            period=subscription_period,
+            default=f"⏰ Период подписки: {subscription_period}"
+        )
+        notification_text += f"{period_line}\n"
+    
+    reward_line = localization.get_text(
+        language,
+        "referral_cashback_reward",
+        amount=cashback_amount,
+        percent=cashback_percent,
+        default=f"💰 Начислен кешбэк: {cashback_amount:.2f} ₽ ({cashback_percent}%)"
+    )
+    
+    level_line = localization.get_text(
+        language,
+        "referral_cashback_level",
+        percent=cashback_percent,
+        default=f"📊 Ваш уровень: {cashback_percent}%"
+    )
+    
+    balance_line = localization.get_text(
+        language,
+        "referral_cashback_balance_auto",
+        default="Баланс пополнен автоматически."
+    )
     
     notification_text += (
-        f"💰 Начислен кешбэк: {cashback_amount:.2f} ₽ ({cashback_percent}%)\n\n"
-        f"📊 Ваш уровень: {cashback_percent}%\n"
+        f"{reward_line}\n\n"
+        f"{level_line}\n"
         f"{progress_text}\n\n"
-        f"Баланс пополнен автоматически."
+        f"{balance_line}"
     )
     
     return notification_text
