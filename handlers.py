@@ -807,6 +807,11 @@ class BroadcastCreate(StatesGroup):
     waiting_for_confirm = State()
 
 
+class AdminBroadcastNoSubscription(StatesGroup):
+    waiting_for_text = State()
+    waiting_for_confirmation = State()
+
+
 class IncidentEdit(StatesGroup):
     waiting_for_text = State()
 
@@ -6097,6 +6102,115 @@ async def cmd_pending_activations(message: Message):
         logger.exception(f"Error in cmd_pending_activations: {e}")
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "errors.data_fetch", error=str(e)[:100], default=f"❌ Ошибка при получении данных: {str(e)[:100]}"))
+
+
+@router.message(Command("notify_no_subscription"))
+async def cmd_notify_no_subscription(message: Message, state: FSMContext):
+    """Broadcast to users without active subscription or trial (admin only). Silently ignore non-admin."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    language = await resolve_user_language(message.from_user.id)
+    await state.set_state(AdminBroadcastNoSubscription.waiting_for_text)
+    await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"))
+
+
+@router.message(AdminBroadcastNoSubscription.waiting_for_text)
+async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
+    """Process broadcast text, show preview, ask confirmation."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    if message.text and message.text.strip().lower() in ("/cancel", "cancel", "отмена"):
+        await state.clear()
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.operation_cancelled"))
+        return
+    if not message.text or not message.text.strip():
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"))
+        return
+    text = message.text.strip()
+    try:
+        users = await database.get_eligible_no_subscription_broadcast_users()
+        total = len(users)
+    except Exception as e:
+        logger.exception(f"Error fetching no_sub broadcast users: {e}")
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.check_logs"))
+        return
+    if total == 0:
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "broadcast._no_sub_zero_recipients"))
+        await state.clear()
+        return
+    await state.update_data(broadcast_text=text)
+    await state.set_state(AdminBroadcastNoSubscription.waiting_for_confirmation)
+    language = await resolve_user_language(message.from_user.id)
+    preview = text[:500] + ("..." if len(text) > 500 else "")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="no_sub_broadcast:confirm")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="no_sub_broadcast:cancel")],
+    ])
+    await message.answer(
+        i18n_get_text(language, "broadcast._no_sub_preview", preview=preview, total=total),
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("no_sub_broadcast:"))
+async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Handle confirm/cancel for no-subscription broadcast."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer()
+        return
+    action = callback.data.split(":")[1]
+    await callback.answer()
+    if action == "cancel":
+        await state.clear()
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"))
+        return
+    if action != "confirm":
+        return
+    data = await state.get_data()
+    text = data.get("broadcast_text")
+    if not text:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.message.edit_text(i18n_get_text(language, "broadcast._validation_message_empty"))
+        await state.clear()
+        return
+    try:
+        users = await database.get_eligible_no_subscription_broadcast_users()
+        total = len(users)
+    except Exception:
+        total = 0
+    language = await resolve_user_language(callback.from_user.id)
+    await callback.message.edit_text(
+        i18n_get_text(language, "broadcast._no_sub_sending", total=total)
+    )
+    await state.clear()
+
+    async def _run_broadcast():
+        try:
+            from broadcast_service import run_no_subscription_broadcast
+            await run_no_subscription_broadcast(
+                bot, text, callback.from_user.id, notify_admin_on_complete=True
+            )
+        except asyncio.CancelledError:
+            logger.info("no_sub_broadcast task cancelled")
+        except Exception as e:
+            logger.exception(f"no_sub_broadcast failed: {e}")
+            try:
+                await bot.send_message(
+                    callback.from_user.id,
+                    i18n_get_text(
+                        await resolve_user_language(callback.from_user.id),
+                        "admin.check_logs"
+                    ),
+                )
+            except Exception:
+                pass
+
+    asyncio.create_task(_run_broadcast())
 
 
 @router.callback_query(F.data == "admin:dashboard")

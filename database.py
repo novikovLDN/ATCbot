@@ -6084,6 +6084,120 @@ async def get_all_users_telegram_ids() -> list:
         return [row["telegram_id"] for row in rows]
 
 
+async def get_eligible_no_subscription_broadcast_users() -> list:
+    """Get users eligible for no-subscription broadcast.
+    Eligible = no active paid subscription, no active trial, is_reachable=TRUE.
+    Returns list of dicts with telegram_id. Defensive: fallback if is_reachable missing.
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, get_eligible_no_subscription_broadcast_users skipped")
+        return []
+    pool = await get_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        query_with_reachable = """
+            SELECT u.telegram_id
+            FROM users u
+            LEFT JOIN subscriptions paid_s ON paid_s.telegram_id = u.telegram_id
+                AND paid_s.status = 'active'
+                AND paid_s.expires_at > $1
+                AND paid_s.source != 'trial'
+            WHERE paid_s.id IS NULL
+              AND (u.trial_expires_at IS NULL OR u.trial_expires_at <= $1)
+              AND COALESCE(u.is_reachable, TRUE) = TRUE
+        """
+        fallback_query = """
+            SELECT u.telegram_id
+            FROM users u
+            LEFT JOIN subscriptions paid_s ON paid_s.telegram_id = u.telegram_id
+                AND paid_s.status = 'active'
+                AND paid_s.expires_at > $1
+                AND paid_s.source != 'trial'
+            WHERE paid_s.id IS NULL
+              AND (u.trial_expires_at IS NULL OR u.trial_expires_at <= $1)
+        """
+        try:
+            rows = await conn.fetch(query_with_reachable, now)
+        except asyncpg.UndefinedColumnError:
+            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, no_sub_broadcast fallback")
+            rows = await conn.fetch(fallback_query, now)
+        return [{"telegram_id": row["telegram_id"]} for row in rows]
+
+
+async def check_user_still_eligible_for_no_sub_broadcast(conn, telegram_id: int, now: datetime) -> bool:
+    """Race-condition re-check before sending. Returns True if still eligible."""
+    paid = await get_active_paid_subscription(conn, telegram_id, now)
+    if paid:
+        return False
+    try:
+        row = await conn.fetchrow(
+            "SELECT trial_expires_at, is_reachable FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+    except asyncpg.UndefinedColumnError:
+        row = await conn.fetchrow(
+            "SELECT trial_expires_at FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+    if not row:
+        return False
+    trial_expires_at = row.get("trial_expires_at")
+    if trial_expires_at and trial_expires_at > now:
+        return False
+    is_reachable = row.get("is_reachable")
+    if is_reachable is False:
+        return False
+    return True
+
+
+async def insert_admin_broadcast_record(
+    broadcast_type: str,
+    total_recipients: int,
+    success_count: int = 0,
+    fail_count: int = 0
+) -> Optional[int]:
+    """Insert admin_broadcasts record. Returns id or None."""
+    if not DB_READY:
+        return None
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO admin_broadcasts (type, total_recipients, success_count, fail_count)
+                   VALUES ($1, $2, $3, $4) RETURNING id""",
+                broadcast_type, total_recipients, success_count, fail_count
+            )
+            return row["id"] if row else None
+    except asyncpg.UndefinedTableError:
+        logger.debug("admin_broadcasts table not found, skipping audit")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to insert admin_broadcast record: {e}")
+        return None
+
+
+async def update_admin_broadcast_record(broadcast_id: int, success_count: int, fail_count: int) -> None:
+    """Update admin_broadcasts record after completion."""
+    if not DB_READY or broadcast_id is None:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE admin_broadcasts
+                   SET success_count = $1, fail_count = $2 WHERE id = $3""",
+                success_count, fail_count, broadcast_id
+            )
+    except Exception as e:
+        logger.warning(f"Failed to update admin_broadcast record: {e}")
+
+
 async def get_users_by_segment(segment: str) -> list:
     """Получить список Telegram ID пользователей по сегменту
     
