@@ -466,7 +466,7 @@ async def expire_trial_subscriptions(bot: Bot):
                             expired_text = localization.get_text(language, "trial_expired_text")
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                 [InlineKeyboardButton(
-                                    text="🔐 Купить / Продлить доступ",
+                                    text=localization.get_text(language, "buy_vpn", default="🔐 Купить доступ"),
                                     callback_data="menu_buy_vpn"
                                 )]
                             ])

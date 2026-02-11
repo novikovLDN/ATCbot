@@ -222,8 +222,7 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             text = localization.get_text(
                                 language,
                                 "payment_approved",
-                                date=expires_str,
-                                default=f"✅ Ваш VPN доступ активирован! Доступ до {expires_str}"
+                                date=expires_str
                             )
                             
                             # Use standard keyboard for VPN key
@@ -319,16 +318,17 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"user={telegram_id}, attempts={new_attempts}, error={error_msg}]"
                             )
                             
-                            # Send admin notification
+                            # Send admin notification (admin notifications use Russian)
                             try:
+                                admin_lang = "ru"
                                 admin_message = (
-                                    f"⚠️ **ОШИБКА АКТИВАЦИИ VPN ПОДПИСКИ**\n\n"
-                                    f"Подписка ID: `{subscription_id}`\n"
-                                    f"Пользователь: `{telegram_id}`\n"
-                                    f"Попыток: {new_attempts}/{MAX_ACTIVATION_ATTEMPTS}\n"
-                                    f"Ошибка: `{error_msg}`\n\n"
-                                    f"Подписка помечена как `failed`.\n"
-                                    f"Требуется ручная активация."
+                                    f"{localization.get_text(admin_lang, 'admin_activation_error_title', default='⚠️ **ОШИБКА АКТИВАЦИИ VPN ПОДПИСКИ**')}\n\n"
+                                    f"{localization.get_text(admin_lang, 'admin_activation_error_subscription_id', subscription_id=subscription_id, default=f'Подписка ID: `{subscription_id}`')}\n"
+                                    f"{localization.get_text(admin_lang, 'admin_activation_error_user', telegram_id=telegram_id, default=f'Пользователь: `{telegram_id}`')}\n"
+                                    f"{localization.get_text(admin_lang, 'admin_activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS, default=f'Попыток: {new_attempts}/{MAX_ACTIVATION_ATTEMPTS}')}\n"
+                                    f"{localization.get_text(admin_lang, 'admin_activation_error_error', error_msg=error_msg, default=f'Ошибка: `{error_msg}`')}\n\n"
+                                    f"{localization.get_text(admin_lang, 'admin_activation_error_status', default='Подписка помечена как `failed`.')}\n"
+                                    f"{localization.get_text(admin_lang, 'admin_activation_error_action', default='Требуется ручная активация.')}"
                                 )
                                 
                                 await bot.send_message(

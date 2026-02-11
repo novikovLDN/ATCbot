@@ -292,17 +292,17 @@ async def process_auto_renewals(bot: Bot):
                                 amount=amount_rubles
                             )
                         except (KeyError, TypeError):
-                            # Fallback на старый формат, если локализация не обновлена
-                            text = f"✅ Подписка автоматически продлена на {duration_days} дней.\n\nДействует до: {expires_str}\nС баланса списано: {amount_rubles:.2f} ₽"
+                            # Fallback на русский, если локализация не обновлена
+                            text = localization.get_text("ru", "auto_renewal_success", days=duration_days, expires_date=expires_str, amount=amount_rubles)
                         
                         # Создаем inline клавиатуру для UX
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[
                             [InlineKeyboardButton(
-                                text="👤 Мой профиль",
+                                text=localization.get_text(language, "profile", default="👤 Мой профиль"),
                                 callback_data="menu_profile"
                             )],
                             [InlineKeyboardButton(
-                                text="🔐 Купить / Продлить доступ",
+                                text=localization.get_text(language, "buy_vpn", default="🔐 Купить доступ"),
                                 callback_data="menu_buy_vpn"
                             )]
                         ])
