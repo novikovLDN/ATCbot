@@ -2,9 +2,17 @@
 """
 Modular I18N architecture for Atlas Secure.
 Strict localization: no hardcoded UI strings in logic.
+
+Language resolution:
+- If language not in LANGUAGES → use DEFAULT_LANGUAGE (ru)
+- Otherwise → use exact language module
+NO cross-language fallback. NEVER auto-use English.
+If key missing: STAGE → strict raise; PROD → [MISSING:key]
 """
 
 from . import ru, en, uz, tj, de, kk, ar
+
+DEFAULT_LANGUAGE = "ru"
 
 LANGUAGES = {
     "ru": ru.LANG,
@@ -37,7 +45,7 @@ def get_text(language: str, key: str, strict: bool = None, **kwargs) -> str:
             strict = IS_STAGE
         except ImportError:
             strict = False
-    lang_dict = LANGUAGES.get(language, LANGUAGES["ru"])
+    lang_dict = LANGUAGES.get(language, LANGUAGES[DEFAULT_LANGUAGE])
     text = lang_dict.get(key)
 
     if text is None:

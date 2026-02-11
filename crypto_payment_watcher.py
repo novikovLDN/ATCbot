@@ -7,8 +7,9 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 import asyncpg
 import database
-import localization
 import config
+from app.services.language_service import resolve_user_language
+from app.i18n import get_text as i18n_get_text
 from payments import cryptobot
 from app.core.system_state import (
     SystemState,
@@ -188,17 +189,15 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
                     # Проверяем, является ли это пополнением баланса
                     is_balance_topup = result.get("is_balance_topup", False)
                     
-                    user = await database.get_user(telegram_id)
-                    language = user.get("language", "ru") if user else "ru"
+                    language = await resolve_user_language(telegram_id)
                     
                     if is_balance_topup:
                         # Отправляем подтверждение пополнения баланса
                         amount = result.get("amount", amount_rubles)
-                        text = localization.get_text(
+                        text = i18n_get_text(
                             language,
-                            "balance_topup_success",
-                            amount=amount,
-                            default=f"✅ Баланс успешно пополнен на {amount:.2f} ₽"
+                            "main.balance_topup_success",
+                            amount=amount
                         )
                         
                         try:
@@ -218,7 +217,7 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
                         vpn_key = result["vpn_key"]
                         
                         expires_str = expires_at.strftime("%d.%m.%Y")
-                        text = localization.get_text(language, "payment_approved", date=expires_str)
+                        text = i18n_get_text(language, "payment.approved", date=expires_str)
                         
                         # Импорт здесь для избежания circular import
                         import handlers

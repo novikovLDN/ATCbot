@@ -176,11 +176,11 @@ class TestNotificationSchedule:
         
         assert len(schedule) == 2
         assert schedule[0]["hours"] == 6
-        assert schedule[0]["key"] == "trial_notification_6h"
+        assert schedule[0]["key"] == "trial.notification_6h"
         assert schedule[0]["has_button"] is False
         
         assert schedule[1]["hours"] == 48
-        assert schedule[1]["key"] == "trial_notification_60h"
+        assert schedule[1]["key"] == "trial.notification_60h"
         assert schedule[1]["has_button"] is True
         assert schedule[1]["db_flag"] == "trial_notif_60h_sent"
     
@@ -189,6 +189,6 @@ class TestNotificationSchedule:
         config = get_final_reminder_config()
         
         assert config["hours_before_expiry"] == 6
-        assert config["notification_key"] == "trial_notification_71h"
+        assert config["notification_key"] == "trial.notification_71h"
         assert config["has_button"] is True
         assert config["db_flag"] == "trial_notif_71h_sent"
