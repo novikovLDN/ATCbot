@@ -6,8 +6,9 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError
 import database
-import localization
 import config
+from app import i18n
+from app.services.language_service import resolve_user_language
 from app.services.notifications import service as notification_service
 from app.services.notifications.service import ReminderType
 # import outline_api  # DISABLED - мигрировали на Xray Core (VLESS)
@@ -19,7 +20,7 @@ def get_renewal_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для продления доступа"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "renew_subscription"),
+            text=i18n.get_text(language, "subscription.renew"),
             callback_data="menu_buy_vpn"
         )]
     ])
@@ -30,7 +31,7 @@ def get_subscription_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для оформления подписки"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "buy_vpn"),
+            text=i18n.get_text(language, "main.buy"),
             callback_data="menu_buy_vpn"
         )]
     ])
@@ -41,7 +42,7 @@ def get_tariff_1_month_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для подписки на 1 месяц (унифицирована с стандартными CTA)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "buy_vpn", default="🔐 Купить / Продлить доступ"),
+            text=i18n.get_text(language, "main.buy"),
             callback_data="menu_buy_vpn"
         )]
     ])
@@ -73,9 +74,7 @@ async def send_smart_reminders(bot: Bot):
                         logger.debug(f"Skipping reminder for user {telegram_id}: {decision.reason}")
                     continue
                 
-                # Get user language
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
+                language = await resolve_user_language(telegram_id)
                 
                 # Determine reminder text and keyboard based on reminder type
                 reminder_type = decision.reminder_type
@@ -84,34 +83,35 @@ async def send_smart_reminders(bot: Bot):
                 audit_message = None
                 
                 if reminder_type == ReminderType.ADMIN_1DAY_6H:
-                    text = localization.get_text(language, "reminder_admin_1day_6h")
+                    text = i18n.get_text(language, "reminder.admin_1day_6h")
                     keyboard = get_subscription_keyboard(language)
                     audit_message = "Admin 1-day reminder (6h before expiry)"
                 
                 elif reminder_type == ReminderType.ADMIN_7DAYS_24H:
-                    text = localization.get_text(language, "reminder_admin_7days_24h")
+                    text = i18n.get_text(language, "reminder.admin_7days_24h")
                     keyboard = get_tariff_1_month_keyboard(language)
                     audit_message = "Admin 7-day reminder (24h before expiry)"
                 
                 elif reminder_type == ReminderType.REMINDER_3D:
-                    text = localization.get_text(language, "reminder_paid_3d")
+                    text = i18n.get_text(language, "reminder.paid_3d")
                     keyboard = get_renewal_keyboard(language)
                     audit_message = "Paid subscription reminder (3d before expiry)"
                 
                 elif reminder_type == ReminderType.REMINDER_24H:
-                    text = localization.get_text(language, "reminder_paid_24h")
+                    text = i18n.get_text(language, "reminder.paid_24h")
                     keyboard = get_renewal_keyboard(language)
                     audit_message = "Paid subscription reminder (24h before expiry)"
                 
                 elif reminder_type == ReminderType.REMINDER_3H:
-                    text = localization.get_text(language, "reminder_paid_3h")
+                    text = i18n.get_text(language, "reminder.paid_3h")
                     keyboard = get_renewal_keyboard(language)
                     audit_message = "Paid subscription reminder (3h before expiry)"
                 
                 if text and keyboard:
                     # Send reminder
                     await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                    
+                    await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
+
                     # Mark reminder as sent using notification service
                     await notification_service.mark_reminder_sent(telegram_id, reminder_type)
                     

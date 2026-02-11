@@ -10,8 +10,8 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import asyncpg
 import database
-import localization
 import config
+from app import i18n
 from app.services.trials import service as trial_service
 from app.core.system_state import (
     SystemState,
@@ -43,7 +43,7 @@ def get_trial_buy_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для покупки доступа (в уведомлениях trial)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "buy_vpn"),
+            text=i18n.get_text(language, "main.buy"),
             callback_data="menu_buy_vpn"
         )]
     ])
@@ -76,7 +76,7 @@ async def send_trial_notification(
         language = await resolve_user_language(telegram_id)
         
         # Получаем текст уведомления
-        text = localization.get_text(language, notification_key)
+        text = i18n.get_text(language, notification_key)
         
         # Формируем клавиатуру (если нужно)
         reply_markup = None
@@ -85,7 +85,8 @@ async def send_trial_notification(
         
         # Отправляем уведомление
         await bot.send_message(telegram_id, text, reply_markup=reply_markup)
-        
+        await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
+
         logger.info(
             f"trial_notification_sent: user={telegram_id}, notification={notification_key}, "
             f"has_button={has_button}"
@@ -460,15 +461,16 @@ async def expire_trial_subscriptions(bot: Bot):
                         if trial_completed_sent:
                             language = await resolve_user_language(telegram_id)
                             
-                            expired_text = localization.get_text(language, "trial_expired_text")
+                            expired_text = i18n.get_text(language, "trial.expired")
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                 [InlineKeyboardButton(
-                                    text=localization.get_text(language, "buy_vpn", default="🔐 Купить доступ"),
+                                    text=i18n.get_text(language, "main.buy"),
                                     callback_data="menu_buy_vpn"
                                 )]
                             ])
                             try:
                                 await bot.send_message(telegram_id, expired_text, parse_mode="HTML", reply_markup=keyboard)
+                                await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
                                 logger.info(
                                     f"trial_expired: notification sent: user={telegram_id}, "
                                     f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
