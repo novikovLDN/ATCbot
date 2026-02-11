@@ -19,7 +19,6 @@ from aiogram.filters import StateFilter
 from datetime import datetime, timedelta
 import logging
 import database
-import localization
 import config
 import time
 import csv
@@ -376,11 +375,7 @@ def handler_exception_boundary(handler_name: str, operation: str = None):
                         event = args[0]
                         tid = getattr(getattr(event, 'from_user', None), 'id', None) or telegram_id
                         language = await resolve_user_language(tid) if tid else DEFAULT_LANGUAGE
-                        error_text = localization.get_text(
-                            language,
-                            "error_occurred",
-                            default="⚠️ Произошла ошибка. Попробуйте позже."
-                        )
+                        error_text = i18n_get_text(language, "main.error_occurred")
                         await args[0].answer(error_text)
                 except Exception:
                     # If we can't send error message, that's OK - handler still exits gracefully
@@ -755,14 +750,10 @@ async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: boo
         
         # Получаем текст сообщения в зависимости от окружения
         if config.IS_PROD:
-            error_text = localization.get_text(
-                language,
-                "service_unavailable",
-                default="⚠️ Сервис временно недоступен. Попробуйте позже."
-            )
+            error_text = i18n_get_text(language, "main.service_unavailable")
         else:
             # STAGE/LOCAL: более мягкое сообщение (language=ru when DB unavailable)
-            error_text = localization.get_text(language, "db_init_stage_warning", default="⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.")
+            error_text = i18n_get_text(language, "errors.db_init_stage_warning")
         
         # Отправляем сообщение
         try:
@@ -875,19 +866,19 @@ def get_language_keyboard(language: str = "ru"):
     """Клавиатура для выбора языка (языковые названия показываются в нативной форме)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_ru", default="🇷🇺 Русский"), callback_data="lang_ru"),
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_en", default="🇺🇸 English"), callback_data="lang_en"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ru"), callback_data="lang_ru"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_en"), callback_data="lang_en"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_de", default="🇩🇪 Deutsch"), callback_data="lang_de"),
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_kk", default="🇰🇿 Қазақша"), callback_data="lang_kk"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_de"), callback_data="lang_de"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_kk"), callback_data="lang_kk"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_ar", default="🇸🇦 العربية"), callback_data="lang_ar"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_ar"), callback_data="lang_ar"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_uz", default="🇺🇿 O'zbek"), callback_data="lang_uz"),
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_tj", default="🇹🇯 Тоҷикӣ"), callback_data="lang_tj"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_uz"), callback_data="lang_uz"),
+            InlineKeyboardButton(text=i18n_get_text(language, "lang.button_tj"), callback_data="lang_tj"),
         ],
     ])
     return keyboard
@@ -1098,7 +1089,7 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
     buttons = []
     
     for tariff_key in config.TARIFFS.keys():
-        base_text = localization.get_text(language, f"tariff_button_{tariff_key}")
+        base_text = i18n_get_text(language, "buy.tariff_button_" + str(tariff_key), f"tariff_button_{tariff_key}")
         buttons.append([InlineKeyboardButton(text=base_text, callback_data=f"tariff_type:{tariff_key}")])
     
     # Кнопка ввода промокода
@@ -1119,11 +1110,11 @@ def get_payment_method_keyboard(language: str):
     """Клавиатура выбора способа оплаты"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "payment_test"),
+            text=i18n_get_text(language, "payment.test", "payment_test"),
             callback_data="payment_test"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "payment_sbp"),
+            text=i18n_get_text(language, "payment.sbp", "payment_sbp"),
             callback_data="payment_sbp"
         )],
         [InlineKeyboardButton(
@@ -1138,7 +1129,7 @@ def get_sbp_payment_keyboard(language: str):
     """Клавиатура для оплаты СБП"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "paid_button"),
+            text=i18n_get_text(language, "payment.paid_button", "paid_button"),
             callback_data="payment_paid"
         )],
         [InlineKeyboardButton(
@@ -1157,7 +1148,7 @@ def get_pending_payment_keyboard(language: str):
             callback_data="menu_main"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "support"),
+            text=i18n_get_text(language, "main.support", "support"),
             callback_data="menu_support"
         )],
     ])
@@ -1168,11 +1159,11 @@ def get_about_keyboard(language: str):
     """Клавиатура раздела 'О сервисе'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "privacy_policy"),
+            text=i18n_get_text(language, "main.privacy_policy", "privacy_policy"),
             callback_data="about_privacy"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "our_channel", default="Наш канал"),
+            text=i18n_get_text(language, "main.our_channel"),
             url="https://t.me/atlas_secure"
         )],
         [InlineKeyboardButton(
@@ -1191,7 +1182,7 @@ def get_service_status_keyboard(language: str):
             callback_data="menu_main"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "support"),
+            text=i18n_get_text(language, "main.support", "support"),
             callback_data="menu_support"
         )],
     ])
@@ -1297,7 +1288,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         # Только iOS
         buttons.append([
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_download_ios"),
+                text=i18n_get_text(language, "instruction._download_ios", "instruction_download_ios"),
                 url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
             )
         ])
@@ -1305,7 +1296,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         # Только Android
         buttons.append([
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_download_android"),
+                text=i18n_get_text(language, "instruction._download_android", "instruction_download_android"),
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             )
         ])
@@ -1313,17 +1304,17 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         # Unknown - показываем все кнопки
         buttons.append([
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_download_ios"),
+                text=i18n_get_text(language, "instruction._download_ios", "instruction_download_ios"),
                 url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
             ),
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_download_android"),
+                text=i18n_get_text(language, "instruction._download_android", "instruction_download_android"),
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
         ])
         buttons.append([
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction_download_desktop"),
+                text=i18n_get_text(language, "instruction._download_desktop", "instruction_download_desktop"),
                 url="https://v2raytun.com"
             ),
         ])
@@ -1331,7 +1322,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
     # Всегда показываем кнопку копирования ключа (one-tap copy)
     buttons.append([
         InlineKeyboardButton(
-            text=localization.get_text(language, "copy_key"),
+            text=i18n_get_text(language, "profile.copy_key", "copy_key"),
             callback_data="copy_vpn_key"
         ),
     ])
@@ -1345,7 +1336,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
     ])
     buttons.append([
         InlineKeyboardButton(
-            text=localization.get_text(language, "support"),
+            text=i18n_get_text(language, "main.support", "support"),
             callback_data="menu_support"
         )
     ])
@@ -1357,19 +1348,19 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
 def get_admin_dashboard_keyboard(language: str = "ru"):
     """Клавиатура главного экрана админ-дашборда"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_dashboard", default="📊 Admin Dashboard"), callback_data="admin:dashboard")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_stats", default="📊 Статистика"), callback_data="admin:stats")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_analytics", default="💰 Аналитика"), callback_data="admin:analytics")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_metrics", default="📈 Метрики"), callback_data="admin:metrics")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_audit", default="📜 Аудит"), callback_data="admin:audit")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_keys", default="🔑 VPN-ключи"), callback_data="admin:keys")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_user", default="👤 Пользователь"), callback_data="admin:user")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_credit_balance", default="💰 Выдать средства"), callback_data="admin:credit_balance")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_system", default="🚨 Система"), callback_data="admin:system")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_export", default="📤 Экспорт данных"), callback_data="admin:export")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_broadcast", default="📣 Уведомления"), callback_data="admin:broadcast")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_promo_stats", default="📊 Статистика промокодов"), callback_data="admin_promo_stats")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_referral_stats", default="🤝 Реферальная статистика"), callback_data="admin:referral_stats")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.dashboard"), callback_data="admin:dashboard")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.stats"), callback_data="admin:stats")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.analytics"), callback_data="admin:analytics")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.metrics"), callback_data="admin:metrics")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data="admin:credit_balance")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats")],
     ])
     return keyboard
 
@@ -1377,7 +1368,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
 def get_admin_back_keyboard(language: str = "ru"):
     """Клавиатура с кнопкой 'Назад' для админ-разделов"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     return keyboard
 
@@ -1385,27 +1376,17 @@ def get_admin_back_keyboard(language: str = "ru"):
 def get_reissue_notification_keyboard(language: str = "ru"):
     """Клавиатура для уведомления о перевыпуске VPN-ключа"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_go_to_instruction", default="🔌 Перейти к инструкции"), callback_data="menu_instruction")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_copy_key", default="📋 Скопировать ключ"), callback_data="copy_vpn_key")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_my_profile", default="👤 Мой профиль"), callback_data="menu_profile")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.go_to_instruction"), callback_data="menu_instruction")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.copy_key"), callback_data="copy_vpn_key")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.my_profile"), callback_data="menu_profile")],
     ])
     return keyboard
 
 
 def get_reissue_notification_text(vpn_key: str, language: str = "ru") -> str:
     """Текст уведомления о перевыпуске VPN-ключа"""
-    title = localization.get_text(language, "reissue_notification_title", default="🔐 Обновление VPN-ключа")
-    text_body = localization.get_text(language, "reissue_notification_text", vpn_key=vpn_key, default=(
-        "Ваш VPN-ключ обновлён\n"
-        "и переведён на новую версию сервера.\n\n"
-        "Для корректной работы:\n"
-        "— удалите старый ключ из VPN-приложения\n"
-        "— добавьте новый ключ доступа\n\n"
-        "Ключ:\n\n"
-        f"<code>{vpn_key}</code>\n\n"
-        "Обновление необходимо для сохранения\n"
-        "стабильности и производительности соединения."
-    ))
+    title = i18n_get_text(language, "main.reissue_notification_title")
+    text_body = i18n_get_text(language, "main.reissue_notification_text", vpn_key=vpn_key)
     return f"{title}\n\n{text_body}"
 
 
@@ -1418,9 +1399,9 @@ from app.handlers.notifications import send_referral_cashback_notification
 def get_broadcast_test_type_keyboard(language: str = "ru"):
     """Клавиатура выбора типа тестирования"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_normal", default="📝 Обычное уведомление"), callback_data="broadcast_test_type:normal")],
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_ab_test", default="🔬 A/B тест"), callback_data="broadcast_test_type:ab")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:broadcast")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._normal"), callback_data="broadcast_test_type:normal")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_test"), callback_data="broadcast_test_type:ab")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
     return keyboard
 
@@ -1428,11 +1409,11 @@ def get_broadcast_test_type_keyboard(language: str = "ru"):
 def get_broadcast_type_keyboard(language: str = "ru"):
     """Клавиатура выбора типа уведомления"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_type_info", default="ℹ️ Информация"), callback_data="broadcast_type:info")],
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_type_maintenance", default="🔧 Технические работы"), callback_data="broadcast_type:maintenance")],
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_type_security", default="🔒 Безопасность"), callback_data="broadcast_type:security")],
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_type_promo", default="🎯 Промо"), callback_data="broadcast_type:promo")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:broadcast")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_info"), callback_data="broadcast_type:info")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_maintenance"), callback_data="broadcast_type:maintenance")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_security"), callback_data="broadcast_type:security")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_promo"), callback_data="broadcast_type:promo")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
     return keyboard
 
@@ -1440,9 +1421,9 @@ def get_broadcast_type_keyboard(language: str = "ru"):
 def get_broadcast_segment_keyboard(language: str = "ru"):
     """Клавиатура выбора сегмента получателей"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_segment_all", default="🌍 Все пользователи"), callback_data="broadcast_segment:all_users")],
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_segment_active", default="🔐 Только активные подписки"), callback_data="broadcast_segment:active_subscriptions")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:broadcast")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_all"), callback_data="broadcast_segment:all_users")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_active"), callback_data="broadcast_segment:active_subscriptions")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
     return keyboard
 
@@ -1450,8 +1431,8 @@ def get_broadcast_segment_keyboard(language: str = "ru"):
 def get_broadcast_confirm_keyboard(language: str = "ru"):
     """Клавиатура подтверждения отправки уведомления"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_confirm_send", default="✅ Отправить"), callback_data="broadcast:confirm_send")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="❌ Отмена"), callback_data="admin:broadcast")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._confirm_send"), callback_data="broadcast:confirm_send")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
     return keyboard
 
@@ -1469,16 +1450,16 @@ def get_ab_test_list_keyboard(ab_tests: list, language: str = "ru") -> InlineKey
         button_text = f"#{test_id} {title} ({date_str})"
         buttons.append([InlineKeyboardButton(text=button_text, callback_data=f"broadcast:ab_stat:{test_id}")])
     
-    buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:broadcast")])
+    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:broadcast")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_admin_export_keyboard(language: str = "ru"):
     """Клавиатура выбора типа экспорта"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_export_users", default="👥 Пользователи"), callback_data="admin:export:users")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_export_subscriptions", default="🔑 Активные подписки"), callback_data="admin:export:subscriptions")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export_users"), callback_data="admin:export:users")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export_subscriptions"), callback_data="admin:export:subscriptions")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     return keyboard
 
@@ -1488,27 +1469,27 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
     buttons = []
     if has_active_subscription:
         callback_data = f"admin:user_reissue:{user_id}" if user_id else "admin:user_reissue"
-        buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_reissue_key", default="🔁 Перевыпустить ключ"), callback_data=callback_data)])
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_key"), callback_data=callback_data)])
     if user_id:
-        buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_subscription_history", default="🧾 История подписок"), callback_data=f"admin:user_history:{user_id}")])
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
         # Кнопки выдачи и лишения доступа (всегда доступны)
         buttons.append([
-            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_access", default="🟢 Выдать доступ"), callback_data=f"admin:grant:{user_id}"),
-            InlineKeyboardButton(text=localization.get_text(language, "admin_revoke_access", default="🔴 Лишить доступа"), callback_data=f"admin:revoke:user:{user_id}")
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_access"), callback_data=f"admin:grant:{user_id}"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")
         ])
         # Кнопки управления скидками
         if has_discount:
-            buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_delete_discount", default="❌ Удалить скидку"), callback_data=f"admin:discount_delete:{user_id}")])
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
         else:
-            buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_create_discount", default="🎯 Назначить скидку"), callback_data=f"admin:discount_create:{user_id}")])
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.create_discount"), callback_data=f"admin:discount_create:{user_id}")])
         # Кнопки управления VIP-статусом
         if is_vip:
-            buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_revoke_vip", default="❌ Снять VIP"), callback_data=f"admin:vip_revoke:{user_id}")])
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_vip"), callback_data=f"admin:vip_revoke:{user_id}")])
         else:
-            buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_grant_vip", default="👑 Выдать VIP"), callback_data=f"admin:vip_grant:{user_id}")])
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
         # Кнопка выдачи средств
-        buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_credit_balance", default="💰 Выдать средства"), callback_data=f"admin:credit_balance:{user_id}")])
-    buttons.append([InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")])
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
+    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
 
@@ -1518,11 +1499,11 @@ def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text=localization.get_text(language, "admin_confirm"),
+                text=i18n_get_text(language, "admin.confirm", "admin_confirm"),
                 callback_data=f"approve_payment:{payment_id}"
             ),
             InlineKeyboardButton(
-                text=localization.get_text(language, "admin_reject"),
+                text=i18n_get_text(language, "admin.reject", "admin_reject"),
                 callback_data=f"reject_payment:{payment_id}"
             ),
         ],
@@ -1673,7 +1654,7 @@ async def cmd_promo_stats(message: Message):
             details={"error": error}
         )
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
+        await message.answer(i18n_get_text(language, "errors.try_later"))
         return
     
     # STEP 4 — PART B: AUTHORIZATION GUARDS
@@ -1681,7 +1662,7 @@ async def cmd_promo_stats(message: Message):
     is_authorized, auth_error = require_admin(telegram_id)
     if not is_authorized:
         language = await resolve_user_language(telegram_id)
-        await message.answer(localization.get_text(language, "error_access_denied"))
+        await message.answer(i18n_get_text(language, "errors.access_denied", "error_access_denied"))
         return
     
     # STEP 4 — PART F: SECURITY LOGGING POLICY
@@ -1702,7 +1683,7 @@ async def cmd_promo_stats(message: Message):
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "error_promo_stats", default="Ошибка при получении статистики промокодов."))
+        await message.answer(i18n_get_text(language, "errors.promo_stats"))
 
 
 @router.message(Command("profile"))
@@ -1717,7 +1698,7 @@ async def cmd_profile(message: Message):
     
     if not user:
         language = await resolve_user_language(telegram_id)
-        await message.answer(localization.get_text(language, "error_start_command"))
+        await message.answer(i18n_get_text(language, "errors.start_command", "error_start_command"))
         return
     
     language = await resolve_user_language(telegram_id)
@@ -1935,7 +1916,7 @@ async def callback_change_language(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
     
     # Экран выбора языка (канонический вид)
-    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
+    text = i18n_get_text(language, "lang.select")
     await safe_edit_text(
         callback.message,
         text,
@@ -1953,7 +1934,7 @@ async def cmd_language(message: Message, bot: Bot):
     telegram_id = message.from_user.id
     language = await resolve_user_language(telegram_id)
     
-    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
+    text = i18n_get_text(language, "lang.select")
     await bot.send_message(
         message.chat.id,
         text,
@@ -2080,11 +2061,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Проверяем eligibility перед активацией
     is_eligible = await database.is_eligible_for_trial(telegram_id)
     if not is_eligible:
-        error_text = localization.get_text(
-            language,
-            "trial_not_available",
-            default="❌ Пробный период недоступен. Вы уже использовали его ранее или имеете активную подписку."
-        )
+        error_text = i18n_get_text(language, "main.trial_not_available")
         await callback.answer(error_text, show_alert=True)
         logger.warning(f"Trial activation attempted by ineligible user: {telegram_id}")
         return
@@ -2181,18 +2158,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         )
         
         # Отправляем сообщение об активации
-        success_text = localization.get_text(
-            language,
-            "trial_activated_text",
-            default=(
-                "🔒 <b>Пробный доступ активирован</b>\n\n"
-                "Вы под защитой на 3 дня.\n\n"
-                "🔑 <b>Ваш ключ подключения:</b>\n"
-                "<code>{vpn_key}</code>\n\n"
-                "Используйте его в приложении VPN.\n\n"
-                "⏰ <b>Срок действия:</b> до {expires_date}"
-            )
-        ).format(
+        success_text = i18n_get_text(
+            language, "main.trial_activated_text",
             vpn_key=vpn_key,
             expires_date=subscription_end.strftime("%d.%m.%Y %H:%M")
         )
@@ -2221,11 +2188,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         
     except Exception as e:
         logger.exception(f"Error activating trial for user {telegram_id}: {e}")
-        error_text = localization.get_text(
-            language,
-            "trial_activation_error",
-            default="❌ Ошибка активации пробного периода. Попробуйте позже или обратитесь в поддержку."
-        )
+        error_text = i18n_get_text(language, "main.trial_activation_error")
         await callback.message.answer(error_text)
 
 
@@ -2268,7 +2231,7 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
             user = await database.get_user(telegram_id)
             language = await resolve_user_language(callback.from_user.id)
             try:
-                error_text = localization.get_text(language, "error_profile_load")
+                error_text = i18n_get_text(language, "errors.profile_load", "error_profile_load")
             except KeyError:
                 logger.error(f"Missing localization key 'error_profile_load' for language '{language}'")
                 error_text = "Ошибка загрузки профиля. Попробуйте позже."
@@ -2287,16 +2250,16 @@ async def callback_vip_access(callback: CallbackQuery):
     is_vip = await database.is_vip_user(telegram_id)
     
     # Получаем текст VIP-доступа
-    text = localization.get_text(language, "vip_access_text")
+    text = i18n_get_text(language, "main.vip_access_text", "vip_access_text")
     
     # Добавляем информацию о статусе, если пользователь VIP
     if is_vip:
-        text += "\n\n" + localization.get_text(language, "vip_status_active", default="👑 Ваш VIP-статус активен")
+        text += "\n\n" + i18n_get_text(language, "main.vip_status_active")
     
     # Клавиатура с кнопками
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "contact_manager_button", default="💬 Связаться с менеджером"),
+            text=i18n_get_text(language, "main.contact_manager_button"),
             url="https://t.me/asc_support"
         )],
         [InlineKeyboardButton(
@@ -2326,7 +2289,7 @@ async def callback_vip_access(callback: CallbackQuery):
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
         try:
-            error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
+            error_text = i18n_get_text(language, "errors.no_active_subscription")
         except (KeyError, TypeError):
             error_text = "Активная подписка не найдена."
         await callback.message.answer(error_text)
@@ -2335,7 +2298,7 @@ async def callback_vip_access(callback: CallbackQuery):
     # Проверяем что подписка действительно активна используя service
     if not is_subscription_active(subscription):
         try:
-            error_text = localization.get_text(language, "no_active_subscription", default="Активная подписка не найдена.")
+            error_text = i18n_get_text(language, "errors.no_active_subscription")
         except (KeyError, TypeError):
             error_text = "Активная подписка не найдена."
         await callback.message.answer(error_text)
@@ -2430,7 +2393,7 @@ async def callback_vip_access(callback: CallbackQuery):
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label=localization.get_text(language, "renewal_payment_label", default="Продление подписки"), amount=amount_kopecks)]
+            prices=[LabeledPrice(label=i18n_get_text(language, "buy.renewal_payment_label"), amount=amount_kopecks)]
         )
         logger.info(f"Sent renewal invoice: user={telegram_id}, tariff={tariff_key}, amount={amount_rubles:.2f} RUB")
     except Exception as e:
@@ -2504,7 +2467,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
     # Формируем prices (цена в копейках)
     # Get user language for invoice label
     language = await resolve_user_language(telegram_id)
-    prices = [LabeledPrice(label=localization.get_text(language, "payment_label", default="К оплате"), amount=amount * 100)]
+    prices = [LabeledPrice(label=i18n_get_text(language, "payment.label"), amount=amount * 100)]
     
     try:
         # Отправляем invoice
@@ -2535,7 +2498,7 @@ async def callback_topup_balance(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
     
     # Показываем экран выбора суммы
-    text = localization.get_text(language, "topup_balance_select_amount", default="Выберите сумму пополнения:")
+    text = i18n_get_text(language, "main.topup_balance_select_amount")
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
@@ -2551,7 +2514,7 @@ async def callback_topup_balance(callback: CallbackQuery):
             callback_data="topup_amount:999"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "topup_custom_amount", default="Другая сумма"),
+            text=i18n_get_text(language, "main.topup_custom_amount"),
             callback_data="topup_custom"
         )],
         [InlineKeyboardButton(
@@ -2587,24 +2550,19 @@ async def callback_topup_amount(callback: CallbackQuery):
         return
     
     # Показываем экран выбора способа оплаты
-    text = localization.get_text(
-        language,
-        "topup_select_payment_method",
-        amount=amount,
-        default=f"Пополнение баланса на {amount} ₽\n\nВыберите способ оплаты:"
-    )
+    text = i18n_get_text(language, "main.topup_select_payment_method", amount=amount)
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
+            text=i18n_get_text(language, "main.pay_with_card"),
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "pay_crypto", default="🌏 Криптовалюта"),
+            text=i18n_get_text(language, "main.pay_crypto"),
             callback_data=f"topup_crypto:{amount}"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back", default="← Назад"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="topup_balance"
         )],
     ])
@@ -2630,7 +2588,7 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
     
     # Отправляем сообщение с инструкцией
     try:
-        text = localization.get_text(language, "topup_enter_amount")
+        text = i18n_get_text(language, "main.topup_enter_amount", "topup_enter_amount")
     except KeyError:
         logger.error(f"Missing localization key 'topup_enter_amount' for language '{language}'")
         text = "Введите свою сумму от 100 ₽"
@@ -2654,7 +2612,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
         amount = int(message.text.strip())
     except (ValueError, AttributeError):
         try:
-            error_text = localization.get_text(language, "topup_amount_invalid")
+            error_text = i18n_get_text(language, "main.topup_amount_invalid", "topup_amount_invalid")
         except KeyError:
             logger.error(f"Missing localization key 'topup_amount_invalid' for language '{language}'")
             error_text = "Пожалуйста, введите число."
@@ -2664,7 +2622,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
     # Проверяем минимальную сумму
     if amount < 100:
         try:
-            error_text = localization.get_text(language, "topup_amount_too_low")
+            error_text = i18n_get_text(language, "main.topup_amount_too_low", "topup_amount_too_low")
         except KeyError:
             logger.error(f"Missing localization key 'topup_amount_too_low' for language '{language}'")
             error_text = "Минимальная сумма пополнения: 100 ₽. Пожалуйста, введите сумму не менее 100 ₽."
@@ -2674,7 +2632,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
     # Проверяем максимальную сумму (технический лимит)
     if amount > 100000:
         try:
-            error_text = localization.get_text(language, "topup_amount_too_high")
+            error_text = i18n_get_text(language, "main.topup_amount_too_high", "topup_amount_too_high")
         except KeyError:
             logger.error(f"Missing localization key 'topup_amount_too_high' for language '{language}'")
             error_text = "Максимальная сумма пополнения: 100 000 ₽. Пожалуйста, введите меньшую сумму."
@@ -2685,24 +2643,19 @@ async def process_topup_amount(message: Message, state: FSMContext):
     await state.clear()
     
     # Показываем экран выбора способа оплаты
-    text = localization.get_text(
-        language,
-        "topup_select_payment_method",
-        amount=amount,
-        default=f"Пополнение баланса на {amount} ₽\n\nВыберите способ оплаты:"
-    )
+    text = i18n_get_text(language, "main.topup_select_payment_method", amount=amount)
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "pay_with_card", default="💳 Оплатить картой"),
+            text=i18n_get_text(language, "main.pay_with_card"),
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "pay_crypto", default="🌏 Криптовалюта"),
+            text=i18n_get_text(language, "main.pay_crypto"),
             callback_data=f"topup_crypto:{amount}"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back", default="← Назад"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="topup_balance"
         )],
     ])
@@ -2771,17 +2724,13 @@ async def callback_copy_key(callback: CallbackQuery):
     if subscription:
         activation_status = subscription.get("activation_status", "active")
         if activation_status == "pending":
-            error_text = localization.get_text(
-                language,
-                "error_activation_pending",
-                default="⏳ Активация в процессе. VPN ключ будет доступен после завершения активации."
-            )
+            error_text = i18n_get_text(language, "main.error_activation_pending")
             logging.info(f"copy_key: Activation pending for user {telegram_id}")
             await callback.answer(error_text, show_alert=True)
             return
     
     if not subscription or not subscription.get("vpn_key"):
-        error_text = localization.get_text(language, "error_no_active_subscription", default="❌ Активная подписка не найдена")
+        error_text = i18n_get_text(language, "errors.no_active_subscription")
         logging.warning(f"copy_key: No active subscription or vpn_key for user {telegram_id}")
         await callback.answer(error_text, show_alert=True)
         return
@@ -2797,11 +2746,7 @@ async def callback_copy_key(callback: CallbackQuery):
             "Key will NOT be sent to user."
         )
         logging.error(f"copy_key: {error_msg}")
-        error_text = localization.get_text(
-            language,
-            "error_subscription_activation",
-            default="❌ Ошибка получения ключа. Пожалуйста, обратитесь в поддержку."
-        )
+        error_text = i18n_get_text(language, "errors.subscription_activation")
         await callback.answer(error_text, show_alert=True)
         return
     
@@ -2812,11 +2757,7 @@ async def callback_copy_key(callback: CallbackQuery):
     )
     
     # Показываем toast уведомление о копировании
-    success_text = localization.get_text(
-        language,
-        "vpn_key_copied_toast",
-        default="✅ Ключ отправлен отдельным сообщением"
-    )
+    success_text = i18n_get_text(language, "profile.vpn_key_copied_toast")
     await callback.answer(success_text, show_alert=False)
 
 @router.callback_query(F.data == "copy_vpn_key")
@@ -2877,7 +2818,7 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     subscription = await database.get_subscription(telegram_id)
     
     if not subscription or not subscription.get("vpn_key"):
-        error_text = localization.get_text(language, "error_no_active_subscription", default="❌ Активная подписка не найдена")
+        error_text = i18n_get_text(language, "errors.no_active_subscription")
         logging.warning(f"copy_vpn_key: No active subscription or vpn_key for user {telegram_id}")
         await callback.answer(error_text, show_alert=True)
         return
@@ -2893,11 +2834,7 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
             "Key will NOT be sent to user."
         )
         logging.error(f"copy_vpn_key: {error_msg}")
-        error_text = localization.get_text(
-            language,
-            "error_subscription_activation",
-            default="❌ Ошибка получения ключа. Пожалуйста, обратитесь в поддержку."
-        )
+        error_text = i18n_get_text(language, "errors.subscription_activation")
         await callback.answer(error_text, show_alert=True)
         return
     
@@ -2908,11 +2845,7 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     )
     
     # Показываем toast уведомление о копировании
-    success_text = localization.get_text(
-        language,
-        "vpn_key_copied_toast",
-        default="✅ Ключ отправлен отдельным сообщением"
-    )
+    success_text = i18n_get_text(language, "profile.vpn_key_copied_toast")
     await callback.answer(success_text, show_alert=False)
 
 
@@ -2949,7 +2882,7 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
             user = await database.get_user(telegram_id)
             language = await resolve_user_language(callback.from_user.id)
             try:
-                error_text = localization.get_text(language, "error_profile_load")
+                error_text = i18n_get_text(language, "errors.profile_load", "error_profile_load")
             except KeyError:
                 logger.error(f"Missing localization key 'error_profile_load' for language '{language}'")
                 error_text = "Ошибка загрузки профиля. Попробуйте позже."
@@ -2983,18 +2916,18 @@ async def callback_subscription_history(callback: CallbackQuery):
     history = await database.get_subscription_history(telegram_id, limit=5)
     
     if not history:
-        text = localization.get_text(language, "subscription_history_empty")
+        text = i18n_get_text(language, "subscription.history_empty", "subscription_history_empty")
         await callback.message.answer(text)
         return
     
     # Формируем текст истории
-    text = localization.get_text(language, "subscription_history") + "\n\n"
+    text = i18n_get_text(language, "subscription.history", "subscription_history") + "\n\n"
     
     action_type_map = {
-        "purchase": localization.get_text(language, "subscription_history_action_purchase"),
-        "renewal": localization.get_text(language, "subscription_history_action_renewal"),
-        "reissue": localization.get_text(language, "subscription_history_action_reissue"),
-        "manual_reissue": localization.get_text(language, "subscription_history_action_manual_reissue"),
+        "purchase": i18n_get_text(language, "subscription.history_action_purchase", "subscription_history_action_purchase"),
+        "renewal": i18n_get_text(language, "subscription.history_action_renewal", "subscription_history_action_renewal"),
+        "reissue": i18n_get_text(language, "subscription.history_action_reissue", "subscription_history_action_reissue"),
+        "manual_reissue": i18n_get_text(language, "subscription.history_action_manual_reissue", "subscription_history_action_manual_reissue"),
     }
     
     for record in history:
@@ -3015,10 +2948,10 @@ async def callback_subscription_history(callback: CallbackQuery):
         
         # Для purchase и reissue показываем ключ
         if action_type in ["purchase", "reissue", "manual_reissue"]:
-            key_label = localization.get_text(language, "subscription_history_key_label", default="Ключ:")
+            key_label = i18n_get_text(language, "subscription.history_key_label")
             text += f"  {key_label} {record['vpn_key']}\n"
         
-        expires_label = localization.get_text(language, "subscription_history_expires", default="До:")
+        expires_label = i18n_get_text(language, "subscription.history_expires")
         text += f"  {expires_label} {end_str}\n\n"
     
     await callback.message.answer(text, reply_markup=get_back_keyboard(language))
@@ -3707,27 +3640,16 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # Если активация отложена - показываем информационное сообщение
         if is_pending_activation:
             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-            pending_text = localization.get_text(
-                language,
-                "payment_pending_activation",
-                date=expires_str,
-                default=(
-                    f"✅ Подписка оформлена!\n\n"
-                    f"📅 Срок действия: до {expires_str}\n\n"
-                    f"⏳ Активация выполняется автоматически. "
-                    f"VPN ключ будет отправлен вам в ближайшее время.\n\n"
-                    f"Если ключ не пришёл в течение часа, обратитесь в поддержку."
-                )
-            )
+            pending_text = i18n_get_text(language, "payment.pending_activation", date=expires_str)
             
             # Клавиатура с кнопками профиля и поддержки
             pending_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=localization.get_text(language, "profile", default="👤 Мой профиль"),
+                    text=i18n_get_text(language, "main.profile"),
                     callback_data="menu_profile"
                 )],
                 [InlineKeyboardButton(
-                    text=localization.get_text(language, "support", default="🆘 Поддержка"),
+                    text=i18n_get_text(language, "main.support"),
                     callback_data="menu_support"
                 )]
             ])
@@ -4112,7 +4034,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
                 url=payment_url
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                text=i18n_get_text(language, "common.back"),
                 callback_data="menu_buy_vpn"
             )]
         ])
@@ -4201,20 +4123,15 @@ async def callback_topup_crypto(callback: CallbackQuery):
         )
         
         # Отправляем пользователю сообщение с payment URL
-        text = localization.get_text(
-            language,
-            "balance_topup_waiting",
-            amount=amount,
-            default=f"₿ Пополнение баланса через криптовалюту\n\nСумма: {amount} ₽\n\n⏳ Ожидаем подтверждение оплаты. Обычно это занимает до 5 минут. Баланс будет пополнен автоматически."
-        )
+        text = i18n_get_text(language, "main.balance_topup_waiting", amount=amount)
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=localization.get_text(language, "crypto_pay_button", default="💳 Перейти к оплате"),
+                text=i18n_get_text(language, "main.crypto_pay_button"),
                 url=payment_url
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                text=i18n_get_text(language, "common.back"),
                 callback_data="topup_balance"
             )]
         ])
@@ -4398,12 +4315,12 @@ async def callback_topup_card(callback: CallbackQuery):
     try:
         await callback.bot.send_invoice(
             chat_id=telegram_id,
-            title=localization.get_text(language, "topup_invoice_title", default="Пополнение баланса Atlas Secure"),
-            description=localization.get_text(language, "topup_invoice_description", amount=amount, default=f"Пополнение баланса на {amount} ₽"),
+            title=i18n_get_text(language, "main.topup_invoice_title"),
+            description=i18n_get_text(language, "main.topup_invoice_description", amount=amount),
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=[LabeledPrice(label=localization.get_text(language, "topup_invoice_label", default="Пополнение баланса"), amount=amount_kopecks)]
+            prices=[LabeledPrice(label=i18n_get_text(language, "main.topup_invoice_label"), amount=amount_kopecks)]
         )
         await callback.answer()
     except Exception as e:
@@ -4473,7 +4390,7 @@ async def process_promo_code(message: Message, state: FSMContext):
             details={"error": error}
         )
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
+        await message.answer(i18n_get_text(language, "errors.try_later"))
         return
     
     # STEP 4 — PART A: INPUT TRUST BOUNDARIES
@@ -4488,7 +4405,7 @@ async def process_promo_code(message: Message, state: FSMContext):
             details={"error": promo_error, "promo_code_preview": promo_code[:20] if promo_code else None}
         )
         language = await resolve_user_language(telegram_id)
-        text = localization.get_text(language, "invalid_promo", default="❌ Промокод недействителен")
+        text = i18n_get_text(language, "main.invalid_promo")
         await message.answer(text)
         return
     """Обработчик ввода промокода"""
@@ -4514,24 +4431,20 @@ async def process_promo_code(message: Message, state: FSMContext):
         # Промокод уже применён в активной сессии - показываем сообщение
         expires_at = promo_session.get("expires_at", 0)
         expires_in = max(0, int(expires_at - time.time()))
-        text = localization.get_text(
-            language, 
-            "promo_applied", 
-            default=f"🎁 Промокод применён. Скидка уже учтена в цене. Действителен ещё {expires_in // 60} мин."
-        )
+        text = i18n_get_text(language, "main.promo_applied")
         await message.answer(text)
         # Возвращаемся к выбору тарифа
         await state.set_state(PurchaseState.choose_tariff)
-        tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
+        tariff_text = i18n_get_text(language, "buy.select_tariff")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "tariff_basic", default="🪙 Basic"), callback_data="tariff:basic")],
-            [InlineKeyboardButton(text=localization.get_text(language, "tariff_plus", default="🔑 Plus"), callback_data="tariff:plus")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "buy.tariff_basic"), callback_data="tariff:basic")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "buy.tariff_plus"), callback_data="tariff:plus")],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "buy.enter_promo"),
                 callback_data="enter_promo"
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main"
             )],
         ])
@@ -4558,7 +4471,7 @@ async def process_promo_code(message: Message, state: FSMContext):
         # КРИТИЧНО: Возвращаем пользователя к выбору тарифа с обновленными ценами
         await state.set_state(PurchaseState.choose_tariff)
         
-        text = localization.get_text(language, "promo_applied", default="✅ Промокод применён")
+        text = i18n_get_text(language, "main.promo_applied")
         await message.answer(text)
         
         logger.info(
@@ -4567,14 +4480,14 @@ async def process_promo_code(message: Message, state: FSMContext):
         )
         
         # Возвращаемся к выбору типа тарифа (Basic/Plus) - цены будут пересчитаны с промокодом
-        tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
+        tariff_text = i18n_get_text(language, "buy.select_tariff")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=localization.get_text(language, "tariff_basic"),
+                text=i18n_get_text(language, "buy.tariff_basic", "tariff_basic"),
                 callback_data="tariff:basic"
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "tariff_plus"),
+                text=i18n_get_text(language, "buy.tariff_plus", "tariff_plus"),
                 callback_data="tariff:plus"
             )],
             [InlineKeyboardButton(
@@ -4582,7 +4495,7 @@ async def process_promo_code(message: Message, state: FSMContext):
                 callback_data="enter_promo"
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "back", default="⬅️ Назад"),
+                text=i18n_get_text(language, "common.back"),
                 callback_data="menu_main"
             )],
         ])
@@ -4590,7 +4503,7 @@ async def process_promo_code(message: Message, state: FSMContext):
         await state.set_state(PurchaseState.choose_tariff)
     else:
         # Промокод невалиден
-        text = localization.get_text(language, "invalid_promo", default="❌ Промокод недействителен")
+        text = i18n_get_text(language, "main.invalid_promo")
         await message.answer(text)
 
 
@@ -4658,7 +4571,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             details={"error": error}
         )
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
+        await message.answer(i18n_get_text(language, "errors.try_later"))
         return
     
     # STEP 4 — PART A: INPUT TRUST BOUNDARIES
@@ -4674,7 +4587,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             details={"error": payload_error, "payload_preview": payload[:50] if payload else None}
         )
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
+        await message.answer(i18n_get_text(language, "errors.try_later"))
         return
     
     # STEP 6 — F1: GLOBAL OPERATIONAL FLAGS
@@ -4687,11 +4600,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         language = await resolve_user_language(telegram_id)
         await message.answer(
-            localization.get_text(
-                language,
-                "service_unavailable",
-                default="⚠️ Сервис временно недоступен. Попробуйте позже."
-            )
+            i18n_get_text(language, "main.service_unavailable")
         )
         return
     # READ-ONLY system state awareness (informational only, does not affect flow)
@@ -4744,20 +4653,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not database.DB_READY:
         language = await resolve_user_language(message.from_user.id)
-        text = localization.get_text(
-            language,
-            "service_unavailable_payment",
-            default="⚠️ Платёж получен, но сервис временно недоступен.\n\nМы уже работаем над восстановлением.\nВаш платёж не потеряется — доступ будет выдан автоматически,\nкак только сервис станет доступен.\n\nЕсли у вас есть вопросы, напишите в поддержку."
-        )
+        text = i18n_get_text(language, "main.service_unavailable_payment")
         
         # Создаем стандартную inline клавиатуру для UX
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=localization.get_text(language, "buy_renew_button"),
+                text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
                 callback_data="menu_buy_vpn"
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "support_button"),
+                text=i18n_get_text(language, "main.support_button", "support_button"),
                 callback_data="menu_support"
             )]
         ])
@@ -4822,11 +4727,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     f"BALANCE_TOPUP_MISSING_CHARGE_ID [user={telegram_id}, "
                     f"payment_total={payment.total_amount}, correlation_id={message.message_id}]"
                 )
-                error_text = localization.get_text(
-                    language,
-                    "error_payment_processing",
-                    default="Ошибка обработки платежа. Обратитесь в поддержку."
-                )
+                error_text = i18n_get_text(language, "errors.payment_processing")
                 await message.answer(error_text)
                 return
             
@@ -4841,11 +4742,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )
             except PaymentFinalizationError as e:
                 logger.error(f"Balance topup finalization failed: user={telegram_id}, error={e}")
-                error_text = localization.get_text(
-                    language,
-                    "error_payment_processing",
-                    default="Ошибка обработки платежа. Обратитесь в поддержку."
-                )
+                error_text = i18n_get_text(language, "errors.payment_processing")
                 await message.answer(error_text)
                 duration_ms = (time.time() - start_time) * 1000
                 error_type = classify_error(e)
@@ -4878,21 +4775,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
             language = await resolve_user_language(telegram_id)
             
             # Отправляем сообщение об успешном пополнении
-            text = localization.get_text(
-                language,
-                "topup_balance_success",
-                balance=new_balance,
-                default=f"✅ Баланс пополнен\n\nНа счёте: {new_balance:.2f} ₽"
-            )
+            text = i18n_get_text(language, "main.topup_balance_success", balance=new_balance)
             
             # Создаем inline клавиатуру для UX
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=localization.get_text(language, "buy_renew_button"),
+                    text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
                     callback_data="menu_buy_vpn"
                 )],
                 [InlineKeyboardButton(
-                    text=localization.get_text(language, "profile"),
+                    text=i18n_get_text(language, "main.profile", "profile"),
                     callback_data="menu_profile"
                 )]
             ])
@@ -5098,27 +4990,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
         # Если активация отложена - показываем информационное сообщение
         if is_pending_activation:
             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-            pending_text = localization.get_text(
-                language,
-                "payment_pending_activation",
-                date=expires_str,
-                default=(
-                    f"✅ Подписка оформлена!\n\n"
-                    f"📅 Срок действия: до {expires_str}\n\n"
-                    f"⏳ Активация выполняется автоматически. "
-                    f"VPN ключ будет отправлен вам в ближайшее время.\n\n"
-                    f"Если ключ не пришёл в течение часа, обратитесь в поддержку."
-                )
-            )
+            pending_text = i18n_get_text(language, "payment.pending_activation", date=expires_str)
             
             # Клавиатура с кнопками профиля и поддержки
             pending_keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text=localization.get_text(language, "profile", default="👤 Мой профиль"),
+                    text=i18n_get_text(language, "main.profile"),
                     callback_data="menu_profile"
                 )],
                 [InlineKeyboardButton(
-                    text=localization.get_text(language, "support", default="🆘 Поддержка"),
+                    text=i18n_get_text(language, "main.support"),
                     callback_data="menu_support"
                 )]
             ])
@@ -5186,11 +5067,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"reason={type(e).__name__}, error={str(e)}"
         )
         language = await resolve_user_language(telegram_id)
-        error_text = localization.get_text(
-            language, 
-            "error_payment_processing",
-            default="Ошибка обработки платежа. Обратитесь в поддержку."
-        )
+        error_text = i18n_get_text(language, "errors.payment_processing")
         await message.answer(error_text)
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
@@ -5216,11 +5093,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, purchase_id={purchase_id}]")
         
         language = await resolve_user_language(telegram_id)
-        error_text = localization.get_text(
-            language, 
-            "error_subscription_activation",
-            default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
-        )
+        error_text = i18n_get_text(language, "errors.subscription_activation")
         await message.answer(error_text)
         
         # Log event for admin
@@ -5257,11 +5130,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, purchase_id={purchase_id}]")
         
         language = await resolve_user_language(telegram_id)
-        error_text = localization.get_text(
-            language, 
-            "error_subscription_activation",
-            default="❌ Ошибка активации подписки. Пожалуйста, обратитесь в поддержку."
-        )
+        error_text = i18n_get_text(language, "errors.subscription_activation")
         await message.answer(error_text)
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
@@ -5332,7 +5201,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     
     # Отправляем сообщение об успешной активации с гарантированным fallback
     try:
-        text = localization.get_text(language, "payment_approved", date=expires_str)
+        text = i18n_get_text(language, "payment.approved", date=expires_str)
         # B3.1 - SOFT DEGRADATION: Add soft UX notice if degraded (only where messages are sent)
         try:
             if _degradation_notice:
@@ -5529,7 +5398,7 @@ async def callback_payment_test(callback: CallbackQuery):
     
     # Тестовая оплата не работает - возвращаем назад
     await callback.answer("Эта функция не работает", show_alert=True)
-    text = localization.get_text(language, "select_payment")
+    text = i18n_get_text(language, "main.select_payment", "select_payment")
     await safe_edit_text(callback.message, text, reply_markup=get_payment_method_keyboard(language))
 
 
@@ -5576,11 +5445,7 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
             amount = base_price
     
     # Формируем текст с реквизитами
-    text = localization.get_text(
-        language, 
-        "sbp_payment_text",
-        amount=amount
-    )
+    text = i18n_get_text(language, "main.sbp_payment_text", amount=amount)
     
     await safe_edit_text(callback.message, text, reply_markup=get_sbp_payment_keyboard(language))
     await callback.answer()
@@ -5598,7 +5463,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     # Проверяем наличие pending платежа перед созданием
     existing_payment = await database.get_pending_payment_by_user(telegram_id)
     if existing_payment:
-        text = localization.get_text(language, "payment_pending")
+        text = i18n_get_text(language, "payment.pending", "payment_pending")
         await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
         await callback.answer("У вас уже есть ожидающий платеж", show_alert=True)
         await state.clear()
@@ -5609,7 +5474,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     
     if payment_id is None:
         # Это не должно произойти, так как мы проверили выше, но на всякий случай
-        text = localization.get_text(language, "payment_pending")
+        text = i18n_get_text(language, "payment.pending", "payment_pending")
         await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
         await callback.answer("Не удалось создать платеж. Попробуйте позже.", show_alert=True)
         await state.clear()
@@ -5627,7 +5492,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
             actual_amount = 149  # Дефолтная цена
     
     # Отправляем сообщение пользователю
-    text = localization.get_text(language, "payment_pending")
+    text = i18n_get_text(language, "payment.pending", "payment_pending")
     await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
     await callback.answer()
     
@@ -5645,15 +5510,15 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     
     # Safe username extraction: can be None
     user_lang = await resolve_user_language(telegram_id)
-    username = (callback.from_user.username if callback.from_user else None) or localization.get_text(user_lang, "username_not_set", default="не указан")
+    username = (callback.from_user.username if callback.from_user else None) or i18n_get_text(user_lang, "common.username_not_set")
     
-    # Используем локализацию для админ-уведомления
-    admin_text = localization.get_text(
-        "ru",  # Админ всегда видит на русском
-        "admin_payment_notification",
+    # Admin notification: admin always sees Russian (ADMIN RU ALLOWED)
+    admin_text = i18n_get_text(
+        "ru",
+        "admin.payment_notification",
         username=username,
         telegram_id=telegram_id,
-        tariff=f"{tariff_key}_30",  # Используем period_days вместо months
+        tariff=f"{tariff_key}_30",
         price=actual_amount
     )
     
@@ -5674,8 +5539,8 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
-    title = localization.get_text(language, "about_title", default="🔎 О сервисе Atlas Secure")
-    text = localization.get_text(language, "about_text")
+    title = i18n_get_text(language, "main.about_title")
+    text = i18n_get_text(language, "main.about_text", "about_text")
     full_text = f"{title}\n\n{text}"
     await safe_edit_text(msg, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=bot)
     if isinstance(event, CallbackQuery):
@@ -5694,13 +5559,13 @@ async def callback_service_status(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
-    text = localization.get_text(language, "service_status_text")
+    text = i18n_get_text(language, "main.service_status_text", "service_status_text")
     
     # Добавляем предупреждение об инциденте, если режим активен
     incident = await database.get_incident_settings()
     if incident["is_active"]:
-        incident_text = incident.get("incident_text") or localization.get_text(language, "incident_banner")
-        warning = localization.get_text(language, "incident_status_warning", incident_text=incident_text)
+        incident_text = incident.get("incident_text") or i18n_get_text(language, "main.incident_banner", "incident_banner")
+        warning = i18n_get_text(language, "main.incident_status_warning", incident_text=incident_text)
         text = text + warning
     
     await safe_edit_text(callback.message, text, reply_markup=get_service_status_keyboard(language))
@@ -5713,7 +5578,7 @@ async def callback_privacy(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
-    text = localization.get_text(language, "privacy_policy_text")
+    text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
     await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language))
     await callback.answer()
 
@@ -5724,7 +5589,7 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
     platform = detect_platform(event)
-    text = localization.get_text(language, "instruction_text")
+    text = i18n_get_text(language, "instruction._text", "instruction_text")
     await safe_edit_text(msg, text, reply_markup=get_instruction_keyboard(language, platform), bot=bot)
     if isinstance(event, CallbackQuery):
         await event.answer()
@@ -5956,7 +5821,7 @@ async def _open_support_screen(event: Union[Message, CallbackQuery], bot: Bot):
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
-    text = localization.get_text(language, "support_text")
+    text = i18n_get_text(language, "main.support_text", "support_text")
     await safe_edit_text(msg, text, reply_markup=get_support_keyboard(language), bot=bot)
     if isinstance(event, CallbackQuery):
         await event.answer()
@@ -6028,7 +5893,7 @@ async def approve_payment(callback: CallbackQuery):
             logger.error(error_msg)
             user = await database.get_user(callback.from_user.id)
             language = await resolve_user_language(callback.from_user.id)
-            await callback.answer(localization.get_text(language, "error_invalid_tariff", default="Ошибка: неверный тариф"), show_alert=True)
+            await callback.answer(i18n_get_text(language, "errors.invalid_tariff"), show_alert=True)
             return
         
         # Атомарно подтверждаем платеж и создаем/продлеваем подписку
@@ -6048,7 +5913,7 @@ async def approve_payment(callback: CallbackQuery):
             logging.error(f"Failed to approve payment {payment_id} atomically")
             user = await database.get_user(callback.from_user.id)
             language = await resolve_user_language(callback.from_user.id)
-            await callback.answer(localization.get_text(language, "error_vpn_key_creation", default="Ошибка создания VPN-ключа. Проверь логи."), show_alert=True)
+            await callback.answer(i18n_get_text(language, "errors.vpn_key_creation"), show_alert=True)
             return
         
         # E) PURCHASE FLOW: Send referral notification for admin-approved payments
@@ -6141,7 +6006,7 @@ async def approve_payment(callback: CallbackQuery):
         
         expires_str = expires_at.strftime("%d.%m.%Y")
         # Отправляем сообщение об успешной активации (без ключа)
-        text = localization.get_text(language, "payment_approved", date=expires_str)
+        text = i18n_get_text(language, "payment.approved", date=expires_str)
         
         try:
             await callback.bot.send_message(
@@ -6177,11 +6042,11 @@ async def cmd_admin(message: Message):
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized admin dashboard attempt by user {message.from_user.id}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         return
     
     language = await resolve_user_language(message.from_user.id)
-    text = localization.get_text(language, "admin_dashboard_title", default="🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:")
+    text = i18n_get_text(language, "admin.dashboard_title")
     await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language))
 
 
@@ -6191,7 +6056,7 @@ async def cmd_pending_activations(message: Message):
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized pending_activations attempt by user {message.from_user.id}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         return
     
     if not database.DB_READY:
@@ -6262,7 +6127,7 @@ async def cmd_pending_activations(message: Message):
     except Exception as e:
         logger.exception(f"Error in cmd_pending_activations: {e}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "error_data_fetch", error=str(e)[:100], default=f"❌ Ошибка при получении данных: {str(e)[:100]}"))
+        await message.answer(i18n_get_text(language, "errors.data_fetch", error=str(e)[:100], default=f"❌ Ошибка при получении данных: {str(e)[:100]}"))
 
 
 @router.callback_query(F.data == "admin:dashboard")
@@ -6274,7 +6139,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -6300,9 +6165,9 @@ async def callback_admin_dashboard(callback: CallbackQuery):
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_refresh", default="🔄 Обновить"), callback_data="admin:dashboard")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_test_menu", default="🧪 Тесты"), callback_data="admin:test_menu")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.refresh"), callback_data="admin:dashboard")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_menu"), callback_data="admin:test_menu")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -6320,7 +6185,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
         logger.exception(f"Error in callback_admin_dashboard: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_dashboard_data", default="Ошибка при получении данных дашборда"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.dashboard_data"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:main")
@@ -6328,12 +6193,12 @@ async def callback_admin_main(callback: CallbackQuery):
     """Главный экран админ-дашборда"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    text = localization.get_text(language, "admin_dashboard_title", default="🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:")
+    text = i18n_get_text(language, "admin.dashboard_title")
     await safe_edit_text(callback.message, text, reply_markup=get_admin_dashboard_keyboard(language))
     await callback.answer()
 
@@ -6344,7 +6209,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -6360,7 +6225,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
         logger.error(f"Error getting promo stats: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_promo_stats", default="Ошибка при получении статистики промокодов."), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.promo_stats"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:metrics")
@@ -6369,7 +6234,7 @@ async def callback_admin_metrics(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -6411,7 +6276,7 @@ async def callback_admin_metrics(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_metrics: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_metrics", default="Ошибка при получении метрик. Проверь логи."), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.metrics"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:stats")
@@ -6420,7 +6285,7 @@ async def callback_admin_stats(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -6445,7 +6310,7 @@ async def callback_admin_stats(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_stats: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_stats", default="Ошибка при получении статистики"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.stats"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:referral_stats")
@@ -6453,7 +6318,7 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
     """Реферальная статистика - главный экран с общей статистикой"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
@@ -6529,18 +6394,18 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
         # Клавиатура с кнопками
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_referral_history", default="📋 История начислений"), callback_data="admin:referral_history"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_referral_top", default="📈 Топ рефереров"), callback_data="admin:referral_top")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_history"), callback_data="admin:referral_history"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_top"), callback_data="admin:referral_top")
             ],
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_revenue"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_invited"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_cashback"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.search"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -6578,18 +6443,18 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text=localization.get_text(language, "admin_referral_history", default="📋 История начислений"), callback_data="admin:referral_history"),
-                    InlineKeyboardButton(text=localization.get_text(language, "admin_referral_top", default="📈 Топ рефереров"), callback_data="admin:referral_top")
+                    InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_history"), callback_data="admin:referral_history"),
+                    InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_top"), callback_data="admin:referral_top")
                 ],
                 [
-                    InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
-                    InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
+                    InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_revenue"), callback_data="admin:referral_sort:total_revenue"),
+                    InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_invited"), callback_data="admin:referral_sort:invited_count")
                 ],
                 [
-                    InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
-                    InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
+                    InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_cashback"), callback_data="admin:referral_sort:cashback_paid"),
+                    InlineKeyboardButton(text=i18n_get_text(language, "admin.search"), callback_data="admin:referral_search")
                 ],
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
             ])
             
             await safe_edit_text(callback.message, fallback_text, reply_markup=keyboard)
@@ -6597,7 +6462,7 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
             logger.exception(f"Error in fallback admin referral stats: {fallback_error}")
             user = await database.get_user(callback.from_user.id)
             language = await resolve_user_language(callback.from_user.id)
-            await callback.answer(localization.get_text(language, "error_referral_stats", default="Ошибка при получении реферальной статистики"), show_alert=True)
+            await callback.answer(i18n_get_text(language, "errors.referral_stats"), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin:referral_sort:"))
@@ -6605,7 +6470,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
     """Сортировка реферальной статистики"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
@@ -6628,7 +6493,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
         if not stats_list:
             text = "📊 Реферальная статистика\n\nРефереры не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -6666,14 +6531,14 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
         # Клавиатура с кнопками фильтров и сортировки
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_revenue"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_invited"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_cashback"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.search"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -6682,7 +6547,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_referral_sort: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_stats_sort", default="Ошибка при сортировке статистики"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.stats_sort"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:referral_search")
@@ -6690,7 +6555,7 @@ async def callback_admin_referral_search(callback: CallbackQuery, state: FSMCont
     """Поиск реферальной статистики"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
@@ -6699,7 +6564,7 @@ async def callback_admin_referral_search(callback: CallbackQuery, state: FSMCont
     
     text = "🔍 Поиск реферальной статистики\n\nВведите telegram_id или username для поиска:"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="❌ Отмена"), callback_data="admin:referral_stats")]
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:referral_stats")]
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -6711,7 +6576,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
     """Обработка поискового запроса"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
     
@@ -6732,7 +6597,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
         if not stats_list:
             text = f"📊 Реферальная статистика\n\nПо запросу '{search_query}' ничего не найдено."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:referral_stats")]
             ])
             await message.answer(text, reply_markup=keyboard)
             return
@@ -6763,14 +6628,14 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_revenue"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_invited"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_cashback"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.search"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
         ])
         
         await message.answer(text, reply_markup=keyboard)
@@ -6778,7 +6643,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
     except Exception as e:
         logging.exception(f"Error in process_admin_referral_search: {e}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "error_stats_search", default="Ошибка при поиске статистики"))
+        await message.answer(i18n_get_text(language, "errors.stats_search"))
 
 
 @router.callback_query(F.data.startswith("admin:referral_detail:"))
@@ -6788,7 +6653,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -6837,7 +6702,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
         
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back_to_stats", default="🔙 Назад к статистике"), callback_data="admin:referral_stats")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back_to_stats"), callback_data="admin:referral_stats")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -6854,7 +6719,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_referral_detail: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_details", default="Ошибка при получении деталей"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.details"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:referral_history")
@@ -6862,7 +6727,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
     """История начислений реферального кешбэка"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -6882,7 +6747,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
         if not history:
             text = "📋 История начислений\n\nНачисления не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:referral_stats")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -6911,10 +6776,10 @@ async def callback_admin_referral_history(callback: CallbackQuery):
         keyboard_buttons = []
         if total_count > 20:
             keyboard_buttons.append([
-                InlineKeyboardButton(text=localization.get_text(language, "admin_next_page", default="➡️ Следующие"), callback_data="admin:referral_history:page:1")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.next_page"), callback_data="admin:referral_history:page:1")
             ])
         keyboard_buttons.append([
-            InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:referral_stats")
         ])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
@@ -6932,7 +6797,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_referral_history: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_rewards_history", default="Ошибка при получении истории начислений"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.rewards_history"), show_alert=True)
 
 
 @router.callback_query(F.data.startswith("admin:referral_history:page:"))
@@ -6940,7 +6805,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
     """Пагинация истории начислений"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -6966,7 +6831,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
         if not history:
             text = "📋 История начислений\n\nНачисления не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:referral_stats")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -6992,13 +6857,13 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
         keyboard_buttons = []
         nav_buttons = []
         if page > 0:
-            nav_buttons.append(InlineKeyboardButton(text=localization.get_text(language, "admin_prev", default="⬅️ Назад"), callback_data=f"admin:referral_history:page:{page - 1}"))
+            nav_buttons.append(InlineKeyboardButton(text=i18n_get_text(language, "admin.prev"), callback_data=f"admin:referral_history:page:{page - 1}"))
         if offset + limit < total_count:
-            nav_buttons.append(InlineKeyboardButton(text=localization.get_text(language, "admin_forward", default="➡️ Вперёд"), callback_data=f"admin:referral_history:page:{page + 1}"))
+            nav_buttons.append(InlineKeyboardButton(text=i18n_get_text(language, "admin.forward"), callback_data=f"admin:referral_history:page:{page + 1}"))
         if nav_buttons:
             keyboard_buttons.append(nav_buttons)
         keyboard_buttons.append([
-            InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:referral_stats")
         ])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
@@ -7008,7 +6873,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_referral_history_page: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_rewards_history", default="Ошибка при получении истории начислений"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.rewards_history"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:referral_top")
@@ -7016,7 +6881,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
     """Топ рефереров - расширенный список"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -7034,7 +6899,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
         if not top_referrers:
             text = "🏆 Топ рефереров\n\nРефереры не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:referral_stats")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -7060,14 +6925,14 @@ async def callback_admin_referral_top(callback: CallbackQuery):
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_revenue"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_invited"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.sort_by_cashback"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.search"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:referral_stats")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7084,7 +6949,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_referral_top: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_top_referrers", default="Ошибка при получении топа рефереров"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.top_referrers"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:analytics")
@@ -7092,7 +6957,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
     """📊 Финансовая аналитика - базовые метрики"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -7127,8 +6992,8 @@ async def callback_admin_analytics(callback: CallbackQuery):
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_refresh", default="🔄 Обновить"), callback_data="admin:analytics")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.refresh"), callback_data="admin:analytics")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7146,7 +7011,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
         logger.exception(f"Error in admin analytics: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_analytics", default="Ошибка загрузки аналитики"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.analytics"), show_alert=True)
         await callback.answer("Ошибка при расчете аналитики", show_alert=True)
 
 
@@ -7155,7 +7020,7 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
     """Ежемесячная сводка"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -7198,7 +7063,7 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back_to_analytics", default="🔙 Назад к аналитике"), callback_data="admin:analytics")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back_to_analytics"), callback_data="admin:analytics")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7215,7 +7080,7 @@ async def callback_admin_audit(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -7223,7 +7088,7 @@ async def callback_admin_audit(callback: CallbackQuery):
         audit_logs = await database.get_last_audit_logs(limit=10)
         
         if not audit_logs:
-            text = localization.get_text(language, "admin_audit_empty", default="📜 Аудит\n\nАудит пуст. Действий не зафиксировано.")
+            text = i18n_get_text(language, "admin.audit_empty")
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer()
             return
@@ -7329,7 +7194,7 @@ async def callback_admin_keys(callback: CallbackQuery):
     """Раздел VPN-ключи в админ-дашборде"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -7340,9 +7205,9 @@ async def callback_admin_keys(callback: CallbackQuery):
         text += "• Перевыпустить ключи для всех активных пользователей\n"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_reissue_for_user", default="👤 Перевыпустить для пользователя"), callback_data="admin:user")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_reissue_all_keys", default="🔄 Перевыпустить все ключи"), callback_data="admin:keys:reissue_all")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_for_user"), callback_data="admin:user")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_all_keys"), callback_data="admin:keys:reissue_all")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7352,7 +7217,7 @@ async def callback_admin_keys(callback: CallbackQuery):
         logging.exception(f"Error in callback_admin_keys: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
 
 
 @router.callback_query(F.data == "admin:keys:reissue_all")
@@ -7361,7 +7226,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer("Начинаю массовый перевыпуск...")
@@ -7391,7 +7256,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         if total_count == 0:
             await safe_edit_text(
                 callback.message,
-                localization.get_text(language, "admin_no_active_subscriptions_reissue", default="❌ Нет активных подписок для перевыпуска"),
+                i18n_get_text(language, "admin.no_active_subscriptions_reissue"),
                 reply_markup=get_admin_back_keyboard(language)
             )
             return
@@ -7424,11 +7289,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                     notify_lang = await resolve_user_language(telegram_id)
                     
                     try:
-                        user_text = localization.get_text(
-                            notify_lang,
-                            "admin_reissue_user_notification",
-                            vpn_key=f"<code>{new_vpn_key}</code>"
-                        )
+                        user_text = i18n_get_text(notify_lang, "admin.reissue_user_notification", vpn_key=f"<code>{new_vpn_key}</code>")
                     except (KeyError, TypeError):
                         # Fallback to default if localization not found
                         user_text = get_reissue_notification_text(new_vpn_key)
@@ -7482,7 +7343,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
             final_text += f"\n\nОшибки у пользователей: {failed_list}"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:keys")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:keys")]
         ])
         
         try:
@@ -7502,7 +7363,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logging.exception(f"Error in callback_admin_keys_reissue_all: {e}")
         await callback.message.edit_text(
-            localization.get_text(language, "admin_reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
+            i18n_get_text(language, "admin.reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
             reply_markup=get_admin_back_keyboard(language)
         )
 
@@ -7513,7 +7374,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -7568,7 +7429,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
         # Показываем админу результат
         user = await database.get_user(telegram_id)
         user_lang = await resolve_user_language(telegram_id)
-        username = user.get("username", localization.get_text(user_lang, "username_not_set", default="не указан")) if user else localization.get_text(user_lang, "username_not_set", default="не указан")
+        username = user.get("username", i18n_get_text(user_lang, "common.username_not_set")) if user else i18n_get_text(user_lang, "common.username_not_set")
         
         expires_at = subscription["expires_at"]
         if isinstance(expires_at, str):
@@ -7604,7 +7465,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
     """Массовый перевыпуск ключей для всех активных подписок"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer("Начинаю массовый перевыпуск...")
@@ -7623,7 +7484,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         if total_count == 0:
             await safe_edit_text(
                 callback.message,
-                localization.get_text(language, "admin_no_active_subscriptions_reissue", default="❌ Нет активных подписок для перевыпуска"),
+                i18n_get_text(language, "admin.no_active_subscriptions_reissue"),
                 reply_markup=get_admin_back_keyboard(language)
             )
             return
@@ -7693,7 +7554,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
             final_text += f"\n\nОшибки у подписок: {failed_list}"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:keys")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:keys")]
         ])
         
         try:
@@ -7713,7 +7574,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logging.exception(f"Error in callback_admin_reissue_all_active: {e}")
         await callback.message.edit_text(
-            localization.get_text(language, "admin_reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
+            i18n_get_text(language, "admin.reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
             reply_markup=get_admin_back_keyboard(language)
         )
 
@@ -7724,7 +7585,7 @@ async def callback_admin_keys_legacy(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -7757,10 +7618,10 @@ async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
-    text = localization.get_text(language, "admin_user_prompt_enter_id", default="👤 Пользователь\n\nВведите Telegram ID или username пользователя:")
+    text = i18n_get_text(language, "admin.user_prompt_enter_id")
     await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
     await state.set_state(AdminUserSearch.waiting_for_user_id)
     await callback.answer()
@@ -7772,7 +7633,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
     
@@ -7823,7 +7684,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         
         # Язык
         user_language = overview.user.get('language') or 'ru'
-        language_display = localization.LANGUAGE_BUTTONS.get(user_language, user_language)
+        language_display = i18n_get_text("ru", f"lang.button_{user_language}")
         text += f"Язык: {language_display}\n"
         
         # Дата регистрации
@@ -7907,7 +7768,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
     """История подписок пользователя (админ)"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -7978,23 +7839,23 @@ def get_admin_grant_days_keyboard(user_id: int, language: str = "ru"):
     """
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_days_1", default="1 день"), callback_data=f"admin:grant_days:{user_id}:1"),
-            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_days_7", default="7 дней"), callback_data=f"admin:grant_days:{user_id}:7"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_days_1"), callback_data=f"admin:grant_days:{user_id}:1"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_days_7"), callback_data=f"admin:grant_days:{user_id}:7"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_days_14", default="14 дней"), callback_data=f"admin:grant_days:{user_id}:14"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_days_14"), callback_data=f"admin:grant_days:{user_id}:14"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_1_year", default="🗓 Выдать доступ на 1 год"), callback_data=f"admin:grant_1_year:{user_id}"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_1_year"), callback_data=f"admin:grant_1_year:{user_id}"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_minutes_10", default="⏱ Доступ на 10 минут"), callback_data=f"admin:grant_minutes:{user_id}:10"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_minutes_10"), callback_data=f"admin:grant_minutes:{user_id}:10"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_custom", default="⚙️ Настроить (дни/часы/минуты)"), callback_data=f"admin:grant_custom:{user_id}"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_custom"), callback_data=f"admin:grant_custom:{user_id}"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:user"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:user"),
         ]
     ])
     return keyboard
@@ -8009,7 +7870,7 @@ async def callback_admin_grant(callback: CallbackQuery, state: FSMContext):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8042,7 +7903,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8057,9 +7918,9 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
         
         text = f"✅ Выдать доступ на {days} дней\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:notify:yes")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:notify:no")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data="admin:notify:yes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:notify:no")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_notify)
@@ -8070,7 +7931,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
         logger.exception(f"Error in callback_admin_grant_days: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8084,7 +7945,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8114,9 +7975,9 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         # Format: admin:notify:yes:minutes:<user_id>:<minutes>
         text = f"✅ Доступ выдан на {minutes} минут\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data=f"admin:notify:yes:minutes:{user_id}:{minutes}")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data=f"admin:notify:no:minutes:{user_id}:{minutes}")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data=f"admin:notify:yes:minutes:{user_id}:{minutes}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data=f"admin:notify:no:minutes:{user_id}:{minutes}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         
@@ -8129,7 +7990,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         logger.exception(f"Error in callback_admin_grant_minutes: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8143,7 +8004,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8157,9 +8018,9 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
         
         text = "✅ Выдать доступ на 1 год\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:notify:yes")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:notify:no")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data="admin:notify:yes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:notify:no")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_notify)
@@ -8170,7 +8031,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
         logger.exception(f"Error in callback_admin_grant_1_year: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8184,7 +8045,7 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8195,10 +8056,10 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
         
         text = "⚙️ Настройка доступа\n\nВыберите единицу времени:"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_minutes", default="⏱ Минуты"), callback_data="admin:grant_unit:minutes")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_hours", default="🕐 Часы"), callback_data="admin:grant_unit:hours")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_days", default="📅 Дни"), callback_data="admin:grant_unit:days")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_minutes"), callback_data="admin:grant_unit:minutes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_hours"), callback_data="admin:grant_unit:hours")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_days"), callback_data="admin:grant_unit:days")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_unit)
@@ -8209,7 +8070,7 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
         logger.exception(f"Error in callback_admin_grant_custom_from_days: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8223,7 +8084,7 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8234,10 +8095,10 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
         
         text = "⚙️ Настройка доступа\n\nВыберите единицу времени:"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_minutes", default="⏱ Минуты"), callback_data="admin:grant_unit:minutes")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_hours", default="🕐 Часы"), callback_data="admin:grant_unit:hours")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_days", default="📅 Дни"), callback_data="admin:grant_unit:days")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_minutes"), callback_data="admin:grant_unit:minutes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_hours"), callback_data="admin:grant_unit:hours")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_days"), callback_data="admin:grant_unit:days")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_unit)
@@ -8248,7 +8109,7 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
         logger.exception(f"Error in callback_admin_grant_custom: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8262,7 +8123,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8274,7 +8135,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
         unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(unit, unit)
         text = f"⚙️ Настройка доступа\n\nЕдиница: {unit_text}\n\nВведите количество (положительное число):"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:main")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:main")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_value)
@@ -8285,7 +8146,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
         logger.exception(f"Error in callback_admin_grant_unit: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8296,7 +8157,7 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
     """
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
     
@@ -8314,9 +8175,9 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
         
         text = f"⚙️ Настройка доступа\n\nПродолжительность: {value} {unit_text}\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:grant:notify:yes")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:grant:notify:no")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:main")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data="admin:grant:notify:yes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:grant:notify:no")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:main")],
         ])
         await message.answer(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_notify)
@@ -8338,7 +8199,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8421,7 +8282,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_notify: {e}")
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8437,7 +8298,7 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8493,7 +8354,7 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
         logger.warning(f"Unexpected error in callback_admin_grant_minutes_notify: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
 
 
 @router.callback_query(
@@ -8509,7 +8370,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8630,7 +8491,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
         logger.exception(f"Error in callback_admin_grant_quick_notify_fsm: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8645,7 +8506,7 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8663,11 +8524,11 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
         # 4️⃣ FSM CONSISTENCY: Save user_id and ask for notify choice
         await state.update_data(user_id=user_id)
         
-        text = localization.get_text(language, "admin_revoke_confirm_text")
+        text = i18n_get_text(language, "admin.revoke_confirm_text", "admin_revoke_confirm_text")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:revoke:notify:yes")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:revoke:notify:no")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel"), callback_data=f"admin:user")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data="admin:revoke:notify:yes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:revoke:notify:no")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel", "admin_cancel"), callback_data=f"admin:user")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminRevokeAccess.waiting_for_notify_choice)
@@ -8684,7 +8545,7 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
         logger.exception(f"Error in callback_admin_revoke: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
 
@@ -8698,7 +8559,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8798,13 +8659,13 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
         logger.exception(f"Error in callback_admin_revoke_notify: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
     """Обработчик кнопки 'Лишить доступа'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -8886,7 +8747,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
                 try:
                     language = await resolve_user_language(user_id)
                     
-                    user_text = localization.get_text(language, "admin_revoke_user_notification")
+                    user_text = i18n_get_text(language, "admin.revoke_user_notification", "admin_revoke_user_notification")
                     await bot.send_message(user_id, user_text)
                     logger.info(
                         "ADMIN_REVOKE_NOTIFICATION_SENT",
@@ -8952,9 +8813,9 @@ def get_admin_discount_percent_keyboard(user_id: int, language: str = "ru"):
         ],
         [
             InlineKeyboardButton(text="25%", callback_data=f"admin:discount_percent:{user_id}:25"),
-            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_manual", default="Ввести вручную"), callback_data=f"admin:discount_percent_manual:{user_id}"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_manual"), callback_data=f"admin:discount_percent_manual:{user_id}"),
         ],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     return keyboard
 
@@ -8963,14 +8824,14 @@ def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int, lan
     """Клавиатура для выбора срока действия скидки"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_expires_7", default="7 дней"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:7"),
-            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_expires_30", default="30 дней"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:30"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_expires_7"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:7"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_expires_30"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:30"),
         ],
         [
-            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_expires_unlimited", default="Бессрочно"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:0"),
-            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_manual", default="Ввести вручную"), callback_data=f"admin:discount_expires_manual:{user_id}:{discount_percent}"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_expires_unlimited"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:0"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_manual"), callback_data=f"admin:discount_expires_manual:{user_id}:{discount_percent}"),
         ],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     return keyboard
 
@@ -8981,7 +8842,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9010,7 +8871,7 @@ async def callback_admin_discount_percent(callback: CallbackQuery):
     """Обработчик выбора процента скидки"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9032,7 +8893,7 @@ async def callback_admin_discount_percent_manual(callback: CallbackQuery, state:
     """Обработчик для ввода процента скидки вручную"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9055,7 +8916,7 @@ async def process_admin_discount_percent(message: Message, state: FSMContext):
     """Обработка введённого процента скидки"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
     
@@ -9089,7 +8950,7 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
     """Обработчик выбора срока действия скидки"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9121,7 +8982,7 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_discount_expires: {e}")
@@ -9133,7 +8994,7 @@ async def callback_admin_discount_expires_manual(callback: CallbackQuery, state:
     """Обработчик для ввода срока действия скидки вручную"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9158,7 +9019,7 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
     """Обработка введённого срока действия скидки"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
     
@@ -9211,7 +9072,7 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9248,7 +9109,7 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
     except UserNotFoundError:
         if hasattr(message_or_callback, 'edit_text'):
             await message_or_callback.edit_text(
-                localization.get_text(language, "admin_user_not_found", default="❌ Пользователь не найден"),
+                i18n_get_text(language, "admin.user_not_found"),
                 reply_markup=get_admin_back_keyboard(language)
             )
         else:
@@ -9266,7 +9127,7 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
     
     # Язык
     user_language = overview.user.get('language') or 'ru'
-    language_display = localization.LANGUAGE_BUTTONS.get(user_language, user_language)
+    language_display = i18n_get_text("ru", f"lang.button_{user_language}")
     text += f"Язык: {language_display}\n"
     
     # Дата регистрации
@@ -9343,7 +9204,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9372,7 +9233,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_vip_grant: {e}")
@@ -9386,7 +9247,7 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9418,7 +9279,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9487,7 +9348,7 @@ async def callback_admin_system(callback: CallbackQuery):
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -9551,8 +9412,8 @@ async def callback_admin_system(callback: CallbackQuery):
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_test_menu", default="🧪 Тесты"), callback_data="admin:test_menu")],
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_menu"), callback_data="admin:test_menu")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -9578,7 +9439,7 @@ async def callback_admin_test_menu(callback: CallbackQuery):
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     text = "🧪 Тестовое меню\n\n"
@@ -9588,11 +9449,11 @@ async def callback_admin_test_menu(callback: CallbackQuery):
     text += "• Все действия логируются в audit_log(type=test)"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_trial", default="🎁 Тест активации триала"), callback_data="admin:test:trial_activation")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_first_purchase", default="💰 Тест уведомления о первой покупке"), callback_data="admin:test:first_purchase")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_renewal", default="🔄 Тест уведомления о продлении"), callback_data="admin:test:renewal")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_reminders", default="⏰ Тест напоминаний"), callback_data="admin:test:reminders")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:system")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_trial"), callback_data="admin:test:trial_activation")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_first_purchase"), callback_data="admin:test:first_purchase")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_renewal"), callback_data="admin:test:renewal")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_reminders"), callback_data="admin:test:reminders")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:system")],
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -9613,7 +9474,7 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     test_type = callback.data.split(":")[-1]
@@ -9683,10 +9544,10 @@ async def callback_admin_export(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
-    text = localization.get_text(language, "admin_export_prompt", default="📤 Экспорт данных\n\nВыберите тип данных для экспорта:")
+    text = i18n_get_text(language, "admin.export_prompt")
     await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard(language))
     await callback.answer()
 
@@ -9696,7 +9557,7 @@ async def callback_admin_export_data(callback: CallbackQuery):
     """Обработка экспорта данных"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -9805,7 +9666,7 @@ async def callback_admin_incident(callback: CallbackQuery):
     """Раздел управления инцидентом"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -9814,19 +9675,19 @@ async def callback_admin_incident(callback: CallbackQuery):
     is_active = incident["is_active"]
     incident_text = incident.get("incident_text") or "Текст не указан"
     
-    status_text = localization.get_text(language, "admin_incident_status_on") if is_active else localization.get_text(language, "admin_incident_status_off")
-    incident_title = localization.get_text(language, "admin_incident_title")
-    incident_label = localization.get_text(language, "admin_incident_text_label")
+    status_text = i18n_get_text(language, "admin.incident_status_on", "admin_incident_status_on") if is_active else i18n_get_text(language, "admin.incident_status_off", "admin_incident_status_off")
+    incident_title = i18n_get_text(language, "admin.incident_title", "admin_incident_title")
+    incident_label = i18n_get_text(language, "admin.incident_text_label", "admin_incident_text_label")
     text = f"{incident_title}\n\n{status_text}\n\n{incident_label}\n{incident_text}"
     
-    toggle_text = localization.get_text(language, "admin_incident_enable") if not is_active else localization.get_text(language, "admin_incident_disable")
+    toggle_text = i18n_get_text(language, "admin.incident_enable", "admin_incident_enable") if not is_active else i18n_get_text(language, "admin.incident_disable", "admin_incident_disable")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=toggle_text,
             callback_data="admin:incident:toggle"
         )],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_incident_edit", default="📝 Изменить текст"), callback_data="admin:incident:edit")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.incident_edit"), callback_data="admin:incident:edit")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -9840,7 +9701,7 @@ async def callback_admin_incident_toggle(callback: CallbackQuery):
     """Переключение режима инцидента"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -9870,14 +9731,14 @@ async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContex
     """Начало редактирования текста инцидента"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
     
     text = "Введите текст инцидента (или отправьте /cancel для отмены):"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:incident")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:incident")],
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -9920,14 +9781,14 @@ async def callback_admin_broadcast(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
-    text = localization.get_text(language, "broadcast_section_title", default="📣 Уведомления\n\nВыберите действие:")
+    text = i18n_get_text(language, "broadcast._section_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_create", default="➕ Создать уведомление"), callback_data="broadcast:create")],
-        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_ab_stats", default="📊 A/B статистика"), callback_data="broadcast:ab_stats")],
-        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._create"), callback_data="broadcast:create")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_stats"), callback_data="broadcast:ab_stats")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
@@ -9943,13 +9804,13 @@ async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
     language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
     await state.set_state(BroadcastCreate.waiting_for_title)
     await callback.message.answer(
-        localization.get_text(language, "broadcast_enter_title", default="Введите заголовок уведомления:")
+        i18n_get_text(language, "broadcast._enter_title")
     )
 
 
@@ -9963,7 +9824,7 @@ async def process_broadcast_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
     await state.set_state(BroadcastCreate.waiting_for_test_type)
     await message.answer(
-        localization.get_text(language, "broadcast_select_type", default="Выберите тип уведомления:"),
+        i18n_get_text(language, "broadcast._select_type"),
         reply_markup=get_broadcast_test_type_keyboard(language)
     )
 
@@ -9973,7 +9834,7 @@ async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContex
     """Обработка выбора типа тестирования"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -9985,12 +9846,12 @@ async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContex
     if test_type == "ab":
         await state.set_state(BroadcastCreate.waiting_for_message_a)
         await callback.message.edit_text(
-            localization.get_text(language, "broadcast_enter_variant_a", default="Введите текст варианта A:")
+            i18n_get_text(language, "broadcast._enter_variant_a")
         )
     else:
         await state.set_state(BroadcastCreate.waiting_for_message)
         await callback.message.edit_text(
-            localization.get_text(language, "broadcast_enter_message", default="Введите текст уведомления:")
+            i18n_get_text(language, "broadcast._enter_message")
         )
 
 
@@ -10004,7 +9865,7 @@ async def process_broadcast_message_a(message: Message, state: FSMContext):
     await state.update_data(message_a=message.text)
     await state.set_state(BroadcastCreate.waiting_for_message_b)
     await message.answer(
-        localization.get_text(language, "broadcast_enter_variant_b", default="Введите текст варианта B:")
+        i18n_get_text(language, "broadcast._enter_variant_b")
     )
 
 
@@ -10018,7 +9879,7 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     await state.update_data(message_b=message.text)
     await state.set_state(BroadcastCreate.waiting_for_type)
     await message.answer(
-        localization.get_text(language, "broadcast_select_type", default="Выберите тип уведомления:"),
+        i18n_get_text(language, "broadcast._select_type"),
         reply_markup=get_broadcast_type_keyboard(language)
     )
 
@@ -10033,7 +9894,7 @@ async def process_broadcast_message(message: Message, state: FSMContext):
     await state.update_data(message=message.text)
     await state.set_state(BroadcastCreate.waiting_for_type)
     await message.answer(
-        localization.get_text(language, "broadcast_select_type", default="Выберите тип уведомления:"),
+        i18n_get_text(language, "broadcast._select_type"),
         reply_markup=get_broadcast_type_keyboard(language)
     )
 
@@ -10043,7 +9904,7 @@ async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора типа уведомления"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -10073,7 +9934,7 @@ async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
     language = await resolve_user_language(callback.from_user.id)
     
     await callback.message.edit_text(
-        localization.get_text(language, "broadcast_select_segment", default="Выберите сегмент получателей:"),
+        i18n_get_text(language, "broadcast._select_segment"),
         reply_markup=get_broadcast_segment_keyboard(language)
     )
 
@@ -10083,7 +9944,7 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
     """Обработка выбора сегмента получателей"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -10140,11 +10001,7 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
     
     language = await resolve_user_language(callback.from_user.id)
     
-    preview_confirm_text = localization.get_text(
-        language, "broadcast_preview_confirm",
-        preview=preview_text,
-        default=f"📋 Предпросмотр уведомления:\n\n{preview_text}\n\nПодтвердите отправку:"
-    )
+    preview_confirm_text = i18n_get_text(language, "broadcast._preview_confirm", preview=preview_text)
     await callback.message.edit_text(
         preview_confirm_text,
         reply_markup=get_broadcast_confirm_keyboard(language)
@@ -10156,7 +10013,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     """Подтверждение и отправка уведомления"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -10220,11 +10077,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         )
         
         await callback.message.edit_text(
-            localization.get_text(
-                language, "broadcast_sending",
-                total=total_users,
-                default=f"📤 Отправка уведомления...\n\nПользователей: {total_users}\nОжидайте завершения."
-            ),
+            i18n_get_text(language, "broadcast._sending", total=total_users),
             reply_markup=None
         )
         
@@ -10277,31 +10130,17 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         
         # Admin report (localized)
         if failed_count == 0:
-            result_text = localization.get_text(
-                language, "broadcast_report_success",
-                total=total_users,
-                sent=sent_count,
-                broadcast_id=broadcast_id,
-                default=f"✅ Broadcast completed.\nTotal: {total_users}\nSuccess: {sent_count}\nFailed: 0\n📝 ID: {broadcast_id}"
-            )
+            result_text = i18n_get_text(language, "broadcast._report_success", total=total_users, sent=sent_count, broadcast_id=broadcast_id)
         else:
             failed_lines = "\n".join(
                 f"{f['telegram_id']} — {f['error']}" for f in failed_list[:20]
             )
             if len(failed_list) > 20:
                 failed_lines += f"\n... and {len(failed_list) - 20} more"
-            result_text = localization.get_text(
-                language, "broadcast_report_partial",
-                total=total_users,
-                sent=sent_count,
-                failed=failed_count,
-                broadcast_id=broadcast_id,
-                failed_list=failed_lines,
-                default=f"⚠️ Broadcast completed with errors.\nTotal: {total_users}\nSuccess: {sent_count}\nFailed: {failed_count}\n\nFailed users:\n{failed_lines}\n\n📝 ID: {broadcast_id}"
-            )
+            result_text = i18n_get_text(language, "broadcast._report_partial", total=total_users, sent=sent_count, failed=failed_count, broadcast_id=broadcast_id, failed_list=failed_lines)
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back_to_broadcast", default="🔙 Назад"), callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back_to_broadcast"), callback_data="admin:broadcast")],
         ])
         
         await callback.message.edit_text(result_text, reply_markup=keyboard)
@@ -10321,7 +10160,7 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -10330,11 +10169,11 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
         ab_tests = await database.get_ab_test_broadcasts()
         
         if not ab_tests:
-            text = localization.get_text(language, "broadcast_ab_stats_empty", default="📊 A/B статистика\n\nA/B тестов не найдено.")
+            text = i18n_get_text(language, "broadcast._ab_stats_empty")
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             return
         
-        text = localization.get_text(language, "broadcast_ab_stats_select", default="📊 A/B статистика\n\nВыберите уведомление для просмотра статистики:")
+        text = i18n_get_text(language, "broadcast._ab_stats_select")
         keyboard = get_ab_test_list_keyboard(ab_tests, language)
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
@@ -10344,7 +10183,7 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_broadcast_ab_stats: {e}")
         await callback.message.answer(
-            localization.get_text(language, "broadcast_ab_stats_error", default="Ошибка при получении списка A/B тестов. Проверь логи.")
+            i18n_get_text(language, "broadcast._ab_stats_error")
         )
 
 
@@ -10353,7 +10192,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
     """Статистика конкретного A/B теста"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
@@ -10373,7 +10212,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         if not stats:
             text = f"📊 A/B статистика\n\nУведомление: #{broadcast_id}\n\nНедостаточно данных для анализа."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="broadcast:ab_stats")],
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="broadcast:ab_stats")],
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -10403,7 +10242,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="broadcast:ab_stats")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="broadcast:ab_stats")],
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -10624,16 +10463,16 @@ async def reject_payment(callback: CallbackQuery):
         # Уведомляем пользователя
         language = await resolve_user_language(telegram_id)
         
-        text = localization.get_text(language, "payment_rejected")
+        text = i18n_get_text(language, "payment.rejected", "payment_rejected")
         
         # Создаем inline клавиатуру для UX
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=localization.get_text(language, "buy_renew_button"),
+                text=i18n_get_text(language, "buy.renew_button", "buy_renew_button"),
                 callback_data="menu_buy_vpn"
             )],
             [InlineKeyboardButton(
-                text=localization.get_text(language, "support_button"),
+                text=i18n_get_text(language, "main.support_button", "support_button"),
                 callback_data="menu_support"
             )]
         ])
@@ -10658,12 +10497,12 @@ async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FS
     """Начало процесса выдачи средств - запрос поиска пользователя"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    text = localization.get_text(language, "admin_credit_balance_prompt")
+    text = i18n_get_text(language, "admin.credit_balance_prompt", "admin_credit_balance_prompt")
     await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
     await state.set_state(AdminCreditBalance.waiting_for_user_search)
     await callback.answer()
@@ -10674,7 +10513,7 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
     """Начало процесса выдачи средств для конкретного пользователя"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -10683,9 +10522,9 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
         
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
-        text = localization.get_text(language, "admin_credit_balance_user_prompt", user_id=user_id)
+        text = i18n_get_text(language, "admin.credit_balance_user_prompt", user_id=user_id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel"), callback_data=f"admin:user")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel", "admin_cancel"), callback_data=f"admin:user")]
         ])
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await state.set_state(AdminCreditBalance.waiting_for_amount)
@@ -10700,7 +10539,7 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
     """Обработка поиска пользователя для выдачи средств"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
     
@@ -10725,7 +10564,7 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
         
         text = f"💰 Выдать средства\n\nПользователь: {target_user_id}\n\nВведите сумму в рублях:"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:main")]
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:main")]
         ])
         await message.answer(text, reply_markup=keyboard)
         await state.set_state(AdminCreditBalance.waiting_for_amount)
@@ -10741,7 +10580,7 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
     """Обработка ввода суммы для выдачи средств"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
     
@@ -10778,8 +10617,8 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text=localization.get_text(language, "admin_confirm", default="✅ Подтвердить"), callback_data="admin:credit_balance_confirm"),
-                InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="❌ Отмена"), callback_data="admin:credit_balance_cancel")
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="admin:credit_balance_confirm"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:credit_balance_cancel")
             ]
         ])
         
@@ -10799,7 +10638,7 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
     """Подтверждение выдачи средств"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     try:
@@ -10846,7 +10685,7 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
             )
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
             ])
             
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -10868,11 +10707,11 @@ async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: F
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.message.edit_text(
-        localization.get_text(language, "admin_operation_cancelled", default="❌ Операция отменена"),
+        i18n_get_text(language, "admin.operation_cancelled"),
         reply_markup=get_admin_back_keyboard(language)
     )
     await state.clear()
