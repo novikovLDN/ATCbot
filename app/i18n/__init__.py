@@ -17,19 +17,26 @@ LANGUAGES = {
 }
 
 
-def get_text(language: str, key: str, strict: bool = False, **kwargs) -> str:
+def get_text(language: str, key: str, strict: bool = None, **kwargs) -> str:
     """
     Get localized text for key in given language.
 
     Args:
         language: Language code (ru, en, uz, tj, de, kk, ar)
         key: Dot-separated key (e.g. main.profile, common.back)
-        strict: If True, raise ValueError on missing key. If False, return [MISSING:key]
+        strict: If True, raise ValueError on missing key. If False, return [MISSING:key].
+                If None, uses STAGE strict mode: strict=True in STAGE, False otherwise.
         **kwargs: Format placeholders (e.g. user="John" for {user})
 
     Returns:
         Localized string, optionally formatted.
     """
+    if strict is None:
+        try:
+            from config import IS_STAGE
+            strict = IS_STAGE
+        except ImportError:
+            strict = False
     lang_dict = LANGUAGES.get(language, LANGUAGES["ru"])
     text = lang_dict.get(key)
 
