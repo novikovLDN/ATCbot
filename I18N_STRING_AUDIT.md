@@ -192,6 +192,56 @@ promo.enter_text
 ### Keys migrated ✅
 referral.screen_title, referral.total_invited, referral.active_with_subscription, referral.current_status, referral.cashback_level, referral.rewards_earned, referral.last_activity, referral.next_level_line, referral.max_level_reached, referral.share_button, referral.stats_button, referral.link_copied, referral.stats_screen, referral.status_footer, referral.how_it_works_text, referral.registered_title, referral.registered_user, referral.registered_date, referral.first_payment_notification, referral.trial_activated_title, referral.trial_activated_user, referral.trial_period, common.user, errors.profile_load
 
+### Phase 3.3 fixes
+- `send_referral_cashback_notification`: use `resolve_user_language(referrer_id)` instead of `referrer_user.get("language", "ru")`
+- `format_referral_notification_text`: default `language` changed from `"ru"` to `"en"`
+
+## 11. BACKGROUND — Phase 3.5 ✅ AUDITED (Feb 2025)
+
+### Audit findings — all user-facing notifications compliant
+
+| Module | Language resolution | i18n keys | Hardcoded "ru" | Status |
+|--------|---------------------|-----------|----------------|--------|
+| auto_renewal.py | `resolve_user_language(telegram_id)` ✅ L93 | i18n.get_text(language, "subscription.auto_renew_success"), main.profile, main.buy | None | ✅ OK |
+| trial_notifications.py | `resolve_user_language(telegram_id)` ✅ L75, L354 | trial.notification_6h/60h/71h, trial.expired, main.buy | None | ✅ OK |
+| reminders.py | `resolve_user_language(telegram_id)` ✅ L78 | reminder.admin_1day_6h, admin_7days_24h, paid_3d/24h/3h, main.buy, subscription.renew | None | ✅ OK |
+| activation_worker.py | `resolve_user_language(telegram_id)` ✅ L217 | i18n.get_text(language, "payment.approved") | admin_lang="ru" (admin only) | ✅ DO NOT TOUCH |
+| admin_notifications.py | — | — | — | DO NOT TOUCH (admin) |
+| app/services/notifications/service.py | — | format_referral_notification_text uses i18n | language=="ru" for pluralization only | ✅ OK |
+
+### auto_renewal.py
+- Language: `resolve_user_language(telegram_id)` ✅ (line 93)
+- Uses: `i18n.get_text(language, "subscription.auto_renew_success", days, expires_date, amount)` ✅
+- Uses: `i18n.get_text(language, "main.profile")`, `i18n.get_text(language, "main.buy")` ✅
+- No localization.get_text("ru", ...), no hardcoded Russian in user messages ✅
+- Internal: DB description strings (decrease_balance, increase_balance) — audit logs, not user-facing
+
+### trial_notifications.py
+- Language: `resolve_user_language(telegram_id)` ✅ (lines 75, 354)
+- Uses: `i18n.get_text(language, notification_key)` — keys: trial.notification_6h, trial.notification_60h, trial.notification_71h ✅
+- Uses: `i18n.get_text(language, "trial.expired")`, `i18n.get_text(language, "main.buy")` ✅
+- All keys present in 7 language files ✅
+
+### activation_worker.py
+- User notification: `resolve_user_language(telegram_id)` ✅ (line 217), `i18n.get_text(language, "payment.approved")` ✅
+- Admin notification: `admin_lang = "ru"`, `localization.get_text(admin_lang, ...)` — **DO NOT TOUCH** (admin panel directive)
+
+### reminders.py
+- Language: `resolve_user_language(telegram_id)` ✅ (line 78)
+- Uses: `i18n.get_text(language, "reminder.admin_1day_6h")`, `reminder.admin_7days_24h`, `reminder.paid_3d`, `reminder.paid_24h`, `reminder.paid_3h` ✅
+- Uses: `i18n.get_text(language, "subscription.renew")`, `main.buy` ✅
+
+### app/services/notifications/
+- `format_referral_notification_text`, `send_referral_cashback_notification` — use app.i18n, language from caller ✅
+- `language == "ru"` (L353): Russian pluralization rules (friend_singular/dual/plural), not a hardcoded default ✅
+
+### Keys in app/i18n (all 7 languages)
+- subscription.auto_renew_success, subscription.renew ✅
+- trial.expired, trial.notification_6h, trial.notification_60h, trial.notification_71h ✅
+- payment.approved ✅
+- reminder.admin_1day_6h, reminder.admin_7days_24h, reminder.paid_3d, reminder.paid_24h, reminder.paid_3h ✅
+- main.profile, main.buy ✅
+
 ## 10. Critical Notes
 
 - **localization.py** remains the primary source until migration complete
