@@ -871,23 +871,23 @@ logger = logging.getLogger(__name__)
 # Функция send_vpn_keys_alert удалена - больше не используется
 # VPN-ключи теперь создаются динамически через Xray API, лимита нет
 
-def get_language_keyboard():
-    """Клавиатура для выбора языка (канонический вид)"""
+def get_language_keyboard(language: str = "ru"):
+    """Клавиатура для выбора языка (языковые названия показываются в нативной форме)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
-            InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_ru", default="🇷🇺 Русский"), callback_data="lang_ru"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_en", default="🇬🇧 English"), callback_data="lang_en"),
         ],
         [
-            InlineKeyboardButton(text="🇩🇪 Deutsch", callback_data="lang_de"),
-            InlineKeyboardButton(text="🇰🇿 Қазақша", callback_data="lang_kk"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_de", default="🇩🇪 Deutsch"), callback_data="lang_de"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_kk", default="🇰🇿 Қазақша"), callback_data="lang_kk"),
         ],
         [
-            InlineKeyboardButton(text="🇸🇦 العربية", callback_data="lang_ar"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_ar", default="🇸🇦 العربية"), callback_data="lang_ar"),
         ],
         [
-            InlineKeyboardButton(text="🇺🇿 O'zbek", callback_data="lang_uz"),
-            InlineKeyboardButton(text="🇹🇯 Тоҷикӣ", callback_data="lang_tj"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_uz", default="🇺🇿 O'zbek"), callback_data="lang_uz"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_tj", default="🇹🇯 Тоҷикӣ"), callback_data="lang_tj"),
         ],
     ])
     return keyboard
@@ -1022,7 +1022,7 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
     
     # Кнопка копирования ключа (one-tap copy, всегда показываем)
     buttons.append([InlineKeyboardButton(
-        text="📋 Скопировать ключ",
+        text=localization.get_text(language, "copy_key"),
         callback_data="copy_key"
     )])
     
@@ -1070,7 +1070,7 @@ def get_vpn_key_keyboard(language: str):
             callback_data="menu_instruction"
         )],
         [InlineKeyboardButton(
-            text="📋 Скопировать ключ",
+            text=localization.get_text(language, "copy_key"),
             callback_data="copy_vpn_key"
         )],
         [InlineKeyboardButton(
@@ -1297,7 +1297,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         # Только iOS
         buttons.append([
             InlineKeyboardButton(
-                text="📱 Скачать v2RayTun (iOS)",
+                text=localization.get_text(language, "instruction_download_ios"),
                 url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
             )
         ])
@@ -1305,7 +1305,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         # Только Android
         buttons.append([
             InlineKeyboardButton(
-                text="🤖 Скачать v2RayTun (Android)",
+                text=localization.get_text(language, "instruction_download_android"),
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             )
         ])
@@ -1313,17 +1313,17 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
         # Unknown - показываем все кнопки
         buttons.append([
             InlineKeyboardButton(
-                text="📱 Скачать v2RayTun (iOS)",
+                text=localization.get_text(language, "instruction_download_ios"),
                 url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
             ),
             InlineKeyboardButton(
-                text="🤖 Скачать v2RayTun (Android)",
+                text=localization.get_text(language, "instruction_download_android"),
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
         ])
         buttons.append([
             InlineKeyboardButton(
-                text="💻 Скачать v2RayTun (ПК)",
+                text=localization.get_text(language, "instruction_download_desktop"),
                 url="https://v2raytun.com"
             ),
         ])
@@ -1331,7 +1331,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
     # Всегда показываем кнопку копирования ключа (one-tap copy)
     buttons.append([
         InlineKeyboardButton(
-            text="📋 Скопировать ключ",
+            text=localization.get_text(language, "copy_key"),
             callback_data="copy_vpn_key"
         ),
     ])
@@ -1513,16 +1513,16 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
     return keyboard
 
 
-def get_admin_payment_keyboard(payment_id: int):
+def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
     """Клавиатура для администратора (подтверждение/отклонение платежа)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="✅ Подтвердить",
+                text=localization.get_text(language, "admin_confirm"),
                 callback_data=f"approve_payment:{payment_id}"
             ),
             InlineKeyboardButton(
-                text="❌ Отклонить",
+                text=localization.get_text(language, "admin_reject"),
                 callback_data=f"reject_payment:{payment_id}"
             ),
         ],
@@ -1625,9 +1625,12 @@ async def cmd_start(message: Message):
             )
     
     # Экран выбора языка
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
     await message.answer(
-        "🌍 Выбери язык:",
-        reply_markup=get_language_keyboard()
+        text,
+        reply_markup=get_language_keyboard(language)
     )
 
 
@@ -1997,7 +2000,7 @@ async def callback_change_language(callback: CallbackQuery):
     await safe_edit_text(
         callback.message,
         text,
-        reply_markup=get_language_keyboard()
+        reply_markup=get_language_keyboard(language)
     )
     await callback.answer()
 
@@ -2016,7 +2019,7 @@ async def cmd_language(message: Message, bot: Bot):
     await bot.send_message(
         message.chat.id,
         text,
-        reply_markup=get_language_keyboard()
+        reply_markup=get_language_keyboard(language)
     )
 
 
@@ -3515,8 +3518,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(
             localization.get_text(language, "select_tariff", default="Выберите тариф:"),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🪙 Basic", callback_data="tariff:basic")],
-                [InlineKeyboardButton(text="🔑 Plus", callback_data="tariff:plus")],
+                [InlineKeyboardButton(text=localization.get_text(language, "tariff_basic", default="🪙 Basic"), callback_data="tariff:basic")],
+                [InlineKeyboardButton(text=localization.get_text(language, "tariff_plus", default="🔑 Plus"), callback_data="tariff:plus")],
                 [InlineKeyboardButton(text=localization.get_text(language, "back", default="⬅️ Назад"), callback_data="menu_main")],
             ])
         )
@@ -4769,8 +4772,8 @@ async def process_promo_code(message: Message, state: FSMContext):
         await state.set_state(PurchaseState.choose_tariff)
         tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🪙 Basic", callback_data="tariff:basic")],
-            [InlineKeyboardButton(text="🔑 Plus", callback_data="tariff:plus")],
+            [InlineKeyboardButton(text=localization.get_text(language, "tariff_basic", default="🪙 Basic"), callback_data="tariff:basic")],
+            [InlineKeyboardButton(text=localization.get_text(language, "tariff_plus", default="🔑 Plus"), callback_data="tariff:plus")],
             [InlineKeyboardButton(
                 text=localization.get_text(language, "enter_promo_button", default="🎟 Ввести промокод"),
                 callback_data="enter_promo"
@@ -4815,11 +4818,11 @@ async def process_promo_code(message: Message, state: FSMContext):
         tariff_text = localization.get_text(language, "select_tariff", default="Выберите тариф:")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="🪙 Basic", 
+                text=localization.get_text(language, "tariff_basic"),
                 callback_data="tariff:basic"
             )],
             [InlineKeyboardButton(
-                text="🔑 Plus",
+                text=localization.get_text(language, "tariff_plus"),
                 callback_data="tariff:plus"
             )],
             [InlineKeyboardButton(
@@ -5001,11 +5004,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
         # Создаем стандартную inline клавиатуру для UX
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="🔐 Купить / Продлить доступ",
+                text=localization.get_text(language, "buy_renew_button"),
                 callback_data="menu_buy_vpn"
             )],
             [InlineKeyboardButton(
-                text="🆘 Поддержка",
+                text=localization.get_text(language, "support_button"),
                 callback_data="menu_support"
             )]
         ])
@@ -5138,11 +5141,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
             # Создаем inline клавиатуру для UX
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="🔐 Купить / Продлить доступ",
+                    text=localization.get_text(language, "buy_renew_button"),
                     callback_data="menu_buy_vpn"
                 )],
                 [InlineKeyboardButton(
-                    text="👤 Мой профиль",
+                    text=localization.get_text(language, "profile"),
                     callback_data="menu_profile"
                 )]
             ])
@@ -5923,7 +5926,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
         await callback.bot.send_message(
             config.ADMIN_TELEGRAM_ID,
             admin_text,
-            reply_markup=get_admin_payment_keyboard(payment_id)
+            reply_markup=get_admin_payment_keyboard(payment_id, "ru")
         )
     except Exception as e:
         logging.error(f"Error sending admin notification: {e}")
@@ -6836,6 +6839,8 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     await callback.answer()
     
     try:
@@ -6907,18 +6912,18 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
         # Клавиатура с кнопками
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📋 История начислений", callback_data="admin:referral_history"),
-                InlineKeyboardButton(text="📈 Топ рефереров", callback_data="admin:referral_top")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_referral_history", default="📋 История начислений"), callback_data="admin:referral_history"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_referral_top", default="📈 Топ рефереров"), callback_data="admin:referral_top")
             ],
             [
-                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -6956,18 +6961,18 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="📋 История начислений", callback_data="admin:referral_history"),
-                    InlineKeyboardButton(text="📈 Топ рефереров", callback_data="admin:referral_top")
+                    InlineKeyboardButton(text=localization.get_text(language, "admin_referral_history", default="📋 История начислений"), callback_data="admin:referral_history"),
+                    InlineKeyboardButton(text=localization.get_text(language, "admin_referral_top", default="📈 Топ рефереров"), callback_data="admin:referral_top")
                 ],
                 [
-                    InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
-                    InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+                    InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
+                    InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
                 ],
                 [
-                    InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
-                    InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+                    InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
+                    InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
                 ],
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
             ])
             
             await safe_edit_text(callback.message, fallback_text, reply_markup=keyboard)
@@ -6987,6 +6992,8 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     await callback.answer()
     
     try:
@@ -7005,7 +7012,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
         if not stats_list:
             text = "📊 Реферальная статистика\n\nРефереры не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -7043,14 +7050,14 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
         # Клавиатура с кнопками фильтров и сортировки
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7071,11 +7078,13 @@ async def callback_admin_referral_search(callback: CallbackQuery, state: FSMCont
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     await callback.answer()
     
     text = "🔍 Поиск реферальной статистики\n\nВведите telegram_id или username для поиска:"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:referral_stats")]
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="❌ Отмена"), callback_data="admin:referral_stats")]
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7092,6 +7101,8 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
         await state.clear()
         return
     
+    user = await database.get_user(message.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     search_query = message.text.strip()
     await state.clear()
     
@@ -7108,7 +7119,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
         if not stats_list:
             text = f"📊 Реферальная статистика\n\nПо запросу '{search_query}' ничего не найдено."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
             ])
             await message.answer(text, reply_markup=keyboard)
             return
@@ -7139,14 +7150,14 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
         ])
         
         await message.answer(text, reply_markup=keyboard)
@@ -7213,7 +7224,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
         
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад к статистике", callback_data="admin:referral_stats")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back_to_stats", default="🔙 Назад к статистике"), callback_data="admin:referral_stats")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7259,7 +7270,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
         if not history:
             text = "📋 История начислений\n\nНачисления не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -7288,10 +7299,10 @@ async def callback_admin_referral_history(callback: CallbackQuery):
         keyboard_buttons = []
         if total_count > 20:
             keyboard_buttons.append([
-                InlineKeyboardButton(text="➡️ Следующие", callback_data="admin:referral_history:page:1")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_next_page", default="➡️ Следующие"), callback_data="admin:referral_history:page:1")
             ])
         keyboard_buttons.append([
-            InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")
+            InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")
         ])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
@@ -7344,7 +7355,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
         if not history:
             text = "📋 История начислений\n\nНачисления не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -7370,13 +7381,13 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
         keyboard_buttons = []
         nav_buttons = []
         if page > 0:
-            nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:referral_history:page:{page - 1}"))
+            nav_buttons.append(InlineKeyboardButton(text=localization.get_text(language, "admin_prev", default="⬅️ Назад"), callback_data=f"admin:referral_history:page:{page - 1}"))
         if offset + limit < total_count:
-            nav_buttons.append(InlineKeyboardButton(text="➡️ Вперёд", callback_data=f"admin:referral_history:page:{page + 1}"))
+            nav_buttons.append(InlineKeyboardButton(text=localization.get_text(language, "admin_forward", default="➡️ Вперёд"), callback_data=f"admin:referral_history:page:{page + 1}"))
         if nav_buttons:
             keyboard_buttons.append(nav_buttons)
         keyboard_buttons.append([
-            InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")
+            InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")
         ])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
@@ -7413,7 +7424,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
         if not top_referrers:
             text = "🏆 Топ рефереров\n\nРефереры не найдены."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -7439,14 +7450,14 @@ async def callback_admin_referral_top(callback: CallbackQuery):
         # Клавиатура
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="📈 По доходу", callback_data="admin:referral_sort:total_revenue"),
-                InlineKeyboardButton(text="👥 По приглашениям", callback_data="admin:referral_sort:invited_count")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_revenue", default="📈 По доходу"), callback_data="admin:referral_sort:total_revenue"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_invited", default="👥 По приглашениям"), callback_data="admin:referral_sort:invited_count")
             ],
             [
-                InlineKeyboardButton(text="💰 По кешбэку", callback_data="admin:referral_sort:cashback_paid"),
-                InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:referral_search")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_sort_by_cashback", default="💰 По кешбэку"), callback_data="admin:referral_sort:cashback_paid"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_search", default="🔍 Поиск"), callback_data="admin:referral_search")
             ],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:referral_stats")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:referral_stats")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7579,7 +7590,7 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад к аналитике", callback_data="admin:analytics")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back_to_analytics", default="🔙 Назад к аналитике"), callback_data="admin:analytics")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7722,9 +7733,9 @@ async def callback_admin_keys(callback: CallbackQuery):
         text += "• Перевыпустить ключи для всех активных пользователей\n"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="👤 Перевыпустить для пользователя", callback_data="admin:user")],
-            [InlineKeyboardButton(text="🔄 Перевыпустить все ключи", callback_data="admin:keys:reissue_all")],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_reissue_for_user", default="👤 Перевыпустить для пользователя"), callback_data="admin:user")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_reissue_all_keys", default="🔄 Перевыпустить все ключи"), callback_data="admin:keys:reissue_all")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -7865,7 +7876,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
             final_text += f"\n\nОшибки у пользователей: {failed_list}"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:keys")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:keys")]
         ])
         
         try:
@@ -8077,7 +8088,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
             final_text += f"\n\nОшибки у подписок: {failed_list}"
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:keys")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:keys")]
         ])
         
         try:
@@ -8356,7 +8367,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
         await callback.answer("Ошибка при получении истории подписок", show_alert=True)
 
 
-def get_admin_grant_days_keyboard(user_id: int):
+def get_admin_grant_days_keyboard(user_id: int, language: str = "ru"):
     """
     5. ADVANCED ACCESS CONTROL (GRANT / REVOKE)
     
@@ -8364,23 +8375,23 @@ def get_admin_grant_days_keyboard(user_id: int):
     """
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="1 день", callback_data=f"admin:grant_days:{user_id}:1"),
-            InlineKeyboardButton(text="7 дней", callback_data=f"admin:grant_days:{user_id}:7"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_days_1", default="1 день"), callback_data=f"admin:grant_days:{user_id}:1"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_days_7", default="7 дней"), callback_data=f"admin:grant_days:{user_id}:7"),
         ],
         [
-            InlineKeyboardButton(text="14 дней", callback_data=f"admin:grant_days:{user_id}:14"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_days_14", default="14 дней"), callback_data=f"admin:grant_days:{user_id}:14"),
         ],
         [
-            InlineKeyboardButton(text="🗓 Выдать доступ на 1 год", callback_data=f"admin:grant_1_year:{user_id}"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_1_year", default="🗓 Выдать доступ на 1 год"), callback_data=f"admin:grant_1_year:{user_id}"),
         ],
         [
-            InlineKeyboardButton(text="⏱ Доступ на 10 минут", callback_data=f"admin:grant_minutes:{user_id}:10"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_minutes_10", default="⏱ Доступ на 10 минут"), callback_data=f"admin:grant_minutes:{user_id}:10"),
         ],
         [
-            InlineKeyboardButton(text="⚙️ Настроить (дни/часы/минуты)", callback_data=f"admin:grant_custom:{user_id}"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_grant_custom", default="⚙️ Настроить (дни/часы/минуты)"), callback_data=f"admin:grant_custom:{user_id}"),
         ],
         [
-            InlineKeyboardButton(text="🔙 Назад", callback_data="admin:user"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:user"),
         ]
     ])
     return keyboard
@@ -8445,9 +8456,9 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
         
         text = f"✅ Выдать доступ на {days} дней\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Да", callback_data="admin:notify:yes")],
-            [InlineKeyboardButton(text="🔕 Нет", callback_data="admin:notify:no")],
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:notify:yes")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:notify:no")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_notify)
@@ -8503,9 +8514,9 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         # Format: admin:notify:yes:minutes:<user_id>:<minutes>
         text = f"✅ Доступ выдан на {minutes} минут\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Да", callback_data=f"admin:notify:yes:minutes:{user_id}:{minutes}")],
-            [InlineKeyboardButton(text="🔕 Нет", callback_data=f"admin:notify:no:minutes:{user_id}:{minutes}")],
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data=f"admin:notify:yes:minutes:{user_id}:{minutes}")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data=f"admin:notify:no:minutes:{user_id}:{minutes}")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         
@@ -8547,9 +8558,9 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
         
         text = "✅ Выдать доступ на 1 год\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Да", callback_data="admin:notify:yes")],
-            [InlineKeyboardButton(text="🔕 Нет", callback_data="admin:notify:no")],
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:notify:yes")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:notify:no")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_notify)
@@ -8586,10 +8597,10 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
         
         text = "⚙️ Настройка доступа\n\nВыберите единицу времени:"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⏱ Минуты", callback_data="admin:grant_unit:minutes")],
-            [InlineKeyboardButton(text="🕐 Часы", callback_data="admin:grant_unit:hours")],
-            [InlineKeyboardButton(text="📅 Дни", callback_data="admin:grant_unit:days")],
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_minutes", default="⏱ Минуты"), callback_data="admin:grant_unit:minutes")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_hours", default="🕐 Часы"), callback_data="admin:grant_unit:hours")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_days", default="📅 Дни"), callback_data="admin:grant_unit:days")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_unit)
@@ -8626,10 +8637,10 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
         
         text = "⚙️ Настройка доступа\n\nВыберите единицу времени:"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⏱ Минуты", callback_data="admin:grant_unit:minutes")],
-            [InlineKeyboardButton(text="🕐 Часы", callback_data="admin:grant_unit:hours")],
-            [InlineKeyboardButton(text="📅 Дни", callback_data="admin:grant_unit:days")],
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:grant:{user_id}")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_minutes", default="⏱ Минуты"), callback_data="admin:grant_unit:minutes")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_hours", default="🕐 Часы"), callback_data="admin:grant_unit:hours")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_grant_unit_days", default="📅 Дни"), callback_data="admin:grant_unit:days")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data=f"admin:grant:{user_id}")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_unit)
@@ -8667,7 +8678,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
         unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(unit, unit)
         text = f"⚙️ Настройка доступа\n\nЕдиница: {unit_text}\n\nВведите количество (положительное число):"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:main")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:main")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_value)
@@ -8708,9 +8719,9 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
         
         text = f"⚙️ Настройка доступа\n\nПродолжительность: {value} {unit_text}\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Да", callback_data="admin:grant:notify:yes")],
-            [InlineKeyboardButton(text="🔕 Нет", callback_data="admin:grant:notify:no")],
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:main")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:grant:notify:yes")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:grant:notify:no")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:main")],
         ])
         await message.answer(text, reply_markup=keyboard)
         await state.set_state(AdminGrantAccess.waiting_for_notify)
@@ -9063,11 +9074,11 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
         # 4️⃣ FSM CONSISTENCY: Save user_id and ask for notify choice
         await state.update_data(user_id=user_id)
         
-        text = "❌ Лишить доступа\n\nУведомить пользователя?"
+        text = localization.get_text(language, "admin_revoke_confirm_text")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔔 Да", callback_data="admin:revoke:notify:yes")],
-            [InlineKeyboardButton(text="🔕 Нет", callback_data="admin:revoke:notify:no")],
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:user")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_yes", default="🔔 Да"), callback_data="admin:revoke:notify:yes")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_notify_no", default="🔕 Нет"), callback_data="admin:revoke:notify:no")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel"), callback_data=f"admin:user")],
         ])
         await callback.message.edit_text(text, reply_markup=keyboard)
         await state.set_state(AdminRevokeAccess.waiting_for_notify_choice)
@@ -9346,7 +9357,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
 
 # ==================== ОБРАБОТЧИКИ ДЛЯ УПРАВЛЕНИЯ ПЕРСОНАЛЬНЫМИ СКИДКАМИ ====================
 
-def get_admin_discount_percent_keyboard(user_id: int):
+def get_admin_discount_percent_keyboard(user_id: int, language: str = "ru"):
     """Клавиатура для выбора процента скидки"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -9355,25 +9366,25 @@ def get_admin_discount_percent_keyboard(user_id: int):
         ],
         [
             InlineKeyboardButton(text="25%", callback_data=f"admin:discount_percent:{user_id}:25"),
-            InlineKeyboardButton(text="Ввести вручную", callback_data=f"admin:discount_percent_manual:{user_id}"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_manual", default="Ввести вручную"), callback_data=f"admin:discount_percent_manual:{user_id}"),
         ],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
     ])
     return keyboard
 
 
-def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int):
+def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int, language: str = "ru"):
     """Клавиатура для выбора срока действия скидки"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="7 дней", callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:7"),
-            InlineKeyboardButton(text="30 дней", callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:30"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_expires_7", default="7 дней"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:7"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_expires_30", default="30 дней"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:30"),
         ],
         [
-            InlineKeyboardButton(text="Бессрочно", callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:0"),
-            InlineKeyboardButton(text="Ввести вручную", callback_data=f"admin:discount_expires_manual:{user_id}:{discount_percent}"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_expires_unlimited", default="Бессрочно"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:0"),
+            InlineKeyboardButton(text=localization.get_text(language, "admin_discount_manual", default="Ввести вручную"), callback_data=f"admin:discount_expires_manual:{user_id}:{discount_percent}"),
         ],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
     ])
     return keyboard
 
@@ -9961,7 +9972,7 @@ async def callback_admin_system(callback: CallbackQuery):
         language = user.get("language", "ru") if user else "ru"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=localization.get_text(language, "admin_test_menu", default="🧪 Тесты"), callback_data="admin:test_menu")],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -9998,11 +10009,11 @@ async def callback_admin_test_menu(callback: CallbackQuery):
     text += "• Все действия логируются в audit_log(type=test)"
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Тест активации триала", callback_data="admin:test:trial_activation")],
-        [InlineKeyboardButton(text="💰 Тест уведомления о первой покупке", callback_data="admin:test:first_purchase")],
-        [InlineKeyboardButton(text="🔄 Тест уведомления о продлении", callback_data="admin:test:renewal")],
-        [InlineKeyboardButton(text="⏰ Тест напоминаний", callback_data="admin:test:reminders")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:system")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_trial", default="🎁 Тест активации триала"), callback_data="admin:test:trial_activation")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_first_purchase", default="💰 Тест уведомления о первой покупке"), callback_data="admin:test:first_purchase")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_renewal", default="🔄 Тест уведомления о продлении"), callback_data="admin:test:renewal")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_test_reminders", default="⏰ Тест напоминаний"), callback_data="admin:test:reminders")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:system")],
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -10227,16 +10238,19 @@ async def callback_admin_incident(callback: CallbackQuery):
     is_active = incident["is_active"]
     incident_text = incident.get("incident_text") or "Текст не указан"
     
-    status_text = "🟢 Режим инцидента активен" if is_active else "⚪ Режим инцидента выключен"
-    text = f"🚨 Инцидент\n\n{status_text}\n\nТекст инцидента:\n{incident_text}"
+    status_text = localization.get_text(language, "admin_incident_status_on") if is_active else localization.get_text(language, "admin_incident_status_off")
+    incident_title = localization.get_text(language, "admin_incident_title")
+    incident_label = localization.get_text(language, "admin_incident_text_label")
+    text = f"{incident_title}\n\n{status_text}\n\n{incident_label}\n{incident_text}"
     
+    toggle_text = localization.get_text(language, "admin_incident_enable") if not is_active else localization.get_text(language, "admin_incident_disable")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✅ Включить" if not is_active else "❌ Выключить",
+            text=toggle_text,
             callback_data="admin:incident:toggle"
         )],
-        [InlineKeyboardButton(text="📝 Изменить текст", callback_data="admin:incident:edit")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_incident_edit", default="📝 Изменить текст"), callback_data="admin:incident:edit")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -10289,7 +10303,7 @@ async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContex
     
     text = "Введите текст инцидента (или отправьте /cancel для отмены):"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:incident")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:incident")],
     ])
     
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -10336,9 +10350,9 @@ async def callback_admin_broadcast(callback: CallbackQuery):
     
     text = "📣 Уведомления\n\nВыберите действие:"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Создать уведомление", callback_data="broadcast:create")],
-        [InlineKeyboardButton(text="📊 A/B статистика", callback_data="broadcast:ab_stats")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")],
+        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_create", default="➕ Создать уведомление"), callback_data="broadcast:create")],
+        [InlineKeyboardButton(text=localization.get_text(language, "broadcast_ab_stats", default="📊 A/B статистика"), callback_data="broadcast:ab_stats")],
+        [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
@@ -10649,7 +10663,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back_to_broadcast", default="🔙 Назад"), callback_data="admin:broadcast")],
         ])
         
         await callback.message.edit_text(result_text, reply_markup=keyboard)
@@ -10719,7 +10733,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         if not stats:
             text = f"📊 A/B статистика\n\nУведомление: #{broadcast_id}\n\nНедостаточно данных для анализа."
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:ab_stats")],
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="broadcast:ab_stats")],
             ])
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             return
@@ -10749,7 +10763,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:ab_stats")],
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="broadcast:ab_stats")],
         ])
         
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -10976,11 +10990,11 @@ async def reject_payment(callback: CallbackQuery):
         # Создаем inline клавиатуру для UX
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="🔐 Купить / Продлить доступ",
+                text=localization.get_text(language, "buy_renew_button"),
                 callback_data="menu_buy_vpn"
             )],
             [InlineKeyboardButton(
-                text="🆘 Поддержка",
+                text=localization.get_text(language, "support_button"),
                 callback_data="menu_support"
             )]
         ])
@@ -11009,8 +11023,10 @@ async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FS
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
-    text = "💰 Выдать средства\n\nВведите Telegram ID или username пользователя:"
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
+    text = localization.get_text(language, "admin_credit_balance_prompt")
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
     await state.set_state(AdminCreditBalance.waiting_for_user_search)
     await callback.answer()
 
@@ -11028,9 +11044,11 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
         user_id = int(callback.data.split(":")[2])
         await state.update_data(target_user_id=user_id)
         
-        text = f"💰 Выдать средства\n\nПользователь: {user_id}\n\nВведите сумму в рублях:"
+        user = await database.get_user(callback.from_user.id)
+        language = user.get("language", "ru") if user else "ru"
+        text = localization.get_text(language, "admin_credit_balance_user_prompt", user_id=user_id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data=f"admin:user")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel"), callback_data=f"admin:user")]
         ])
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await state.set_state(AdminCreditBalance.waiting_for_amount)
@@ -11071,7 +11089,7 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
         
         text = f"💰 Выдать средства\n\nПользователь: {target_user_id}\n\nВведите сумму в рублях:"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:main")]
+            [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="🔙 Отмена"), callback_data="admin:main")]
         ])
         await message.answer(text, reply_markup=keyboard)
         await state.set_state(AdminCreditBalance.waiting_for_amount)
@@ -11125,8 +11143,8 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin:credit_balance_confirm"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data="admin:credit_balance_cancel")
+                InlineKeyboardButton(text=localization.get_text(language, "admin_confirm", default="✅ Подтвердить"), callback_data="admin:credit_balance_confirm"),
+                InlineKeyboardButton(text=localization.get_text(language, "admin_cancel", default="❌ Отмена"), callback_data="admin:credit_balance_cancel")
             ]
         ])
         
@@ -11194,7 +11212,7 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
             )
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:main")]
+                [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
             ])
             
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
