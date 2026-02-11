@@ -1534,7 +1534,8 @@ def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
     # SAFE STARTUP GUARD: Проверка готовности БД
     # /start может работать в деградированном режиме (только показ меню),
     # но если БД недоступна, не пытаемся создавать пользователя
@@ -1627,18 +1628,9 @@ async def cmd_start(message: Message):
                 }
             )
     
-    # Phase 4: If user has language set → main menu; else → language selection
-    user = await database.get_user(telegram_id)
-    language = user.get("language") if user else None
-    if language:
-        text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
-        text = await format_text_with_incident(text, language)
-        keyboard = await get_main_menu_keyboard(language, telegram_id)
-        await message.answer(text, reply_markup=keyboard)
-    else:
-        language = "ru"  # Default for keyboard labels on selection screen
-        text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
-        await message.answer(text, reply_markup=get_language_keyboard(language))
+    # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
+    text = "🌍 Выберите язык:"
+    await message.answer(text, reply_markup=get_language_keyboard("ru"))
 
 
 async def format_promo_stats_text(stats: list) -> str:
