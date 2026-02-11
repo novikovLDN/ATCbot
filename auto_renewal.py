@@ -280,20 +280,16 @@ async def process_auto_renewals(bot: Bot):
                             )
                             continue
                         
-                        # Отправляем уведомление пользователю
+                        # Отправляем уведомление пользователю (language from user DB)
                         expires_str = expires_at.strftime("%d.%m.%Y")
                         duration_days = duration.days
-                        try:
-                            text = localization.get_text(
-                                language,
-                                "auto_renewal_success",
-                                days=duration_days,
-                                expires_date=expires_str,
-                                amount=amount_rubles
-                            )
-                        except (KeyError, TypeError):
-                            # Fallback на русский, если локализация не обновлена
-                            text = localization.get_text("ru", "auto_renewal_success", days=duration_days, expires_date=expires_str, amount=amount_rubles)
+                        text = localization.get_text(
+                            language,
+                            "auto_renewal_success",
+                            days=duration_days,
+                            expires_date=expires_str,
+                            amount=amount_rubles
+                        )
                         
                         # Создаем inline клавиатуру для UX
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[

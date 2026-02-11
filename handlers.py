@@ -89,24 +89,25 @@ _bot_start_time = time.time()
 # SAFE USERNAME RESOLUTION HELPER
 # ====================================================================================
 
-def safe_resolve_username(user_obj, telegram_id: int = None) -> str:
+def safe_resolve_username(user_obj, language: str, telegram_id: int = None) -> str:
     """
     Безопасное разрешение username для отображения.
     
     Priority:
     1. user_obj.username (Telegram username)
     2. user_obj.first_name (имя пользователя)
-    3. "пользователь" (fallback)
+    3. localized fallback (user_fallback key)
     
     Args:
         user_obj: Telegram user object (Message.from_user, CallbackQuery.from_user, etc.)
+        language: User language for fallback text (from DB)
         telegram_id: Optional telegram ID for logging
     
     Returns:
         Строка для отображения (никогда не None)
     """
     if not user_obj:
-        return "пользователь"
+        return localization.get_text(language, "user_fallback", default="пользователь")
     
     # Priority 1: Telegram username
     if hasattr(user_obj, 'username') and user_obj.username:
@@ -117,11 +118,10 @@ def safe_resolve_username(user_obj, telegram_id: int = None) -> str:
         return user_obj.first_name
     
     # Priority 3: Fallback
-    import localization
-    return localization.get_text("ru", "user_fallback", default="пользователь")
+    return localization.get_text(language, "user_fallback", default="пользователь")
 
 
-def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = None) -> str:
+def safe_resolve_username_from_db(user_dict: Optional[Dict], language: str, telegram_id: int = None) -> str:
     """
     Безопасное разрешение username из словаря пользователя из БД.
     
@@ -129,10 +129,11 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = 
     1. user_dict.get("username")
     2. user_dict.get("first_name")
     3. "ID: <telegram_id>" if telegram_id provided
-    4. "пользователь" (fallback)
+    4. localized fallback (user_fallback key)
     
     Args:
         user_dict: Словарь пользователя из БД
+        language: User language for fallback text (from DB)
         telegram_id: Optional telegram ID for fallback
     
     Returns:
@@ -141,8 +142,7 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = 
     if not user_dict:
         if telegram_id:
             return f"ID: {telegram_id}"
-        import localization
-        return localization.get_text("ru", "user_fallback", default="пользователь")
+        return localization.get_text(language, "user_fallback", default="пользователь")
     
     # Priority 1: Username from DB
     username = user_dict.get("username")
@@ -159,8 +159,7 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = 
         return f"ID: {telegram_id}"
     
     # Priority 4: Generic fallback
-    import localization
-    return localization.get_text("ru", "user_fallback", default="пользователь")
+    return localization.get_text(language, "user_fallback", default="пользователь")
 
 
 # ====================================================================================
@@ -761,8 +760,8 @@ async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: boo
                 default="⚠️ Сервис временно недоступен. Попробуйте позже."
             )
         else:
-            # STAGE/LOCAL: более мягкое сообщение
-            error_text = localization.get_text("ru", "db_init_stage_warning", default="⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.")
+            # STAGE/LOCAL: более мягкое сообщение (language=ru when DB unavailable)
+            error_text = localization.get_text(language, "db_init_stage_warning", default="⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны.")
         
         # Отправляем сообщение
         try:
@@ -1547,11 +1546,12 @@ async def cmd_start(message: Message):
         return
     """Обработчик команды /start"""
     telegram_id = message.from_user.id
-    # Safe username resolution: username or first_name or "пользователь"
-    username = safe_resolve_username(message.from_user, telegram_id)
-    
-    # Создаем пользователя если его нет
+    # Safe username resolution: username or first_name or localized fallback
     user = await database.get_user(telegram_id)
+    start_language = user.get("language", "ru") if user else "ru"
+    username = safe_resolve_username(message.from_user, start_language, telegram_id)
+    
+    # Создаем пользователя если его нет (user already fetched above)
     if not user:
         await database.create_user(telegram_id, username, "ru")
     else:
@@ -1586,7 +1586,7 @@ async def cmd_start(message: Message):
                 # Get referred user info (safe: username or first_name or fallback)
                 referred_username = username  # Already resolved via safe_resolve_username
                 # Format display name: add @ prefix if username exists and doesn't have it
-                user_fallback_text = localization.get_text("ru", "user_fallback", default="пользователь")
+                user_fallback_text = localization.get_text(referrer_language, "user_fallback", default="пользователь")
                 if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
                     referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
                 else:
@@ -2202,20 +2202,20 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 referrer_id = activation_result.get("referrer_id")
                 if referrer_id:
                     try:
+                        referrer_user_for_notif = await database.get_user(referrer_id)
+                        referrer_language_notif = referrer_user_for_notif.get("language", "ru") if referrer_user_for_notif else "ru"
                         # Get referred user info (user who activated trial)
                         referred_user = await database.get_user(telegram_id)
-                        referred_username = safe_resolve_username_from_db(referred_user, telegram_id)
+                        referred_username = safe_resolve_username_from_db(referred_user, referrer_language_notif, telegram_id)
                         
                         # Format display name: add @ prefix if username exists and doesn't have it
                         import localization
-                        user_fallback_text = localization.get_text("ru", "user_fallback", default="пользователь")
+                        user_fallback_text = localization.get_text(referrer_language_notif, "user_fallback", default="пользователь")
                         if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
                             referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
                         else:
                             referred_display = referred_username
                         
-                        referrer_user_for_notif = await database.get_user(referrer_id)
-                        referrer_language_notif = referrer_user_for_notif.get("language", "ru") if referrer_user_for_notif else "ru"
                         first_payment_msg_notif = localization.get_text(
                             referrer_language_notif,
                             "referral_first_payment_notification",
@@ -6722,9 +6722,9 @@ async def callback_admin_main(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_promo_stats")
 async def callback_admin_promo_stats(callback: CallbackQuery):
     """Обработчик кнопки статистики промокодов в админ-дашборде"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -6735,7 +6735,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
         # Формируем текст ответа
         text = await format_promo_stats_text(stats)
         
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
@@ -6747,9 +6747,9 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
 @router.callback_query(F.data == "admin:metrics")
 async def callback_admin_metrics(callback: CallbackQuery):
     """Раздел Метрики"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -6782,7 +6782,7 @@ async def callback_admin_metrics(callback: CallbackQuery):
         approval_rate = metrics.get('approval_rate_percent', 0.0)
         text += f"✅ Процент подтвержденных платежей: {approval_rate:.1f}%\n"
         
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
         
         # Логируем действие
@@ -6798,9 +6798,9 @@ async def callback_admin_metrics(callback: CallbackQuery):
 @router.callback_query(F.data == "admin:stats")
 async def callback_admin_stats(callback: CallbackQuery):
     """Раздел Статистика"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -6816,7 +6816,7 @@ async def callback_admin_stats(callback: CallbackQuery):
         text += f"❌ Отклонённых платежей: {stats['rejected_payments']}\n"
         text += f"🔓 Свободных VPN-ключей: {stats['free_vpn_keys']}"
         
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
         
         # Логируем просмотр статистики
@@ -7604,9 +7604,9 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
 @router.callback_query(F.data == "admin:audit")
 async def callback_admin_audit(callback: CallbackQuery):
     """Раздел Аудит (переиспользование логики /admin_audit)"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7616,7 +7616,7 @@ async def callback_admin_audit(callback: CallbackQuery):
         
         if not audit_logs:
             text = "📜 Аудит\n\nАудит пуст. Действий не зафиксировано."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer()
             return
         
@@ -7705,7 +7705,7 @@ async def callback_admin_audit(callback: CallbackQuery):
             
             text = "\n".join(lines)
         
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
         
         # Логируем просмотр аудита
@@ -7751,9 +7751,9 @@ async def callback_admin_keys(callback: CallbackQuery):
 @router.callback_query(F.data == "admin:keys:reissue_all")
 async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
     """Массовый перевыпуск ключей для всех активных пользователей"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7785,7 +7785,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
             await safe_edit_text(
                 callback.message,
                 "❌ Нет активных подписок для перевыпуска",
-                reply_markup=get_admin_back_keyboard()
+                reply_markup=get_admin_back_keyboard(language)
             )
             return
         
@@ -7814,12 +7814,12 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                 
                 # Отправляем уведомление пользователю
                 try:
-                    user_lang = await database.get_user(telegram_id)
-                    language = user_lang.get("language", "ru") if user_lang else "ru"
+                    user_row = await database.get_user(telegram_id)
+                    notify_lang = user_row.get("language", "ru") if user_row else "ru"
                     
                     try:
                         user_text = localization.get_text(
-                            language,
+                            notify_lang,
                             "admin_reissue_user_notification",
                             vpn_key=f"<code>{new_vpn_key}</code>"
                         )
@@ -7827,7 +7827,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                         # Fallback to default if localization not found
                         user_text = get_reissue_notification_text(new_vpn_key)
                     
-                    keyboard = get_reissue_notification_keyboard()
+                    keyboard = get_reissue_notification_keyboard(notify_lang)
                     await bot.send_message(telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
                 except Exception as e:
                     logging.warning(f"Failed to send reissue notification to user {telegram_id}: {e}")
@@ -7897,16 +7897,16 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         logging.exception(f"Error in callback_admin_keys_reissue_all: {e}")
         await callback.message.edit_text(
             f"❌ Ошибка при массовом перевыпуске: {str(e)}",
-            reply_markup=get_admin_back_keyboard()
+            reply_markup=get_admin_back_keyboard(language)
         )
 
 
 @router.callback_query(F.data.startswith("admin:reissue_key:"))
 async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
     """Перевыпуск ключа для одной подписки (по subscription_id)"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7962,7 +7962,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
         # Показываем админу результат
         user = await database.get_user(telegram_id)
         user_lang = user.get("language", "ru") if user else "ru"
-        username = user.get("username", localization.get_text(user_lang, "username_not_set", default="не указан")) if user else localization.get_text("ru", "username_not_set", default="не указан")
+        username = user.get("username", localization.get_text(user_lang, "username_not_set", default="не указан")) if user else localization.get_text(user_lang, "username_not_set", default="не указан")
         
         expires_at = subscription["expires_at"]
         if isinstance(expires_at, str):
@@ -7975,7 +7975,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
         text += f"Срок действия: до {expires_str}\n\n"
         text += f"Новый VPN-ключ:\n<code>{vless_url}</code>"
         
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(), parse_mode="HTML")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
         await callback.answer("Ключ успешно перевыпущен")
         
         # Логируем в audit_log
@@ -8019,7 +8019,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
             await safe_edit_text(
                 callback.message,
                 "❌ Нет активных подписок для перевыпуска",
-                reply_markup=get_admin_back_keyboard()
+                reply_markup=get_admin_back_keyboard(language)
             )
             return
         
@@ -8109,16 +8109,16 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         logging.exception(f"Error in callback_admin_reissue_all_active: {e}")
         await callback.message.edit_text(
             f"❌ Ошибка при массовом перевыпуске: {str(e)}",
-            reply_markup=get_admin_back_keyboard()
+            reply_markup=get_admin_back_keyboard(language)
         )
 
 
 @router.callback_query(F.data.startswith("admin:keys:"))
 async def callback_admin_keys_legacy(callback: CallbackQuery):
     """Раздел VPN-ключи"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8135,7 +8135,7 @@ async def callback_admin_keys_legacy(callback: CallbackQuery):
         else:
             text += f"Свободных: {stats['free']}"
         
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
         
         # Логируем просмотр статистики ключей
@@ -8149,14 +8149,14 @@ async def callback_admin_keys_legacy(callback: CallbackQuery):
 @router.callback_query(F.data == "admin:user")
 async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
     """Раздел Пользователь - запрос Telegram ID или username"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     text = "👤 Пользователь\n\nВведите Telegram ID или username пользователя:"
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard())
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
     await state.set_state(AdminUserSearch.waiting_for_user_id)
     await callback.answer()
 
@@ -8320,7 +8320,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
         
         if not history:
             text = "🧾 История подписок\n\nИстория подписок пуста."
-            await callback.message.answer(text, reply_markup=get_admin_back_keyboard())
+            await callback.message.answer(text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer()
             return
         
@@ -8356,7 +8356,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
             
             text += f"  До: {end_str}\n\n"
         
-        await callback.message.answer(text, reply_markup=get_admin_back_keyboard())
+        await callback.message.answer(text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
         
         # Логируем просмотр истории
@@ -8505,7 +8505,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         except Exception as e:
             logger.exception(f"CRITICAL: Failed to grant admin access (minutes) for user {user_id}, minutes={minutes}, admin={callback.from_user.id}: {e}")
             text = f"❌ Ошибка выдачи доступа: {str(e)[:100]}"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Ошибка создания ключа", show_alert=True)
             await state.clear()
             return
@@ -8792,7 +8792,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
                 text += "\nПользователь уведомлён."
             else:
                 text += "\nДействие выполнено без уведомления."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             
             # PART 6: Notify user if flag is True
             if notify_user and vpn_key:
@@ -8820,7 +8820,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             
         except Exception as e:
             logger.exception(f"Error granting custom access: {e}")
-            await callback.message.answer(f"❌ Ошибка: {str(e)[:100]}", reply_markup=get_admin_back_keyboard())
+            await callback.message.answer(f"❌ Ошибка: {str(e)[:100]}", reply_markup=get_admin_back_keyboard(language))
         
         await state.clear()
         logger.debug(f"FSM: AdminGrantAccess cleared after grant")
@@ -8892,7 +8892,7 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
             text += "\nПользователь уведомлён."
         else:
             text += "\nДействие выполнено без уведомления."
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         
     except ValueError as e:
         logger.warning(f"Invalid callback data format: {callback.data}, error: {e}")
@@ -8976,7 +8976,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 logger.info(f"ADMIN_GRANT_NOTIFY_SKIPPED [user_id={user_id}, days={days}]")
                 text += "\nДействие выполнено без уведомления."
             
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             
             # Audit log
             await database._log_audit_event_atomic_standalone(
@@ -9020,7 +9020,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 logger.info(f"ADMIN_GRANT_NOTIFY_SKIPPED [user_id={user_id}, duration=1_year]")
                 text += "\nДействие выполнено без уведомления."
             
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             
             # Audit log
             await database._log_audit_event_atomic_standalone(
@@ -9152,7 +9152,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
         
         if not revoked:
             text = "❌ У пользователя нет активной подписки"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
             text = "✅ Доступ отозван"
@@ -9160,7 +9160,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
                 text += "\nПользователь уведомлён."
             else:
                 text += "\nДействие выполнено без уведомления."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             
             # 2️⃣ ПРОВЕРКА notify В ФИНАЛЬНОМ revoke: используем ТОЛЬКО if notify:
             # 3️⃣ ОТПРАВКА УВЕДОМЛЕНИЯ (ЯВНО): если notify=True
@@ -9284,7 +9284,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
         if not revoked:
             # Нет активной подписки
             text = "❌ У пользователя нет активной подписки"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
             # Успешно
@@ -9292,7 +9292,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
                 text = "✅ Доступ отозван\nПользователь уведомлён."
             else:
                 text = "✅ Доступ отозван"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             
             # Уведомляем пользователя только если notify=True
             if notify:
@@ -9407,7 +9407,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
         if existing_discount:
             discount_percent = existing_discount["discount_percent"]
             text = f"❌ У пользователя уже есть персональная скидка {discount_percent}%.\n\nСначала удалите существующую скидку."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Скидка уже существует", show_alert=True)
             return
         
@@ -9459,7 +9459,7 @@ async def callback_admin_discount_percent_manual(callback: CallbackQuery, state:
         await state.set_state(AdminDiscountCreate.waiting_for_percent)
         
         text = "🎯 Назначить скидку\n\nВведите процент скидки (число от 1 до 99):"
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
         
     except Exception as e:
@@ -9533,11 +9533,11 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
         if success:
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
             text = f"✅ Персональная скидка {discount_percent}% назначена\n\nСрок действия: {expires_str}"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Скидка назначена", show_alert=True)
         else:
             text = "❌ Ошибка при создании скидки"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             user = await database.get_user(callback.from_user.id)
         language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
@@ -9565,7 +9565,7 @@ async def callback_admin_discount_expires_manual(callback: CallbackQuery, state:
         await state.set_state(AdminDiscountCreate.waiting_for_expires)
         
         text = "🎯 Назначить скидку\n\nВведите количество дней действия скидки (или 0 для бессрочной):"
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
         
     except Exception as e:
@@ -9613,10 +9613,10 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
         if success:
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
             text = f"✅ Персональная скидка {discount_percent}% назначена\n\nСрок действия: {expires_str}"
-            await message.answer(text, reply_markup=get_admin_back_keyboard())
+            await message.answer(text, reply_markup=get_admin_back_keyboard(language))
         else:
             text = "❌ Ошибка при создании скидки"
-            await message.answer(text, reply_markup=get_admin_back_keyboard())
+            await message.answer(text, reply_markup=get_admin_back_keyboard(language))
         
         await state.clear()
         
@@ -9647,11 +9647,11 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
         
         if success:
             text = "✅ Персональная скидка удалена"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Скидка удалена", show_alert=True)
         else:
             text = "❌ Скидка не найдена или уже удалена"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Скидка не найдена", show_alert=True)
         
     except Exception as e:
@@ -9661,15 +9661,16 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
 
 # ==================== ОБРАБОТЧИКИ ДЛЯ УПРАВЛЕНИЯ VIP-СТАТУСОМ ====================
 
-async def _show_admin_user_card(message_or_callback, user_id: int):
+async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegram_id: int):
     """Вспомогательная функция для отображения карточки пользователя администратору"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
-    # Получаем полный обзор пользователя через admin service
+    admin_user = await database.get_user(admin_telegram_id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
     try:
         overview = await admin_service.get_admin_user_overview(user_id)
     except UserNotFoundError:
         if hasattr(message_or_callback, 'edit_text'):
-            await message_or_callback.edit_text("❌ Пользователь не найден", reply_markup=get_admin_back_keyboard())
+            await message_or_callback.edit_text("❌ Пользователь не найден", reply_markup=get_admin_back_keyboard(language))
         else:
             await message_or_callback.answer("❌ Пользователь не найден")
         return
@@ -9745,7 +9746,8 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
         has_active_subscription=overview.subscription_status.is_active,
         user_id=overview.user["telegram_id"],
         has_discount=overview.user_discount is not None,
-        is_vip=overview.is_vip
+        is_vip=overview.is_vip,
+        language=language
     )
     
     if hasattr(message_or_callback, 'edit_text'):
@@ -9758,9 +9760,9 @@ async def _show_admin_user_card(message_or_callback, user_id: int):
 async def callback_admin_vip_grant(callback: CallbackQuery):
     """Обработчик кнопки 'Выдать VIP'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9771,7 +9773,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
         existing_vip = await database.is_vip_user(user_id)
         if existing_vip:
             # Если уже есть VIP, просто обновляем карточку
-            await _show_admin_user_card(callback.message, user_id)
+            await _show_admin_user_card(callback.message, user_id, callback.from_user.id)
             await callback.answer("VIP уже назначен", show_alert=True)
             return
         
@@ -9783,11 +9785,11 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
         
         if success:
             # После успешного назначения VIP обновляем карточку пользователя
-            await _show_admin_user_card(callback.message, user_id)
+            await _show_admin_user_card(callback.message, user_id, callback.from_user.id)
             await callback.answer("✅ VIP-статус выдан", show_alert=True)
         else:
             text = "❌ Ошибка при назначении VIP-статуса"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             user = await database.get_user(callback.from_user.id)
         language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
@@ -9801,9 +9803,9 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
 async def callback_admin_vip_revoke(callback: CallbackQuery):
     """Обработчик кнопки 'Снять VIP'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9818,11 +9820,11 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
         
         if success:
             # После успешного снятия VIP обновляем карточку пользователя
-            await _show_admin_user_card(callback.message, user_id)
+            await _show_admin_user_card(callback.message, user_id, callback.from_user.id)
             await callback.answer("✅ VIP-статус снят", show_alert=True)
         else:
             text = "❌ VIP-статус не найден или уже снят"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("VIP не найден", show_alert=True)
         
     except Exception as e:
@@ -10102,14 +10104,14 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
 @router.callback_query(F.data == "admin:export")
 async def callback_admin_export(callback: CallbackQuery):
     """Раздел Экспорт данных"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     text = "📤 Экспорт данных\n\nВыберите тип данных для экспорта:"
-    await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard())
+    await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard(language))
     await callback.answer()
 
 
@@ -11310,15 +11312,15 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
 @router.callback_query(F.data == "admin:credit_balance_cancel")
 async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: FSMContext):
     """Отмена выдачи средств"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     await callback.message.edit_text(
         "❌ Операция отменена",
-        reply_markup=get_admin_back_keyboard()
+        reply_markup=get_admin_back_keyboard(language)
     )
     await state.clear()
     await callback.answer()
