@@ -185,6 +185,11 @@ LANG = {
     'broadcast._type_maintenance': '🔧 صيانة',
     'broadcast._type_promo': '🎯 ترويجي',
     'broadcast._type_security': '🔒 أمان',
+    'broadcast._no_sub_enter_text': 'أدخل النص (مستخدمون بدون اشتراك وتجربة فقط):',
+    'broadcast._no_sub_preview': '📋 معاينة:\n\n{preview}\n\nالمستلمون: {total}\n\nتأكيد الإرسال؟',
+    'broadcast._no_sub_sending': '📤 جاري الإرسال... المستلمون: {total}. يرجى الانتظار.',
+    'broadcast._no_sub_completed': '✅ تم.\n\nالمستلمون: {total}\nتم: {sent}\nفشل: {failed}\nتخطي: {skipped}\nالمدة: {duration:.1f} ث.',
+    'broadcast._no_sub_zero_recipients': 'لا يوجد مستلمون لهذا الجزء.',
     'broadcast._validation_ab_empty': 'خطأ: نصوص A و B غير مكتملة. ابدأ من جديد.',
     'broadcast._validation_incomplete': 'خطأ: بيانات غير كاملة. ابدأ من جديد.',
     'broadcast._validation_message_empty': 'خطأ: نص الإشعار غير مكتمل. ابدأ من جديد.',
