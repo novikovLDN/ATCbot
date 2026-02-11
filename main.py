@@ -2,6 +2,12 @@ import asyncio
 import logging
 import os
 import sys
+
+# Configure logging FIRST (before any other imports that may log)
+# Routes INFO/WARNING → stdout, ERROR/CRITICAL → stderr for correct container classification
+from app.core.logging_config import setup_logging
+setup_logging()
+
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
@@ -56,14 +62,9 @@ import activation_worker
 # 
 # SECURITY:
 # - DO NOT log secrets, PII, or full payloads
-# - DO NOT change logger configuration
+# - Logging configured in app.core.logging_config (STDOUT/STDERR routing)
 # ====================================================================================
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
