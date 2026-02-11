@@ -6,10 +6,11 @@ import time
 from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from app.utils.telegram_safe import safe_send_message
 import asyncpg
 import database
-import localization
 import config
+from app import i18n
 from app.services.notifications import service as notification_service
 from app.core.system_state import (
     SystemState,
@@ -17,6 +18,7 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
+from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -69,19 +71,34 @@ async def process_auto_renewals(bot: Bot):
         now = datetime.utcnow()
         renewal_threshold = now + RENEWAL_WINDOW
         
-        subscriptions = await conn.fetch(
-            """SELECT s.*, u.language, u.balance
-               FROM subscriptions s
-               JOIN users u ON s.telegram_id = u.telegram_id
-               WHERE s.status = 'active'
-               AND s.auto_renew = TRUE
-               AND s.expires_at <= $1 
-               AND s.expires_at > $2
-               AND s.uuid IS NOT NULL
-               AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
-               FOR UPDATE SKIP LOCKED""",
-            renewal_threshold, now
-        )
+        query_with_reachable = """
+            SELECT s.*, u.language, u.balance
+            FROM subscriptions s
+            JOIN users u ON s.telegram_id = u.telegram_id
+            WHERE s.status = 'active'
+            AND s.auto_renew = TRUE
+            AND s.expires_at <= $1
+            AND s.expires_at > $2
+            AND s.uuid IS NOT NULL
+            AND COALESCE(u.is_reachable, TRUE) = TRUE
+            AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
+            FOR UPDATE SKIP LOCKED"""
+        fallback_query = """
+            SELECT s.*, u.language, u.balance
+            FROM subscriptions s
+            JOIN users u ON s.telegram_id = u.telegram_id
+            WHERE s.status = 'active'
+            AND s.auto_renew = TRUE
+            AND s.expires_at <= $1
+            AND s.expires_at > $2
+            AND s.uuid IS NOT NULL
+            AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
+            FOR UPDATE SKIP LOCKED"""
+        try:
+            subscriptions = await conn.fetch(query_with_reachable, renewal_threshold, now)
+        except asyncpg.UndefinedColumnError:
+            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, auto_renewal fallback to legacy query")
+            subscriptions = await conn.fetch(fallback_query, renewal_threshold, now)
         
         logger.info(
             f"Auto-renewal check: Found {len(subscriptions)} subscriptions expiring within {RENEWAL_WINDOW_HOURS} hours"
@@ -90,7 +107,7 @@ async def process_auto_renewals(bot: Bot):
         for sub_row in subscriptions:
             subscription = dict(sub_row)
             telegram_id = subscription["telegram_id"]
-            language = subscription.get("language", "ru")
+            language = await resolve_user_language(telegram_id)
             
             # Используем транзакцию для атомарности операции
             async with conn.transaction():
@@ -280,35 +297,34 @@ async def process_auto_renewals(bot: Bot):
                             )
                             continue
                         
-                        # Отправляем уведомление пользователю
+                        # Отправляем уведомление пользователю (language from resolve_user_language)
                         expires_str = expires_at.strftime("%d.%m.%Y")
                         duration_days = duration.days
-                        try:
-                            text = localization.get_text(
-                                language,
-                                "auto_renewal_success",
-                                days=duration_days,
-                                expires_date=expires_str,
-                                amount=amount_rubles
-                            )
-                        except (KeyError, TypeError):
-                            # Fallback на старый формат, если локализация не обновлена
-                            text = f"✅ Подписка автоматически продлена на {duration_days} дней.\n\nДействует до: {expires_str}\nС баланса списано: {amount_rubles:.2f} ₽"
+                        text = i18n.get_text(
+                            language,
+                            "subscription.auto_renew_success",
+                            days=duration_days,
+                            expires_date=expires_str,
+                            amount=amount_rubles
+                        )
                         
                         # Создаем inline клавиатуру для UX
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[
                             [InlineKeyboardButton(
-                                text="👤 Мой профиль",
+                                text=i18n.get_text(language, "main.profile"),
                                 callback_data="menu_profile"
                             )],
                             [InlineKeyboardButton(
-                                text="🔐 Купить / Продлить доступ",
+                                text=i18n.get_text(language, "main.buy"),
                                 callback_data="menu_buy_vpn"
                             )]
                         ])
                         
-                        await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                        
+                        sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+                        if sent is None:
+                            continue
+                        await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
+
                         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
                         try:
                             sent = await notification_service.mark_notification_sent(payment_id, conn=conn)

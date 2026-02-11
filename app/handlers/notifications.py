@@ -23,7 +23,7 @@ async def send_referral_cashback_notification(
     cashback_percent: int,
     paid_referrals_count: int,
     referrals_needed: int,
-    action_type: str = "покупку",
+    action_type: str = "purchase",
     subscription_period: Optional[str] = None
 ) -> bool:
     """
@@ -48,11 +48,25 @@ async def send_referral_cashback_notification(
         True если уведомление отправлено, False если ошибка
     """
     try:
-        # Получаем информацию о реферале (username or first_name or "пользователь")
+        # Получаем язык реферера для локализации уведомления
+        from app.services.language_service import resolve_user_language
+        referrer_language = await resolve_user_language(referrer_id)
+        
+        # Получаем информацию о реферале (username or first_name or localized fallback)
         referred_user = await database.get_user(referred_id)
         # Import helper function at runtime to avoid circular dependency
         import handlers
-        referred_username = handlers.safe_resolve_username_from_db(referred_user, referred_id)
+        referred_username = handlers.safe_resolve_username_from_db(referred_user, referrer_language, referred_id)
+        
+        from app.i18n import get_text as i18n_get_text
+        if action_type in ("покупка", "покупку", "purchase"):
+            localized_action_type = i18n_get_text(referrer_language, "referral.action_purchase")
+        elif action_type in ("продление", "renewal"):
+            localized_action_type = i18n_get_text(referrer_language, "referral.action_renewal")
+        elif action_type in ("пополнение", "topup"):
+            localized_action_type = i18n_get_text(referrer_language, "referral.action_topup")
+        else:
+            localized_action_type = action_type
         
         # Используем единый сервис для форматирования
         from app.services.notifications.service import format_referral_notification_text
@@ -65,8 +79,9 @@ async def send_referral_cashback_notification(
             cashback_percent=cashback_percent,
             paid_referrals_count=paid_referrals_count,
             referrals_needed=referrals_needed,
-            action_type=action_type,
-            subscription_period=subscription_period
+            action_type=localized_action_type,
+            subscription_period=subscription_period,
+            language=referrer_language
         )
         
         # Отправляем уведомление

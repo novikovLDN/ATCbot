@@ -19,6 +19,7 @@ Failure taxonomy:
 """
 
 import logging
+import json
 import uuid
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -105,7 +106,9 @@ def log_handler_entry(
     if kwargs:
         log_data.update(kwargs)
     
-    logger.info(f"[OBSERVABILITY] {log_data}")
+    # Emit as JSON with proper level field for external log aggregation
+    log_data["level"] = "INFO"
+    logger.info(json.dumps(log_data))
     return correlation_id
 
 
@@ -156,12 +159,16 @@ def log_handler_exit(
     if kwargs:
         log_data.update(kwargs)
     
+    # Emit as JSON with proper level field matching Python logging level
     if outcome == "failed":
-        logger.error(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "ERROR"
+        logger.error(json.dumps(log_data))
     elif outcome == "degraded":
-        logger.warning(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "WARNING"
+        logger.warning(json.dumps(log_data))
     else:
-        logger.info(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "INFO"
+        logger.info(json.dumps(log_data))
 
 
 def log_worker_iteration_start(
@@ -200,7 +207,9 @@ def log_worker_iteration_start(
     if kwargs:
         log_data.update(kwargs)
     
-    logger.info(f"[OBSERVABILITY] {log_data}")
+    # Emit as JSON with proper level field for external log aggregation
+    log_data["level"] = "INFO"
+    logger.info(json.dumps(log_data))
     return correlation_id
 
 
@@ -249,14 +258,19 @@ def log_worker_iteration_end(
     if kwargs:
         log_data.update(kwargs)
     
+    # Emit as JSON with proper level field matching Python logging level
     if outcome == "failed":
-        logger.error(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "ERROR"
+        logger.error(json.dumps(log_data))
     elif outcome == "degraded":
-        logger.warning(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "WARNING"
+        logger.warning(json.dumps(log_data))
     elif outcome == "skipped":
-        logger.info(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "INFO"
+        logger.info(json.dumps(log_data))
     else:
-        logger.info(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "INFO"
+        logger.info(json.dumps(log_data))
 
 
 def classify_error(exception: Exception) -> str:
@@ -365,9 +379,13 @@ def log_operation(
     if kwargs:
         log_data.update(kwargs)
     
+    # Emit as JSON with proper level field matching Python logging level
     if outcome == "failed":
-        logger.error(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "ERROR"
+        logger.error(json.dumps(log_data))
     elif outcome == "degraded":
-        logger.warning(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "WARNING"
+        logger.warning(json.dumps(log_data))
     else:
-        logger.info(f"[OBSERVABILITY] {log_data}")
+        log_data["level"] = "INFO"
+        logger.info(json.dumps(log_data))

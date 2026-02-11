@@ -6,9 +6,9 @@ import time
 from datetime import datetime
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from app.utils.telegram_safe import safe_send_message
 import asyncpg
 import database
-import localization
 import config
 import admin_notifications
 from app.services.activation import service as activation_service
@@ -30,6 +30,8 @@ from app.core.recovery_cooldown import (
     ComponentName,
 )
 from app.core.metrics import get_metrics
+from app.services.language_service import resolve_user_language
+from app import i18n
 from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
@@ -213,34 +215,30 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             )
                         else:
                             # This is the first activation - send notification
-                            user = await database.get_user(telegram_id)
-                            language = user.get("language", "ru") if user else "ru"
+                            language = await resolve_user_language(telegram_id)
                             
                             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
                             
                             # Use localized text for successful activation
-                            text = localization.get_text(
+                            text = i18n.get_text(
                                 language,
-                                "payment_approved",
-                                date=expires_str,
-                                default=f"✅ Ваш VPN доступ активирован! Доступ до {expires_str}"
+                                "payment.approved",
+                                date=expires_str
                             )
                             
                             # Use standard keyboard for VPN key
                             import handlers
                             keyboard = handlers.get_vpn_key_keyboard(language)
                             
-                            await bot.send_message(
-                                telegram_id,
-                                text,
-                                reply_markup=keyboard,
-                                parse_mode="HTML"
+                            sent1 = await safe_send_message(
+                                bot, telegram_id, text,
+                                reply_markup=keyboard, parse_mode="HTML"
                             )
-                            
-                            # Send VPN key
+                            if sent1 is None:
+                                continue
                             if result.vpn_key:
-                                await bot.send_message(
-                                    telegram_id,
+                                await safe_send_message(
+                                    bot, telegram_id,
                                     f"<code>{result.vpn_key}</code>",
                                     parse_mode="HTML"
                                 )
@@ -319,27 +317,26 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"user={telegram_id}, attempts={new_attempts}, error={error_msg}]"
                             )
                             
-                            # Send admin notification
+                            # Send admin notification (admin always sees Russian)
                             try:
+                                admin_lang = "ru"
                                 admin_message = (
-                                    f"⚠️ **ОШИБКА АКТИВАЦИИ VPN ПОДПИСКИ**\n\n"
-                                    f"Подписка ID: `{subscription_id}`\n"
-                                    f"Пользователь: `{telegram_id}`\n"
-                                    f"Попыток: {new_attempts}/{MAX_ACTIVATION_ATTEMPTS}\n"
-                                    f"Ошибка: `{error_msg}`\n\n"
-                                    f"Подписка помечена как `failed`.\n"
-                                    f"Требуется ручная активация."
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=error_msg)}\n\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_action')}"
                                 )
                                 
-                                await bot.send_message(
-                                    config.ADMIN_TELEGRAM_ID,
-                                    admin_message,
-                                    parse_mode="Markdown"
-                                )
-                                
-                                logger.info(
-                                    f"Admin notification sent: Activation failed for subscription {subscription_id}"
-                                )
+                                if await safe_send_message(
+                                    bot, config.ADMIN_TELEGRAM_ID,
+                                    admin_message, parse_mode="Markdown"
+                                ):
+                                    logger.info(
+                                        f"Admin notification sent: Activation failed for subscription {subscription_id}"
+                                    )
                             except Exception as admin_error:
                                 logger.error(
                                     f"Failed to send admin notification: {admin_error}"
