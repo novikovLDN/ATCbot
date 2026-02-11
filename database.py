@@ -1807,62 +1807,193 @@ async def get_total_cashback_earned(partner_id: int) -> float:
         return 0.0
 
 
+async def get_referral_metrics(user_id: int) -> Dict[str, int]:
+    """
+    Получить разделённые метрики рефералов для пользователя.
+    
+    КРИТИЧНО:
+    - total_referrals: ВСЕ приглашённые (без фильтров)
+    - active_paid_referrals: Только с активной подпиской (expires_at > NOW())
+    
+    Args:
+        user_id: Telegram ID пользователя
+    
+    Returns:
+        {
+            "total_referrals": int,  # Всего приглашено (без фильтров)
+            "active_paid_referrals": int  # Активных с подпиской
+        }
+    """
+    if not DB_READY:
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+    
+    pool = await get_pool()
+    if pool is None:
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+    
+    try:
+        async with pool.acquire() as conn:
+            # 1️⃣ Всего приглашено: ВСЕ записи из referrals
+            total_referrals_val = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
+                user_id
+            )
+            total_referrals = safe_int(total_referrals_val)
+            
+            # 2️⃣ Активных с подпиской: только те, у кого активная подписка
+            active_paid_referrals_val = await conn.fetchval(
+                """SELECT COUNT(DISTINCT r.referred_user_id)
+                   FROM referrals r
+                   INNER JOIN subscriptions s ON s.telegram_id = r.referred_user_id
+                   WHERE r.referrer_user_id = $1
+                   AND s.expires_at IS NOT NULL
+                   AND s.expires_at > NOW()""",
+                user_id
+            )
+            active_paid_referrals = safe_int(active_paid_referrals_val)
+            
+            return {
+                "total_referrals": total_referrals,
+                "active_paid_referrals": active_paid_referrals
+            }
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
+        logger.warning(f"referrals or subscriptions table missing — skipping: {e}")
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+    except Exception as e:
+        logger.warning(f"Error in get_referral_metrics for user_id={user_id}: {e}")
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+
+
+def calculate_referral_level(total_referrals: int) -> Dict[str, Any]:
+    """
+    Рассчитать уровень реферала СТРОГО на основе total_referrals.
+    
+    ⚠️ ВАЖНО: Уровень определяется СТРОГО по total_referrals.
+    НЕ используется active_paid_referrals, rewards, revenue.
+    
+    Пороги соответствуют существующим уровням из loyalty.py:
+    - 0-24: Silver Access (10%)
+    - 25-49: Gold Access (25%)
+    - 50+: Platinum Access (45%)
+    
+    Args:
+        total_referrals: Общее количество приглашённых рефералов
+    
+    Returns:
+        {
+            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
+            "cashback_percent": int,  # 10, 25, 45
+            "next_level_name": Optional[str],  # Следующий уровень или None
+            "remaining_connections": int  # До следующего уровня (max(0, ...))
+        }
+    """
+    # Структура уровней: соответствует LOYALTY_TIERS из app/constants/loyalty.py
+    # Пороги: 0-24 → Silver, 25-49 → Gold, 50+ → Platinum
+    REFERRAL_LEVELS = [
+        {"name": "Platinum Access", "threshold": 50, "cashback": 45},
+        {"name": "Gold Access", "threshold": 25, "cashback": 25},
+        {"name": "Silver Access", "threshold": 0, "cashback": 10},  # Базовый уровень
+    ]
+    
+    # Сортируем по threshold DESC (от большего к меньшему)
+    levels_sorted = sorted(REFERRAL_LEVELS, key=lambda x: x["threshold"], reverse=True)
+    
+    # Находим текущий уровень (максимальный, где total_referrals >= threshold)
+    current_level = None
+    for level in levels_sorted:
+        if total_referrals >= level["threshold"]:
+            current_level = level
+            break
+    
+    # Если не найден (не должно произойти, т.к. есть базовый уровень с threshold=0)
+    if current_level is None:
+        current_level = {"name": "Silver Access", "threshold": 0, "cashback": 10}
+    
+    # Находим следующий уровень (первый, где threshold > total_referrals)
+    next_level = None
+    for level in levels_sorted:
+        if level["threshold"] > total_referrals:
+            next_level = level
+    
+    # Рассчитываем remaining_connections
+    if next_level:
+        remaining = next_level["threshold"] - total_referrals
+        remaining = max(0, remaining)  # ⚠️ ОБЯЗАТЕЛЬНО: никогда не отрицательный
+    else:
+        remaining = 0  # Максимальный уровень достигнут
+    
+    return {
+        "current_level_name": current_level["name"],
+        "cashback_percent": current_level["cashback"],
+        "next_level_name": next_level["name"] if next_level else None,
+        "remaining_connections": remaining
+    }
+
+
 async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
     """
     Получить полную статистику рефералов для партнёра.
     
+    НОВАЯ ЛОГИКА:
+    - total_invited: Всего приглашено (из referrals, без фильтров)
+    - active_paid_referrals: Активных с подпиской (expires_at > NOW())
+    - Уровень рассчитывается СТРОГО по total_invited
+    
     Returns:
         {
             "total_invited": int,  # Всего приглашено
-            "active_referrals": int,  # Активных (активировали trial или оплатили)
+            "active_paid_referrals": int,  # Активных с подпиской
             "total_cashback_earned": float,  # Общий кешбэк в рублях
             "last_activity_at": Optional[datetime],  # Последняя активность реферала
-            "paid_referrals_count": int,  # Оплативших рефералов
-            "current_level": int,  # Текущий уровень (10, 25, 45)
-            "referrals_to_next": Optional[int]  # До следующего уровня
+            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
+            "cashback_percent": int,  # 10, 25, 45
+            "next_level_name": Optional[str],  # Следующий уровень или None
+            "remaining_connections": int  # До следующего уровня
         }
     """
     if not DB_READY:
         return {
             "total_invited": 0,
-            "active_referrals": 0,
+            "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "paid_referrals_count": 0,
-            "current_level": 10,
-            "referrals_to_next": 25
+            "current_level_name": "Silver Access",
+            "cashback_percent": 10,
+            "next_level_name": "Gold Access",
+            "remaining_connections": 5
         }
     
     pool = await get_pool()
     if pool is None:
         return {
             "total_invited": 0,
-            "active_referrals": 0,
+            "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "paid_referrals_count": 0,
-            "current_level": 10,
-            "referrals_to_next": 25
+            "current_level_name": "Silver Access",
+            "cashback_percent": 10,
+            "next_level_name": "Gold Access",
+            "remaining_connections": 5
         }
     
     try:
         async with pool.acquire() as conn:
-            # Total invited
-            total_invited_val = await conn.fetchval(
-                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
-                partner_id
-            )
-            total_invited = safe_int(total_invited_val)
-            
-            # Active referrals (have first_paid_at OR activated trial)
-            active_referrals_val = await conn.fetchval(
-                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL",
-                partner_id
-            )
-            active_referrals = safe_int(active_referrals_val)
-            
-            # Paid referrals count (same as active for now)
-            paid_referrals_count = active_referrals
+            # Получаем разделённые метрики
+            metrics = await get_referral_metrics(partner_id)
+            total_invited = metrics["total_referrals"]
+            active_paid_referrals = metrics["active_paid_referrals"]
             
             # Total cashback earned
             total_cashback_kopecks_val = await conn.fetchval(
@@ -1874,45 +2005,48 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             total_cashback_kopecks = safe_int(total_cashback_kopecks_val)
             total_cashback_earned = total_cashback_kopecks / 100.0
             
-            # Last activity timestamp
+            # Last activity timestamp (последняя оплата реферала)
             last_activity_row = await conn.fetchrow(
-                """SELECT MAX(first_paid_at) as last_activity
-                   FROM referrals 
-                   WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL""",
+                """SELECT MAX(r.first_paid_at) as last_activity
+                   FROM referrals r
+                   WHERE r.referrer_user_id = $1 AND r.first_paid_at IS NOT NULL""",
                 partner_id
             )
             last_activity_at = last_activity_row.get("last_activity") if last_activity_row else None
             
-            # Current level and progress
-            if paid_referrals_count >= 50:
-                current_level = 45
-                referrals_to_next = None
-            elif paid_referrals_count >= 25:
-                current_level = 25
-                referrals_to_next = 50 - paid_referrals_count
-            else:
-                current_level = 10
-                referrals_to_next = 25 - paid_referrals_count
+            # Рассчитываем уровень СТРОГО по total_invited
+            level_info = calculate_referral_level(total_invited)
+            
+            # Debug логирование
+            logger.info(
+                f"REF_STATS user={partner_id} "
+                f"total={total_invited} "
+                f"active_paid={active_paid_referrals} "
+                f"level={level_info['current_level_name']} "
+                f"remaining={level_info['remaining_connections']}"
+            )
             
             return {
                 "total_invited": total_invited,
-                "active_referrals": active_referrals,
+                "active_paid_referrals": active_paid_referrals,
                 "total_cashback_earned": total_cashback_earned,
                 "last_activity_at": last_activity_at,
-                "paid_referrals_count": paid_referrals_count,
-                "current_level": current_level,
-                "referrals_to_next": referrals_to_next
+                "current_level_name": level_info["current_level_name"],
+                "cashback_percent": level_info["cashback_percent"],
+                "next_level_name": level_info["next_level_name"],
+                "remaining_connections": level_info["remaining_connections"]
             }
     except Exception as e:
         logger.exception(f"Error getting referral statistics for partner_id={partner_id}: {e}")
         return {
             "total_invited": 0,
-            "active_referrals": 0,
+            "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "paid_referrals_count": 0,
-            "current_level": 10,
-            "referrals_to_next": 25
+            "current_level_name": "Silver Access",
+            "cashback_percent": 10,
+            "next_level_name": "Gold Access",
+            "remaining_connections": 5
         }
 
 
