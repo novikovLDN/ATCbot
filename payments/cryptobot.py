@@ -22,7 +22,8 @@ from app.utils.retry import retry_async
 logger = logging.getLogger(__name__)
 
 # Configuration — single source: config.py (STAGE_CRYPTOBOT_TOKEN / PROD_CRYPTOBOT_TOKEN)
-CRYPTOBOT_API_TOKEN = config.CRYPTOBOT_TOKEN
+# Strip token to remove Railway ENV whitespace/newlines that cause 401
+CRYPTOBOT_API_TOKEN = (config.CRYPTOBOT_TOKEN or "").strip()
 CRYPTOBOT_API_URL = config.CRYPTOBOT_API_URL
 ALLOWED_ASSETS = config.CRYPTOBOT_ALLOWED_ASSETS
 
@@ -102,7 +103,14 @@ async def create_invoice(
     """
     if not is_enabled():
         raise Exception("CryptoBot not configured")
-    
+
+    if not CRYPTOBOT_API_TOKEN:
+        raise CryptoBotAuthError("CryptoBot token is empty after config resolution")
+
+    logger.info(
+        f"CRYPTOBOT_DEBUG token_prefix={CRYPTOBOT_API_TOKEN[:6]}..., length={len(CRYPTOBOT_API_TOKEN)}"
+    )
+
     if asset.upper() not in ALLOWED_ASSETS:
         raise ValueError(f"Invalid asset: {asset}. Allowed: {ALLOWED_ASSETS}")
     
