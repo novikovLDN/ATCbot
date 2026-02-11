@@ -5937,13 +5937,13 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
     try:
         stats = await database.get_referral_statistics(telegram_id)
         total_invited = stats.get("total_invited", 0)
+        active_paid_referrals = stats.get("active_paid_referrals", 0)
         total_cashback = stats.get("total_cashback_earned", 0.0)
-        current_level = stats.get("current_level", 10)
-        referrals_to_next = stats.get("referrals_to_next")
+        current_level_name = stats.get("current_level_name", "Silver Access")
+        cashback_percent = stats.get("cashback_percent", 10)
+        next_level_name = stats.get("next_level_name")
+        remaining_connections = stats.get("remaining_connections", 0)
         last_activity_at = stats.get("last_activity_at")
-        paid_referrals_count = stats.get("paid_referrals_count", 0)
-        
-        current_status_name, next_status_name = get_loyalty_status_names(paid_referrals_count)
         
         last_activity_str = "—"
         if last_activity_at:
@@ -5955,35 +5955,33 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
             if isinstance(last_activity_at, datetime):
                 last_activity_str = last_activity_at.strftime("%d.%m.%Y")
         
-        if referrals_to_next is None or next_status_name is None:
-            next_level_line = ""
-        else:
+        # Формируем строку "До следующего уровня"
+        if next_level_name and remaining_connections > 0:
             next_level_line = localization.get_text(
                 language,
                 "referral_stats_next_level_line",
-                next_status_name=next_status_name,
-                remaining_invites=referrals_to_next,
-                default=f"🚀 До уровня {next_status_name}:\nосталось {referrals_to_next} подключений"
+                next_status_name=next_level_name,
+                remaining_invites=remaining_connections,
+                default=f"🚀 До уровня {next_level_name}:\nосталось {remaining_connections} подключений"
+            )
+        else:
+            # Максимальный уровень достигнут
+            next_level_line = localization.get_text(
+                language,
+                "referral_max_level_reached",
+                default="🏆 У вас максимальный уровень программы"
             )
         
-        text = localization.get_text(
-            language,
-            "referral_program_screen",
-            total_referred=total_invited,
-            total_cashback=total_cashback,
-            current_status_name=current_status_name,
-            cashback_percent=current_level,
-            next_level_line=next_level_line,
-            last_activity_date=last_activity_str,
-            default=(
-                "📊 Активность и статус доступа\n\n"
-                "👤 Подключённых аккаунтов: {total_referred}\n\n"
-                "💎 Начислено вознаграждений: {total_cashback:.2f} ₽\n"
-                "🏆 Текущий статус: {current_status_name}\n"
-                "📈 Уровень возврата: {cashback_percent}%\n\n"
-                "{next_level_line}\n\n"
-                "📅 Последняя активность: {last_activity_date}"
-            )
+        # Новый формат текста с разделёнными метриками
+        text = (
+            "📊 Активность и статус доступа\n\n"
+            f"👤 Всего приглашено: {total_invited}\n"
+            f"💎 Активных с подпиской: {active_paid_referrals}\n\n"
+            f"🏆 Текущий статус: {current_level_name}\n"
+            f"📈 Уровень возврата: {cashback_percent}%\n\n"
+            f"{next_level_line}\n\n"
+            f"💎 Начислено вознаграждений: {total_cashback:.2f} ₽\n"
+            f"📅 Последняя активность: {last_activity_str}"
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -6001,7 +5999,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
             )],
         ])
         
-        file_id = get_loyalty_screen_attachment(current_status_name)
+        file_id = get_loyalty_screen_attachment(current_level_name)
         if file_id:
             await bot.send_photo(
                 chat_id=chat_id,
@@ -6020,8 +6018,9 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
             await event.answer()
         logger.debug(
             f"Referral screen opened: user={telegram_id}, "
-            f"invited={total_invited}, paid={paid_referrals_count}, "
-            f"percent={current_level}%, cashback={total_cashback:.2f} RUB, with_photo={bool(file_id)}"
+            f"total_invited={total_invited}, active_paid={active_paid_referrals}, "
+            f"level={current_level_name}, percent={cashback_percent}%, "
+            f"cashback={total_cashback:.2f} RUB, remaining={remaining_connections}, with_photo={bool(file_id)}"
         )
     except Exception as e:
         logger.exception(f"Error in referral screen handler: user={telegram_id}: {e}")
@@ -6116,19 +6115,23 @@ async def callback_referral_stats(callback: CallbackQuery):
             pass
         
         stats = await database.get_referral_statistics(telegram_id)
-        referrals_to_next = stats.get("referrals_to_next")
-        paid_referrals_count = stats.get("paid_referrals_count", 0)
+        total_invited = stats.get("total_invited", 0)
+        current_level_name = stats.get("current_level_name", "Silver Access")
+        next_level_name = stats.get("next_level_name")
+        remaining_connections = stats.get("remaining_connections", 0)
         
-        current_status_name, _ = get_loyalty_status_names(paid_referrals_count)
-        
-        if referrals_to_next is None:
-            status_footer = ""
-        else:
+        if next_level_name and remaining_connections > 0:
             status_footer = localization.get_text(
                 language,
                 "referral_program_status_footer",
-                remaining_invites=referrals_to_next,
-                default=f"🚀 До следующего уровня: осталось {referrals_to_next} приглашений"
+                remaining_invites=remaining_connections,
+                default=f"🚀 До уровня {next_level_name}: осталось {remaining_connections} подключений"
+            )
+        else:
+            status_footer = localization.get_text(
+                language,
+                "referral_max_level_reached",
+                default="🏆 У вас максимальный уровень программы"
             )
         
         bot_info = await callback.bot.get_me()
@@ -6138,7 +6141,7 @@ async def callback_referral_stats(callback: CallbackQuery):
             language,
             "referral_stats_screen",
             referral_link=referral_link,
-            current_status_name=current_status_name,
+            current_status_name=current_level_name,
             status_footer=status_footer,
             default=(
                 "🔐 Программа лояльности Atlas Secure\n\n"
