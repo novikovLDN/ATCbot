@@ -63,6 +63,7 @@ from app.utils.logging_helpers import (
 )
 from app.utils.referral_middleware import process_referral_on_first_interaction
 from app.services.referrals import activate_referral, ReferralState
+from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
 from app.utils.security import (
     validate_telegram_id,
     validate_message_text,
@@ -372,8 +373,9 @@ def handler_exception_boundary(handler_name: str, operation: str = None):
                 try:
                     # Try to send generic error message if we have message/callback
                     if args and hasattr(args[0], 'answer'):
-                        user = await database.get_user(telegram_id) if telegram_id else None
-                        language = user.get("language", "ru") if user else "ru"
+                        event = args[0]
+                        tid = getattr(getattr(event, 'from_user', None), 'id', None) or telegram_id
+                        language = await resolve_user_language(tid) if tid else DEFAULT_LANGUAGE
                         error_text = localization.get_text(
                             language,
                             "error_occurred",
@@ -748,9 +750,8 @@ async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: boo
         if allow_readonly_in_stage and config.IS_STAGE:
             return True
         
-        # Определяем язык пользователя (по умолчанию русский)
-        # ВАЖНО: Не обращаемся к БД если она не готова
-        language = "ru"
+        # DB unavailable: use canonical fallback from service (do not call DB)
+        language = DEFAULT_LANGUAGE
         
         # Получаем текст сообщения в зависимости от окружения
         if config.IS_PROD:
@@ -1542,7 +1543,7 @@ async def cmd_start(message: Message, state: FSMContext):
     if not database.DB_READY:
         # В STAGE показываем меню без сообщения об ошибке (read-only режим)
         # В PROD показываем сообщение об ошибке
-        language = "ru"  # По умолчанию русский
+        language = await resolve_user_language(message.from_user.id)
         text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
         if config.IS_PROD:
             text += "\n\n" + localization.get_text(language, "service_unavailable", default="⚠️ Сервис временно недоступен. Попробуйте позже.")
@@ -1553,7 +1554,7 @@ async def cmd_start(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     # Safe username resolution: username or first_name or localized fallback
     user = await database.get_user(telegram_id)
-    start_language = user.get("language", "ru") if user else "ru"
+    start_language = await resolve_user_language(telegram_id)
     username = safe_resolve_username(message.from_user, start_language, telegram_id)
     
     # Создаем пользователя если его нет (user already fetched above)
@@ -1586,7 +1587,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 # Get referrer info
                 referrer_user = await database.get_user(referrer_id)
                 referrer_username = referrer_user.get("username") if referrer_user else None
-                referrer_language = referrer_user.get("language", "ru") if referrer_user else "ru"
+                referrer_language = await resolve_user_language(referrer_id)
                 
                 # Get referred user info (safe: username or first_name or fallback)
                 referred_username = username  # Already resolved via safe_resolve_username
@@ -1679,8 +1680,7 @@ async def cmd_promo_stats(message: Message):
             correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
             details={"error": error}
         )
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
         return
     
@@ -1688,8 +1688,7 @@ async def cmd_promo_stats(message: Message):
     # Explicit admin authorization check - fail closed
     is_authorized, auth_error = require_admin(telegram_id)
     if not is_authorized:
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(localization.get_text(language, "error_access_denied"))
         return
     
@@ -1710,8 +1709,7 @@ async def cmd_promo_stats(message: Message):
         await message.answer(text)
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "error_promo_stats", default="Ошибка при получении статистики промокодов."))
 
 
@@ -1726,12 +1724,11 @@ async def cmd_profile(message: Message):
     user = await database.get_user(telegram_id)
     
     if not user:
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(localization.get_text(language, "error_start_command"))
         return
     
-    language = user.get("language", "ru")
+    language = await resolve_user_language(telegram_id)
     await show_profile(message, language)
 
 
@@ -1944,8 +1941,7 @@ async def show_profile(message_or_query, language: str):
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
             # Последняя попытка - отправить простой текст без локализации
             try:
-                user = await database.get_user(telegram_id)
-                language = user.get("language", "ru") if user else "ru"
+                language = await resolve_user_language(telegram_id)
                 error_text = localization.get_text(language, "error_profile_load", default="Ошибка загрузки профиля. Попробуйте позже.")
                 if isinstance(message_or_query, CallbackQuery):
                     await message_or_query.message.answer(error_text)
@@ -1973,8 +1969,7 @@ async def callback_toggle_auto_renew(callback: CallbackQuery):
             auto_renew, telegram_id
         )
     
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     if auto_renew:
         text = localization.get_text(language, "auto_renew_enabled", default="✅ Автопродление включено")
@@ -1991,8 +1986,7 @@ async def callback_toggle_auto_renew(callback: CallbackQuery):
 async def callback_change_language(callback: CallbackQuery):
     """Изменить язык"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Экран выбора языка (канонический вид)
     text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
@@ -2011,8 +2005,7 @@ async def cmd_language(message: Message, bot: Bot):
         return
     
     telegram_id = message.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
     await bot.send_message(
@@ -2066,10 +2059,7 @@ async def callback_main_menu(callback: CallbackQuery):
         pass
     
     telegram_id = callback.from_user.id
-    language = "ru"  # По умолчанию
-    if database.DB_READY:
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
@@ -2138,8 +2128,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         return
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # STEP 6 — F3: RATE LIMITING (HUMAN & BOT SAFETY)
     # Rate limit trial activation (once per hour)
@@ -2203,7 +2192,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 if referrer_id:
                     try:
                         referrer_user_for_notif = await database.get_user(referrer_id)
-                        referrer_language_notif = referrer_user_for_notif.get("language", "ru") if referrer_user_for_notif else "ru"
+                        referrer_language_notif = await resolve_user_language(referrer_id)
                         # Get referred user info (user who activated trial)
                         referred_user = await database.get_user(telegram_id)
                         referred_username = safe_resolve_username_from_db(referred_user, referrer_language_notif, telegram_id)
@@ -2332,8 +2321,7 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
     try:
         logger.info(f"Opening profile for user {telegram_id}")
         
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         
         await show_profile(callback, language)
         
@@ -2343,7 +2331,7 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
         # Пытаемся отправить сообщение об ошибке
         try:
             user = await database.get_user(telegram_id)
-            language = user.get("language", "ru") if user else "ru"
+            language = await resolve_user_language(callback.from_user.id)
             try:
                 error_text = localization.get_text(language, "error_profile_load")
             except KeyError:
@@ -2358,8 +2346,7 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
 async def callback_vip_access(callback: CallbackQuery):
     """Обработчик кнопки 'VIP-доступ'"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Проверяем VIP-статус
     is_vip = await database.is_vip_user(telegram_id)
@@ -2394,8 +2381,7 @@ async def callback_vip_access(callback: CallbackQuery):
 # /buy -> выбор тарифа -> выбор периода -> выбор способа оплаты
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
@@ -2522,13 +2508,11 @@ async def callback_renewal_pay(callback: CallbackQuery):
     """Обработчик кнопки оплаты продления - отправляет invoice через Telegram Payments"""
     tariff_key = callback.data.split(":")[1]
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await callback.answer(localization.get_text(language, "error_payments_unavailable"), show_alert=True)
         return
     
@@ -2536,8 +2520,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
     if tariff_key not in config.TARIFFS:
         error_msg = f"Invalid tariff_key '{tariff_key}' for user {telegram_id}. Valid tariffs: {list(config.TARIFFS.keys())}"
         logger.error(error_msg)
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
         return
     
@@ -2545,8 +2528,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
     if 30 not in config.TARIFFS[tariff_key]:
         error_msg = f"Period 30 days not found in tariff '{tariff_key}' for user {telegram_id}"
         logger.error(error_msg)
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
         return
     
@@ -2586,8 +2568,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
     
     # Формируем prices (цена в копейках)
     # Get user language for invoice label
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     prices = [LabeledPrice(label=localization.get_text(language, "payment_label", default="К оплате"), amount=amount * 100)]
     
     try:
@@ -2604,8 +2585,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice for renewal: {e}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await callback.answer(localization.get_text(language, "error_payment_create"), show_alert=True)
 
 
@@ -2617,8 +2597,7 @@ async def callback_topup_balance(callback: CallbackQuery):
         return
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Показываем экран выбора суммы
     text = localization.get_text(language, "topup_balance_select_amount", default="Выберите сумму пополнения:")
@@ -2658,8 +2637,7 @@ async def callback_topup_amount(callback: CallbackQuery):
         return
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Извлекаем сумму из callback_data
     amount_str = callback.data.split(":")[1]
@@ -2708,8 +2686,7 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
         return
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     await callback.answer()
     
@@ -2735,8 +2712,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
         return
     
     telegram_id = message.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Проверяем, что сообщение содержит число
     try:
@@ -2848,8 +2824,7 @@ async def callback_copy_key(callback: CallbackQuery):
         pass
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
@@ -2958,8 +2933,7 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
         pass
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Дополнительная защита: проверка истечения подписки
     await check_subscription_expiry(telegram_id)
@@ -3028,8 +3002,7 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
     try:
         logger.info(f"Opening profile via go_profile for user {telegram_id}")
         
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         
         await show_profile(callback, language)
         
@@ -3039,7 +3012,7 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
         # Пытаемся отправить сообщение об ошибке
         try:
             user = await database.get_user(telegram_id)
-            language = user.get("language", "ru") if user else "ru"
+            language = await resolve_user_language(callback.from_user.id)
             try:
                 error_text = localization.get_text(language, "error_profile_load")
             except KeyError:
@@ -3054,8 +3027,7 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
 async def callback_back_to_main(callback: CallbackQuery):
     """Возврат в главное меню с экрана выдачи ключа"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
@@ -3070,8 +3042,7 @@ async def callback_subscription_history(callback: CallbackQuery):
     await callback.answer()
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Получаем историю подписок
     history = await database.get_subscription_history(telegram_id, limit=5)
@@ -3124,8 +3095,7 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     """
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
@@ -3186,8 +3156,7 @@ async def callback_corporate_access_request(callback: CallbackQuery, state: FSMC
         return
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Set FSM state
     await state.set_state(CorporateAccessRequest.waiting_for_confirmation)
@@ -3228,9 +3197,9 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
         return
     
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
     user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    
+
     try:
         # Get user data (safe: username can be None)
         username = callback.from_user.username if callback.from_user else None
@@ -3339,8 +3308,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     - Показывает экран выбора периода
     """
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_tariff или None (начало покупки)
     current_state = await state.get_state()
@@ -3361,14 +3329,14 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         parts = callback.data.split(":")
         if len(parts) < 2:
             user = await database.get_user(callback.from_user.id)
-            language = user.get("language", "ru") if user else "ru"
+            language = await resolve_user_language(callback.from_user.id)
             await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
             return
         tariff_type = parts[1]  # "basic" или "plus"
     except (IndexError, ValueError) as e:
         logger.error(f"Invalid tariff callback_data: {callback.data}, error={e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
         return
     
@@ -3376,7 +3344,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     if tariff_type not in config.TARIFFS:
         logger.error(f"Invalid tariff_type: {tariff_type}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_tariff", default="Ошибка тарифа"), show_alert=True)
         return
     
@@ -3482,8 +3450,7 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     - Открывает экран выбора способа оплаты
     """
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Парсим callback_data безопасно (формат: "period:basic:30")
     try:
@@ -3609,8 +3576,7 @@ async def show_payment_method_selection(
     - ⬅️ Назад
     """
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Получаем баланс пользователя
     balance_rubles = await database.get_user_balance(telegram_id)
@@ -3687,12 +3653,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     # Rate limit payment initiation
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or "Слишком много запросов. Попробуйте позже.", show_alert=True)
         return
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
     current_state = await state.get_state()
@@ -4066,8 +4030,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     - Переводит в processing_payment
     """
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
     current_state = await state.get_state()
@@ -4200,8 +4163,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     - Использует polling для проверки статуса (NO WEBHOOKS)
     """
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
     current_state = await state.get_state()
@@ -4350,8 +4312,7 @@ async def callback_topup_crypto(callback: CallbackQuery):
         return
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Извлекаем сумму из callback_data
     amount_str = callback.data.split(":")[1]
@@ -4451,8 +4412,7 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Проверяем активную промо-сессию
     promo_session = await get_promo_session(state)
@@ -4484,8 +4444,7 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     Оставлена для обратной совместимости со старыми кнопками.
     """
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Получаем данные из FSM state (единственный источник правды)
     fsm_data = await state.get_data()
@@ -4620,8 +4579,7 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
 async def callback_topup_card(callback: CallbackQuery):
     """Оплата пополнения баланса картой"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     amount_str = callback.data.split(":")[1]
     try:
@@ -4716,8 +4674,7 @@ async def process_promo_code(message: Message, state: FSMContext):
             correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
             details={"error": error}
         )
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
         return
     
@@ -4732,8 +4689,7 @@ async def process_promo_code(message: Message, state: FSMContext):
             correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
             details={"error": promo_error, "promo_code_preview": promo_code[:20] if promo_code else None}
         )
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         text = localization.get_text(language, "invalid_promo", default="❌ Промокод недействителен")
         await message.answer(text)
         return
@@ -4744,8 +4700,7 @@ async def process_promo_code(message: Message, state: FSMContext):
         return
     
     telegram_id = message.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     
     # ⛔ Защита от non-text апдейтов (callback / invoice / system)
@@ -4904,8 +4859,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
             details={"error": error}
         )
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
         return
     
@@ -4921,8 +4875,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
             details={"error": payload_error, "payload_preview": payload[:50] if payload else None}
         )
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "error_try_later", default="⚠️ Произошла ошибка. Попробуйте позже."))
         return
     
@@ -4934,8 +4887,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"[FEATURE_FLAG] Payments disabled, skipping payment finalization: "
             f"user={telegram_id}, correlation_id={str(message.message_id) if hasattr(message, 'message_id') else None}"
         )
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(
             localization.get_text(
                 language,
@@ -4993,7 +4945,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not database.DB_READY:
-        language = "ru"  # По умолчанию
+        language = await resolve_user_language(message.from_user.id)
         text = localization.get_text(
             language,
             "service_unavailable_payment",
@@ -5042,11 +4994,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # КРИТИЧНО: Инициализация языка в начале функции для гарантированной доступности
     # Получаем язык пользователя из профиля или используем "ru" как fallback
     try:
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
     except Exception as e:
-        logger.warning(f"Failed to get user language for {telegram_id}, using 'ru' as fallback: {e}")
-        language = "ru"
+        logger.warning(f"Failed to get user language for {telegram_id}, using DEFAULT_LANGUAGE: {e}")
+        language = DEFAULT_LANGUAGE
     payment = message.successful_payment
     payload = payment.invoice_payload
     
@@ -5126,8 +5077,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 return
             
             # Получаем язык пользователя для сообщения
-            user = await database.get_user(telegram_id)
-            language = user.get("language", "ru") if user else "ru"
+            language = await resolve_user_language(telegram_id)
             
             # Отправляем сообщение об успешном пополнении
             text = localization.get_text(
@@ -5210,8 +5160,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             
     except InvalidPaymentPayloadError as e:
         logger.error(f"Invalid payment payload: {payload}, error={e}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(localization.get_text(language, "error_payment_processing"))
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
@@ -5227,8 +5176,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         return
     except PaymentServiceError as e:
         logger.error(f"Payment service error: {e}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(localization.get_text(language, "error_payment_processing"))
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
@@ -5248,8 +5196,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     if payload_info.payload_type != "purchase":
         # Legacy formats are not supported for new purchases - only balance topup
         logger.error(f"Unsupported payload type for subscription payment: {payload_info.payload_type}, payload={payload}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(localization.get_text(language, "error_payment_processing"))
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
@@ -5267,8 +5214,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     purchase_id = payload_info.purchase_id
     if not purchase_id:
         logger.error(f"No purchase_id in payload: {payload}")
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(localization.get_text(language, "error_payment_processing"))
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
@@ -5286,8 +5232,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     if not pending_purchase:
         error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         await message.answer(localization.get_text(language, "error_payment_processing", default=error_text))
         logger.error(
             f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
@@ -5442,8 +5387,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
             f"reason={type(e).__name__}, error={str(e)}"
         )
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         error_text = localization.get_text(
             language, 
             "error_payment_processing",
@@ -5473,8 +5417,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         logger.error(error_msg)
         logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, purchase_id={purchase_id}]")
         
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         error_text = localization.get_text(
             language, 
             "error_subscription_activation",
@@ -5515,8 +5458,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         logger.error(error_msg)
         logger.exception(f"process_successful_payment: EXCEPTION_TRACEBACK [user={telegram_id}, purchase_id={purchase_id}]")
         
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         error_text = localization.get_text(
             language, 
             "error_subscription_activation",
@@ -5785,8 +5727,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
 async def callback_payment_test(callback: CallbackQuery):
     """Тестовая оплата (не работает)"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     # Тестовая оплата не работает - возвращаем назад
     await callback.answer("Эта функция не работает", show_alert=True)
@@ -5798,8 +5739,7 @@ async def callback_payment_test(callback: CallbackQuery):
 async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     """Оплата через СБП"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     data = await state.get_data()
     tariff_key = data.get("tariff", "basic")  # Используем "basic" как дефолт вместо "1"
@@ -5852,8 +5792,7 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
 async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     """Пользователь нажал 'Я оплатил'"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     data = await state.get_data()
     tariff_key = data.get("tariff", "1")
@@ -5907,8 +5846,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
         tariff_data = {"price": 149}  # Дефолтная цена
     
     # Safe username extraction: can be None
-    user_obj = await database.get_user(telegram_id)
-    user_lang = user_obj.get("language", "ru") if user_obj else "ru"
+    user_lang = await resolve_user_language(telegram_id)
     username = (callback.from_user.username if callback.from_user else None) or localization.get_text(user_lang, "username_not_set", default="не указан")
     
     # Используем локализацию для админ-уведомления
@@ -5937,8 +5875,7 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """О сервисе. Reusable for callback and /info command."""
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     title = localization.get_text(language, "about_title", default="🔎 О сервисе Atlas Secure")
     text = localization.get_text(language, "about_text")
     full_text = f"{title}\n\n{text}"
@@ -5957,8 +5894,7 @@ async def callback_about(callback: CallbackQuery):
 async def callback_service_status(callback: CallbackQuery):
     """Статус сервиса"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     text = localization.get_text(language, "service_status_text")
     
@@ -5977,8 +5913,7 @@ async def callback_service_status(callback: CallbackQuery):
 async def callback_privacy(callback: CallbackQuery):
     """Политика конфиденциальности"""
     telegram_id = callback.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     
     text = localization.get_text(language, "privacy_policy_text")
     await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language))
@@ -5989,8 +5924,7 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
     """Инструкция. Reusable for callback and /instruction command."""
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     platform = detect_platform(event)
     text = localization.get_text(language, "instruction_text")
     await safe_edit_text(msg, text, reply_markup=get_instruction_keyboard(language, platform), bot=bot)
@@ -6011,20 +5945,13 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """
     chat_id = event.message.chat.id if isinstance(event, CallbackQuery) else event.chat.id
     telegram_id = event.from_user.id
-    language = "ru"
+    language = await resolve_user_language(telegram_id)
     
     async def _send_error(err_text: str):
         if isinstance(event, CallbackQuery):
             await event.answer(err_text, show_alert=True)
         else:
             await bot.send_message(chat_id, err_text)
-    
-    try:
-        user = await database.get_user(telegram_id)
-        if user:
-            language = user.get("language", "ru")
-    except Exception as e:
-        logger.warning(f"Error getting user in referral screen: {e}, using default language")
     
     try:
         stats = await database.get_referral_statistics(telegram_id)
@@ -6135,14 +6062,7 @@ async def callback_referral(callback: CallbackQuery):
 async def callback_copy_referral_link(callback: CallbackQuery):
     """Поделиться реферальной ссылкой - отправляет ссылку отдельным сообщением"""
     telegram_id = callback.from_user.id
-    language = "ru"
-    
-    try:
-        user = await database.get_user(telegram_id)
-        if user:
-            language = user.get("language", "ru")
-    except Exception as e:
-        logger.warning(f"Error getting user in share_referral_link: {e}")
+    language = await resolve_user_language(callback.from_user.id)
     
     try:
         # Получаем username бота для реферальной ссылки
@@ -6191,14 +6111,7 @@ def _pluralize_friends(count: int) -> str:
 async def callback_referral_stats(callback: CallbackQuery):
     """Экран «Подробнее» — расширенный презентационный текст. Delete + answer to support navigation from photo (loyalty screen)."""
     telegram_id = callback.from_user.id
-    language = "ru"
-    
-    try:
-        user = await database.get_user(telegram_id)
-        if user:
-            language = user.get("language", "ru")
-    except Exception as e:
-        logger.warning(f"Error getting user in referral_stats: {e}")
+    language = await resolve_user_language(callback.from_user.id)
     
     try:
         try:
@@ -6273,14 +6186,7 @@ async def callback_referral_stats(callback: CallbackQuery):
 async def callback_referral_how_it_works(callback: CallbackQuery):
     """Экран «Как работает программа» для реферальной программы"""
     telegram_id = callback.from_user.id
-    language = "ru"
-    
-    try:
-        user = await database.get_user(telegram_id)
-        if user:
-            language = user.get("language", "ru")
-    except Exception as e:
-        logger.warning(f"Error getting user in referral_how_it_works: {e}")
+    language = await resolve_user_language(callback.from_user.id)
     
     try:
         # Получаем текст о том, как работает программа
@@ -6328,8 +6234,7 @@ async def _open_support_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """Поддержка. Reusable for callback and /help command."""
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
-    user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(telegram_id)
     text = localization.get_text(language, "support_text")
     await safe_edit_text(msg, text, reply_markup=get_support_keyboard(language), bot=bot)
     if isinstance(event, CallbackQuery):
@@ -6401,7 +6306,7 @@ async def approve_payment(callback: CallbackQuery):
             error_msg = f"CRITICAL: Cannot find valid tariff data for tariff_key '{tariff_key}'"
             logger.error(error_msg)
             user = await database.get_user(callback.from_user.id)
-            language = user.get("language", "ru") if user else "ru"
+            language = await resolve_user_language(callback.from_user.id)
             await callback.answer(localization.get_text(language, "error_invalid_tariff", default="Ошибка: неверный тариф"), show_alert=True)
             return
         
@@ -6421,7 +6326,7 @@ async def approve_payment(callback: CallbackQuery):
         if expires_at is None or vpn_key is None:
             logging.error(f"Failed to approve payment {payment_id} atomically")
             user = await database.get_user(callback.from_user.id)
-            language = user.get("language", "ru") if user else "ru"
+            language = await resolve_user_language(callback.from_user.id)
             await callback.answer(localization.get_text(language, "error_vpn_key_creation", default="Ошибка создания VPN-ключа. Проверь логи."), show_alert=True)
             return
         
@@ -6511,8 +6416,7 @@ async def approve_payment(callback: CallbackQuery):
             logging.info(f"New subscription created for user {telegram_id}, payment_id={payment_id}, expires_at={expires_at}")
         
         # Уведомляем пользователя
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         
         expires_str = expires_at.strftime("%d.%m.%Y")
         # Отправляем сообщение об успешной активации (без ключа)
@@ -6551,13 +6455,11 @@ async def cmd_admin(message: Message):
     """Административный дашборд"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized admin dashboard attempt by user {message.from_user.id}")
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         return
     
-    user = await database.get_user(message.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(message.from_user.id)
     text = localization.get_text(language, "admin_dashboard_title", default="🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:")
     await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language))
 
@@ -6567,8 +6469,7 @@ async def cmd_pending_activations(message: Message):
     """Показать подписки с отложенной активацией (только для админа)"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized pending_activations attempt by user {message.from_user.id}")
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         return
     
@@ -6639,8 +6540,7 @@ async def cmd_pending_activations(message: Message):
             
     except Exception as e:
         logger.exception(f"Error in cmd_pending_activations: {e}")
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "error_data_fetch", error=str(e)[:100], default=f"❌ Ошибка при получении данных: {str(e)[:100]}"))
 
 
@@ -6652,8 +6552,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
     Display real-time system health with severity indicator.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -6678,7 +6577,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
         
         # Add refresh button
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=localization.get_text(language, "admin_refresh", default="🔄 Обновить"), callback_data="admin:dashboard")],
             [InlineKeyboardButton(text=localization.get_text(language, "admin_test_menu", default="🧪 Тесты"), callback_data="admin:test_menu")],
@@ -6699,7 +6598,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error in callback_admin_dashboard: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_dashboard_data", default="Ошибка при получении данных дашборда"), show_alert=True)
 
 
@@ -6707,13 +6606,12 @@ async def callback_admin_dashboard(callback: CallbackQuery):
 async def callback_admin_main(callback: CallbackQuery):
     """Главный экран админ-дашборда"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     text = localization.get_text(language, "admin_dashboard_title", default="🛠 Atlas Secure · Admin Dashboard\n\nВыберите действие:")
     await safe_edit_text(callback.message, text, reply_markup=get_admin_dashboard_keyboard(language))
     await callback.answer()
@@ -6723,7 +6621,7 @@ async def callback_admin_main(callback: CallbackQuery):
 async def callback_admin_promo_stats(callback: CallbackQuery):
     """Обработчик кнопки статистики промокодов в админ-дашборде"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -6740,7 +6638,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_promo_stats", default="Ошибка при получении статистики промокодов."), show_alert=True)
 
 
@@ -6748,7 +6646,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
 async def callback_admin_metrics(callback: CallbackQuery):
     """Раздел Метрики"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -6791,7 +6689,7 @@ async def callback_admin_metrics(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_metrics: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_metrics", default="Ошибка при получении метрик. Проверь логи."), show_alert=True)
 
 
@@ -6799,7 +6697,7 @@ async def callback_admin_metrics(callback: CallbackQuery):
 async def callback_admin_stats(callback: CallbackQuery):
     """Раздел Статистика"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -6825,7 +6723,7 @@ async def callback_admin_stats(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_stats: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_stats", default="Ошибка при получении статистики"), show_alert=True)
 
 
@@ -6833,13 +6731,12 @@ async def callback_admin_stats(callback: CallbackQuery):
 async def callback_admin_referral_stats(callback: CallbackQuery):
     """Реферальная статистика - главный экран с общей статистикой"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     await callback.answer()
     
     try:
@@ -6978,7 +6875,7 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
         except Exception as fallback_error:
             logger.exception(f"Error in fallback admin referral stats: {fallback_error}")
             user = await database.get_user(callback.from_user.id)
-            language = user.get("language", "ru") if user else "ru"
+            language = await resolve_user_language(callback.from_user.id)
             await callback.answer(localization.get_text(language, "error_referral_stats", default="Ошибка при получении реферальной статистики"), show_alert=True)
 
 
@@ -6986,13 +6883,12 @@ async def callback_admin_referral_stats(callback: CallbackQuery):
 async def callback_admin_referral_sort(callback: CallbackQuery):
     """Сортировка реферальной статистики"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     await callback.answer()
     
     try:
@@ -7064,7 +6960,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_sort: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_stats_sort", default="Ошибка при сортировке статистики"), show_alert=True)
 
 
@@ -7072,13 +6968,12 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
 async def callback_admin_referral_search(callback: CallbackQuery, state: FSMContext):
     """Поиск реферальной статистики"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     await callback.answer()
     
     text = "🔍 Поиск реферальной статистики\n\nВведите telegram_id или username для поиска:"
@@ -7094,14 +6989,12 @@ async def callback_admin_referral_search(callback: CallbackQuery, state: FSMCont
 async def process_admin_referral_search(message: Message, state: FSMContext):
     """Обработка поискового запроса"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         await state.clear()
         return
     
-    user = await database.get_user(message.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(message.from_user.id)
     search_query = message.text.strip()
     await state.clear()
     
@@ -7163,8 +7056,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
         
     except Exception as e:
         logging.exception(f"Error in process_admin_referral_search: {e}")
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "error_stats_search", default="Ошибка при поиске статистики"))
 
 
@@ -7172,7 +7064,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
 async def callback_admin_referral_detail(callback: CallbackQuery):
     """Детальная информация по рефереру"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
@@ -7240,7 +7132,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_detail: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_details", default="Ошибка при получении деталей"), show_alert=True)
 
 
@@ -7248,8 +7140,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
 async def callback_admin_referral_history(callback: CallbackQuery):
     """История начислений реферального кешбэка"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7319,7 +7210,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_history: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_rewards_history", default="Ошибка при получении истории начислений"), show_alert=True)
 
 
@@ -7327,8 +7218,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
 async def callback_admin_referral_history_page(callback: CallbackQuery):
     """Пагинация истории начислений"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7396,7 +7286,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_history_page: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_rewards_history", default="Ошибка при получении истории начислений"), show_alert=True)
 
 
@@ -7404,8 +7294,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
 async def callback_admin_referral_top(callback: CallbackQuery):
     """Топ рефереров - расширенный список"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7473,7 +7362,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_referral_top: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_top_referrers", default="Ошибка при получении топа рефереров"), show_alert=True)
 
 
@@ -7481,8 +7370,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
 async def callback_admin_analytics(callback: CallbackQuery):
     """📊 Финансовая аналитика - базовые метрики"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7516,7 +7404,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
         
         # Клавиатура
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=localization.get_text(language, "admin_refresh", default="🔄 Обновить"), callback_data="admin:analytics")],
             [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")]
@@ -7536,7 +7424,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error in admin analytics: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_analytics", default="Ошибка загрузки аналитики"), show_alert=True)
         await callback.answer("Ошибка при расчете аналитики", show_alert=True)
 
@@ -7545,8 +7433,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
 async def callback_admin_analytics_monthly(callback: CallbackQuery):
     """Ежемесячная сводка"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7605,7 +7492,7 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
 async def callback_admin_audit(callback: CallbackQuery):
     """Раздел Аудит (переиспользование логики /admin_audit)"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -7720,8 +7607,7 @@ async def callback_admin_audit(callback: CallbackQuery):
 async def callback_admin_keys(callback: CallbackQuery):
     """Раздел VPN-ключи в админ-дашборде"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -7744,7 +7630,7 @@ async def callback_admin_keys(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_keys: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
 
 
@@ -7752,7 +7638,7 @@ async def callback_admin_keys(callback: CallbackQuery):
 async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
     """Массовый перевыпуск ключей для всех активных пользователей"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -7814,8 +7700,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                 
                 # Отправляем уведомление пользователю
                 try:
-                    user_row = await database.get_user(telegram_id)
-                    notify_lang = user_row.get("language", "ru") if user_row else "ru"
+                    notify_lang = await resolve_user_language(telegram_id)
                     
                     try:
                         user_text = localization.get_text(
@@ -7905,7 +7790,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
 async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
     """Перевыпуск ключа для одной подписки (по subscription_id)"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -7961,7 +7846,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
         
         # Показываем админу результат
         user = await database.get_user(telegram_id)
-        user_lang = user.get("language", "ru") if user else "ru"
+        user_lang = await resolve_user_language(telegram_id)
         username = user.get("username", localization.get_text(user_lang, "username_not_set", default="не указан")) if user else localization.get_text(user_lang, "username_not_set", default="не указан")
         
         expires_at = subscription["expires_at"]
@@ -7997,8 +7882,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
 async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
     """Массовый перевыпуск ключей для всех активных подписок"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8117,7 +8001,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
 async def callback_admin_keys_legacy(callback: CallbackQuery):
     """Раздел VPN-ключи"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -8150,7 +8034,7 @@ async def callback_admin_keys_legacy(callback: CallbackQuery):
 async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
     """Раздел Пользователь - запрос Telegram ID или username"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -8166,8 +8050,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
     """Обработка введённого Telegram ID или username пользователя"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         await state.clear()
         return
@@ -8302,8 +8185,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
 async def callback_admin_user_history(callback: CallbackQuery):
     """История подписок пользователя (админ)"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8405,8 +8287,7 @@ async def callback_admin_grant(callback: CallbackQuery, state: FSMContext):
     """
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8439,8 +8320,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
     Ask for notify_user choice before executing.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8468,7 +8348,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_days: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -8482,8 +8362,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
     Quick action: Grant access for N minutes, then ask for notify choice.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8528,7 +8407,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_minutes: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -8542,8 +8421,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
     Ask for notify_user choice before executing.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8570,7 +8448,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_1_year: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -8584,8 +8462,7 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
     This is the handler that was missing - works when FSM is in waiting_for_days.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8610,7 +8487,7 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_custom_from_days: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -8624,8 +8501,7 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
     Fallback handler (no state filter) - works from any state.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8650,7 +8526,7 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_custom: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -8664,8 +8540,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
     Handler works ONLY in state waiting_for_unit.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8688,7 +8563,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_unit: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -8699,8 +8574,7 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
     PART 1: Process duration value input, move to notify choice.
     """
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         await state.clear()
         return
@@ -8742,8 +8616,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
     PART 1: Execute grant access with notify_user choice.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8797,8 +8670,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             # PART 6: Notify user if flag is True
             if notify_user and vpn_key:
                 import admin_notifications
-                user_lang = await database.get_user(user_id)
-                language = user_lang.get("language", "ru") if user_lang else "ru"
+                language = await resolve_user_language(user_id)
                 vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
                 user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
                 # Use unified notification service
@@ -8827,8 +8699,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
         
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_notify: {e}")
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -8844,8 +8715,7 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
     Format: admin:notify:yes|no:minutes:<user_id>:<minutes>
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -8901,7 +8771,7 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
         # 6️⃣ ERROR HANDLING: NO generic Exception raises, graceful exit
         logger.warning(f"Unexpected error in callback_admin_grant_minutes_notify: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
 
 
@@ -8917,8 +8787,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
     FIX: Missing handler for admin:notify:yes and admin:notify:no used by grant_days and grant_1_year.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9039,7 +8908,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_quick_notify_fsm: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -9054,8 +8923,7 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
     Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:user:<id>
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9094,7 +8962,7 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
     except Exception as e:
         logger.exception(f"Error in callback_admin_revoke: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
 
@@ -9108,8 +8976,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:notify:yes|no
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9209,14 +9076,13 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     except Exception as e:
         logger.exception(f"Error in callback_admin_revoke_notify: {e}")
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         await state.clear()
     """Обработчик кнопки 'Лишить доступа'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9297,8 +9163,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             # Уведомляем пользователя только если notify=True
             if notify:
                 try:
-                    user_lang = await database.get_user(user_id)
-                    language = user_lang.get("language", "ru") if user_lang else "ru"
+                    language = await resolve_user_language(user_id)
                     
                     user_text = localization.get_text(language, "admin_revoke_user_notification")
                     await bot.send_message(user_id, user_text)
@@ -9394,8 +9259,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
     """Обработчик кнопки 'Назначить скидку'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9424,8 +9288,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
 async def callback_admin_discount_percent(callback: CallbackQuery):
     """Обработчик выбора процента скидки"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9447,8 +9310,7 @@ async def callback_admin_discount_percent(callback: CallbackQuery):
 async def callback_admin_discount_percent_manual(callback: CallbackQuery, state: FSMContext):
     """Обработчик для ввода процента скидки вручную"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9471,8 +9333,7 @@ async def callback_admin_discount_percent_manual(callback: CallbackQuery, state:
 async def process_admin_discount_percent(message: Message, state: FSMContext):
     """Обработка введённого процента скидки"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         await state.clear()
         return
@@ -9506,8 +9367,7 @@ async def process_admin_discount_percent(message: Message, state: FSMContext):
 async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
     """Обработчик выбора срока действия скидки"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9539,7 +9399,7 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
             text = "❌ Ошибка при создании скидки"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         
     except Exception as e:
@@ -9551,8 +9411,7 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
 async def callback_admin_discount_expires_manual(callback: CallbackQuery, state: FSMContext):
     """Обработчик для ввода срока действия скидки вручную"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9577,8 +9436,7 @@ async def callback_admin_discount_expires_manual(callback: CallbackQuery, state:
 async def process_admin_discount_expires(message: Message, state: FSMContext, bot: Bot):
     """Обработка введённого срока действия скидки"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         await state.clear()
         return
@@ -9631,8 +9489,7 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
     """Обработчик кнопки 'Удалить скидку'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9664,8 +9521,7 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
 async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegram_id: int):
     """Вспомогательная функция для отображения карточки пользователя администратору"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
-    admin_user = await database.get_user(admin_telegram_id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(admin_telegram_id)
     try:
         overview = await admin_service.get_admin_user_overview(user_id)
     except UserNotFoundError:
@@ -9764,7 +9620,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
     """Обработчик кнопки 'Выдать VIP'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -9794,7 +9650,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
             text = "❌ Ошибка при назначении VIP-статуса"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "error_generic", default="Ошибка"), show_alert=True)
         
     except Exception as e:
@@ -9807,7 +9663,7 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
     """Обработчик кнопки 'Снять VIP'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -9840,8 +9696,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
     """Перевыпуск ключа из админ-дашборда"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9910,8 +9765,7 @@ async def callback_admin_system(callback: CallbackQuery):
     PART A.3: Admin system status dashboard with severity and error summary.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -9974,7 +9828,7 @@ async def callback_admin_system(callback: CallbackQuery):
         
         # PART C.5: Add test menu button
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=localization.get_text(language, "admin_test_menu", default="🧪 Тесты"), callback_data="admin:test_menu")],
             [InlineKeyboardButton(text=localization.get_text(language, "admin_back", default="🔙 Назад"), callback_data="admin:main")],
@@ -10002,8 +9856,7 @@ async def callback_admin_test_menu(callback: CallbackQuery):
     PART C.5: Admin test menu for testing notifications.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10038,8 +9891,7 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
     PART C.5: Execute admin test actions.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10108,7 +9960,7 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
 async def callback_admin_export(callback: CallbackQuery):
     """Раздел Экспорт данных"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
@@ -10122,8 +9974,7 @@ async def callback_admin_export(callback: CallbackQuery):
 async def callback_admin_export_data(callback: CallbackQuery):
     """Обработка экспорта данных"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10232,8 +10083,7 @@ async def callback_admin_export_data(callback: CallbackQuery):
 async def callback_admin_incident(callback: CallbackQuery):
     """Раздел управления инцидентом"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10268,8 +10118,7 @@ async def callback_admin_incident(callback: CallbackQuery):
 async def callback_admin_incident_toggle(callback: CallbackQuery):
     """Переключение режима инцидента"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10299,8 +10148,7 @@ async def callback_admin_incident_toggle(callback: CallbackQuery):
 async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContext):
     """Начало редактирования текста инцидента"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10348,7 +10196,7 @@ async def process_incident_text(message: Message, state: FSMContext):
 async def callback_admin_broadcast(callback: CallbackQuery):
     """Раздел уведомлений"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
@@ -10371,7 +10219,7 @@ async def callback_admin_broadcast(callback: CallbackQuery):
 async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
     """Начать создание уведомления"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
@@ -10389,8 +10237,7 @@ async def process_broadcast_title(message: Message, state: FSMContext):
     """Обработка заголовка уведомления"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
-    admin_user = await database.get_user(message.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(message.from_user.id)
     
     await state.update_data(title=message.text)
     await state.set_state(BroadcastCreate.waiting_for_test_type)
@@ -10404,14 +10251,12 @@ async def process_broadcast_title(message: Message, state: FSMContext):
 async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора типа тестирования"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     await callback.answer()
-    admin_user = await database.get_user(callback.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     test_type = callback.data.split(":")[1]
     
     await state.update_data(is_ab_test=(test_type == "ab"))
@@ -10433,8 +10278,7 @@ async def process_broadcast_message_a(message: Message, state: FSMContext):
     """Обработка текста варианта A"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
-    admin_user = await database.get_user(message.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(message.from_user.id)
     
     await state.update_data(message_a=message.text)
     await state.set_state(BroadcastCreate.waiting_for_message_b)
@@ -10448,8 +10292,7 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     """Обработка текста варианта B"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
-    admin_user = await database.get_user(message.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(message.from_user.id)
     
     await state.update_data(message_b=message.text)
     await state.set_state(BroadcastCreate.waiting_for_type)
@@ -10464,8 +10307,7 @@ async def process_broadcast_message(message: Message, state: FSMContext):
     """Обработка текста уведомления"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
-    admin_user = await database.get_user(message.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(message.from_user.id)
     
     await state.update_data(message=message.text)
     await state.set_state(BroadcastCreate.waiting_for_type)
@@ -10479,8 +10321,7 @@ async def process_broadcast_message(message: Message, state: FSMContext):
 async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора типа уведомления"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10508,8 +10349,7 @@ async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
     await state.update_data(type=broadcast_type)
     await state.set_state(BroadcastCreate.waiting_for_segment)
     
-    admin_user = await database.get_user(callback.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     await callback.message.edit_text(
         localization.get_text(language, "broadcast_select_segment", default="Выберите сегмент получателей:"),
@@ -10521,8 +10361,7 @@ async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
 async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора сегмента получателей"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10578,8 +10417,7 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
     await state.update_data(segment=segment)
     await state.set_state(BroadcastCreate.waiting_for_confirm)
     
-    admin_user = await database.get_user(callback.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     preview_confirm_text = localization.get_text(
         language, "broadcast_preview_confirm",
@@ -10596,15 +10434,13 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
 async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение и отправка уведомления"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     await callback.answer()
     
-    admin_user = await database.get_user(callback.from_user.id)
-    language = admin_user.get("language", "ru") if admin_user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     data = await state.get_data()
     title = data.get("title")
@@ -10761,7 +10597,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 async def callback_broadcast_ab_stats(callback: CallbackQuery):
     """Список A/B тестов"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
@@ -10795,8 +10631,7 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
 async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
     """Статистика конкретного A/B теста"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -11066,8 +10901,7 @@ async def reject_payment(callback: CallbackQuery):
         logging.info(f"Payment {payment_id} rejected for user {telegram_id}")
         
         # Уведомляем пользователя
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         
         text = localization.get_text(language, "payment_rejected")
         
@@ -11102,13 +10936,12 @@ async def reject_payment(callback: CallbackQuery):
 async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FSMContext):
     """Начало процесса выдачи средств - запрос поиска пользователя"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     text = localization.get_text(language, "admin_credit_balance_prompt")
     await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
     await state.set_state(AdminCreditBalance.waiting_for_user_search)
@@ -11119,8 +10952,7 @@ async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FS
 async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSMContext):
     """Начало процесса выдачи средств для конкретного пользователя"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -11129,7 +10961,7 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
         await state.update_data(target_user_id=user_id)
         
         user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         text = localization.get_text(language, "admin_credit_balance_user_prompt", user_id=user_id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=localization.get_text(language, "admin_cancel"), callback_data=f"admin:user")]
@@ -11146,8 +10978,7 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
 async def process_admin_credit_balance_user_search(message: Message, state: FSMContext):
     """Обработка поиска пользователя для выдачи средств"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         await state.clear()
         return
@@ -11188,8 +11019,7 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
 async def process_admin_credit_balance_amount(message: Message, state: FSMContext):
     """Обработка ввода суммы для выдачи средств"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(message.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(message.from_user.id)
         await message.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"))
         await state.clear()
         return
@@ -11247,8 +11077,7 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
 async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение выдачи средств"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -11316,7 +11145,7 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
 async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: FSMContext):
     """Отмена выдачи средств"""
     user = await database.get_user(callback.from_user.id)
-    language = user.get("language", "ru") if user else "ru"
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return

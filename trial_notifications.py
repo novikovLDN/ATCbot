@@ -19,6 +19,7 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
+from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -72,9 +73,7 @@ async def send_trial_notification(
         - (False, "failed_temporary") - временная ошибка, можно повторить позже
     """
     try:
-        # Получаем язык пользователя
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         
         # Получаем текст уведомления
         text = localization.get_text(language, notification_key)
@@ -459,9 +458,7 @@ async def expire_trial_subscriptions(bot: Bot):
                         )
                         
                         if trial_completed_sent:
-                            # I/O: Get user language and send notification
-                            user = await database.get_user(telegram_id)
-                            language = user.get("language", "ru") if user else "ru"
+                            language = await resolve_user_language(telegram_id)
                             
                             expired_text = localization.get_text(language, "trial_expired_text")
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[

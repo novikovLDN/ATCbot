@@ -30,6 +30,7 @@ from app.core.recovery_cooldown import (
     ComponentName,
 )
 from app.core.metrics import get_metrics
+from app.services.language_service import resolve_user_language
 from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
@@ -213,8 +214,7 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             )
                         else:
                             # This is the first activation - send notification
-                            user = await database.get_user(telegram_id)
-                            language = user.get("language", "ru") if user else "ru"
+                            language = await resolve_user_language(telegram_id)
                             
                             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
                             

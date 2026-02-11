@@ -2,9 +2,10 @@
 Admin Notifications Module
 
 Sends Telegram notifications to admin about bot state changes.
-All messages use localization (admin language: ru).
+All messages use admin's language from DB.
 """
 import localization
+from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
 import logging
 from datetime import datetime
 from typing import Optional
@@ -40,17 +41,13 @@ async def notify_admin_degraded_mode(bot: Bot):
     if _degraded_notification_sent:
         return
     
-    # Resolve admin language from DB when available; fallback to ru only if DB unavailable
-    language = "ru"
+    language = DEFAULT_LANGUAGE
     try:
-        import database
-        if database.DB_READY and config.ADMIN_TELEGRAM_ID:
-            admin_user = await database.get_user(config.ADMIN_TELEGRAM_ID)
-            if admin_user and admin_user.get("language"):
-                language = admin_user["language"]
+        if config.ADMIN_TELEGRAM_ID:
+            language = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
     except Exception:
         pass
-    
+
     message = localization.get_text(language, "admin_degraded_mode")
     
     # Use unified entry point for consistent error handling and observability
@@ -80,17 +77,13 @@ async def notify_admin_recovered(bot: Bot):
     if _recovered_notification_sent:
         return
     
-    # Resolve admin language from DB (DB is up after recovery)
-    language = "ru"
+    language = DEFAULT_LANGUAGE
     try:
-        import database
         if config.ADMIN_TELEGRAM_ID:
-            admin_user = await database.get_user(config.ADMIN_TELEGRAM_ID)
-            if admin_user and admin_user.get("language"):
-                language = admin_user["language"]
+            language = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
     except Exception:
         pass
-    
+
     message = localization.get_text(language, "admin_recovered")
     
     # Use unified entry point for consistent error handling and observability
@@ -143,17 +136,13 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
             logger.debug(f"Skipping pending activations notification (cooldown active)")
             return
         
-        # Resolve admin language from DB
-        admin_lang = "ru"
+        admin_lang = DEFAULT_LANGUAGE
         try:
-            import database
             if config.ADMIN_TELEGRAM_ID:
-                admin_user = await database.get_user(config.ADMIN_TELEGRAM_ID)
-                if admin_user and admin_user.get("language"):
-                    admin_lang = admin_user["language"]
+                admin_lang = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
         except Exception:
             pass
-        
+
         title = localization.get_text(admin_lang, "admin_pending_activations_title")
         total = localization.get_text(admin_lang, "admin_pending_activations_total", count=pending_count)
         message_lines = [title, total]
