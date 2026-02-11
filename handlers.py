@@ -7171,9 +7171,10 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("admin:referral_detail:"))
 async def callback_admin_referral_detail(callback: CallbackQuery):
     """Детальная информация по рефереру"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
+    
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10341,13 +10342,14 @@ async def process_incident_text(message: Message, state: FSMContext):
 @router.callback_query(F.data == "admin:broadcast")
 async def callback_admin_broadcast(callback: CallbackQuery):
     """Раздел уведомлений"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
+    
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
-    text = "📣 Уведомления\n\nВыберите действие:"
+    text = localization.get_text(language, "broadcast_section_title", default="📣 Уведомления\n\nВыберите действие:")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=localization.get_text(language, "broadcast_create", default="➕ Создать уведомление"), callback_data="broadcast:create")],
         [InlineKeyboardButton(text=localization.get_text(language, "broadcast_ab_stats", default="📊 A/B статистика"), callback_data="broadcast:ab_stats")],
@@ -10363,15 +10365,18 @@ async def callback_admin_broadcast(callback: CallbackQuery):
 @router.callback_query(F.data == "broadcast:create")
 async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
     """Начать создание уведомления"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
+    
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
     await callback.answer()
     await state.set_state(BroadcastCreate.waiting_for_title)
-    await callback.message.answer("Введите заголовок уведомления:")
+    await callback.message.answer(
+        localization.get_text(language, "broadcast_enter_title", default="Введите заголовок уведомления:")
+    )
 
 
 @router.message(BroadcastCreate.waiting_for_title)
@@ -10750,9 +10755,10 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 @router.callback_query(F.data == "broadcast:ab_stats")
 async def callback_broadcast_ab_stats(callback: CallbackQuery):
     """Список A/B тестов"""
+    user = await database.get_user(callback.from_user.id)
+    language = user.get("language", "ru") if user else "ru"
+    
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        user = await database.get_user(callback.from_user.id)
-        language = user.get("language", "ru") if user else "ru"
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
@@ -10762,12 +10768,12 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
         ab_tests = await database.get_ab_test_broadcasts()
         
         if not ab_tests:
-            text = "📊 A/B статистика\n\nA/B тестов не найдено."
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard())
+            text = localization.get_text(language, "broadcast_ab_stats_empty", default="📊 A/B статистика\n\nA/B тестов не найдено.")
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             return
         
-        text = "📊 A/B статистика\n\nВыберите уведомление для просмотра статистики:"
-        keyboard = get_ab_test_list_keyboard(ab_tests)
+        text = localization.get_text(language, "broadcast_ab_stats_select", default="📊 A/B статистика\n\nВыберите уведомление для просмотра статистики:")
+        keyboard = get_ab_test_list_keyboard(ab_tests, language)
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
         
         # Логируем действие
@@ -10775,7 +10781,9 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
     
     except Exception as e:
         logging.exception(f"Error in callback_broadcast_ab_stats: {e}")
-        await callback.message.answer("Ошибка при получении списка A/B тестов. Проверь логи.")
+        await callback.message.answer(
+            localization.get_text(language, "broadcast_ab_stats_error", default="Ошибка при получении списка A/B тестов. Проверь логи.")
+        )
 
 
 @router.callback_query(F.data.startswith("broadcast:ab_stat:"))
