@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Tuple
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from app.utils.telegram_safe import safe_send_message
 import asyncpg
 import database
 import config
@@ -83,8 +84,10 @@ async def send_trial_notification(
         if has_button:
             reply_markup = get_trial_buy_keyboard(language)
         
-        # Отправляем уведомление
-        await bot.send_message(telegram_id, text, reply_markup=reply_markup)
+        # Отправляем уведомление (safe_send_message handles chat_not_found, blocked)
+        sent = await safe_send_message(bot, telegram_id, text, reply_markup=reply_markup)
+        if sent is None:
+            return (False, "failed_permanently")
         await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
 
         logger.info(
@@ -94,30 +97,11 @@ async def send_trial_notification(
         
         return (True, "sent")
     except Exception as e:
-        error_str = str(e).lower()
-        
-        # Проверяем на постоянные ошибки (Forbidden/blocked)
-        permanent_errors = [
-            "forbidden",
-            "bot was blocked",
-            "user is deactivated",
-            "chat not found",
-            "user not found"
-        ]
-        
-        if any(keyword in error_str for keyword in permanent_errors):
-            logger.warning(
-                f"trial_notification_failed_permanently: user={telegram_id}, notification={notification_key}, "
-                f"reason=forbidden_or_blocked, error={str(e)}"
-            )
-            return (False, "failed_permanently")
-        else:
-            # Временная ошибка - можно повторить позже
-            logger.error(
-                f"trial_notification_failed_temporary: user={telegram_id}, notification={notification_key}, "
-                f"reason=temporary_error, error={str(e)}"
-            )
-            return (False, "failed_temporary")
+        logger.error(
+            f"trial_notification_failed: user={telegram_id}, notification={notification_key}, "
+            f"error={str(e)}"
+        )
+        return (False, "failed_temporary")
 
 
 async def process_trial_notifications(bot: Bot):
@@ -162,6 +146,7 @@ async def process_trial_notifications(bot: Bot):
                 WHERE u.trial_used_at IS NOT NULL
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at > $1
+                  AND COALESCE(u.is_reachable, TRUE) = TRUE
             """, now)
             
             for row in rows:
@@ -371,6 +356,7 @@ async def expire_trial_subscriptions(bot: Bot):
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at <= $1
                   AND u.trial_expires_at > $1 - INTERVAL '24 hours'
+                  AND COALESCE(u.is_reachable, TRUE) = TRUE
             """, now)
             
             for row in rows:
@@ -468,8 +454,11 @@ async def expire_trial_subscriptions(bot: Bot):
                                     callback_data="menu_buy_vpn"
                                 )]
                             ])
-                            try:
-                                await bot.send_message(telegram_id, expired_text, parse_mode="HTML", reply_markup=keyboard)
+                            sent = await safe_send_message(
+                                bot, telegram_id, expired_text,
+                                parse_mode="HTML", reply_markup=keyboard
+                            )
+                            if sent:
                                 await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
                                 logger.info(
                                     f"trial_expired: notification sent: user={telegram_id}, "
@@ -482,14 +471,9 @@ async def expire_trial_subscriptions(bot: Bot):
                                     f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
                                     f"completed_at={now.isoformat()}"
                                 )
-                            except Exception as e:
-                                logger.warning(f"Failed to send trial expiration notification to user {telegram_id}: {e}")
-                                # Rollback flag on send error
-                                await conn.execute("""
-                                    UPDATE users 
-                                    SET trial_completed_sent = FALSE 
-                                    WHERE telegram_id = $1
-                                """, telegram_id)
+                            else:
+                                # safe_send_message failed (chat not found, blocked, etc.) - do NOT retry
+                                logger.warning(f"TRIAL_EXPIRED_SKIP_CHAT_NOT_FOUND user={telegram_id}")
                         else:
                             logger.info(
                                 f"trial_expired_skipped: user={telegram_id}, reason=already_sent"

@@ -1,17 +1,20 @@
 """Модуль для отправки напоминаний об окончании подписки"""
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramForbiddenError
 import database
 import config
 from app import i18n
 from app.services.language_service import resolve_user_language
 from app.services.notifications import service as notification_service
 from app.services.notifications.service import ReminderType
+from app.utils.telegram_safe import safe_send_message
 # import outline_api  # DISABLED - мигрировали на Xray Core (VLESS)
+
+# Idempotency: skip if reminder sent within this window (container restart guard)
+REMINDER_IDEMPOTENCY_WINDOW = timedelta(minutes=30)
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +76,19 @@ async def send_smart_reminders(bot: Bot):
                     if decision.reason:
                         logger.debug(f"Skipping reminder for user {telegram_id}: {decision.reason}")
                     continue
-                
+
+                # Idempotency: skip if reminder sent recently (container restart guard)
+                last_reminder_at = subscription.get("last_reminder_at")
+                if last_reminder_at and isinstance(last_reminder_at, datetime):
+                    try:
+                        naive_at = last_reminder_at.replace(tzinfo=None) if last_reminder_at.tzinfo else last_reminder_at
+                        delta = datetime.utcnow() - naive_at
+                        if 0 <= delta.total_seconds() < REMINDER_IDEMPOTENCY_WINDOW.total_seconds():
+                            logger.debug(f"Skipping reminder for user {telegram_id}: last_reminder_at within idempotency window")
+                            continue
+                    except (TypeError, AttributeError):
+                        pass
+
                 language = await resolve_user_language(telegram_id)
                 
                 # Determine reminder text and keyboard based on reminder type
@@ -108,8 +123,10 @@ async def send_smart_reminders(bot: Bot):
                     audit_message = "Paid subscription reminder (3h before expiry)"
                 
                 if text and keyboard:
-                    # Send reminder
-                    await bot.send_message(telegram_id, text, reply_markup=keyboard)
+                    # Send reminder (safe_send_message handles chat_not_found, blocked)
+                    sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+                    if sent is None:
+                        continue
                     await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
 
                     # Mark reminder as sent using notification service
@@ -125,10 +142,6 @@ async def send_smart_reminders(bot: Bot):
                     
                     logger.info(f"Reminder ({reminder_type.value}) sent to user {telegram_id}")
                 
-            except TelegramForbiddenError:
-                # Пользователь заблокировал бота - это ожидаемое поведение, не ошибка
-                logger.info(f"User {telegram_id} blocked bot, skipping reminder")
-                continue
             except Exception as e:
                 # Ошибка для одного пользователя не должна ломать цикл
                 logger.error(f"Error sending reminder to user {telegram_id}: {e}", exc_info=True)

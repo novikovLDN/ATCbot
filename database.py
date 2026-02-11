@@ -4325,9 +4325,43 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            f"UPDATE subscriptions SET {flag_name} = TRUE WHERE telegram_id = $1",
+            f"UPDATE subscriptions SET {flag_name} = TRUE, last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1",
             telegram_id
         )
+
+
+async def mark_user_unreachable(telegram_id: int) -> None:
+    """Mark user as unreachable (chat not found, blocked). Background workers filter by is_reachable."""
+    if not DB_READY:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET is_reachable = FALSE WHERE telegram_id = $1",
+                telegram_id
+            )
+    except Exception as e:
+        logger.warning(f"mark_user_unreachable failed for user={telegram_id}: {e}")
+
+
+async def update_last_reminder_at(subscription_id: int) -> None:
+    """Update last_reminder_at for idempotency guard (container restart protection)."""
+    if not DB_READY:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE subscriptions SET last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE id = $1",
+                subscription_id
+            )
+    except Exception as e:
+        logger.warning(f"update_last_reminder_at failed for subscription_id={subscription_id}: {e}")
 
 
 async def get_promo_code(code: str) -> Optional[Dict[str, Any]]:
@@ -4468,6 +4502,7 @@ async def is_user_first_purchase(telegram_id: int) -> bool:
 async def get_subscriptions_for_reminders() -> list:
     """Получить все активные подписки, которым нужно отправить напоминания
     
+    Filters out users with is_reachable = FALSE (blocked/chat not found).
     Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
     """
     # Защита от работы с неинициализированной БД
@@ -4480,13 +4515,16 @@ async def get_subscriptions_for_reminders() -> list:
         return []
     async with pool.acquire() as conn:
         now = datetime.now()
+        # JOIN users: filter is_reachable (COALESCE for migration backward compat)
         rows = await conn.fetch(
             """SELECT s.*, 
                       (SELECT action_type FROM subscription_history 
                        WHERE telegram_id = s.telegram_id 
                        ORDER BY created_at DESC LIMIT 1) as last_action_type
                FROM subscriptions s
+               JOIN users u ON s.telegram_id = u.telegram_id
                WHERE s.expires_at > $1
+               AND COALESCE(u.is_reachable, TRUE) = TRUE
                ORDER BY s.expires_at ASC""",
             now
         )
