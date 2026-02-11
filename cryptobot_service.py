@@ -2,8 +2,9 @@
 Crypto Bot (Telegram Crypto Pay) Integration
 
 Handles invoice creation and webhook processing for cryptocurrency payments.
+Configuration: Token/webhook/API URL resolved via config.py only (Railway env-safe).
 """
-import os
+import config
 import json
 import hmac
 import hashlib
@@ -16,10 +17,10 @@ from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-CRYPTOBOT_TOKEN = os.getenv("CRYPTOBOT_TOKEN", "")
-CRYPTOBOT_WEBHOOK_SECRET = os.getenv("CRYPTOBOT_WEBHOOK_SECRET", "")
-CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "https://pay.crypt.bot/api")
+# Configuration — single source: config.py (STAGE_CRYPTOBOT_* / PROD_CRYPTOBOT_*)
+CRYPTOBOT_TOKEN = config.CRYPTOBOT_TOKEN
+CRYPTOBOT_WEBHOOK_SECRET = config.CRYPTOBOT_WEBHOOK_SECRET
+CRYPTOBOT_API_URL = config.CRYPTOBOT_API_URL
 
 ALLOWED_ASSETS = ["USDT", "TON", "BTC"]
 

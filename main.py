@@ -13,6 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 import config
 import database
+from app.core.feature_flags import get_feature_flags
 import handlers
 import reminders
 import healthcheck
@@ -78,7 +79,12 @@ async def main():
     logger.info(f"Using BOT_TOKEN from {config.APP_ENV.upper()}_BOT_TOKEN")
     logger.info(f"Using DATABASE_URL from {config.APP_ENV.upper()}_DATABASE_URL")
     logger.info(f"Using ADMIN_TELEGRAM_ID from {config.APP_ENV.upper()}_ADMIN_TELEGRAM_ID")
-    
+
+    # Defensive: payments enabled but no CryptoBot token → will silently disable
+    flags = get_feature_flags()
+    if flags.payments_enabled and not config.CRYPTOBOT_TOKEN:
+        logger.warning("PAYMENTS_ENABLED_BUT_NO_CRYPTOBOT_TOKEN — CryptoBot disabled until token is set")
+
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
