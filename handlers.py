@@ -1623,14 +1623,18 @@ async def cmd_start(message: Message):
                 }
             )
     
-    # Экран выбора языка
+    # Phase 4: If user has language set → main menu; else → language selection
     user = await database.get_user(telegram_id)
-    language = user.get("language", "ru") if user else "ru"
-    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
-    await message.answer(
-        text,
-        reply_markup=get_language_keyboard(language)
-    )
+    language = user.get("language") if user else None
+    if language:
+        text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
+        text = await format_text_with_incident(text, language)
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+        await message.answer(text, reply_markup=keyboard)
+    else:
+        language = "ru"  # Default for keyboard labels on selection screen
+        text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
+        await message.answer(text, reply_markup=get_language_keyboard(language))
 
 
 async def format_promo_stats_text(stats: list) -> str:
@@ -7615,7 +7619,7 @@ async def callback_admin_audit(callback: CallbackQuery):
         audit_logs = await database.get_last_audit_logs(limit=10)
         
         if not audit_logs:
-            text = "📜 Аудит\n\nАудит пуст. Действий не зафиксировано."
+            text = localization.get_text(language, "admin_audit_empty", default="📜 Аудит\n\nАудит пуст. Действий не зафиксировано.")
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer()
             return
@@ -7784,7 +7788,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         if total_count == 0:
             await safe_edit_text(
                 callback.message,
-                "❌ Нет активных подписок для перевыпуска",
+                localization.get_text(language, "admin_no_active_subscriptions_reissue", default="❌ Нет активных подписок для перевыпуска"),
                 reply_markup=get_admin_back_keyboard(language)
             )
             return
@@ -7896,7 +7900,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logging.exception(f"Error in callback_admin_keys_reissue_all: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при массовом перевыпуске: {str(e)}",
+            localization.get_text(language, "admin_reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
             reply_markup=get_admin_back_keyboard(language)
         )
 
@@ -8018,7 +8022,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         if total_count == 0:
             await safe_edit_text(
                 callback.message,
-                "❌ Нет активных подписок для перевыпуска",
+                localization.get_text(language, "admin_no_active_subscriptions_reissue", default="❌ Нет активных подписок для перевыпуска"),
                 reply_markup=get_admin_back_keyboard(language)
             )
             return
@@ -8108,7 +8112,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
     except Exception as e:
         logging.exception(f"Error in callback_admin_reissue_all_active: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при массовом перевыпуске: {str(e)}",
+            localization.get_text(language, "admin_reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
             reply_markup=get_admin_back_keyboard(language)
         )
 
@@ -8155,7 +8159,7 @@ async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
-    text = "👤 Пользователь\n\nВведите Telegram ID или username пользователя:"
+    text = localization.get_text(language, "admin_user_prompt_enter_id", default="👤 Пользователь\n\nВведите Telegram ID или username пользователя:")
     await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
     await state.set_state(AdminUserSearch.waiting_for_user_id)
     await callback.answer()
@@ -9670,7 +9674,10 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
         overview = await admin_service.get_admin_user_overview(user_id)
     except UserNotFoundError:
         if hasattr(message_or_callback, 'edit_text'):
-            await message_or_callback.edit_text("❌ Пользователь не найден", reply_markup=get_admin_back_keyboard(language))
+            await message_or_callback.edit_text(
+                localization.get_text(language, "admin_user_not_found", default="❌ Пользователь не найден"),
+                reply_markup=get_admin_back_keyboard(language)
+            )
         else:
             await message_or_callback.answer("❌ Пользователь не найден")
         return
@@ -10110,7 +10117,7 @@ async def callback_admin_export(callback: CallbackQuery):
         await callback.answer(localization.get_text(language, "admin_access_denied", default="Недостаточно прав доступа"), show_alert=True)
         return
     
-    text = "📤 Экспорт данных\n\nВыберите тип данных для экспорта:"
+    text = localization.get_text(language, "admin_export_prompt", default="📤 Экспорт данных\n\nВыберите тип данных для экспорта:")
     await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard(language))
     await callback.answer()
 
@@ -11319,7 +11326,7 @@ async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: F
         return
     
     await callback.message.edit_text(
-        "❌ Операция отменена",
+        localization.get_text(language, "admin_operation_cancelled", default="❌ Операция отменена"),
         reply_markup=get_admin_back_keyboard(language)
     )
     await state.clear()
