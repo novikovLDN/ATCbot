@@ -876,7 +876,7 @@ def get_language_keyboard(language: str = "ru"):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=localization.get_text(language, "language_button_ru", default="🇷🇺 Русский"), callback_data="lang_ru"),
-            InlineKeyboardButton(text=localization.get_text(language, "language_button_en", default="🇬🇧 English"), callback_data="lang_en"),
+            InlineKeyboardButton(text=localization.get_text(language, "language_button_en", default="🇺🇸 English"), callback_data="lang_en"),
         ],
         [
             InlineKeyboardButton(text=localization.get_text(language, "language_button_de", default="🇩🇪 Deutsch"), callback_data="lang_de"),
@@ -10379,10 +10379,15 @@ async def process_broadcast_title(message: Message, state: FSMContext):
     """Обработка заголовка уведомления"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
+    admin_user = await database.get_user(message.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
     
     await state.update_data(title=message.text)
     await state.set_state(BroadcastCreate.waiting_for_test_type)
-    await message.answer("Выберите тип уведомления:", reply_markup=get_broadcast_test_type_keyboard())
+    await message.answer(
+        localization.get_text(language, "broadcast_select_type", default="Выберите тип уведомления:"),
+        reply_markup=get_broadcast_test_type_keyboard(language)
+    )
 
 
 @router.callback_query(F.data.startswith("broadcast_test_type:"))
@@ -10395,16 +10400,22 @@ async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContex
         return
     
     await callback.answer()
+    admin_user = await database.get_user(callback.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
     test_type = callback.data.split(":")[1]
     
     await state.update_data(is_ab_test=(test_type == "ab"))
     
     if test_type == "ab":
         await state.set_state(BroadcastCreate.waiting_for_message_a)
-        await callback.message.edit_text("Введите текст варианта A:")
+        await callback.message.edit_text(
+            localization.get_text(language, "broadcast_enter_variant_a", default="Введите текст варианта A:")
+        )
     else:
         await state.set_state(BroadcastCreate.waiting_for_message)
-        await callback.message.edit_text("Введите текст уведомления:")
+        await callback.message.edit_text(
+            localization.get_text(language, "broadcast_enter_message", default="Введите текст уведомления:")
+        )
 
 
 @router.message(BroadcastCreate.waiting_for_message_a)
@@ -10412,10 +10423,14 @@ async def process_broadcast_message_a(message: Message, state: FSMContext):
     """Обработка текста варианта A"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
+    admin_user = await database.get_user(message.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
     
     await state.update_data(message_a=message.text)
     await state.set_state(BroadcastCreate.waiting_for_message_b)
-    await message.answer("Введите текст варианта B:")
+    await message.answer(
+        localization.get_text(language, "broadcast_enter_variant_b", default="Введите текст варианта B:")
+    )
 
 
 @router.message(BroadcastCreate.waiting_for_message_b)
@@ -10423,10 +10438,15 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     """Обработка текста варианта B"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
+    admin_user = await database.get_user(message.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
     
     await state.update_data(message_b=message.text)
     await state.set_state(BroadcastCreate.waiting_for_type)
-    await message.answer("Выберите тип уведомления:", reply_markup=get_broadcast_type_keyboard())
+    await message.answer(
+        localization.get_text(language, "broadcast_select_type", default="Выберите тип уведомления:"),
+        reply_markup=get_broadcast_type_keyboard(language)
+    )
 
 
 @router.message(BroadcastCreate.waiting_for_message)
@@ -10434,10 +10454,15 @@ async def process_broadcast_message(message: Message, state: FSMContext):
     """Обработка текста уведомления"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
+    admin_user = await database.get_user(message.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
     
     await state.update_data(message=message.text)
     await state.set_state(BroadcastCreate.waiting_for_type)
-    await message.answer("Выберите тип уведомления:", reply_markup=get_broadcast_type_keyboard())
+    await message.answer(
+        localization.get_text(language, "broadcast_select_type", default="Выберите тип уведомления:"),
+        reply_markup=get_broadcast_type_keyboard(language)
+    )
 
 
 @router.callback_query(F.data.startswith("broadcast_type:"))
@@ -10473,9 +10498,12 @@ async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
     await state.update_data(type=broadcast_type)
     await state.set_state(BroadcastCreate.waiting_for_segment)
     
+    admin_user = await database.get_user(callback.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
+    
     await callback.message.edit_text(
-        "Выберите сегмент получателей:",
-        reply_markup=get_broadcast_segment_keyboard()
+        localization.get_text(language, "broadcast_select_segment", default="Выберите сегмент получателей:"),
+        reply_markup=get_broadcast_segment_keyboard(language)
     )
 
 
@@ -10540,9 +10568,17 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
     await state.update_data(segment=segment)
     await state.set_state(BroadcastCreate.waiting_for_confirm)
     
+    admin_user = await database.get_user(callback.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
+    
+    preview_confirm_text = localization.get_text(
+        language, "broadcast_preview_confirm",
+        preview=preview_text,
+        default=f"📋 Предпросмотр уведомления:\n\n{preview_text}\n\nПодтвердите отправку:"
+    )
     await callback.message.edit_text(
-        f"📋 Предпросмотр уведомления:\n\n{preview_text}\n\nПодтвердите отправку:",
-        reply_markup=get_broadcast_confirm_keyboard()
+        preview_confirm_text,
+        reply_markup=get_broadcast_confirm_keyboard(language)
     )
 
 
@@ -10556,6 +10592,9 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         return
     
     await callback.answer()
+    
+    admin_user = await database.get_user(callback.from_user.id)
+    language = admin_user.get("language", "ru") if admin_user else "ru"
     
     data = await state.get_data()
     title = data.get("title")
@@ -10609,42 +10648,59 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         user_ids = await database.get_users_by_segment(segment)
         total_users = len(user_ids)
         
+        logger.info(
+            f"BROADCAST_START broadcast_id={broadcast_id} segment={segment} total_users={total_users}"
+        )
+        
         await callback.message.edit_text(
-            f"📤 Отправка уведомления...\n\nПользователей: {total_users}\nОжидайте завершения.",
+            localization.get_text(
+                language, "broadcast_sending",
+                total=total_users,
+                default=f"📤 Отправка уведомления...\n\nПользователей: {total_users}\nОжидайте завершения."
+            ),
             reply_markup=None
         )
         
-        # Отправляем уведомления с задержкой
+        # Telegram limit: 20 msg/sec. Batch 20 users, then sleep 1 sec.
+        BROADCAST_BATCH_SIZE = 20
         sent_count = 0
-        failed_count = 0
+        failed_list = []  # [{"telegram_id": int, "error": str}, ...]
         
-        for user_id in user_ids:
-            try:
+        def _chunks(lst, n):
+            for i in range(0, len(lst), n):
+                yield lst[i:i + n]
+        
+        for batch in _chunks(user_ids, BROADCAST_BATCH_SIZE):
+            tasks = []
+            for user_id in batch:
                 if is_ab_test:
-                    # Случайно выбираем вариант A или B (50/50)
                     variant = "A" if random.random() < 0.5 else "B"
-                    message_to_send = final_message_a if variant == "A" else final_message_b
+                    msg = final_message_a if variant == "A" else final_message_b
+                else:
+                    variant = None
+                    msg = final_message
+                tasks.append((user_id, variant, msg))
+            
+            for user_id, variant, message_to_send in tasks:
+                try:
                     await bot.send_message(user_id, message_to_send)
                     await database.log_broadcast_send(broadcast_id, user_id, "sent", variant)
-                else:
-                    await bot.send_message(user_id, final_message)
-                    await database.log_broadcast_send(broadcast_id, user_id, "sent")
-                
-                sent_count += 1
-                
-                # Задержка между отправками (0.3-0.5 сек)
-                await asyncio.sleep(0.4)
-                
-            except Exception as e:
-                logging.error(f"Error sending broadcast to user {user_id}: {e}")
-                variant = None
-                if is_ab_test:
-                    # Для неудачных отправок тоже логируем вариант, если можем определить
-                    variant = "A" if random.random() < 0.5 else "B"
-                await database.log_broadcast_send(broadcast_id, user_id, "failed", variant)
-                failed_count += 1
+                    sent_count += 1
+                    logger.debug(f"BROADCAST_BATCH_SENT user_id={user_id} broadcast_id={broadcast_id}")
+                except Exception as e:
+                    err_str = str(e).strip()[:80]
+                    failed_list.append({"telegram_id": user_id, "error": err_str})
+                    await database.log_broadcast_send(broadcast_id, user_id, "failed", variant)
+                    logger.warning(f"BROADCAST_FAILED_USER user_id={user_id} error={err_str}")
+            
+            if len(batch) == BROADCAST_BATCH_SIZE:
+                await asyncio.sleep(1)
         
-        # Логируем действие
+        failed_count = len(failed_list)
+        logger.info(
+            f"BROADCAST_COMPLETED broadcast_id={broadcast_id} sent={sent_count} failed={failed_count}"
+        )
+        
         await database._log_audit_event_atomic_standalone(
             "broadcast_sent",
             callback.from_user.id,
@@ -10652,14 +10708,30 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             f"Broadcast ID: {broadcast_id}, Segment: {segment}, Sent: {sent_count}, Failed: {failed_count}"
         )
         
-        # Показываем результат
-        result_text = (
-            f"✅ Уведомление отправлено\n\n"
-            f"📊 Статистика:\n"
-            f"✅ Отправлено: {sent_count}\n"
-            f"❌ Ошибок: {failed_count}\n"
-            f"📝 ID уведомления: {broadcast_id}"
-        )
+        # Admin report (localized)
+        if failed_count == 0:
+            result_text = localization.get_text(
+                language, "broadcast_report_success",
+                total=total_users,
+                sent=sent_count,
+                broadcast_id=broadcast_id,
+                default=f"✅ Broadcast completed.\nTotal: {total_users}\nSuccess: {sent_count}\nFailed: 0\n📝 ID: {broadcast_id}"
+            )
+        else:
+            failed_lines = "\n".join(
+                f"{f['telegram_id']} — {f['error']}" for f in failed_list[:20]
+            )
+            if len(failed_list) > 20:
+                failed_lines += f"\n... and {len(failed_list) - 20} more"
+            result_text = localization.get_text(
+                language, "broadcast_report_partial",
+                total=total_users,
+                sent=sent_count,
+                failed=failed_count,
+                broadcast_id=broadcast_id,
+                failed_list=failed_lines,
+                default=f"⚠️ Broadcast completed with errors.\nTotal: {total_users}\nSuccess: {sent_count}\nFailed: {failed_count}\n\nFailed users:\n{failed_lines}\n\n📝 ID: {broadcast_id}"
+            )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=localization.get_text(language, "admin_back_to_broadcast", default="🔙 Назад"), callback_data="admin:broadcast")],
