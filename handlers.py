@@ -1586,7 +1586,6 @@ async def cmd_start(message: Message):
                 # Get referred user info (safe: username or first_name or fallback)
                 referred_username = username  # Already resolved via safe_resolve_username
                 # Format display name: add @ prefix if username exists and doesn't have it
-                import localization
                 user_fallback_text = localization.get_text("ru", "user_fallback", default="пользователь")
                 if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
                     referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
