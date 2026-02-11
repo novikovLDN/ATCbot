@@ -3835,7 +3835,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     
     try:
         # КРИТИЧНО: Создаем pending_purchase ТОЛЬКО при выборе оплаты картой
-        purchase_id = await subscription_service.create_purchase(
+        purchase_id = await subscription_service.create_subscription_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
@@ -3948,7 +3948,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     
     try:
         # Создаем pending_purchase
-        purchase_id = await subscription_service.create_purchase(
+        purchase_id = await subscription_service.create_subscription_purchase(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
@@ -4059,15 +4059,12 @@ async def callback_topup_crypto(callback: CallbackQuery):
         return
     
     try:
-        # Создаем pending purchase для пополнения баланса
-        # Используем tariff='basic' и period_days=0 как индикатор balance_topup
+        # Создаем pending purchase для пополнения баланса (отдельный flow, без subscription logic)
         amount_kopecks = amount * 100
-        purchase_id = await subscription_service.create_purchase(
+        purchase_id = await subscription_service.create_balance_topup_purchase(
             telegram_id=telegram_id,
-            tariff="basic",  # Используем 'basic' (требование CHECK constraint), period_days=0 будет индикатором
-            period_days=0,  # Индикатор balance_topup
-            price_kopecks=amount_kopecks,
-            promo_code=None
+            amount_kopecks=amount_kopecks,
+            currency="RUB"
         )
         
         # Формируем описание

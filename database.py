@@ -5279,6 +5279,34 @@ async def calculate_final_price(
     }
 
 
+async def create_pending_balance_topup_purchase(
+    telegram_id: int,
+    amount_kopecks: int,
+) -> str:
+    """
+    Create pending purchase for balance top-up only.
+    No tariff, no period_days. Separate from subscription logic.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending'",
+            telegram_id
+        )
+        purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
+        expires_at = datetime.now() + timedelta(minutes=30)
+        await conn.execute(
+            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
+               VALUES ($1, $2, 'balance_topup', $3, 'pending', $4)""",
+            purchase_id, telegram_id, amount_kopecks, expires_at
+        )
+        logger.info(
+            f"BALANCE_TOPUP_PURCHASE_CREATED purchase_id={purchase_id} telegram_id={telegram_id} "
+            f"amount={amount_kopecks} kopecks"
+        )
+        return purchase_id
+
+
 async def create_pending_purchase(
     telegram_id: int,
     tariff: str,  # "basic" или "plus"
@@ -5313,10 +5341,10 @@ async def create_pending_purchase(
         # Срок действия контекста покупки (30 минут)
         expires_at = datetime.now() + timedelta(minutes=30)
         
-        # Создаем запись о покупке
+        # Создаем запись о покупке (subscription only)
         await conn.execute(
-            """INSERT INTO pending_purchases (purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, status, expires_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at)
+               VALUES ($1, $2, 'subscription', $3, $4, $5, $6, $7, $8)""",
             purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", expires_at
         )
         
@@ -5509,10 +5537,14 @@ async def finalize_purchase(
                 logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
                 raise ValueError(error_msg)
             
-            tariff_type = pending_purchase["tariff"]
-            period_days = pending_purchase["period_days"]
+            tariff_type = pending_purchase.get("tariff")
+            period_days = pending_purchase.get("period_days")
+            purchase_type = pending_purchase.get("purchase_type", "subscription")
             price_kopecks = pending_purchase["price_kopecks"]
             expected_amount_rubles = price_kopecks / 100.0
+
+            # STEP 4: Balance top-up: purchase_type=='balance_topup' OR legacy period_days==0
+            is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
             
             # КРИТИЧНО: Проверка суммы платежа перед активацией подписки
             # Разрешаем отклонение до 1 рубля (округление, комиссии)
@@ -5529,7 +5561,7 @@ async def finalize_purchase(
             logger.info(
                 f"finalize_purchase: START [purchase_id={purchase_id}, user={telegram_id}, "
                 f"provider={payment_provider}, amount={amount_rubles:.2f} RUB (expected={expected_amount_rubles:.2f} RUB), "
-                f"tariff={tariff_type}, period_days={period_days}]"
+                f"purchase_type={purchase_type}, tariff={tariff_type}, period_days={period_days}]"
             )
             
             # Логируем событие получения платежа для аудита
@@ -5555,9 +5587,6 @@ async def finalize_purchase(
                 error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
                 logger.error(f"finalize_purchase: payment_rejected: reason=db_update_failed, {error_msg}")
                 raise Exception(error_msg)
-            
-            # STEP 4: Проверяем, является ли это пополнением баланса (period_days == 0)
-            is_balance_topup = (period_days == 0)
             
             if is_balance_topup:
                 # ОБРАБОТКА ПОПОЛНЕНИЯ БАЛАНСА
@@ -5636,7 +5665,12 @@ async def finalize_purchase(
                     "referral_reward": referral_reward_result
                 }
             
-            # STEP 5: ОБРАБОТКА ПОДПИСКИ (period_days > 0)
+            # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)
+            if tariff_type is None or period_days is None or period_days <= 0:
+                error_msg = f"Invalid subscription purchase: tariff={tariff_type}, period_days={period_days}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise ValueError(error_msg)
+
             # Создаем payment record
             payment_id = await conn.fetchval(
                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
