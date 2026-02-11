@@ -117,7 +117,8 @@ def safe_resolve_username(user_obj, telegram_id: int = None) -> str:
         return user_obj.first_name
     
     # Priority 3: Fallback
-    return "пользователь"
+    import localization
+    return localization.get_text("ru", "user_fallback", default="пользователь")
 
 
 def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = None) -> str:
@@ -140,7 +141,8 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = 
     if not user_dict:
         if telegram_id:
             return f"ID: {telegram_id}"
-        return "пользователь"
+        import localization
+        return localization.get_text("ru", "user_fallback", default="пользователь")
     
     # Priority 1: Username from DB
     username = user_dict.get("username")
@@ -157,7 +159,8 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], telegram_id: int = 
         return f"ID: {telegram_id}"
     
     # Priority 4: Generic fallback
-    return "пользователь"
+    import localization
+    return localization.get_text("ru", "user_fallback", default="пользователь")
 
 
 # ====================================================================================
@@ -302,7 +305,11 @@ def handler_exception_boundary(handler_name: str, operation: str = None):
                 message_or_query = args[0] if args else None
                 if message_or_query:
                     try:
-                        warning_text = "⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны."
+                        warning_text = localization.get_text(
+                            "ru",
+                            "db_init_stage_warning",
+                            default="⚠️ База данных ещё инициализируется (STAGE). Некоторые функции могут быть недоступны."
+                        )
                         if hasattr(message_or_query, 'answer') and hasattr(message_or_query, 'text'):
                             # This is a Message
                             await message_or_query.answer(warning_text)
@@ -869,7 +876,14 @@ def get_language_keyboard():
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
-            InlineKeyboardButton(text="🇺🇸 English", callback_data="lang_en"),
+            InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en"),
+        ],
+        [
+            InlineKeyboardButton(text="🇩🇪 Deutsch", callback_data="lang_de"),
+            InlineKeyboardButton(text="🇰🇿 Қазақша", callback_data="lang_kk"),
+        ],
+        [
+            InlineKeyboardButton(text="🇸🇦 العربية", callback_data="lang_ar"),
         ],
         [
             InlineKeyboardButton(text="🇺🇿 O'zbek", callback_data="lang_uz"),
@@ -1566,20 +1580,30 @@ async def cmd_start(message: Message):
                 # Get referrer info
                 referrer_user = await database.get_user(referrer_id)
                 referrer_username = referrer_user.get("username") if referrer_user else None
+                referrer_language = referrer_user.get("language", "ru") if referrer_user else "ru"
                 
-                # Get referred user info (safe: username or first_name or "пользователь")
+                # Get referred user info (safe: username or first_name or fallback)
                 referred_username = username  # Already resolved via safe_resolve_username
                 # Format display name: add @ prefix if username exists and doesn't have it
-                if referred_username and not referred_username.startswith("ID:") and referred_username != "пользователь":
+                import localization
+                user_fallback_text = localization.get_text("ru", "user_fallback", default="пользователь")
+                if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
                     referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
                 else:
                     referred_display = referred_username
                 
-                notification_text = (
-                    f"🎉 Новый реферал зарегистрирован!\n\n"
-                    f"👤 Пользователь: {referred_display}\n"
-                    f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
-                    f"Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
+                first_payment_msg = localization.get_text(
+                    referrer_language,
+                    "referral_first_payment_notification",
+                    default="Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
+                )
+                notification_text = localization.get_text(
+                    referrer_language,
+                    "referral_registered_notification",
+                    user=referred_display,
+                    date=datetime.now().strftime('%d.%m.%Y %H:%M'),
+                    first_payment_msg=first_payment_msg,
+                    default=f"🎉 Новый реферал зарегистрирован!\n\n👤 Пользователь: {referred_display}\n📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n{first_payment_msg}"
                 )
                 
                 await message.bot.send_message(
@@ -1808,7 +1832,13 @@ async def show_profile(message_or_query, language: str):
             text = localization.get_text(language, "profile_welcome", username=username, balance=round(balance_rubles, 2))
         except (KeyError, TypeError) as e:
             logger.warning(f"Error getting profile_welcome text for language {language}: {e}")
-            text = f"Добро пожаловать в Atlas Secure!\n\n👤 {username}\n\n💰 Баланс: {round(balance_rubles, 2)} ₽"
+            text = localization.get_text(
+                language,
+                "profile_welcome_full",
+                username=username,
+                balance=round(balance_rubles, 2),
+                default=f"Добро пожаловать в Atlas Secure!\n\n👤 {username}\n\n💰 Баланс: {round(balance_rubles, 2)} ₽"
+            )
         
         # Определяем статус подписки используя subscription service
         subscription_status = get_subscription_status(subscription)
@@ -1959,12 +1989,31 @@ async def callback_change_language(callback: CallbackQuery):
     language = user.get("language", "ru") if user else "ru"
     
     # Экран выбора языка (канонический вид)
+    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
     await safe_edit_text(
         callback.message,
-        "🌍 Выбери язык:",
+        text,
         reply_markup=get_language_keyboard()
     )
     await callback.answer()
+
+
+@router.message(Command("language"))
+async def cmd_language(message: Message, bot: Bot):
+    """Обработчик команды /language — открывает экран выбора языка"""
+    if not await ensure_db_ready_message(message):
+        return
+    
+    telegram_id = message.from_user.id
+    user = await database.get_user(telegram_id)
+    language = user.get("language", "ru") if user else "ru"
+    
+    text = localization.get_text(language, "language_select", default="🌍 Выбери язык:")
+    await bot.send_message(
+        message.chat.id,
+        text,
+        reply_markup=get_language_keyboard()
+    )
 
 
 @router.callback_query(F.data.startswith("lang_"))
@@ -1979,11 +2028,21 @@ async def callback_language(callback: CallbackQuery):
     
     await database.update_user_language(telegram_id, language)
     
+    # Подтверждение смены языка на выбранном языке
+    confirmation_text = localization.get_text(
+        language,
+        "language_changed",
+        default=localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
+    )
+    
     text = localization.get_text(language, "home_welcome_text", default=localization.get_text(language, "welcome"))
     text = await format_text_with_incident(text, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
-    await callback.answer()
+    await callback.answer(
+        localization.get_text(language, "language_changed_toast", default="✅ Язык изменён"),
+        show_alert=False
+    )
 
 
 @router.callback_query(F.data == "menu_main")
@@ -2142,16 +2201,26 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                         referred_username = safe_resolve_username_from_db(referred_user, telegram_id)
                         
                         # Format display name: add @ prefix if username exists and doesn't have it
-                        if referred_username and not referred_username.startswith("ID:") and referred_username != "пользователь":
+                        import localization
+                        user_fallback_text = localization.get_text("ru", "user_fallback", default="пользователь")
+                        if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
                             referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
                         else:
                             referred_display = referred_username
                         
-                        notification_text = (
-                            f"🎉 Ваш реферал активировал пробный период!\n\n"
-                            f"👤 Пользователь: {referred_display}\n"
-                            f"⏰ Пробный период: 3 дня\n\n"
-                            f"Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
+                        referrer_user_for_notif = await database.get_user(referrer_id)
+                        referrer_language_notif = referrer_user_for_notif.get("language", "ru") if referrer_user_for_notif else "ru"
+                        first_payment_msg_notif = localization.get_text(
+                            referrer_language_notif,
+                            "referral_first_payment_notification",
+                            default="Когда ваш реферал совершит первую оплату, вам будет начислен кешбэк!"
+                        )
+                        notification_text = localization.get_text(
+                            referrer_language_notif,
+                            "referral_trial_activated_notification",
+                            user=referred_display,
+                            first_payment_msg=first_payment_msg_notif,
+                            default=f"🎉 Ваш реферал активировал пробный период!\n\n👤 Пользователь: {referred_display}\n⏰ Пробный период: 3 дня\n\n{first_payment_msg_notif}"
                         )
                         
                         await callback.bot.send_message(
@@ -5974,14 +6043,14 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         
         # Новый формат текста с разделёнными метриками
         text = (
-            "📊 Активность и статус доступа\n\n"
-            f"👤 Всего приглашено: {total_invited}\n"
-            f"💎 Активных с подпиской: {active_paid_referrals}\n\n"
-            f"🏆 Текущий статус: {current_level_name}\n"
-            f"📈 Уровень возврата: {cashback_percent}%\n\n"
+            f"{localization.get_text(language, 'referral_screen_title', default='📊 Активность и статус доступа')}\n\n"
+            f"{localization.get_text(language, 'referral_total_invited', default='👤 Всего приглашено: {count}').format(count=total_invited)}\n"
+            f"{localization.get_text(language, 'referral_active_paid', default='💎 Активных с подпиской: {count}').format(count=active_paid_referrals)}\n\n"
+            f"{localization.get_text(language, 'referral_current_status', default='🏆 Текущий статус: {status}').format(status=current_level_name)}\n"
+            f"{localization.get_text(language, 'referral_cashback_level', default='📈 Уровень возврата: {percent}%').format(percent=cashback_percent)}\n\n"
             f"{next_level_line}\n\n"
-            f"💎 Начислено вознаграждений: {total_cashback:.2f} ₽\n"
-            f"📅 Последняя активность: {last_activity_str}"
+            f"{localization.get_text(language, 'referral_rewards_earned', default='💎 Начислено вознаграждений: {amount:.2f} ₽').format(amount=total_cashback)}\n"
+            f"{localization.get_text(language, 'referral_last_activity', default='📅 Последняя активность: {date}').format(date=last_activity_str)}"
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[

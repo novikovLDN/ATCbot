@@ -339,6 +339,7 @@ async def main():
             BotCommand(command="info", description="О сервисе"),
             BotCommand(command="help", description="Поддержка"),
             BotCommand(command="instruction", description="Инструкция"),
+            BotCommand(command="language", description="Изменить язык"),
         ])
         logger.info("Bot commands registered")
     except Exception as e:
