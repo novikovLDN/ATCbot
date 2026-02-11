@@ -27,7 +27,7 @@ import tempfile
 import os
 import asyncio
 import random
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from app.services.subscriptions import service as subscription_service
 from app.services.subscriptions.service import (
     is_subscription_active,
@@ -1708,6 +1708,46 @@ async def cmd_profile(message: Message):
     await show_profile(message, language)
 
 
+@router.message(Command("buy"))
+async def cmd_buy(message: Message, state: FSMContext, bot: Bot):
+    """Обработчик команды /buy — открывает экран покупки"""
+    if not await ensure_db_ready_message(message):
+        return
+    await _open_buy_screen(message, bot, state)
+
+
+@router.message(Command("referral"))
+async def cmd_referral(message: Message, bot: Bot):
+    """Обработчик команды /referral — открывает экран программы лояльности"""
+    if not await ensure_db_ready_message(message):
+        return
+    await _open_referral_screen(message, bot)
+
+
+@router.message(Command("info"))
+async def cmd_info(message: Message, bot: Bot):
+    """Обработчик команды /info — открывает экран «О сервисе»"""
+    if not await ensure_db_ready_message(message):
+        return
+    await _open_about_screen(message, bot)
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message, bot: Bot):
+    """Обработчик команды /help — открывает экран поддержки"""
+    if not await ensure_db_ready_message(message):
+        return
+    await _open_support_screen(message, bot)
+
+
+@router.message(Command("instruction"))
+async def cmd_instruction(message: Message, bot: Bot):
+    """Обработчик команды /instruction — открывает экран инструкции"""
+    if not await ensure_db_ready_message(message):
+        return
+    await _open_instruction_screen(message, bot)
+
+
 async def check_subscription_expiry(telegram_id: int) -> bool:
     """
     Дополнительная защита: проверка и мгновенное отключение истёкшей подписки
@@ -3001,35 +3041,19 @@ async def callback_subscription_history(callback: CallbackQuery):
     await callback.message.answer(text, reply_markup=get_back_keyboard(language))
 
 
-@router.callback_query(F.data == "menu_buy_vpn")
-async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
+async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state: FSMContext):
     """
-    Купить VPN - выбор типа тарифа (Basic/Plus)
-    
-    КРИТИЧНО:
-    - НЕ создает pending_purchase
-    - Только показывает кнопки выбора тарифа
-    - Устанавливает FSM state в choose_tariff
+    Купить VPN - выбор типа тарифа (Basic/Plus). Reusable for callback and /buy command.
     """
-    # SAFE STARTUP GUARD: Проверка готовности БД
-    if not await ensure_db_ready_callback(callback):
-        return
-    
-    telegram_id = callback.from_user.id
+    msg = event.message if isinstance(event, CallbackQuery) else event
+    telegram_id = event.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
     
-    # КРИТИЧНО: Очищаем все данные покупки и устанавливаем начальное состояние
-    # Промо-сессия НЕ очищается - она независима от покупки и имеет свой TTL
     await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
-    
-    # КРИТИЧНО: Отменяем все старые pending покупки при начале новой покупки
     await database.cancel_pending_purchases(telegram_id, "new_purchase_started")
-    
-    # КРИТИЧНО: Устанавливаем FSM state в choose_tariff
     await state.set_state(PurchaseState.choose_tariff)
     
-    # NEW TEXT: Clean, enterprise-style descriptions
     text = (
         "✅ Basic\n"
         "Для повседневного использования\n\n"
@@ -3043,7 +3067,7 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "tariff_select_basic_button", default="✅ Выбрать Basic"), 
+            text=localization.get_text(language, "tariff_select_basic_button", default="✅ Выбрать Basic"),
             callback_data="tariff:basic"
         )],
         [InlineKeyboardButton(
@@ -3064,8 +3088,17 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
         )],
     ])
     
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
-    await callback.answer()
+    await safe_edit_text(msg, text, reply_markup=keyboard, bot=bot)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+
+
+@router.callback_query(F.data == "menu_buy_vpn")
+async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
+    """Купить VPN - выбор типа тарифа (Basic/Plus). Entry from inline button."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await _open_buy_screen(callback, callback.bot, state)
 
 
 @router.callback_query(F.data == "corporate_access_request")
@@ -5808,20 +5841,24 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
 
-@router.callback_query(F.data == "menu_about")
-async def callback_about(callback: CallbackQuery):
-    """О сервисе"""
-    telegram_id = callback.from_user.id
+async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
+    """О сервисе. Reusable for callback and /info command."""
+    msg = event.message if isinstance(event, CallbackQuery) else event
+    telegram_id = event.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
-    
-    # Получаем заголовок и текст
     title = localization.get_text(language, "about_title", default="🔎 О сервисе Atlas Secure")
     text = localization.get_text(language, "about_text")
     full_text = f"{title}\n\n{text}"
-    
-    await safe_edit_text(callback.message, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML")
-    await callback.answer()
+    await safe_edit_text(msg, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=bot)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+
+
+@router.callback_query(F.data == "menu_about")
+async def callback_about(callback: CallbackQuery):
+    """О сервисе. Entry from inline button."""
+    await _open_about_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data == "menu_service_status")
@@ -5856,29 +5893,39 @@ async def callback_privacy(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "menu_instruction")
-async def callback_instruction(callback: CallbackQuery):
-    """Инструкция"""
-    telegram_id = callback.from_user.id
+async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bot):
+    """Инструкция. Reusable for callback and /instruction command."""
+    msg = event.message if isinstance(event, CallbackQuery) else event
+    telegram_id = event.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
-    
-    # Определяем платформу пользователя
-    platform = detect_platform(callback)
-    
+    platform = detect_platform(event)
     text = localization.get_text(language, "instruction_text")
-    await safe_edit_text(callback.message, text, reply_markup=get_instruction_keyboard(language, platform))
-    await callback.answer()
+    await safe_edit_text(msg, text, reply_markup=get_instruction_keyboard(language, platform), bot=bot)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
 
 
-@router.callback_query(F.data == "menu_referral")
-async def callback_referral(callback: CallbackQuery):
+@router.callback_query(F.data == "menu_instruction")
+async def callback_instruction(callback: CallbackQuery):
+    """Инструкция. Entry from inline button."""
+    await _open_instruction_screen(callback, callback.bot)
+
+
+async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """
-    Экран «Программа лояльности» — короткий статусный обзор (статистика + статус).
-    Кнопка «Подробнее» ведёт на расширенный презентационный экран.
+    Экран «Программа лояльности». Reusable for callback and /referral command.
+    Sends new message (photo or text), does not edit.
     """
-    telegram_id = callback.from_user.id
+    chat_id = event.message.chat.id if isinstance(event, CallbackQuery) else event.chat.id
+    telegram_id = event.from_user.id
     language = "ru"
+    
+    async def _send_error(err_text: str):
+        if isinstance(event, CallbackQuery):
+            await event.answer(err_text, show_alert=True)
+        else:
+            await bot.send_message(chat_id, err_text)
     
     try:
         user = await database.get_user(telegram_id)
@@ -5954,49 +6001,42 @@ async def callback_referral(callback: CallbackQuery):
             )],
         ])
         
-        try:
-            # Single atomic message: photo + caption if file_id configured, else text only.
-            file_id = get_loyalty_screen_attachment(current_status_name)
-            chat_id = callback.message.chat.id
-            if file_id:
-                await callback.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=file_id,
-                    caption=text,
-                    reply_markup=keyboard,
-                    parse_mode=None,
-                )
-            else:
-                await callback.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    reply_markup=keyboard,
-                )
-            await callback.answer()
-            
-            logger.debug(
-                f"Referral screen opened: user={telegram_id}, "
-                f"invited={total_invited}, paid={paid_referrals_count}, "
-                f"percent={current_level}%, cashback={total_cashback:.2f} RUB, with_photo={bool(file_id)}"
+        file_id = get_loyalty_screen_attachment(current_status_name)
+        if file_id:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=file_id,
+                caption=text,
+                reply_markup=keyboard,
+                parse_mode=None,
             )
-        except Exception as e:
-            logger.exception(f"Error sending loyalty screen: user={telegram_id}: {e}")
-            error_text = localization.get_text(
-                language,
-                "error_profile_load",
-                default="Ошибка загрузки данных. Попробуйте позже."
+        else:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
             )
-            await callback.answer(error_text, show_alert=True)
-            
+        if isinstance(event, CallbackQuery):
+            await event.answer()
+        logger.debug(
+            f"Referral screen opened: user={telegram_id}, "
+            f"invited={total_invited}, paid={paid_referrals_count}, "
+            f"percent={current_level}%, cashback={total_cashback:.2f} RUB, with_photo={bool(file_id)}"
+        )
     except Exception as e:
         logger.exception(f"Error in referral screen handler: user={telegram_id}: {e}")
-        # Показываем минимальный fallback, чтобы экран всегда открывался
         error_text = localization.get_text(
             language,
             "error_profile_load",
             default="Ошибка загрузки данных. Попробуйте позже."
         )
-        await callback.answer(error_text, show_alert=True)
+        await _send_error(error_text)
+
+
+@router.callback_query(F.data == "menu_referral")
+async def callback_referral(callback: CallbackQuery):
+    """Экран «Программа лояльности». Entry from inline button."""
+    await _open_referral_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data == "share_referral_link")
@@ -6189,16 +6229,22 @@ async def callback_referral_how_it_works(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
 
 
-@router.callback_query(F.data == "menu_support")
-async def callback_support(callback: CallbackQuery):
-    """Поддержка"""
-    telegram_id = callback.from_user.id
+async def _open_support_screen(event: Union[Message, CallbackQuery], bot: Bot):
+    """Поддержка. Reusable for callback and /help command."""
+    msg = event.message if isinstance(event, CallbackQuery) else event
+    telegram_id = event.from_user.id
     user = await database.get_user(telegram_id)
     language = user.get("language", "ru") if user else "ru"
-    
     text = localization.get_text(language, "support_text")
-    await safe_edit_text(callback.message, text, reply_markup=get_support_keyboard(language))
-    await callback.answer()
+    await safe_edit_text(msg, text, reply_markup=get_support_keyboard(language), bot=bot)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+
+
+@router.callback_query(F.data == "menu_support")
+async def callback_support(callback: CallbackQuery):
+    """Поддержка. Entry from inline button."""
+    await _open_support_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data.startswith("approve_payment:"))

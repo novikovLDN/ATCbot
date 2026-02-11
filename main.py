@@ -4,6 +4,7 @@ import os
 import sys
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 import config
 import database
 import handlers
@@ -327,6 +328,21 @@ async def main():
     # 3️⃣ ADD explicit startup log with PID
     pid = os.getpid()
     logger.info(f"Telegram polling started (pid={pid})")
+    
+    # 4️⃣ Register bot slash commands (runs once on startup)
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Запустить бота"),
+            BotCommand(command="profile", description="Мой профиль"),
+            BotCommand(command="buy", description="Купить доступ"),
+            BotCommand(command="referral", description="Программа лояльности"),
+            BotCommand(command="info", description="О сервисе"),
+            BotCommand(command="help", description="Поддержка"),
+            BotCommand(command="instruction", description="Инструкция"),
+        ])
+        logger.info("Bot commands registered")
+    except Exception as e:
+        logger.warning(f"Failed to register bot commands: {e}")
     
     try:
         # 2️⃣ Wrap dispatcher.start_polling() so it is called ONLY from the primary process
