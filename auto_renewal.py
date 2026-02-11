@@ -17,6 +17,7 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
+from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -90,7 +91,7 @@ async def process_auto_renewals(bot: Bot):
         for sub_row in subscriptions:
             subscription = dict(sub_row)
             telegram_id = subscription["telegram_id"]
-            language = subscription.get("language", "ru")
+            language = await resolve_user_language(telegram_id)
             
             # Используем транзакцию для атомарности операции
             async with conn.transaction():
