@@ -115,7 +115,7 @@ async def calculate_price(
 # Purchase Creation
 # ====================================================================================
 
-async def create_purchase(
+async def create_subscription_purchase(
     telegram_id: int,
     tariff: str,
     period_days: int,
@@ -123,15 +123,13 @@ async def create_purchase(
     promo_code: Optional[str] = None
 ) -> str:
     """
-    Create a pending purchase record.
-    
-    This creates a pending purchase that will be finalized when payment is received.
-    The purchase_id is returned and should be used in payment flows.
+    Create a pending subscription purchase record.
+    Subscription purchases require tariff and period_days. Never use for balance top-up.
     
     Args:
         telegram_id: Telegram ID of the user
         tariff: Tariff type ("basic" or "plus")
-        period_days: Subscription period in days
+        period_days: Subscription period in days (must be > 0)
         price_kopecks: Price in kopecks
         promo_code: Optional promo code used
         
@@ -143,19 +141,15 @@ async def create_purchase(
         PurchaseCreationError: If purchase creation fails
     """
     try:
-        # Validate tariff exists
+        if period_days <= 0:
+            raise InvalidTariffError(f"Invalid period_days: {period_days} (subscription requires period_days > 0)")
         if tariff not in config.TARIFFS:
             raise InvalidTariffError(f"Invalid tariff: {tariff}")
-        
-        # Validate period exists for tariff
         if period_days not in config.TARIFFS[tariff]:
             raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
-        
-        # Validate price is positive
         if price_kopecks <= 0:
             raise PurchaseCreationError(f"Invalid price: {price_kopecks} kopecks")
-        
-        # Delegate to database layer
+
         purchase_id = await database.create_pending_purchase(
             telegram_id=telegram_id,
             tariff=tariff,
@@ -163,17 +157,78 @@ async def create_purchase(
             price_kopecks=price_kopecks,
             promo_code=promo_code
         )
-        
+
         logger.info(
-            f"Purchase created: purchase_id={purchase_id}, user={telegram_id}, "
-            f"tariff={tariff}, period={period_days}, price={price_kopecks} kopecks"
+            f"SUBSCRIPTION_PURCHASE_CREATED purchase_id={purchase_id} telegram_id={telegram_id} "
+            f"tariff={tariff} period_days={period_days} price={price_kopecks} kopecks"
         )
-        
         return purchase_id
-        
+
+    except (InvalidTariffError, PurchaseCreationError):
+        raise
     except Exception as e:
-        logger.error(f"Purchase creation failed: user={telegram_id}, tariff={tariff}, period={period_days}, error={e}")
+        logger.error(f"PURCHASE_CREATION_FAILED user={telegram_id} tariff={tariff} period_days={period_days} error={e}")
         raise PurchaseCreationError(f"Purchase creation failed: {e}") from e
+
+
+async def create_balance_topup_purchase(
+    telegram_id: int,
+    amount_kopecks: int,
+    currency: str = "RUB"
+) -> str:
+    """
+    Create a pending balance top-up purchase. No tariff, no period_days.
+    Separate from subscription logic. Uses CryptoBot for invoice creation (caller's responsibility).
+    
+    Args:
+        telegram_id: Telegram ID of the user
+        amount_kopecks: Amount in kopecks
+        currency: Currency code (default RUB)
+        
+    Returns:
+        purchase_id: Unique purchase identifier
+        
+    Raises:
+        PurchaseCreationError: If purchase creation fails
+    """
+    try:
+        if amount_kopecks <= 0:
+            raise PurchaseCreationError(f"Invalid amount: {amount_kopecks} kopecks")
+
+        purchase_id = await database.create_pending_balance_topup_purchase(
+            telegram_id=telegram_id,
+            amount_kopecks=amount_kopecks
+        )
+
+        logger.info(
+            f"BALANCE_TOPUP_PURCHASE_CREATED purchase_id={purchase_id} telegram_id={telegram_id} "
+            f"amount={amount_kopecks} kopecks currency={currency}"
+        )
+        return purchase_id
+
+    except PurchaseCreationError:
+        raise
+    except Exception as e:
+        logger.error(f"PURCHASE_CREATION_FAILED user={telegram_id} purchase_type=balance_topup amount={amount_kopecks} error={e}")
+        raise PurchaseCreationError(f"Balance top-up purchase creation failed: {e}") from e
+
+
+# Backward compatibility alias
+async def create_purchase(
+    telegram_id: int,
+    tariff: str,
+    period_days: int,
+    price_kopecks: int,
+    promo_code: Optional[str] = None
+) -> str:
+    """Deprecated: use create_subscription_purchase for subscriptions, create_balance_topup_purchase for top-ups."""
+    return await create_subscription_purchase(
+        telegram_id=telegram_id,
+        tariff=tariff,
+        period_days=period_days,
+        price_kopecks=price_kopecks,
+        promo_code=promo_code
+    )
 
 
 # ====================================================================================
@@ -458,7 +513,7 @@ async def renew_subscription(
             amount_rubles = price_info["final_price_kopecks"] / 100.0
         
         # Create purchase
-        purchase_id = await create_purchase(
+        purchase_id = await create_subscription_purchase(
             telegram_id=telegram_id,
             tariff=tariff,
             period_days=period_days,
