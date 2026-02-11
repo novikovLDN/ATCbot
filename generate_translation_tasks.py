@@ -17,8 +17,8 @@ OUTPUT_FILE = ROOT / "translation_tasks.json"
 # Languages to scan (de, kk, uz, tj, ar; exclude ru, en)
 TARGET_LANGUAGES = ["de", "kk", "uz", "tj", "ar"]
 
-# Latin-script non-English (e.g. Uzbek): skip regex, only substring check
-LATIN_SCRIPT_LANGS = frozenset({"uz"})
+# Latin-script non-English (de, uz): skip regex, only substring check
+LATIN_SCRIPT_LANGS = frozenset({"de", "uz"})
 
 # English-only regex: value is purely A-Za-z0-9, space, common punctuation
 ENGLISH_ONLY_PATTERN = re.compile(r"^[A-Za-z0-9 ,.!?:;'\"()\-\n]+$")
