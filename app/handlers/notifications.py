@@ -23,7 +23,7 @@ async def send_referral_cashback_notification(
     cashback_percent: int,
     paid_referrals_count: int,
     referrals_needed: int,
-    action_type: str = "покупку",
+    action_type: str = "purchase",
     subscription_period: Optional[str] = None
 ) -> bool:
     """
@@ -58,14 +58,13 @@ async def send_referral_cashback_notification(
         import handlers
         referred_username = handlers.safe_resolve_username_from_db(referred_user, referrer_language, referred_id)
         
-        # Локализуем action_type
-        import localization
-        if action_type == "покупка" or action_type == "покупку":
-            localized_action_type = localization.get_text(referrer_language, "action_purchase", default="покупку")
-        elif action_type == "продление":
-            localized_action_type = localization.get_text(referrer_language, "action_renewal", default="продление")
-        elif action_type == "пополнение":
-            localized_action_type = localization.get_text(referrer_language, "action_topup", default="пополнение")
+        from app.i18n import get_text as i18n_get_text
+        if action_type in ("покупка", "покупку", "purchase"):
+            localized_action_type = i18n_get_text(referrer_language, "referral.action_purchase")
+        elif action_type in ("продление", "renewal"):
+            localized_action_type = i18n_get_text(referrer_language, "referral.action_renewal")
+        elif action_type in ("пополнение", "topup"):
+            localized_action_type = i18n_get_text(referrer_language, "referral.action_topup")
         else:
             localized_action_type = action_type
         
