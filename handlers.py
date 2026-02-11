@@ -64,6 +64,7 @@ from app.utils.logging_helpers import (
 from app.utils.referral_middleware import process_referral_on_first_interaction
 from app.services.referrals import activate_referral, ReferralState
 from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
+from app.i18n import get_text as i18n_get_text
 from app.utils.security import (
     validate_telegram_id,
     validate_message_text,
@@ -934,40 +935,40 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             is_available = await trial_service.is_trial_available(telegram_id)
             if is_available:
                 buttons.append([InlineKeyboardButton(
-                    text=localization.get_text(language, "trial_button", default="🎁 Пробный период 3 дня"),
+                    text=i18n_get_text(language, "trial.button"),
                     callback_data="activate_trial"
                 )])
         except Exception as e:
             logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
     
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "profile"),
+        text=i18n_get_text(language, "main.profile"),
         callback_data="menu_profile"
     )])
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "buy_vpn"),
+        text=i18n_get_text(language, "main.buy"),
         callback_data="menu_buy_vpn"
     )])
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "instruction"),
+        text=i18n_get_text(language, "main.instruction"),
         callback_data="menu_instruction"
     )])
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "referral_program"),
+        text=i18n_get_text(language, "main.referral"),
         callback_data="menu_referral"
     )])
     buttons.append([
         InlineKeyboardButton(
-            text=localization.get_text(language, "about"),
+            text=i18n_get_text(language, "main.about"),
             callback_data="menu_about"
         ),
         InlineKeyboardButton(
-            text=localization.get_text(language, "support"),
+            text=i18n_get_text(language, "main.help"),
             callback_data="menu_support"
         ),
     ])
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "change_language"),
+        text=i18n_get_text(language, "lang.change"),
         callback_data="change_language"
     )])
     
@@ -978,7 +979,7 @@ def get_back_keyboard(language: str):
     """Кнопка Назад"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )]
     ])
@@ -992,47 +993,43 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
     if has_active_subscription:
         # Если есть активная подписка - показываем кнопку продления
         buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "renew_subscription"),
+            text=i18n_get_text(language, "subscription.renew"),
             callback_data="menu_buy_vpn"  # Используем стандартный flow покупки/продления
         )])
         
         # Кнопка автопродления (только для активных подписок)
-        try:
-            if auto_renew:
-                buttons.append([InlineKeyboardButton(
-                    text=localization.get_text(language, "auto_renew_disable", default="⏸ Отключить автопродление"),
-                    callback_data="toggle_auto_renew:off"
-                )])
-            else:
-                buttons.append([InlineKeyboardButton(
-                    text=localization.get_text(language, "auto_renew_enable", default="🔄 Включить автопродление"),
-                    callback_data="toggle_auto_renew:on"
-                )])
-        except KeyError:
-            # Если ключи локализации отсутствуют, пропускаем кнопку автопродления
-            pass
+        if auto_renew:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "subscription.auto_renew_disable"),
+                callback_data="toggle_auto_renew:off"
+            )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "subscription.auto_renew_enable"),
+                callback_data="toggle_auto_renew:on"
+            )])
     else:
         # Если нет активной подписки - показываем кнопку покупки
         buttons.append([InlineKeyboardButton(
-            text=localization.get_text(language, "buy_vpn"),
+            text=i18n_get_text(language, "main.buy"),
             callback_data="menu_buy_vpn"
         )])
     
     # Кнопка пополнения баланса (всегда показываем)
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "topup_balance"),
+        text=i18n_get_text(language, "profile.topup_balance"),
         callback_data="topup_balance"
     )])
     
     # Кнопка копирования ключа (one-tap copy, всегда показываем)
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "copy_key"),
+        text=i18n_get_text(language, "profile.copy_key"),
         callback_data="copy_key"
     )])
     
     # Кнопка "Назад"
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "back"),
+        text=i18n_get_text(language, "common.back"),
         callback_data="menu_main"
     )])
     
@@ -1050,16 +1047,16 @@ def get_profile_keyboard_old(language: str):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text=localization.get_text(language, "profile"),
+                text=i18n_get_text(language, "main.profile"),
                 callback_data="menu_profile"
             ),
             InlineKeyboardButton(
-                text=localization.get_text(language, "instruction"),
+                text=i18n_get_text(language, "main.instruction"),
                 callback_data="menu_instruction"
             ),
         ],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "copy_key"),
+            text=i18n_get_text(language, "profile.copy_key"),
             callback_data="copy_key"
         )]
     ])
@@ -1112,7 +1109,7 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
     )])
     
     buttons.append([InlineKeyboardButton(
-        text=localization.get_text(language, "back"),
+        text=i18n_get_text(language, "common.back"),
         callback_data="menu_main"
     )])
     
@@ -1131,7 +1128,7 @@ def get_payment_method_keyboard(language: str):
             callback_data="payment_sbp"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_buy_vpn"
         )],
     ])
@@ -1146,7 +1143,7 @@ def get_sbp_payment_keyboard(language: str):
             callback_data="payment_paid"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )],
     ])
@@ -1157,7 +1154,7 @@ def get_pending_payment_keyboard(language: str):
     """Клавиатура после нажатия 'Я оплатил'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )],
         [InlineKeyboardButton(
@@ -1180,7 +1177,7 @@ def get_about_keyboard(language: str):
             url="https://t.me/atlas_secure"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )],
     ])
@@ -1191,7 +1188,7 @@ def get_service_status_keyboard(language: str):
     """Клавиатура экрана 'Статус сервиса'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )],
         [InlineKeyboardButton(
@@ -1206,11 +1203,11 @@ def get_support_keyboard(language: str):
     """Клавиатура раздела 'Поддержка'"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="💬 Написать в поддержку",
+            text=i18n_get_text(language, "support.write_button"),
             url="https://t.me/asc_support"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )],
     ])
@@ -1343,7 +1340,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
     # Кнопки навигации
     buttons.append([
         InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )
     ])
@@ -1630,7 +1627,7 @@ async def cmd_start(message: Message, state: FSMContext):
             )
     
     # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
-    text = "🌍 Выберите язык:"
+    text = i18n_get_text("ru", "lang.select_title")
     await message.answer(text, reply_markup=get_language_keyboard("ru"))
 
 
@@ -1810,10 +1807,7 @@ async def show_profile(message_or_query, language: str):
         user = await database.get_user(telegram_id)
         if not user:
             logger.warning(f"User not found: {telegram_id}")
-            try:
-                error_text = localization.get_text(language, "error_profile_load")
-            except KeyError:
-                error_text = "Ошибка загрузки профиля. Попробуйте позже."
+            error_text = i18n_get_text(language, "errors.profile_load")
             await send_func(error_text)
             return
         
@@ -2365,7 +2359,7 @@ async def callback_vip_access(callback: CallbackQuery):
             url="https://t.me/asc_support"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_profile"
         )]
     ])
@@ -2620,7 +2614,7 @@ async def callback_topup_balance(callback: CallbackQuery):
             callback_data="topup_custom"
         )],
         [InlineKeyboardButton(
-            text=localization.get_text(language, "back"),
+            text=i18n_get_text(language, "common.back"),
             callback_data="menu_profile"
         )],
     ])
