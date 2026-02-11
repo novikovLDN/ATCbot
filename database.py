@@ -380,7 +380,21 @@ async def init_db() -> bool:
     except Exception as e:
         logger.error(f"Migration execution failed: {e}")
         return False
-    
+
+    # 4b️⃣ RECREATE POOL after migrations (asyncpg prepared statement cache fix)
+    # Schema changes can invalidate cached prepared statements; fresh pool clears cache.
+    try:
+        await _pool.close()
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=5
+        )
+        logger.info("DB_POOL_RECREATED_AFTER_MIGRATIONS")
+    except Exception as e:
+        logger.error(f"Failed to recreate pool after migrations: {e}")
+        return False
+
     # 5️⃣ IF migrations_success IS FALSE → already returned False above
     # Now proceed with table creation (pool.acquire() is safe after yield)
     # STRICT PATTERN: async with pool.acquire() as conn
@@ -4343,6 +4357,8 @@ async def mark_user_unreachable(telegram_id: int) -> None:
                 "UPDATE users SET is_reachable = FALSE WHERE telegram_id = $1",
                 telegram_id
             )
+    except asyncpg.UndefinedColumnError:
+        logger.debug("mark_user_unreachable skipped: is_reachable column not present")
     except Exception as e:
         logger.warning(f"mark_user_unreachable failed for user={telegram_id}: {e}")
 
@@ -4501,8 +4517,9 @@ async def is_user_first_purchase(telegram_id: int) -> bool:
 
 async def get_subscriptions_for_reminders() -> list:
     """Получить все активные подписки, которым нужно отправить напоминания
-    
+
     Filters out users with is_reachable = FALSE (blocked/chat not found).
+    Falls back to legacy query if is_reachable column not yet present (migration 014).
     Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
     """
     # Защита от работы с неинициализированной БД
@@ -4515,19 +4532,29 @@ async def get_subscriptions_for_reminders() -> list:
         return []
     async with pool.acquire() as conn:
         now = datetime.now()
-        # JOIN users: filter is_reachable (COALESCE for migration backward compat)
-        rows = await conn.fetch(
-            """SELECT s.*, 
-                      (SELECT action_type FROM subscription_history 
-                       WHERE telegram_id = s.telegram_id 
-                       ORDER BY created_at DESC LIMIT 1) as last_action_type
-               FROM subscriptions s
-               JOIN users u ON s.telegram_id = u.telegram_id
-               WHERE s.expires_at > $1
-               AND COALESCE(u.is_reachable, TRUE) = TRUE
-               ORDER BY s.expires_at ASC""",
-            now
-        )
+        query_with_reachable = """
+            SELECT s.*,
+                   (SELECT action_type FROM subscription_history
+                    WHERE telegram_id = s.telegram_id
+                    ORDER BY created_at DESC LIMIT 1) as last_action_type
+            FROM subscriptions s
+            JOIN users u ON s.telegram_id = u.telegram_id
+            WHERE s.expires_at > $1
+            AND COALESCE(u.is_reachable, TRUE) = TRUE
+            ORDER BY s.expires_at ASC"""
+        fallback_query = """
+            SELECT s.*,
+                   (SELECT action_type FROM subscription_history
+                    WHERE telegram_id = s.telegram_id
+                    ORDER BY created_at DESC LIMIT 1) as last_action_type
+            FROM subscriptions s
+            WHERE s.expires_at > $1
+            ORDER BY s.expires_at ASC"""
+        try:
+            rows = await conn.fetch(query_with_reachable, now)
+        except asyncpg.UndefinedColumnError:
+            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, fallback to legacy query")
+            rows = await conn.fetch(fallback_query, now)
         return [dict(row) for row in rows]
 
 
