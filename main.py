@@ -330,6 +330,10 @@ async def main():
     # 3️⃣ ADD explicit startup log with PID
     pid = os.getpid()
     logger.info(f"Telegram polling started (pid={pid})")
+
+    # PART 4 — Polling self-check: STAGE startup guard
+    if os.getenv("ENVIRONMENT") == "STAGE":
+        logger.info("STAGE_STARTUP_GUARD_ACTIVE")
     
     # 4️⃣ Register bot slash commands (runs once on startup)
     try:
@@ -350,7 +354,14 @@ async def main():
     try:
         # 2️⃣ Wrap dispatcher.start_polling() so it is called ONLY from the primary process
         # Polling is started ONCE and ONLY AFTER DB init attempt finishes
+        from aiogram.exceptions import TelegramConflictError
         await dp.start_polling(bot)
+    except TelegramConflictError as e:
+        logger.critical(
+            "POLLING_CONFLICT_DETECTED — another bot instance is running",
+            exc_info=True
+        )
+        raise SystemExit(1)
     finally:
         # Отменяем все фоновые задачи
         if db_retry_task_instance:

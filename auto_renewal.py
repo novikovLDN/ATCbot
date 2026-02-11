@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from app.utils.telegram_safe import safe_send_message
 import asyncpg
 import database
 import config
@@ -79,6 +80,7 @@ async def process_auto_renewals(bot: Bot):
                AND s.expires_at <= $1 
                AND s.expires_at > $2
                AND s.uuid IS NOT NULL
+               AND COALESCE(u.is_reachable, TRUE) = TRUE
                AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
                FOR UPDATE SKIP LOCKED""",
             renewal_threshold, now
@@ -304,7 +306,9 @@ async def process_auto_renewals(bot: Bot):
                             )]
                         ])
                         
-                        await bot.send_message(telegram_id, text, reply_markup=keyboard)
+                        sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+                        if sent is None:
+                            continue
                         await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
 
                         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
