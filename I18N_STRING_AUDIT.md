@@ -242,6 +242,58 @@ referral.screen_title, referral.total_invited, referral.active_with_subscription
 - reminder.admin_1day_6h, reminder.admin_7days_24h, reminder.paid_3d, reminder.paid_24h, reminder.paid_3h ✅
 - main.profile, main.buy ✅
 
+## 12. FINAL_SWEEP — Phase 4 (Global Russian Sweep)
+
+### Scope
+- **Objective:** Eliminate all Russian in user-facing flows. localization.py no longer used.
+- **Admin:** Allowed to stay RU (admin keys in app/i18n/ru.py).
+- **Crypto:** NOT IN SCOPE (cryptobot_service, crypto_payment_watcher).
+
+### Step 1 — Global Cyrillic Scan (user-facing only)
+
+#### localization.get_text usage count
+| File | Count | Scope |
+|------|-------|-------|
+| handlers.py | 430 | User + Admin flows |
+| admin_notifications.py | 6 | Admin only |
+| activation_worker.py | 7 | Admin only (user uses i18n) |
+| cryptobot_service.py | 1 | **EXCLUDED** (CRYPTO) |
+| crypto_payment_watcher.py | 2 | **EXCLUDED** (CRYPTO) |
+| validate_localization.py | — | Validation script, update or remove |
+| validate_translations.py | — | Validation script, update or remove |
+
+#### Hardcoded Russian literals in handlers.py (user-facing)
+- `"Нет доступа"` — callback.answer (L5978, L10592), message.answer (L10535)
+- `"Ошибка"` — message.answer (L8330)
+- `"Отменено"` — message.answer (L9895)
+- localization.get_text(..., default="Ошибка") — 15+ callbacks
+
+#### localization.py keys
+- **446 keys** across 7 languages (ru, en, uz, tj, ar, kk, de)
+- All must exist in app/i18n before removal
+
+#### Excluded from migration
+- **Comments, docstrings** — trial_notifications.py, auto_renewal.py, reminders.py (Russian comments OK)
+- **Logs** — logger.info/error/warning messages
+- **Migrations** — SQL files
+- **app/i18n/*.py** — translation content (Tajik, Russian, etc. — intended strings)
+- **Admin** — text may remain Russian; migrate localization → app.i18n with ru keys
+
+### Step 2–3 Migration Plan
+1. Port all 446 localization.py keys → app/i18n (ru, en, uz, tj, de, kk, ar)
+2. Replace `import localization` + `localization.get_text(lang, key, default=...)` with `from app.i18n import get_text` + `get_text(lang, key)`
+3. Remove `default=` fallbacks — keys must exist in app.i18n
+4. handlers.py: 430 call sites
+5. admin_notifications.py: 6 call sites
+6. activation_worker.py: 7 call sites (admin block)
+7. Delete localization.py
+8. Update validate_localization.py, validate_translations.py for app.i18n or remove
+
+### Estimated effort
+- ~446 keys × 7 languages = 3122 translation lines to add
+- ~443 localization.get_text → get_text replacements (excluding crypto)
+- Large, multi-commit migration recommended
+
 ## 10. Critical Notes
 
 - **localization.py** remains the primary source until migration complete

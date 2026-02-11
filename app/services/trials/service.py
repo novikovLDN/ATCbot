@@ -427,8 +427,8 @@ def get_notification_schedule() -> List[Dict[str, Any]]:
         - db_flag: Database flag name (optional)
     """
     return [
-        {"hours": 6, "key": "trial_notification_6h", "has_button": False},
-        {"hours": 48, "key": "trial_notification_60h", "has_button": True, "db_flag": "trial_notif_60h_sent"},
+        {"hours": 6, "key": "trial.notification_6h", "has_button": False},
+        {"hours": 48, "key": "trial.notification_60h", "has_button": True, "db_flag": "trial_notif_60h_sent"},
     ]
 
 
@@ -446,7 +446,7 @@ def get_final_reminder_config() -> Dict[str, Any]:
     """
     return {
         "hours_before_expiry": 6,
-        "notification_key": "trial_notification_71h",
+        "notification_key": "trial.notification_71h",
         "has_button": True,
         "db_flag": "trial_notif_71h_sent"
     }

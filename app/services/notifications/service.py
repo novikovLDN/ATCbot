@@ -340,7 +340,7 @@ def format_referral_notification_text(
     referrals_needed: int,
     action_type: str,
     subscription_period: Optional[str] = None,
-    language: str = "ru"
+    language: str = "en"
 ) -> str:
     """
     Format referral cashback notification text.

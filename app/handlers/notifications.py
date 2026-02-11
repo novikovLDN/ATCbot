@@ -49,8 +49,8 @@ async def send_referral_cashback_notification(
     """
     try:
         # Получаем язык реферера для локализации уведомления
-        referrer_user = await database.get_user(referrer_id)
-        referrer_language = referrer_user.get("language", "ru") if referrer_user else "ru"
+        from app.services.language_service import resolve_user_language
+        referrer_language = await resolve_user_language(referrer_id)
         
         # Получаем информацию о реферале (username or first_name or localized fallback)
         referred_user = await database.get_user(referred_id)
