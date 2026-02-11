@@ -6,4 +6,4 @@
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_reachable BOOLEAN DEFAULT TRUE;
 
 -- subscriptions.last_reminder_at: timestamp of last reminder sent (idempotency)
-ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMP;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMP NULL;

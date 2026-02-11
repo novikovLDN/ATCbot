@@ -71,20 +71,34 @@ async def process_auto_renewals(bot: Bot):
         now = datetime.utcnow()
         renewal_threshold = now + RENEWAL_WINDOW
         
-        subscriptions = await conn.fetch(
-            """SELECT s.*, u.language, u.balance
-               FROM subscriptions s
-               JOIN users u ON s.telegram_id = u.telegram_id
-               WHERE s.status = 'active'
-               AND s.auto_renew = TRUE
-               AND s.expires_at <= $1 
-               AND s.expires_at > $2
-               AND s.uuid IS NOT NULL
-               AND COALESCE(u.is_reachable, TRUE) = TRUE
-               AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
-               FOR UPDATE SKIP LOCKED""",
-            renewal_threshold, now
-        )
+        query_with_reachable = """
+            SELECT s.*, u.language, u.balance
+            FROM subscriptions s
+            JOIN users u ON s.telegram_id = u.telegram_id
+            WHERE s.status = 'active'
+            AND s.auto_renew = TRUE
+            AND s.expires_at <= $1
+            AND s.expires_at > $2
+            AND s.uuid IS NOT NULL
+            AND COALESCE(u.is_reachable, TRUE) = TRUE
+            AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
+            FOR UPDATE SKIP LOCKED"""
+        fallback_query = """
+            SELECT s.*, u.language, u.balance
+            FROM subscriptions s
+            JOIN users u ON s.telegram_id = u.telegram_id
+            WHERE s.status = 'active'
+            AND s.auto_renew = TRUE
+            AND s.expires_at <= $1
+            AND s.expires_at > $2
+            AND s.uuid IS NOT NULL
+            AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
+            FOR UPDATE SKIP LOCKED"""
+        try:
+            subscriptions = await conn.fetch(query_with_reachable, renewal_threshold, now)
+        except asyncpg.UndefinedColumnError:
+            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, auto_renewal fallback to legacy query")
+            subscriptions = await conn.fetch(fallback_query, renewal_threshold, now)
         
         logger.info(
             f"Auto-renewal check: Found {len(subscriptions)} subscriptions expiring within {RENEWAL_WINDOW_HOURS} hours"

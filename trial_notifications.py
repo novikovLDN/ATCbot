@@ -128,15 +128,15 @@ async def process_trial_notifications(bot: Bot):
             # Получаем только пользователей с АКТИВНОЙ trial-подпиской
             # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
             # Canonical guard: paid overrides trial — LEFT JOIN matches database.get_active_paid_subscription logic.
-            rows = await conn.fetch("""
+            query_with_reachable = """
                 SELECT u.telegram_id, u.trial_expires_at,
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
-                INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id 
-                    AND s.source = 'trial' 
+                INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
+                    AND s.source = 'trial'
                     AND s.status = 'active'
                     AND s.expires_at > $1
                 LEFT JOIN subscriptions paid_s ON u.telegram_id = paid_s.telegram_id
@@ -147,7 +147,31 @@ async def process_trial_notifications(bot: Bot):
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at > $1
                   AND COALESCE(u.is_reachable, TRUE) = TRUE
-            """, now)
+            """
+            fallback_query = """
+                SELECT u.telegram_id, u.trial_expires_at,
+                       s.id as subscription_id,
+                       s.expires_at as subscription_expires_at,
+                       s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
+                       paid_s.expires_at as paid_subscription_expires_at
+                FROM users u
+                INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
+                    AND s.source = 'trial'
+                    AND s.status = 'active'
+                    AND s.expires_at > $1
+                LEFT JOIN subscriptions paid_s ON u.telegram_id = paid_s.telegram_id
+                    AND paid_s.source != 'trial'
+                    AND paid_s.status = 'active'
+                    AND paid_s.expires_at > $1
+                WHERE u.trial_used_at IS NOT NULL
+                  AND u.trial_expires_at IS NOT NULL
+                  AND u.trial_expires_at > $1
+            """
+            try:
+                rows = await conn.fetch(query_with_reachable, now)
+            except asyncpg.UndefinedColumnError:
+                logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, trial_notifications fallback to legacy query")
+                rows = await conn.fetch(fallback_query, now)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
@@ -347,7 +371,7 @@ async def expire_trial_subscriptions(bot: Bot):
             # и их trial-подписки для отзыва доступа
             # ВАЖНО: Выбираем только тех, у кого trial_expires_at в пределах последних 24 часов
             # Это предотвращает повторную обработку и отправку умного предложения
-            rows = await conn.fetch("""
+            query_with_reachable = """
                 SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
                        s.uuid, s.expires_at as subscription_expires_at
                 FROM users u
@@ -357,7 +381,22 @@ async def expire_trial_subscriptions(bot: Bot):
                   AND u.trial_expires_at <= $1
                   AND u.trial_expires_at > $1 - INTERVAL '24 hours'
                   AND COALESCE(u.is_reachable, TRUE) = TRUE
-            """, now)
+            """
+            fallback_query = """
+                SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
+                       s.uuid, s.expires_at as subscription_expires_at
+                FROM users u
+                LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
+                WHERE u.trial_used_at IS NOT NULL
+                  AND u.trial_expires_at IS NOT NULL
+                  AND u.trial_expires_at <= $1
+                  AND u.trial_expires_at > $1 - INTERVAL '24 hours'
+            """
+            try:
+                rows = await conn.fetch(query_with_reachable, now)
+            except asyncpg.UndefinedColumnError:
+                logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, expire_trial fallback to legacy query")
+                rows = await conn.fetch(fallback_query, now)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
