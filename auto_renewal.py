@@ -8,8 +8,8 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import asyncpg
 import database
-import localization
 import config
+from app import i18n
 from app.services.notifications import service as notification_service
 from app.core.system_state import (
     SystemState,
@@ -281,12 +281,12 @@ async def process_auto_renewals(bot: Bot):
                             )
                             continue
                         
-                        # Отправляем уведомление пользователю (language from user DB)
+                        # Отправляем уведомление пользователю (language from resolve_user_language)
                         expires_str = expires_at.strftime("%d.%m.%Y")
                         duration_days = duration.days
-                        text = localization.get_text(
+                        text = i18n.get_text(
                             language,
-                            "auto_renewal_success",
+                            "subscription.auto_renew_success",
                             days=duration_days,
                             expires_date=expires_str,
                             amount=amount_rubles
@@ -295,17 +295,18 @@ async def process_auto_renewals(bot: Bot):
                         # Создаем inline клавиатуру для UX
                         keyboard = InlineKeyboardMarkup(inline_keyboard=[
                             [InlineKeyboardButton(
-                                text=localization.get_text(language, "profile", default="👤 Мой профиль"),
+                                text=i18n.get_text(language, "main.profile"),
                                 callback_data="menu_profile"
                             )],
                             [InlineKeyboardButton(
-                                text=localization.get_text(language, "buy_vpn", default="🔐 Купить доступ"),
+                                text=i18n.get_text(language, "main.buy"),
                                 callback_data="menu_buy_vpn"
                             )]
                         ])
                         
                         await bot.send_message(telegram_id, text, reply_markup=keyboard)
-                        
+                        await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
+
                         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
                         try:
                             sent = await notification_service.mark_notification_sent(payment_id, conn=conn)
