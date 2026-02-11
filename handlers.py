@@ -2230,11 +2230,7 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
         try:
             user = await database.get_user(telegram_id)
             language = await resolve_user_language(callback.from_user.id)
-            try:
-                error_text = i18n_get_text(language, "errors.profile_load", "error_profile_load")
-            except KeyError:
-                logger.error(f"Missing localization key 'error_profile_load' for language '{language}'")
-                error_text = "Ошибка загрузки профиля. Попробуйте позже."
+            error_text = i18n_get_text(language, "errors.profile_load")
             await callback.message.answer(error_text)
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
@@ -2288,19 +2284,13 @@ async def callback_vip_access(callback: CallbackQuery):
     # Продление работает для ЛЮБОЙ активной подписки независимо от source (payment/admin/test)
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
-        try:
-            error_text = i18n_get_text(language, "errors.no_active_subscription")
-        except (KeyError, TypeError):
-            error_text = "Активная подписка не найдена."
+        error_text = i18n_get_text(language, "errors.no_active_subscription")
         await callback.message.answer(error_text)
         return
     
     # Проверяем что подписка действительно активна используя service
     if not is_subscription_active(subscription):
-        try:
-            error_text = i18n_get_text(language, "errors.no_active_subscription")
-        except (KeyError, TypeError):
-            error_text = "Активная подписка не найдена."
+        error_text = i18n_get_text(language, "errors.no_active_subscription")
         await callback.message.answer(error_text)
         return
     
@@ -2587,11 +2577,7 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
     await state.set_state(TopUpStates.waiting_for_amount)
     
     # Отправляем сообщение с инструкцией
-    try:
-        text = i18n_get_text(language, "main.topup_enter_amount", "topup_enter_amount")
-    except KeyError:
-        logger.error(f"Missing localization key 'topup_enter_amount' for language '{language}'")
-        text = "Введите свою сумму от 100 ₽"
+    text = i18n_get_text(language, "main.topup_enter_amount")
     
     await callback.message.answer(text)
 
@@ -2611,31 +2597,19 @@ async def process_topup_amount(message: Message, state: FSMContext):
     try:
         amount = int(message.text.strip())
     except (ValueError, AttributeError):
-        try:
-            error_text = i18n_get_text(language, "main.topup_amount_invalid", "topup_amount_invalid")
-        except KeyError:
-            logger.error(f"Missing localization key 'topup_amount_invalid' for language '{language}'")
-            error_text = "Пожалуйста, введите число."
+        error_text = i18n_get_text(language, "main.topup_amount_invalid")
         await message.answer(error_text)
         return
     
     # Проверяем минимальную сумму
     if amount < 100:
-        try:
-            error_text = i18n_get_text(language, "main.topup_amount_too_low", "topup_amount_too_low")
-        except KeyError:
-            logger.error(f"Missing localization key 'topup_amount_too_low' for language '{language}'")
-            error_text = "Минимальная сумма пополнения: 100 ₽. Пожалуйста, введите сумму не менее 100 ₽."
+        error_text = i18n_get_text(language, "main.topup_amount_too_low")
         await message.answer(error_text)
         return
     
     # Проверяем максимальную сумму (технический лимит)
     if amount > 100000:
-        try:
-            error_text = i18n_get_text(language, "main.topup_amount_too_high", "topup_amount_too_high")
-        except KeyError:
-            logger.error(f"Missing localization key 'topup_amount_too_high' for language '{language}'")
-            error_text = "Максимальная сумма пополнения: 100 000 ₽. Пожалуйста, введите меньшую сумму."
+        error_text = i18n_get_text(language, "main.topup_amount_too_high")
         await message.answer(error_text)
         return
     
@@ -2881,11 +2855,7 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
         try:
             user = await database.get_user(telegram_id)
             language = await resolve_user_language(callback.from_user.id)
-            try:
-                error_text = i18n_get_text(language, "errors.profile_load", "error_profile_load")
-            except KeyError:
-                logger.error(f"Missing localization key 'error_profile_load' for language '{language}'")
-                error_text = "Ошибка загрузки профиля. Попробуйте позже."
+            error_text = i18n_get_text(language, "errors.profile_load")
             await callback.message.answer(error_text)
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
@@ -4420,7 +4390,7 @@ async def process_promo_code(message: Message, state: FSMContext):
     
     # ⛔ Защита от non-text апдейтов (callback / invoice / system)
     if not message.text:
-        await message.answer("Пожалуйста, введите промокод текстом.")
+        await message.answer(i18n_get_text(language, "buy.promo_enter_text_hint"))
         return
 
     promo_code = message.text.strip().upper()
@@ -4921,9 +4891,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Get pending purchase for logging
     pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     if not pending_purchase:
-        error_text = "Сессия покупки устарела. Пожалуйста, начните заново."
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await message.answer(i18n_get_text(language, "errors.session_expired"))
         logger.error(
             f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
             f"reason=pending_purchase_not_found_or_expired"
@@ -5397,7 +5366,7 @@ async def callback_payment_test(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
     
     # Тестовая оплата не работает - возвращаем назад
-    await callback.answer("Эта функция не работает", show_alert=True)
+    await callback.answer(i18n_get_text(language, "errors.function_disabled"), show_alert=True)
     text = i18n_get_text(language, "main.select_payment", "select_payment")
     await safe_edit_text(callback.message, text, reply_markup=get_payment_method_keyboard(language))
 
@@ -5465,7 +5434,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     if existing_payment:
         text = i18n_get_text(language, "payment.pending", "payment_pending")
         await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
-        await callback.answer("У вас уже есть ожидающий платеж", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.pending_payment_exists"), show_alert=True)
         await state.clear()
         return
     
@@ -5476,7 +5445,7 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
         # Это не должно произойти, так как мы проверили выше, но на всякий случай
         text = i18n_get_text(language, "payment.pending", "payment_pending")
         await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
-        await callback.answer("Не удалось создать платеж. Попробуйте позже.", show_alert=True)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
         await state.clear()
         return
     
@@ -9735,8 +9704,8 @@ async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContex
         return
     
     await callback.answer()
-    
-    text = "Введите текст инцидента (или отправьте /cancel для отмены):"
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "admin.incident_text_prompt")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:incident")],
     ])
