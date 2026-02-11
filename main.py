@@ -2,8 +2,15 @@ import asyncio
 import logging
 import os
 import sys
+
+# Configure logging FIRST (before any other imports that may log)
+# Routes INFO/WARNING → stdout, ERROR/CRITICAL → stderr for correct container classification
+from app.core.logging_config import setup_logging
+setup_logging()
+
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 import config
 import database
 import handlers
@@ -55,14 +62,9 @@ import activation_worker
 # 
 # SECURITY:
 # - DO NOT log secrets, PII, or full payloads
-# - DO NOT change logger configuration
+# - Logging configured in app.core.logging_config (STDOUT/STDERR routing)
 # ====================================================================================
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
@@ -70,6 +72,7 @@ async def main():
     # Конфигурация уже проверена в config.py
     # Если переменные окружения не заданы, программа завершится с ошибкой
     
+    logger.info(f"BOT_INSTANCE_STARTED pid={os.getpid()}")
     # Логируем информацию о конфигурации при старте
     logger.info(f"Starting bot in {config.APP_ENV.upper()} environment")
     logger.info(f"Using BOT_TOKEN from {config.APP_ENV.upper()}_BOT_TOKEN")
@@ -327,11 +330,38 @@ async def main():
     # 3️⃣ ADD explicit startup log with PID
     pid = os.getpid()
     logger.info(f"Telegram polling started (pid={pid})")
+
+    # PART 4 — Polling self-check: STAGE startup guard
+    if os.getenv("ENVIRONMENT") == "STAGE":
+        logger.info("STAGE_STARTUP_GUARD_ACTIVE")
+    
+    # 4️⃣ Register bot slash commands (runs once on startup)
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Запустить бота"),
+            BotCommand(command="profile", description="Мой профиль"),
+            BotCommand(command="buy", description="Купить доступ"),
+            BotCommand(command="referral", description="Программа лояльности"),
+            BotCommand(command="info", description="О сервисе"),
+            BotCommand(command="help", description="Поддержка"),
+            BotCommand(command="instruction", description="Инструкция"),
+            BotCommand(command="language", description="Изменить язык"),
+        ])
+        logger.info("Bot commands registered")
+    except Exception as e:
+        logger.warning(f"Failed to register bot commands: {e}")
     
     try:
         # 2️⃣ Wrap dispatcher.start_polling() so it is called ONLY from the primary process
         # Polling is started ONCE and ONLY AFTER DB init attempt finishes
+        from aiogram.exceptions import TelegramConflictError
         await dp.start_polling(bot)
+    except TelegramConflictError as e:
+        logger.critical(
+            "POLLING_CONFLICT_DETECTED — another bot instance is running",
+            exc_info=True
+        )
+        raise SystemExit(1)
     finally:
         # Отменяем все фоновые задачи
         if db_retry_task_instance:

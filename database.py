@@ -380,7 +380,21 @@ async def init_db() -> bool:
     except Exception as e:
         logger.error(f"Migration execution failed: {e}")
         return False
-    
+
+    # 4b️⃣ RECREATE POOL after migrations (asyncpg prepared statement cache fix)
+    # Schema changes can invalidate cached prepared statements; fresh pool clears cache.
+    try:
+        await _pool.close()
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=5
+        )
+        logger.info("DB_POOL_RECREATED_AFTER_MIGRATIONS")
+    except Exception as e:
+        logger.error(f"Failed to recreate pool after migrations: {e}")
+        return False
+
     # 5️⃣ IF migrations_success IS FALSE → already returned False above
     # Now proceed with table creation (pool.acquire() is safe after yield)
     # STRICT PATTERN: async with pool.acquire() as conn
@@ -1807,62 +1821,193 @@ async def get_total_cashback_earned(partner_id: int) -> float:
         return 0.0
 
 
+async def get_referral_metrics(user_id: int) -> Dict[str, int]:
+    """
+    Получить разделённые метрики рефералов для пользователя.
+    
+    КРИТИЧНО:
+    - total_referrals: ВСЕ приглашённые (без фильтров)
+    - active_paid_referrals: Только с активной подпиской (expires_at > NOW())
+    
+    Args:
+        user_id: Telegram ID пользователя
+    
+    Returns:
+        {
+            "total_referrals": int,  # Всего приглашено (без фильтров)
+            "active_paid_referrals": int  # Активных с подпиской
+        }
+    """
+    if not DB_READY:
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+    
+    pool = await get_pool()
+    if pool is None:
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+    
+    try:
+        async with pool.acquire() as conn:
+            # 1️⃣ Всего приглашено: ВСЕ записи из referrals
+            total_referrals_val = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
+                user_id
+            )
+            total_referrals = safe_int(total_referrals_val)
+            
+            # 2️⃣ Активных с подпиской: только те, у кого активная подписка
+            active_paid_referrals_val = await conn.fetchval(
+                """SELECT COUNT(DISTINCT r.referred_user_id)
+                   FROM referrals r
+                   INNER JOIN subscriptions s ON s.telegram_id = r.referred_user_id
+                   WHERE r.referrer_user_id = $1
+                   AND s.expires_at IS NOT NULL
+                   AND s.expires_at > NOW()""",
+                user_id
+            )
+            active_paid_referrals = safe_int(active_paid_referrals_val)
+            
+            return {
+                "total_referrals": total_referrals,
+                "active_paid_referrals": active_paid_referrals
+            }
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
+        logger.warning(f"referrals or subscriptions table missing — skipping: {e}")
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+    except Exception as e:
+        logger.warning(f"Error in get_referral_metrics for user_id={user_id}: {e}")
+        return {
+            "total_referrals": 0,
+            "active_paid_referrals": 0
+        }
+
+
+def calculate_referral_level(total_referrals: int) -> Dict[str, Any]:
+    """
+    Рассчитать уровень реферала СТРОГО на основе total_referrals.
+    
+    ⚠️ ВАЖНО: Уровень определяется СТРОГО по total_referrals.
+    НЕ используется active_paid_referrals, rewards, revenue.
+    
+    Пороги соответствуют существующим уровням из loyalty.py:
+    - 0-24: Silver Access (10%)
+    - 25-49: Gold Access (25%)
+    - 50+: Platinum Access (45%)
+    
+    Args:
+        total_referrals: Общее количество приглашённых рефералов
+    
+    Returns:
+        {
+            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
+            "cashback_percent": int,  # 10, 25, 45
+            "next_level_name": Optional[str],  # Следующий уровень или None
+            "remaining_connections": int  # До следующего уровня (max(0, ...))
+        }
+    """
+    # Структура уровней: соответствует LOYALTY_TIERS из app/constants/loyalty.py
+    # Пороги: 0-24 → Silver, 25-49 → Gold, 50+ → Platinum
+    REFERRAL_LEVELS = [
+        {"name": "Platinum Access", "threshold": 50, "cashback": 45},
+        {"name": "Gold Access", "threshold": 25, "cashback": 25},
+        {"name": "Silver Access", "threshold": 0, "cashback": 10},  # Базовый уровень
+    ]
+    
+    # Сортируем по threshold DESC (от большего к меньшему)
+    levels_sorted = sorted(REFERRAL_LEVELS, key=lambda x: x["threshold"], reverse=True)
+    
+    # Находим текущий уровень (максимальный, где total_referrals >= threshold)
+    current_level = None
+    for level in levels_sorted:
+        if total_referrals >= level["threshold"]:
+            current_level = level
+            break
+    
+    # Если не найден (не должно произойти, т.к. есть базовый уровень с threshold=0)
+    if current_level is None:
+        current_level = {"name": "Silver Access", "threshold": 0, "cashback": 10}
+    
+    # Находим следующий уровень (первый, где threshold > total_referrals)
+    next_level = None
+    for level in levels_sorted:
+        if level["threshold"] > total_referrals:
+            next_level = level
+    
+    # Рассчитываем remaining_connections
+    if next_level:
+        remaining = next_level["threshold"] - total_referrals
+        remaining = max(0, remaining)  # ⚠️ ОБЯЗАТЕЛЬНО: никогда не отрицательный
+    else:
+        remaining = 0  # Максимальный уровень достигнут
+    
+    return {
+        "current_level_name": current_level["name"],
+        "cashback_percent": current_level["cashback"],
+        "next_level_name": next_level["name"] if next_level else None,
+        "remaining_connections": remaining
+    }
+
+
 async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
     """
     Получить полную статистику рефералов для партнёра.
     
+    НОВАЯ ЛОГИКА:
+    - total_invited: Всего приглашено (из referrals, без фильтров)
+    - active_paid_referrals: Активных с подпиской (expires_at > NOW())
+    - Уровень рассчитывается СТРОГО по total_invited
+    
     Returns:
         {
             "total_invited": int,  # Всего приглашено
-            "active_referrals": int,  # Активных (активировали trial или оплатили)
+            "active_paid_referrals": int,  # Активных с подпиской
             "total_cashback_earned": float,  # Общий кешбэк в рублях
             "last_activity_at": Optional[datetime],  # Последняя активность реферала
-            "paid_referrals_count": int,  # Оплативших рефералов
-            "current_level": int,  # Текущий уровень (10, 25, 45)
-            "referrals_to_next": Optional[int]  # До следующего уровня
+            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
+            "cashback_percent": int,  # 10, 25, 45
+            "next_level_name": Optional[str],  # Следующий уровень или None
+            "remaining_connections": int  # До следующего уровня
         }
     """
     if not DB_READY:
         return {
             "total_invited": 0,
-            "active_referrals": 0,
+            "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "paid_referrals_count": 0,
-            "current_level": 10,
-            "referrals_to_next": 25
+            "current_level_name": "Silver Access",
+            "cashback_percent": 10,
+            "next_level_name": "Gold Access",
+            "remaining_connections": 5
         }
     
     pool = await get_pool()
     if pool is None:
         return {
             "total_invited": 0,
-            "active_referrals": 0,
+            "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "paid_referrals_count": 0,
-            "current_level": 10,
-            "referrals_to_next": 25
+            "current_level_name": "Silver Access",
+            "cashback_percent": 10,
+            "next_level_name": "Gold Access",
+            "remaining_connections": 5
         }
     
     try:
         async with pool.acquire() as conn:
-            # Total invited
-            total_invited_val = await conn.fetchval(
-                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
-                partner_id
-            )
-            total_invited = safe_int(total_invited_val)
-            
-            # Active referrals (have first_paid_at OR activated trial)
-            active_referrals_val = await conn.fetchval(
-                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL",
-                partner_id
-            )
-            active_referrals = safe_int(active_referrals_val)
-            
-            # Paid referrals count (same as active for now)
-            paid_referrals_count = active_referrals
+            # Получаем разделённые метрики
+            metrics = await get_referral_metrics(partner_id)
+            total_invited = metrics["total_referrals"]
+            active_paid_referrals = metrics["active_paid_referrals"]
             
             # Total cashback earned
             total_cashback_kopecks_val = await conn.fetchval(
@@ -1874,45 +2019,48 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             total_cashback_kopecks = safe_int(total_cashback_kopecks_val)
             total_cashback_earned = total_cashback_kopecks / 100.0
             
-            # Last activity timestamp
+            # Last activity timestamp (последняя оплата реферала)
             last_activity_row = await conn.fetchrow(
-                """SELECT MAX(first_paid_at) as last_activity
-                   FROM referrals 
-                   WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL""",
+                """SELECT MAX(r.first_paid_at) as last_activity
+                   FROM referrals r
+                   WHERE r.referrer_user_id = $1 AND r.first_paid_at IS NOT NULL""",
                 partner_id
             )
             last_activity_at = last_activity_row.get("last_activity") if last_activity_row else None
             
-            # Current level and progress
-            if paid_referrals_count >= 50:
-                current_level = 45
-                referrals_to_next = None
-            elif paid_referrals_count >= 25:
-                current_level = 25
-                referrals_to_next = 50 - paid_referrals_count
-            else:
-                current_level = 10
-                referrals_to_next = 25 - paid_referrals_count
+            # Рассчитываем уровень СТРОГО по total_invited
+            level_info = calculate_referral_level(total_invited)
+            
+            # Debug логирование
+            logger.info(
+                f"REF_STATS user={partner_id} "
+                f"total={total_invited} "
+                f"active_paid={active_paid_referrals} "
+                f"level={level_info['current_level_name']} "
+                f"remaining={level_info['remaining_connections']}"
+            )
             
             return {
                 "total_invited": total_invited,
-                "active_referrals": active_referrals,
+                "active_paid_referrals": active_paid_referrals,
                 "total_cashback_earned": total_cashback_earned,
                 "last_activity_at": last_activity_at,
-                "paid_referrals_count": paid_referrals_count,
-                "current_level": current_level,
-                "referrals_to_next": referrals_to_next
+                "current_level_name": level_info["current_level_name"],
+                "cashback_percent": level_info["cashback_percent"],
+                "next_level_name": level_info["next_level_name"],
+                "remaining_connections": level_info["remaining_connections"]
             }
     except Exception as e:
         logger.exception(f"Error getting referral statistics for partner_id={partner_id}: {e}")
         return {
             "total_invited": 0,
-            "active_referrals": 0,
+            "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "paid_referrals_count": 0,
-            "current_level": 10,
-            "referrals_to_next": 25
+            "current_level_name": "Silver Access",
+            "cashback_percent": 10,
+            "next_level_name": "Gold Access",
+            "remaining_connections": 5
         }
 
 
@@ -4191,9 +4339,45 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            f"UPDATE subscriptions SET {flag_name} = TRUE WHERE telegram_id = $1",
+            f"UPDATE subscriptions SET {flag_name} = TRUE, last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1",
             telegram_id
         )
+
+
+async def mark_user_unreachable(telegram_id: int) -> None:
+    """Mark user as unreachable (chat not found, blocked). Background workers filter by is_reachable."""
+    if not DB_READY:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET is_reachable = FALSE WHERE telegram_id = $1",
+                telegram_id
+            )
+    except asyncpg.UndefinedColumnError:
+        logger.debug("mark_user_unreachable skipped: is_reachable column not present")
+    except Exception as e:
+        logger.warning(f"mark_user_unreachable failed for user={telegram_id}: {e}")
+
+
+async def update_last_reminder_at(subscription_id: int) -> None:
+    """Update last_reminder_at for idempotency guard (container restart protection)."""
+    if not DB_READY:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE subscriptions SET last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE id = $1",
+                subscription_id
+            )
+    except Exception as e:
+        logger.warning(f"update_last_reminder_at failed for subscription_id={subscription_id}: {e}")
 
 
 async def get_promo_code(code: str) -> Optional[Dict[str, Any]]:
@@ -4333,7 +4517,9 @@ async def is_user_first_purchase(telegram_id: int) -> bool:
 
 async def get_subscriptions_for_reminders() -> list:
     """Получить все активные подписки, которым нужно отправить напоминания
-    
+
+    Filters out users with is_reachable = FALSE (blocked/chat not found).
+    Falls back to legacy query if is_reachable column not yet present (migration 014).
     Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
     """
     # Защита от работы с неинициализированной БД
@@ -4346,16 +4532,29 @@ async def get_subscriptions_for_reminders() -> list:
         return []
     async with pool.acquire() as conn:
         now = datetime.now()
-        rows = await conn.fetch(
-            """SELECT s.*, 
-                      (SELECT action_type FROM subscription_history 
-                       WHERE telegram_id = s.telegram_id 
-                       ORDER BY created_at DESC LIMIT 1) as last_action_type
-               FROM subscriptions s
-               WHERE s.expires_at > $1
-               ORDER BY s.expires_at ASC""",
-            now
-        )
+        query_with_reachable = """
+            SELECT s.*,
+                   (SELECT action_type FROM subscription_history
+                    WHERE telegram_id = s.telegram_id
+                    ORDER BY created_at DESC LIMIT 1) as last_action_type
+            FROM subscriptions s
+            JOIN users u ON s.telegram_id = u.telegram_id
+            WHERE s.expires_at > $1
+            AND COALESCE(u.is_reachable, TRUE) = TRUE
+            ORDER BY s.expires_at ASC"""
+        fallback_query = """
+            SELECT s.*,
+                   (SELECT action_type FROM subscription_history
+                    WHERE telegram_id = s.telegram_id
+                    ORDER BY created_at DESC LIMIT 1) as last_action_type
+            FROM subscriptions s
+            WHERE s.expires_at > $1
+            ORDER BY s.expires_at ASC"""
+        try:
+            rows = await conn.fetch(query_with_reachable, now)
+        except asyncpg.UndefinedColumnError:
+            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, fallback to legacy query")
+            rows = await conn.fetch(fallback_query, now)
         return [dict(row) for row in rows]
 
 
@@ -5883,6 +6082,120 @@ async def get_all_users_telegram_ids() -> list:
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT telegram_id FROM users")
         return [row["telegram_id"] for row in rows]
+
+
+async def get_eligible_no_subscription_broadcast_users() -> list:
+    """Get users eligible for no-subscription broadcast.
+    Eligible = no active paid subscription, no active trial, is_reachable=TRUE.
+    Returns list of dicts with telegram_id. Defensive: fallback if is_reachable missing.
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, get_eligible_no_subscription_broadcast_users skipped")
+        return []
+    pool = await get_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        now = datetime.now()
+        query_with_reachable = """
+            SELECT u.telegram_id
+            FROM users u
+            LEFT JOIN subscriptions paid_s ON paid_s.telegram_id = u.telegram_id
+                AND paid_s.status = 'active'
+                AND paid_s.expires_at > $1
+                AND paid_s.source != 'trial'
+            WHERE paid_s.id IS NULL
+              AND (u.trial_expires_at IS NULL OR u.trial_expires_at <= $1)
+              AND COALESCE(u.is_reachable, TRUE) = TRUE
+        """
+        fallback_query = """
+            SELECT u.telegram_id
+            FROM users u
+            LEFT JOIN subscriptions paid_s ON paid_s.telegram_id = u.telegram_id
+                AND paid_s.status = 'active'
+                AND paid_s.expires_at > $1
+                AND paid_s.source != 'trial'
+            WHERE paid_s.id IS NULL
+              AND (u.trial_expires_at IS NULL OR u.trial_expires_at <= $1)
+        """
+        try:
+            rows = await conn.fetch(query_with_reachable, now)
+        except asyncpg.UndefinedColumnError:
+            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, no_sub_broadcast fallback")
+            rows = await conn.fetch(fallback_query, now)
+        return [{"telegram_id": row["telegram_id"]} for row in rows]
+
+
+async def check_user_still_eligible_for_no_sub_broadcast(conn, telegram_id: int, now: datetime) -> bool:
+    """Race-condition re-check before sending. Returns True if still eligible."""
+    paid = await get_active_paid_subscription(conn, telegram_id, now)
+    if paid:
+        return False
+    try:
+        row = await conn.fetchrow(
+            "SELECT trial_expires_at, is_reachable FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+    except asyncpg.UndefinedColumnError:
+        row = await conn.fetchrow(
+            "SELECT trial_expires_at FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+    if not row:
+        return False
+    trial_expires_at = row.get("trial_expires_at")
+    if trial_expires_at and trial_expires_at > now:
+        return False
+    is_reachable = row.get("is_reachable")
+    if is_reachable is False:
+        return False
+    return True
+
+
+async def insert_admin_broadcast_record(
+    broadcast_type: str,
+    total_recipients: int,
+    success_count: int = 0,
+    fail_count: int = 0
+) -> Optional[int]:
+    """Insert admin_broadcasts record. Returns id or None."""
+    if not DB_READY:
+        return None
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO admin_broadcasts (type, total_recipients, success_count, fail_count)
+                   VALUES ($1, $2, $3, $4) RETURNING id""",
+                broadcast_type, total_recipients, success_count, fail_count
+            )
+            return row["id"] if row else None
+    except asyncpg.UndefinedTableError:
+        logger.debug("admin_broadcasts table not found, skipping audit")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to insert admin_broadcast record: {e}")
+        return None
+
+
+async def update_admin_broadcast_record(broadcast_id: int, success_count: int, fail_count: int) -> None:
+    """Update admin_broadcasts record after completion."""
+    if not DB_READY or broadcast_id is None:
+        return
+    try:
+        pool = await get_pool()
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE admin_broadcasts
+                   SET success_count = $1, fail_count = $2 WHERE id = $3""",
+                success_count, fail_count, broadcast_id
+            )
+    except Exception as e:
+        logger.warning(f"Failed to update admin_broadcast record: {e}")
 
 
 async def get_users_by_segment(segment: str) -> list:

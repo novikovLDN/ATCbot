@@ -8,10 +8,11 @@ from datetime import datetime, timedelta
 from typing import Tuple
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from app.utils.telegram_safe import safe_send_message
 import asyncpg
 import database
-import localization
 import config
+from app import i18n
 from app.services.trials import service as trial_service
 from app.core.system_state import (
     SystemState,
@@ -19,6 +20,7 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
+from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -42,7 +44,7 @@ def get_trial_buy_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для покупки доступа (в уведомлениях trial)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=localization.get_text(language, "buy_vpn"),
+            text=i18n.get_text(language, "main.buy"),
             callback_data="menu_buy_vpn"
         )]
     ])
@@ -72,21 +74,22 @@ async def send_trial_notification(
         - (False, "failed_temporary") - временная ошибка, можно повторить позже
     """
     try:
-        # Получаем язык пользователя
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        language = await resolve_user_language(telegram_id)
         
         # Получаем текст уведомления
-        text = localization.get_text(language, notification_key)
+        text = i18n.get_text(language, notification_key)
         
         # Формируем клавиатуру (если нужно)
         reply_markup = None
         if has_button:
             reply_markup = get_trial_buy_keyboard(language)
         
-        # Отправляем уведомление
-        await bot.send_message(telegram_id, text, reply_markup=reply_markup)
-        
+        # Отправляем уведомление (safe_send_message handles chat_not_found, blocked)
+        sent = await safe_send_message(bot, telegram_id, text, reply_markup=reply_markup)
+        if sent is None:
+            return (False, "failed_permanently")
+        await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
+
         logger.info(
             f"trial_notification_sent: user={telegram_id}, notification={notification_key}, "
             f"has_button={has_button}"
@@ -94,30 +97,11 @@ async def send_trial_notification(
         
         return (True, "sent")
     except Exception as e:
-        error_str = str(e).lower()
-        
-        # Проверяем на постоянные ошибки (Forbidden/blocked)
-        permanent_errors = [
-            "forbidden",
-            "bot was blocked",
-            "user is deactivated",
-            "chat not found",
-            "user not found"
-        ]
-        
-        if any(keyword in error_str for keyword in permanent_errors):
-            logger.warning(
-                f"trial_notification_failed_permanently: user={telegram_id}, notification={notification_key}, "
-                f"reason=forbidden_or_blocked, error={str(e)}"
-            )
-            return (False, "failed_permanently")
-        else:
-            # Временная ошибка - можно повторить позже
-            logger.error(
-                f"trial_notification_failed_temporary: user={telegram_id}, notification={notification_key}, "
-                f"reason=temporary_error, error={str(e)}"
-            )
-            return (False, "failed_temporary")
+        logger.error(
+            f"trial_notification_failed: user={telegram_id}, notification={notification_key}, "
+            f"error={str(e)}"
+        )
+        return (False, "failed_temporary")
 
 
 async def process_trial_notifications(bot: Bot):
@@ -144,15 +128,15 @@ async def process_trial_notifications(bot: Bot):
             # Получаем только пользователей с АКТИВНОЙ trial-подпиской
             # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
             # Canonical guard: paid overrides trial — LEFT JOIN matches database.get_active_paid_subscription logic.
-            rows = await conn.fetch("""
+            query_with_reachable = """
                 SELECT u.telegram_id, u.trial_expires_at,
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
-                INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id 
-                    AND s.source = 'trial' 
+                INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
+                    AND s.source = 'trial'
                     AND s.status = 'active'
                     AND s.expires_at > $1
                 LEFT JOIN subscriptions paid_s ON u.telegram_id = paid_s.telegram_id
@@ -162,7 +146,32 @@ async def process_trial_notifications(bot: Bot):
                 WHERE u.trial_used_at IS NOT NULL
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at > $1
-            """, now)
+                  AND COALESCE(u.is_reachable, TRUE) = TRUE
+            """
+            fallback_query = """
+                SELECT u.telegram_id, u.trial_expires_at,
+                       s.id as subscription_id,
+                       s.expires_at as subscription_expires_at,
+                       s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
+                       paid_s.expires_at as paid_subscription_expires_at
+                FROM users u
+                INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
+                    AND s.source = 'trial'
+                    AND s.status = 'active'
+                    AND s.expires_at > $1
+                LEFT JOIN subscriptions paid_s ON u.telegram_id = paid_s.telegram_id
+                    AND paid_s.source != 'trial'
+                    AND paid_s.status = 'active'
+                    AND paid_s.expires_at > $1
+                WHERE u.trial_used_at IS NOT NULL
+                  AND u.trial_expires_at IS NOT NULL
+                  AND u.trial_expires_at > $1
+            """
+            try:
+                rows = await conn.fetch(query_with_reachable, now)
+            except asyncpg.UndefinedColumnError:
+                logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, trial_notifications fallback to legacy query")
+                rows = await conn.fetch(fallback_query, now)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
@@ -362,7 +371,7 @@ async def expire_trial_subscriptions(bot: Bot):
             # и их trial-подписки для отзыва доступа
             # ВАЖНО: Выбираем только тех, у кого trial_expires_at в пределах последних 24 часов
             # Это предотвращает повторную обработку и отправку умного предложения
-            rows = await conn.fetch("""
+            query_with_reachable = """
                 SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
                        s.uuid, s.expires_at as subscription_expires_at
                 FROM users u
@@ -371,7 +380,23 @@ async def expire_trial_subscriptions(bot: Bot):
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at <= $1
                   AND u.trial_expires_at > $1 - INTERVAL '24 hours'
-            """, now)
+                  AND COALESCE(u.is_reachable, TRUE) = TRUE
+            """
+            fallback_query = """
+                SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
+                       s.uuid, s.expires_at as subscription_expires_at
+                FROM users u
+                LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
+                WHERE u.trial_used_at IS NOT NULL
+                  AND u.trial_expires_at IS NOT NULL
+                  AND u.trial_expires_at <= $1
+                  AND u.trial_expires_at > $1 - INTERVAL '24 hours'
+            """
+            try:
+                rows = await conn.fetch(query_with_reachable, now)
+            except asyncpg.UndefinedColumnError:
+                logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, expire_trial fallback to legacy query")
+                rows = await conn.fetch(fallback_query, now)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
@@ -459,19 +484,21 @@ async def expire_trial_subscriptions(bot: Bot):
                         )
                         
                         if trial_completed_sent:
-                            # I/O: Get user language and send notification
-                            user = await database.get_user(telegram_id)
-                            language = user.get("language", "ru") if user else "ru"
+                            language = await resolve_user_language(telegram_id)
                             
-                            expired_text = localization.get_text(language, "trial_expired_text")
+                            expired_text = i18n.get_text(language, "trial.expired")
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                 [InlineKeyboardButton(
-                                    text="🔐 Купить / Продлить доступ",
+                                    text=i18n.get_text(language, "main.buy"),
                                     callback_data="menu_buy_vpn"
                                 )]
                             ])
-                            try:
-                                await bot.send_message(telegram_id, expired_text, parse_mode="HTML", reply_markup=keyboard)
+                            sent = await safe_send_message(
+                                bot, telegram_id, expired_text,
+                                parse_mode="HTML", reply_markup=keyboard
+                            )
+                            if sent:
+                                await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
                                 logger.info(
                                     f"trial_expired: notification sent: user={telegram_id}, "
                                     f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
@@ -483,14 +510,9 @@ async def expire_trial_subscriptions(bot: Bot):
                                     f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
                                     f"completed_at={now.isoformat()}"
                                 )
-                            except Exception as e:
-                                logger.warning(f"Failed to send trial expiration notification to user {telegram_id}: {e}")
-                                # Rollback flag on send error
-                                await conn.execute("""
-                                    UPDATE users 
-                                    SET trial_completed_sent = FALSE 
-                                    WHERE telegram_id = $1
-                                """, telegram_id)
+                            else:
+                                # safe_send_message failed (chat not found, blocked, etc.) - do NOT retry
+                                logger.warning(f"TRIAL_EXPIRED_SKIP_CHAT_NOT_FOUND user={telegram_id}")
                         else:
                             logger.info(
                                 f"trial_expired_skipped: user={telegram_id}, reason=already_sent"

@@ -402,12 +402,13 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
         logger.info(f"Crypto Bot webhook: purchase_finalized: purchase_id={purchase_id}, payment_id={payment_id}, expires_at={expires_at.isoformat()}, vpn_key_length={len(vpn_key)}")
         
         # Send confirmation to user
-        import localization
-        user = await database.get_user(telegram_id)
-        language = user.get("language", "ru") if user else "ru"
+        from app.services.language_service import resolve_user_language
+        from app.i18n import get_text as i18n_get_text
+        
+        language = await resolve_user_language(telegram_id)
         
         expires_str = expires_at.strftime("%d.%m.%Y")
-        text = localization.get_text(language, "payment_approved", date=expires_str)
+        text = i18n_get_text(language, "payment.approved", date=expires_str)
         
         from handlers import get_vpn_key_keyboard
         await bot.send_message(telegram_id, text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")

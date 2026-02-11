@@ -1,17 +1,11 @@
 """
 Admin Notifications Module
 
-Sends Telegram notifications to admin about bot state changes:
-- Bot enters degraded mode (DB unavailable)
-- Bot recovers from degraded mode (DB restored)
-- Pending VPN activations (long-pending or high attempts)
-
-This module provides a first-class notification service with:
-- Unified entry points for admin and user notifications
-- Explicit delivery attempt logging
-- Graceful error handling (logs but doesn't crash)
-- Observable delivery attempts
+Sends Telegram notifications to admin about bot state changes.
+All messages use admin's language from DB.
 """
+from app.i18n import get_text
+from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
 import logging
 from datetime import datetime
 from typing import Optional
@@ -47,18 +41,14 @@ async def notify_admin_degraded_mode(bot: Bot):
     if _degraded_notification_sent:
         return
     
-    message = (
-        "⚠️ **БОТ РАБОТАЕТ В ДЕГРАДИРОВАННОМ РЕЖИМЕ**\n\n"
-        "База данных недоступна.\n\n"
-        "• Бот запущен и отвечает на команды\n"
-        "• Критические операции блокируются\n"
-        "• Пользователи получают сообщения о временной недоступности\n\n"
-        "Бот будет автоматически пытаться восстановить соединение с БД каждые 30 секунд.\n\n"
-        "Проверьте:\n"
-        "• Доступность PostgreSQL\n"
-        "• Правильность DATABASE_URL\n"
-        "• Сетевые настройки"
-    )
+    language = DEFAULT_LANGUAGE
+    try:
+        if config.ADMIN_TELEGRAM_ID:
+            language = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
+    except Exception:
+        pass
+
+    message = get_text(language, "admin.degraded_mode")
     
     # Use unified entry point for consistent error handling and observability
     success = await send_admin_notification(
@@ -87,13 +77,14 @@ async def notify_admin_recovered(bot: Bot):
     if _recovered_notification_sent:
         return
     
-    message = (
-        "✅ **СЛУЖБА ВОССТАНОВЛЕНА**\n\n"
-        "База данных стала доступна.\n\n"
-        "• Бот работает в полнофункциональном режиме\n"
-        "• Все операции восстановлены\n"
-        "• Фоновые задачи запущены"
-    )
+    language = DEFAULT_LANGUAGE
+    try:
+        if config.ADMIN_TELEGRAM_ID:
+            language = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
+    except Exception:
+        pass
+
+    message = get_text(language, "admin.recovered")
     
     # Use unified entry point for consistent error handling and observability
     success = await send_admin_notification(
@@ -145,13 +136,19 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
             logger.debug(f"Skipping pending activations notification (cooldown active)")
             return
         
-        message_lines = [
-            "⚠️ **ОТЛОЖЕННЫЕ АКТИВАЦИИ VPN**\n",
-            f"Всего pending подписок: **{pending_count}**\n"
-        ]
+        admin_lang = DEFAULT_LANGUAGE
+        try:
+            if config.ADMIN_TELEGRAM_ID:
+                admin_lang = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
+        except Exception:
+            pass
+
+        title = get_text(admin_lang, "admin.pending_activations_title")
+        total = get_text(admin_lang, "admin.pending_activations_total", count=pending_count)
+        message_lines = [title, total]
         
         if oldest_pending:
-            message_lines.append("\n**Топ-5 старейших:**\n")
+            message_lines.append(get_text(admin_lang, "admin.pending_activations_top"))
             for idx, sub in enumerate(oldest_pending[:5], 1):
                 pending_since = sub.get("pending_since", "N/A")
                 if isinstance(pending_since, datetime):
@@ -163,15 +160,19 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
                 if error_preview and len(error_preview) > 50:
                     error_preview = error_preview[:50] + "..."
                 
-                message_lines.append(
-                    f"{idx}. ID: `{sub['subscription_id']}` | "
-                    f"User: `{sub['telegram_id']}` | "
-                    f"Попыток: {sub['attempts']} | "
-                    f"С {pending_since_str}\n"
-                    f"   Ошибка: `{error_preview}`\n"
+                row = get_text(
+                    admin_lang,
+                    "admin.pending_activations_row",
+                    idx=idx,
+                    subscription_id=sub["subscription_id"],
+                    telegram_id=sub["telegram_id"],
+                    attempts=sub["attempts"],
+                    pending_since=pending_since_str,
+                    error=error_preview
                 )
+                message_lines.append(row)
         
-        message = "\n".join(message_lines)
+        message = "".join(message_lines)
         
         # Use unified entry point for consistent error handling and observability
         success = await send_admin_notification(

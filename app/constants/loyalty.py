@@ -31,17 +31,25 @@ LOYALTY_PHOTOS: dict[str, str] = {
 }
 
 
-def get_loyalty_status_names(paid_referrals_count: int) -> Tuple[str, Optional[str]]:
+def get_loyalty_status_names(total_referrals: int) -> Tuple[str, Optional[str]]:
     """
-    Return (current_status_name, next_status_name) by paid referrals count.
-    Uses existing tier boundaries (0–24, 25–49, 50+); does not change business logic.
+    Return (current_status_name, next_status_name) by total referrals count.
+    
+    ⚠️ ВАЖНО: Уровень определяется СТРОГО по total_referrals (всего приглашено).
+    Пороги соответствуют LOYALTY_TIERS: 0-24 → Silver, 25-49 → Gold, 50+ → Platinum
+    
+    Args:
+        total_referrals: Общее количество приглашённых рефералов
+    
+    Returns:
+        Tuple[str, Optional[str]]: (current_status_name, next_status_name)
     """
-    n = max(0, paid_referrals_count)
+    n = max(0, total_referrals)
     if n >= 50:
         return ("Platinum Access", None)
     if n >= 25:
         return ("Gold Access", "Platinum Access")
-    return ("Silver Access", "Gold Access")
+    return ("Silver Access", "Gold Access")  # Базовый уровень для 0-24
 
 
 def get_loyalty_screen_attachment(current_status_key: str) -> Optional[str]:

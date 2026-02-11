@@ -18,11 +18,9 @@ from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Use shared logging config (INFO/WARNING→stdout, ERROR→stderr)
+from app.core.logging_config import setup_logging
+setup_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
