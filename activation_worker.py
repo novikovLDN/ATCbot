@@ -8,7 +8,6 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import asyncpg
 import database
-import localization
 import config
 import admin_notifications
 from app.services.activation import service as activation_service
@@ -31,6 +30,7 @@ from app.core.recovery_cooldown import (
 )
 from app.core.metrics import get_metrics
 from app.services.language_service import resolve_user_language
+from app import i18n
 from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
@@ -219,9 +219,9 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
                             
                             # Use localized text for successful activation
-                            text = localization.get_text(
+                            text = i18n.get_text(
                                 language,
-                                "payment_approved",
+                                "payment.approved",
                                 date=expires_str
                             )
                             
@@ -318,17 +318,17 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"user={telegram_id}, attempts={new_attempts}, error={error_msg}]"
                             )
                             
-                            # Send admin notification (admin notifications use Russian)
+                            # Send admin notification (admin always sees Russian)
                             try:
                                 admin_lang = "ru"
                                 admin_message = (
-                                    f"{localization.get_text(admin_lang, 'admin_activation_error_title', default='⚠️ **ОШИБКА АКТИВАЦИИ VPN ПОДПИСКИ**')}\n\n"
-                                    f"{localization.get_text(admin_lang, 'admin_activation_error_subscription_id', subscription_id=subscription_id, default=f'Подписка ID: `{subscription_id}`')}\n"
-                                    f"{localization.get_text(admin_lang, 'admin_activation_error_user', telegram_id=telegram_id, default=f'Пользователь: `{telegram_id}`')}\n"
-                                    f"{localization.get_text(admin_lang, 'admin_activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS, default=f'Попыток: {new_attempts}/{MAX_ACTIVATION_ATTEMPTS}')}\n"
-                                    f"{localization.get_text(admin_lang, 'admin_activation_error_error', error_msg=error_msg, default=f'Ошибка: `{error_msg}`')}\n\n"
-                                    f"{localization.get_text(admin_lang, 'admin_activation_error_status', default='Подписка помечена как `failed`.')}\n"
-                                    f"{localization.get_text(admin_lang, 'admin_activation_error_action', default='Требуется ручная активация.')}"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=error_msg)}\n\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_action')}"
                                 )
                                 
                                 await bot.send_message(

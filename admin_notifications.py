@@ -4,7 +4,7 @@ Admin Notifications Module
 Sends Telegram notifications to admin about bot state changes.
 All messages use admin's language from DB.
 """
-import localization
+from app.i18n import get_text
 from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
 import logging
 from datetime import datetime
@@ -48,7 +48,7 @@ async def notify_admin_degraded_mode(bot: Bot):
     except Exception:
         pass
 
-    message = localization.get_text(language, "admin_degraded_mode")
+    message = get_text(language, "admin.degraded_mode")
     
     # Use unified entry point for consistent error handling and observability
     success = await send_admin_notification(
@@ -84,7 +84,7 @@ async def notify_admin_recovered(bot: Bot):
     except Exception:
         pass
 
-    message = localization.get_text(language, "admin_recovered")
+    message = get_text(language, "admin.recovered")
     
     # Use unified entry point for consistent error handling and observability
     success = await send_admin_notification(
@@ -143,12 +143,12 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
         except Exception:
             pass
 
-        title = localization.get_text(admin_lang, "admin_pending_activations_title")
-        total = localization.get_text(admin_lang, "admin_pending_activations_total", count=pending_count)
+        title = get_text(admin_lang, "admin.pending_activations_title")
+        total = get_text(admin_lang, "admin.pending_activations_total", count=pending_count)
         message_lines = [title, total]
         
         if oldest_pending:
-            message_lines.append(localization.get_text(admin_lang, "admin_pending_activations_top"))
+            message_lines.append(get_text(admin_lang, "admin.pending_activations_top"))
             for idx, sub in enumerate(oldest_pending[:5], 1):
                 pending_since = sub.get("pending_since", "N/A")
                 if isinstance(pending_since, datetime):
@@ -160,9 +160,9 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
                 if error_preview and len(error_preview) > 50:
                     error_preview = error_preview[:50] + "..."
                 
-                row = localization.get_text(
+                row = get_text(
                     admin_lang,
-                    "admin_pending_activations_row",
+                    "admin.pending_activations_row",
                     idx=idx,
                     subscription_id=sub["subscription_id"],
                     telegram_id=sub["telegram_id"],
