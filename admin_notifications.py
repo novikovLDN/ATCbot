@@ -40,7 +40,18 @@ async def notify_admin_degraded_mode(bot: Bot):
     if _degraded_notification_sent:
         return
     
-    message = localization.get_text("ru", "admin_degraded_mode")
+    # Resolve admin language from DB when available; fallback to ru only if DB unavailable
+    language = "ru"
+    try:
+        import database
+        if database.DB_READY and config.ADMIN_TELEGRAM_ID:
+            admin_user = await database.get_user(config.ADMIN_TELEGRAM_ID)
+            if admin_user and admin_user.get("language"):
+                language = admin_user["language"]
+    except Exception:
+        pass
+    
+    message = localization.get_text(language, "admin_degraded_mode")
     
     # Use unified entry point for consistent error handling and observability
     success = await send_admin_notification(
@@ -69,7 +80,18 @@ async def notify_admin_recovered(bot: Bot):
     if _recovered_notification_sent:
         return
     
-    message = localization.get_text("ru", "admin_recovered")
+    # Resolve admin language from DB (DB is up after recovery)
+    language = "ru"
+    try:
+        import database
+        if config.ADMIN_TELEGRAM_ID:
+            admin_user = await database.get_user(config.ADMIN_TELEGRAM_ID)
+            if admin_user and admin_user.get("language"):
+                language = admin_user["language"]
+    except Exception:
+        pass
+    
+    message = localization.get_text(language, "admin_recovered")
     
     # Use unified entry point for consistent error handling and observability
     success = await send_admin_notification(
@@ -121,7 +143,17 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
             logger.debug(f"Skipping pending activations notification (cooldown active)")
             return
         
+        # Resolve admin language from DB
         admin_lang = "ru"
+        try:
+            import database
+            if config.ADMIN_TELEGRAM_ID:
+                admin_user = await database.get_user(config.ADMIN_TELEGRAM_ID)
+                if admin_user and admin_user.get("language"):
+                    admin_lang = admin_user["language"]
+        except Exception:
+            pass
+        
         title = localization.get_text(admin_lang, "admin_pending_activations_title")
         total = localization.get_text(admin_lang, "admin_pending_activations_total", count=pending_count)
         message_lines = [title, total]

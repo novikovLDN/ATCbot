@@ -52,11 +52,11 @@ async def send_referral_cashback_notification(
         referrer_user = await database.get_user(referrer_id)
         referrer_language = referrer_user.get("language", "ru") if referrer_user else "ru"
         
-        # Получаем информацию о реферале (username or first_name or "пользователь")
+        # Получаем информацию о реферале (username or first_name or localized fallback)
         referred_user = await database.get_user(referred_id)
         # Import helper function at runtime to avoid circular dependency
         import handlers
-        referred_username = handlers.safe_resolve_username_from_db(referred_user, referred_id)
+        referred_username = handlers.safe_resolve_username_from_db(referred_user, referrer_language, referred_id)
         
         # Локализуем action_type
         import localization
