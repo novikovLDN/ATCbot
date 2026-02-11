@@ -965,6 +965,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             callback_data="menu_support"
         ),
     ])
+    buttons.append([InlineKeyboardButton(
+        text=localization.get_text(language, "change_language"),
+        callback_data="change_language"
+    )])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
