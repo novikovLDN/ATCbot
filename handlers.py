@@ -9320,15 +9320,18 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         await callback.answer("Ошибка: неверный формат команды", show_alert=True)
         return
 
-    # STEP 3 — IN-MEMORY ASYNC LOCK (atomic non-blocking acquire, eliminates TOCTOU)
+    # STEP 3 — IN-MEMORY ASYNC LOCK (fast UX check + real acquire)
     lock = get_reissue_lock(target_user_id)
     logger.debug("ADMIN_REISSUE_LOCK_ATTEMPT user=%s locked=%s", target_user_id, lock.locked())
-    try:
-        await asyncio.wait_for(lock.acquire(), timeout=0)
-    except asyncio.TimeoutError:
+    
+    # STEP 1 — FAST CHECK (UX guard only)
+    if lock.locked():
         logger.info("ADMIN_REISSUE_REJECTED_ALREADY_RUNNING user=%s", target_user_id)
         await callback.answer("Перевыпуск уже выполняется...", show_alert=False)
         return
+
+    # STEP 2 — ACQUIRE (real acquire, no timeout)
+    await lock.acquire()
 
     try:
         # STEP 1 — IMMEDIATE CALLBACK ACK (inside protected block to prevent lock leak)
@@ -9424,9 +9427,8 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         except Exception:
             pass
     finally:
-        # GUARANTEED RELEASE: protect against lock leak
-        if lock.locked():
-            lock.release()
+        # GUARANTEED RELEASE (lock was acquired, no check needed)
+        lock.release()
 
 
 @router.callback_query(F.data == "admin:system")
