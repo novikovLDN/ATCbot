@@ -350,13 +350,22 @@ def is_subscription_active(
     - uuid is not None (has VPN access)
     
     Args:
-        subscription: Subscription dictionary from database
+        subscription: Subscription dictionary from database (or None, or legacy int)
         now: Current time (defaults to datetime.now())
         
     Returns:
         True if subscription is active, False otherwise
     """
     if not subscription:
+        return False
+    
+    # Legacy fallback: если subscription это int (старый формат)
+    if isinstance(subscription, int):
+        return bool(subscription)
+    
+    # Если subscription не dict, возвращаем False
+    if not isinstance(subscription, dict):
+        logger.warning(f"is_subscription_active: unexpected subscription type: {type(subscription)}")
         return False
     
     if now is None:

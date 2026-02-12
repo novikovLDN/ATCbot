@@ -2814,7 +2814,8 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
     await safe_edit_text(callback.message, in_progress_text, reply_markup=get_profile_keyboard(language, has_any_sub, auto_renew), bot=callback.bot)
     try:
         balance = await database.get_user_balance(telegram_id)
-        has_active = await subscription_service.is_subscription_active(telegram_id)
+        subscription = await database.get_subscription(telegram_id)
+        has_active = is_subscription_active(subscription) if subscription else False
         sub_text = "активна" if has_active else "нет"
         admin_text = (
             f"💸 Новая заявка на вывод #{wid}\n\n"
@@ -2829,8 +2830,9 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
             [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"withdraw_reject:{wid}")],
         ])
         await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb)
+        logger.info(f"ADMIN_NOTIFICATION_SENT withdrawal_id={wid} user={telegram_id} amount={amount:.2f} RUB")
     except Exception as e:
-        logger.warning(f"Failed to send withdrawal notification to admin: {e}")
+        logger.error(f"CRITICAL: Failed to send withdrawal notification to admin: withdrawal_id={wid} user={telegram_id} error={e}", exc_info=True)
 
 
 @router.callback_query(F.data == "withdraw_cancel")
@@ -10923,7 +10925,8 @@ async def process_admin_balance_user_search(message: Message, state: FSMContext)
             return
         target_user_id = user["telegram_id"]
         balance = await database.get_user_balance(target_user_id)
-        has_active = await subscription_service.is_subscription_active(target_user_id)
+        subscription = await database.get_subscription(target_user_id)
+        has_active = is_subscription_active(subscription) if subscription else False
         sub_text = i18n_get_text(language, "admin.no_active_subscription") if not has_active else "Подписка активна"
         text = (
             f"💰 Управление балансом\n\n"
