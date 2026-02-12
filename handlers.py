@@ -869,6 +869,15 @@ class WithdrawStates(StatesGroup):
     withdraw_final_confirm = State()
 
 
+class AdminCreatePromocode(StatesGroup):
+    waiting_for_code_name = State()
+    waiting_for_duration_unit = State()
+    waiting_for_duration_value = State()
+    waiting_for_max_uses = State()
+    waiting_for_discount_percent = State()
+    confirm_creation = State()
+
+
 class PurchaseState(StatesGroup):
     """FSM состояния для процесса покупки"""
     choose_tariff = State()           # Выбор тарифа (Basic/Plus)
@@ -1388,6 +1397,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode")],
     ])
     return keyboard
 
@@ -9432,6 +9442,302 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_discount_delete: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+# ==================== ОБРАБОТЧИКИ ДЛЯ СОЗДАНИЯ ПРОМОКОДОВ ====================
+
+@router.callback_query(F.data == "admin:create_promocode")
+async def callback_admin_create_promocode(callback: CallbackQuery, state: FSMContext):
+    """Начало создания промокода"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    
+    language = await resolve_user_language(callback.from_user.id)
+    await state.set_state(AdminCreatePromocode.waiting_for_code_name)
+    text = i18n_get_text(language, "admin.promocode_code_prompt")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.message(AdminCreatePromocode.waiting_for_code_name)
+async def process_admin_promocode_code_name(message: Message, state: FSMContext):
+    """Обработка имени промокода"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await state.clear()
+        return
+    
+    language = await resolve_user_language(message.from_user.id)
+    code_input = message.text.strip() if message.text else ""
+    
+    # Если пустое сообщение — автогенерация
+    if not code_input:
+        from database import generate_promo_code
+        code = generate_promo_code(6)
+    else:
+        code = code_input.upper().strip()
+        
+        # Валидация
+        if len(code) < 3 or len(code) > 32:
+            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"))
+            return
+        
+        if not all(c.isalnum() for c in code):
+            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"))
+            return
+        
+        # Проверка существования
+        existing = await database.get_promo_code(code)
+        if existing:
+            await message.answer(i18n_get_text(language, "admin.promocode_code_exists"))
+            return
+    
+    await state.update_data(promocode_code=code)
+    await state.set_state(AdminCreatePromocode.waiting_for_discount_percent)
+    
+    text = i18n_get_text(language, "admin.promocode_discount_prompt")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
+    ])
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.message(AdminCreatePromocode.waiting_for_discount_percent)
+async def process_admin_promocode_discount(message: Message, state: FSMContext):
+    """Обработка процента скидки"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await state.clear()
+        return
+    
+    language = await resolve_user_language(message.from_user.id)
+    
+    try:
+        discount_percent = int(message.text.strip())
+        if discount_percent < 0 or discount_percent > 100:
+            await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"))
+            return
+    except ValueError:
+        await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"))
+        return
+    
+    await state.update_data(promocode_discount=discount_percent)
+    await state.set_state(AdminCreatePromocode.waiting_for_duration_unit)
+    
+    text = i18n_get_text(language, "admin.promocode_duration_unit_prompt")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏱ Часы", callback_data="admin:promocode_unit:hours")],
+        [InlineKeyboardButton(text="📅 Дни", callback_data="admin:promocode_unit:days")],
+        [InlineKeyboardButton(text="🗓 Месяцы", callback_data="admin:promocode_unit:months")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
+    ])
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("admin:promocode_unit:"))
+async def callback_admin_promocode_unit(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора единицы времени"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    
+    language = await resolve_user_language(callback.from_user.id)
+    unit = callback.data.split(":")[2]  # hours, days, months
+    
+    unit_names = {
+        "hours": "часов",
+        "days": "дней",
+        "months": "месяцев"
+    }
+    
+    await state.update_data(promocode_duration_unit=unit)
+    await state.set_state(AdminCreatePromocode.waiting_for_duration_value)
+    
+    text = i18n_get_text(language, "admin.promocode_duration_value_prompt", unit=unit_names[unit])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.message(AdminCreatePromocode.waiting_for_duration_value)
+async def process_admin_promocode_duration_value(message: Message, state: FSMContext):
+    """Обработка значения длительности"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await state.clear()
+        return
+    
+    language = await resolve_user_language(message.from_user.id)
+    
+    try:
+        value = int(message.text.strip())
+        if value <= 0:
+            await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"))
+            return
+    except ValueError:
+        await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"))
+        return
+    
+    data = await state.get_data()
+    unit = data.get("promocode_duration_unit")
+    
+    # Конвертация в секунды
+    if unit == "hours":
+        duration_seconds = value * 3600
+    elif unit == "days":
+        duration_seconds = value * 86400
+    elif unit == "months":
+        duration_seconds = value * 30 * 86400
+    else:
+        await message.answer("Ошибка: неверная единица времени")
+        await state.clear()
+        return
+    
+    await state.update_data(promocode_duration_seconds=duration_seconds)
+    await state.set_state(AdminCreatePromocode.waiting_for_max_uses)
+    
+    text = i18n_get_text(language, "admin.promocode_max_uses_prompt")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
+    ])
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.message(AdminCreatePromocode.waiting_for_max_uses)
+async def process_admin_promocode_max_uses(message: Message, state: FSMContext):
+    """Обработка максимального количества использований"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await state.clear()
+        return
+    
+    language = await resolve_user_language(message.from_user.id)
+    
+    try:
+        max_uses = int(message.text.strip())
+        if max_uses < 1:
+            await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"))
+            return
+    except ValueError:
+        await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"))
+        return
+    
+    data = await state.get_data()
+    code = data.get("promocode_code")
+    discount_percent = data.get("promocode_discount")
+    duration_seconds = data.get("promocode_duration_seconds")
+    
+    # Форматируем длительность для отображения
+    if duration_seconds < 3600:
+        duration_str = f"{duration_seconds // 60} минут"
+    elif duration_seconds < 86400:
+        duration_str = f"{duration_seconds // 3600} часов"
+    elif duration_seconds < 2592000:
+        duration_str = f"{duration_seconds // 86400} дней"
+    else:
+        duration_str = f"{duration_seconds // 2592000} месяцев"
+    
+    await state.update_data(promocode_max_uses=max_uses)
+    await state.set_state(AdminCreatePromocode.confirm_creation)
+    
+    text = (
+        f"🎟 Подтверждение создания промокода\n\n"
+        f"Код: {code}\n"
+        f"Скидка: {discount_percent}%\n"
+        f"Срок действия: {duration_str}\n"
+        f"Лимит использований: {max_uses}\n\n"
+        f"Подтвердите создание:"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.promocode_confirm"), callback_data="admin:promocode_confirm")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.promocode_cancel"), callback_data="admin:promocode_cancel")]
+    ])
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "admin:promocode_confirm")
+async def callback_admin_promocode_confirm(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение создания промокода"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    
+    language = await resolve_user_language(callback.from_user.id)
+    data = await state.get_data()
+    
+    code = data.get("promocode_code")
+    discount_percent = data.get("promocode_discount")
+    duration_seconds = data.get("promocode_duration_seconds")
+    max_uses = data.get("promocode_max_uses")
+    
+    if not all([code, discount_percent is not None, duration_seconds, max_uses]):
+        await callback.answer("Ошибка: неполные данные", show_alert=True)
+        await state.clear()
+        return
+    
+    # Создаем промокод
+    result = await database.create_promocode_atomic(
+        code=code,
+        discount_percent=discount_percent,
+        duration_seconds=duration_seconds,
+        max_uses=max_uses,
+        created_by=callback.from_user.id
+    )
+    
+    if result:
+        # Форматируем длительность для отображения
+        if duration_seconds < 3600:
+            duration_str = f"{duration_seconds // 60} минут"
+        elif duration_seconds < 86400:
+            duration_str = f"{duration_seconds // 3600} часов"
+        elif duration_seconds < 2592000:
+            duration_str = f"{duration_seconds // 86400} дней"
+        else:
+            duration_str = f"{duration_seconds // 2592000} месяцев"
+        
+        text = i18n_get_text(
+            language, "admin.promocode_created",
+            code=code,
+            discount=discount_percent,
+            duration=duration_str,
+            max_uses=max_uses
+        )
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        await callback.answer("✅ Промокод создан", show_alert=True)
+    else:
+        text = i18n_get_text(language, "admin.promocode_creation_failed")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        await callback.answer("❌ Ошибка создания", show_alert=True)
+    
+    await state.clear()
+
+
+@router.callback_query(F.data == "admin:promocode_cancel")
+async def callback_admin_promocode_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отмена создания промокода"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    
+    language = await resolve_user_language(callback.from_user.id)
+    await state.clear()
+    text = i18n_get_text(language, "admin.dashboard_title")
+    await safe_edit_text(callback.message, text, reply_markup=get_admin_dashboard_keyboard(language))
+    await callback.answer()
 
 
 # ==================== ОБРАБОТЧИКИ ДЛЯ УПРАВЛЕНИЯ VIP-СТАТУСОМ ====================
