@@ -1093,7 +1093,11 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
                     telegram_id, amount_kopecks, transaction_type, source, description
                 )
                 
-                logger.info(f"Increased balance by {amount} RUB ({amount_kopecks} kopecks) for user {telegram_id}, source={source}")
+                # Structured logging
+                logger.info(
+                    f"BALANCE_INCREASED user={telegram_id} amount={amount:.2f} RUB "
+                    f"({amount_kopecks} kopecks) source={source}"
+                )
                 return True
             except Exception as e:
                 logger.exception(f"Error increasing balance for user {telegram_id}")
@@ -1176,7 +1180,11 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
                     telegram_id, -amount_kopecks, transaction_type, source, description
                 )
                 
-                logger.info(f"Decreased balance by {amount} RUB ({amount_kopecks} kopecks) for user {telegram_id}, source={source}")
+                # Structured logging
+                logger.info(
+                    f"BALANCE_DECREASED user={telegram_id} amount={amount:.2f} RUB "
+                    f"({amount_kopecks} kopecks) source={source}"
+                )
                 return True
             except Exception as e:
                 logger.exception(f"Error decreasing balance for user {telegram_id}")
@@ -1226,6 +1234,9 @@ async def add_balance(telegram_id: int, amount: int, transaction_type: str, desc
     """
     Добавить средства на баланс пользователя (атомарно)
     
+    DEPRECATED: Используйте increase_balance() вместо этой функции.
+    Эта функция оставлена для обратной совместимости и защищена advisory lock + FOR UPDATE.
+    
     Args:
         telegram_id: Telegram ID пользователя
         amount: Сумма в копейках (положительное число)
@@ -1243,7 +1254,23 @@ async def add_balance(telegram_id: int, amount: int, transaction_type: str, desc
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Обновляем баланс
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
+                )
+                
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
+                    logger.error(f"User {telegram_id} not found")
+                    return False
+                
+                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
                 await conn.execute(
                     "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
                     amount, telegram_id
@@ -1267,6 +1294,9 @@ async def subtract_balance(telegram_id: int, amount: int, transaction_type: str,
     """
     Списать средства с баланса пользователя (атомарно)
     
+    DEPRECATED: Используйте decrease_balance() вместо этой функции.
+    Эта функция оставлена для обратной совместимости и защищена advisory lock + FOR UPDATE.
+    
     Args:
         telegram_id: Telegram ID пользователя
         amount: Сумма в копейках (положительное число)
@@ -1284,20 +1314,29 @@ async def subtract_balance(telegram_id: int, amount: int, transaction_type: str,
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Проверяем баланс
-                current_balance = await conn.fetchval(
-                    "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
                 )
                 
-                if current_balance is None:
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
                     logger.error(f"User {telegram_id} not found")
                     return False
+                
+                current_balance = row["balance"]
                 
                 if current_balance < amount:
                     logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount}")
                     return False
                 
-                # Обновляем баланс
+                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
                 await conn.execute(
                     "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
                     amount, telegram_id
@@ -1352,14 +1391,26 @@ async def create_withdrawal_request(
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
+                # CRITICAL: advisory lock per user для защиты от race conditions
                 await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
-                current = await conn.fetchval("SELECT balance FROM users WHERE telegram_id = $1", telegram_id)
-                if current is None:
+                
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
                     logger.error(f"User {telegram_id} not found for withdrawal")
                     return None
+                
+                current = row["balance"]
+                
                 if current < amount_kopecks:
                     logger.warning(f"Insufficient balance for withdrawal: user={telegram_id}, balance={current}, amount={amount_kopecks}")
                     return None
+                
+                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
                 await conn.execute(
                     "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
                     amount_kopecks, telegram_id
@@ -1377,7 +1428,13 @@ async def create_withdrawal_request(
                     telegram_id, username, amount_kopecks, requisites
                 )
                 wid = row["id"]
-                logger.info(f"Created withdrawal request id={wid} user={telegram_id} amount={amount_kopecks} kopecks")
+                
+                # Structured logging with correlation_id
+                correlation_id = str(uuid.uuid4())
+                logger.info(
+                    f"WITHDRAWAL_REQUEST_CREATED withdrawal_id={wid} user={telegram_id} "
+                    f"amount={amount_kopecks} kopecks correlation_id={correlation_id}"
+                )
                 return wid
             except Exception as e:
                 logger.exception(f"Error creating withdrawal request for user {telegram_id}: {e}")
@@ -1419,7 +1476,8 @@ async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
                 processed_by, wid
             )
             if result == "UPDATE 1":
-                logger.info(f"Withdrawal request {wid} approved by {processed_by}")
+                # Structured logging
+                logger.info(f"WITHDRAWAL_APPROVED withdrawal_id={wid} processed_by={processed_by}")
                 return True
             return False
 
@@ -1441,7 +1499,21 @@ async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
                 return False
             telegram_id = row["telegram_id"]
             amount_kopecks = row["amount"]
+            
+            # CRITICAL: advisory lock per user для защиты от race conditions
             await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            
+            # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+            user_row = await conn.fetchrow(
+                "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id
+            )
+            
+            if not user_row:
+                logger.error(f"User {telegram_id} not found for withdrawal rejection refund")
+                return False
+            
+            # Обновляем баланс (строка уже заблокирована FOR UPDATE)
             await conn.execute(
                 "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
                 amount_kopecks, telegram_id
@@ -1456,7 +1528,11 @@ async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
                 "UPDATE withdrawal_requests SET status = 'rejected', processed_at = NOW(), processed_by = $1 WHERE id = $2",
                 processed_by, wid
             )
-            logger.info(f"Withdrawal request {wid} rejected, refunded {amount_kopecks} kopecks to user {telegram_id}")
+            # Structured logging
+            logger.info(
+                f"WITHDRAWAL_REJECTED withdrawal_id={wid} processed_by={processed_by} "
+                f"user={telegram_id} refunded={amount_kopecks} kopecks"
+            )
             return True
 
 
@@ -2435,7 +2511,22 @@ async def process_referral_reward(
         
         # FINANCIAL OPERATIONS (raise exceptions on failure, do not catch):
         # 7. Начисляем кешбэк на баланс реферера
-        # Если это упадет - исключение пробросится вверх, транзакция откатится
+        # CRITICAL: advisory lock per user для защиты от race conditions
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock($1)",
+            referrer_id
+        )
+        
+        # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+        balance_row = await conn.fetchrow(
+            "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+            referrer_id
+        )
+        
+        if not balance_row:
+            raise ValueError(f"Referrer {referrer_id} not found for reward")
+        
+        # Обновляем баланс (строка уже заблокирована FOR UPDATE)
         await conn.execute(
             "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
             reward_amount_kopecks, referrer_id
