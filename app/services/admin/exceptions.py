@@ -18,22 +18,3 @@ class UserNotFoundError(AdminServiceError):
 class InvalidAdminActionError(AdminServiceError):
     """Raised when admin action is invalid or not allowed"""
     pass
-
-
-# ====================================================================================
-# Admin Operation Errors (reissue, grant, etc.)
-# ====================================================================================
-
-class AdminOperationError(AdminServiceError):
-    """Base exception for admin operations (reissue, grant, etc.)"""
-    pass
-
-
-class SubscriptionNotFoundError(AdminOperationError):
-    """Raised when subscription is not found or not active"""
-    pass
-
-
-class ReissueFailedError(AdminOperationError):
-    """Raised when VPN key reissue fails"""
-    pass
