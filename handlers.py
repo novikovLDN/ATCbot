@@ -3231,6 +3231,9 @@ async def callback_subscription_history(callback: CallbackQuery):
 async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state: FSMContext):
     """
     Купить VPN - выбор типа тарифа (Basic/Plus). Reusable for callback and /buy command.
+    
+    CANONICAL TARIFF SCREEN BUILDER - единственный источник правды для экрана тарифов.
+    Используется везде: после промокода, при нажатии "Купить доступ", и т.д.
     """
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
@@ -3273,6 +3276,21 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     await safe_edit_text(msg, text, reply_markup=keyboard, bot=bot)
     if isinstance(event, CallbackQuery):
         await event.answer()
+
+
+async def show_tariffs_main_screen(event: Union[Message, CallbackQuery], state: FSMContext):
+    """
+    CANONICAL TARIFF SCREEN - единый builder для экрана тарифов.
+    
+    Используется после применения промокода и везде, где нужно показать экран тарифов.
+    Гарантирует единообразие UI и отсутствие дублирования кода.
+    
+    Args:
+        event: Message или CallbackQuery объект
+        state: FSM context
+    """
+    bot = event.bot if isinstance(event, CallbackQuery) else event.bot
+    await _open_buy_screen(event, bot, state)
 
 
 @router.callback_query(F.data == "menu_buy_vpn")
@@ -3613,16 +3631,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
         logger.warning(f"Invalid FSM state for period: user={telegram_id}, state={current_state}, expected=PurchaseState.choose_period")
-        # Сбрасываем состояние и возвращаем к выбору тарифа
-        await state.set_state(PurchaseState.choose_tariff)
-        await callback.message.answer(
-            i18n_get_text(language, "buy.select_tariff"),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=i18n_get_text(language, "buy.tariff_label_basic"), callback_data="tariff:basic")],
-                [InlineKeyboardButton(text=i18n_get_text(language, "buy.tariff_label_plus"), callback_data="tariff:plus")],
-                [InlineKeyboardButton(text=i18n_get_text(language, "buy.back_to_tariffs"), callback_data="menu_main")],
-            ])
-        )
+        # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render
+        await show_tariffs_main_screen(callback, state)
         return
     
     # Валидация тарифа и периода
@@ -4735,22 +4745,8 @@ async def process_promo_code(message: Message, state: FSMContext):
         expires_in = max(0, int(expires_at - time.time()))
         text = i18n_get_text(language, "main.promo_applied")
         await message.answer(text)
-        # Возвращаемся к выбору тарифа
-        await state.set_state(PurchaseState.choose_tariff)
-        tariff_text = i18n_get_text(language, "buy.select_tariff")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "buy.tariff_basic"), callback_data="tariff:basic")],
-            [InlineKeyboardButton(text=i18n_get_text(language, "buy.tariff_plus"), callback_data="tariff:plus")],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "buy.enter_promo"),
-                callback_data="enter_promo"
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="menu_main"
-            )],
-        ])
-        await message.answer(tariff_text, reply_markup=keyboard)
+        # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render
+        await show_tariffs_main_screen(message, state)
         return
     
     # CRITICAL FIX: Используем validate_promocode_atomic для валидации без инкремента
@@ -4772,8 +4768,8 @@ async def process_promo_code(message: Message, state: FSMContext):
         
         # КРИТИЧНО: НЕ отменяем pending покупки - промо-сессия независима от покупки
         
-        # КРИТИЧНО: Возвращаем пользователя к выбору тарифа с обновленными ценами
-        await state.set_state(PurchaseState.choose_tariff)
+        # CRITICAL FIX: Очищаем FSM state после успешного применения промокода
+        await state.set_state(None)
         
         text = i18n_get_text(language, "main.promo_applied")
         await message.answer(text)
@@ -4783,28 +4779,9 @@ async def process_promo_code(message: Message, state: FSMContext):
             f"discount_percent={discount_percent}%, old_purchases_cancelled=True"
         )
         
-        # Возвращаемся к выбору типа тарифа (Basic/Plus) - цены будут пересчитаны с промокодом
-        tariff_text = i18n_get_text(language, "buy.select_tariff")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "buy.tariff_basic", "tariff_basic"),
-                callback_data="tariff:basic"
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "buy.tariff_plus", "tariff_plus"),
-                callback_data="tariff:plus"
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "buy.enter_promo"),
-                callback_data="enter_promo"
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="menu_main"
-            )],
-        ])
-        await message.answer(tariff_text, reply_markup=keyboard)
-        await state.set_state(PurchaseState.choose_tariff)
+        # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render
+        # Цены будут автоматически пересчитаны с промокодом при выборе тарифа
+        await show_tariffs_main_screen(message, state)
     else:
         # Промокод невалиден
         error_reason = result.get("error", "invalid")
@@ -4822,33 +4799,8 @@ async def callback_promo_back(callback: CallbackQuery, state: FSMContext):
     # CRITICAL FIX: Очищаем FSM state при выходе с экрана ввода промокода
     await state.clear()
     
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    
-    # Возвращаем пользователя на экран выбора тарифа
-    await state.set_state(PurchaseState.choose_tariff)
-    tariff_text = i18n_get_text(language, "buy.select_tariff")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.tariff_basic"),
-            callback_data="tariff:basic"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.tariff_plus"),
-            callback_data="tariff:plus"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.enter_promo"),
-            callback_data="enter_promo"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
-    ])
-    
-    await callback.message.edit_text(tariff_text, reply_markup=keyboard)
-    await callback.answer()
+    # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render
+    await show_tariffs_main_screen(callback, state)
 
 
 # Старый обработчик tariff_* удалён - теперь используется новый флоу tariff_type -> tariff_period
