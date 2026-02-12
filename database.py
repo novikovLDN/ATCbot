@@ -3201,11 +3201,16 @@ async def _log_audit_event_atomic_standalone(
         logger.warning(f"Error logging audit event (standalone): {e}")
 
 
-async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tuple[Optional[str], Optional[str]]:
+async def reissue_vpn_key_atomic(
+    telegram_id: int,
+    admin_telegram_id: int,
+    correlation_id: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     """Атомарно перевыпустить VPN-ключ для пользователя
     
     Перевыпуск возможен ТОЛЬКО если у пользователя есть активная подписка.
     В одной транзакции:
+    - pg_advisory_xact_lock (cross-process) — гарантирует один reissue на user_id
     - удаляет старый UUID из Xray API (POST /remove-user/{uuid})
     - создает новый UUID через Xray API (POST /add-user)
     - обновляет subscriptions (uuid, vpn_key)
@@ -3215,6 +3220,7 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
     Args:
         telegram_id: Telegram ID пользователя
         admin_telegram_id: Telegram ID администратора, который выполняет перевыпуск
+        correlation_id: Опциональный ID для корреляции логов
     
     Returns:
         (new_vpn_key, old_vpn_key) или (None, None) если нет активной подписки или ошибка создания ключа
@@ -3223,7 +3229,10 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # 1. Проверяем, что у пользователя есть активная подписка
+                # STEP 4 — POSTGRES ADVISORY LOCK (cross-process safe)
+                await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+
+                # 1. Проверяем, что у пользователя есть активная подписку
                 # КРИТИЧНО: Проверяем status='active', а не только expires_at
                 now = datetime.now()
                 subscription_row = await conn.fetchrow(
@@ -3351,9 +3360,13 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                 
                 # Безопасное логирование UUID
                 new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+                log_extra = {"user": telegram_id, "admin": admin_telegram_id, "new_uuid": new_uuid_preview}
+                if correlation_id:
+                    log_extra["correlation_id"] = correlation_id
                 logger.info(
                     f"VPN key reissued [action=admin_reissue, user={telegram_id}, admin={admin_telegram_id}, "
-                    f"new_uuid={new_uuid_preview}, expires_at={expires_at.isoformat()}]"
+                    f"new_uuid={new_uuid_preview}, expires_at={expires_at.isoformat()}]",
+                    extra=log_extra,
                 )
                 return new_vpn_key, old_vpn_key
                 
