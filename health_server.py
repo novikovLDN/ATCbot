@@ -65,11 +65,22 @@ async def health_handler(request: web.Request) -> web.Response:
         
         # Check Redis connection (non-blocking, does not affect status)
         redis_ready = False
+        fsm_storage_type = "unknown"
         try:
             redis_ready = redis_client.REDIS_READY
+            # Determine FSM storage type based on Redis availability
+            # Note: This is a best-effort check - actual storage type is set at startup
+            if redis_ready:
+                fsm_storage_type = "redis"
+            else:
+                # If Redis is configured but not ready, FSM might be degraded
+                # If Redis is not configured, FSM is using MemoryStorage
+                # We can't determine exact state without config, so use "memory" as safe default
+                fsm_storage_type = "memory"
         except Exception:
             # Redis check failed - treat as unavailable but don't crash
             redis_ready = False
+            fsm_storage_type = "unknown"
         
         # Create SystemState instance (for internal use)
         system_state = SystemState(
@@ -86,11 +97,12 @@ async def health_handler(request: web.Request) -> web.Response:
         # Note: recovery_cooldown import removed to avoid dependency (not needed for health_server)
         # Recovery state is computed in healthcheck.py, not in health_server.py
         
-        # Формируем ответ (preserve exact format, add redis status)
+        # Формируем ответ (preserve exact format, add redis and fsm status)
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
             "redis_ready": redis_ready,
+            "fsm_storage": fsm_storage_type,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         # Note: recovery_in_progress is computed but not added to response
@@ -108,6 +120,7 @@ async def health_handler(request: web.Request) -> web.Response:
             "status": "degraded",
             "db_ready": False,
             "redis_ready": False,
+            "fsm_storage": "unknown",
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "error": "Health check error"
         }

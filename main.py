@@ -10,7 +10,9 @@ setup_logging()
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand
+from aiogram.fsm.storage.redis import RedisStorage, KeyBuilder, DefaultKeyBuilder
+from aiogram.fsm.storage.base import StorageKey
+from typing import Literal
 import config
 import database
 from app.core.feature_flags import get_feature_flags
@@ -86,9 +88,138 @@ async def main():
     if flags.payments_enabled and not config.CRYPTOBOT_TOKEN:
         logger.warning("PAYMENTS_ENABLED_BUT_NO_CRYPTOBOT_TOKEN — CryptoBot disabled until token is set")
 
+    # ====================================================================================
+    # FSM STORAGE INITIALIZATION: RedisStorage with fallback to MemoryStorage
+    # ====================================================================================
+    # PROD: Redis required (fail fast if missing)
+    # STAGE/LOCAL: Redis optional (fallback to MemoryStorage)
+    # ====================================================================================
+    
+    # Custom KeyBuilder with namespace prefix
+    class NamespaceKeyBuilder(KeyBuilder):
+        """KeyBuilder that adds environment-specific namespace prefix"""
+        def __init__(self, prefix: str):
+            self.prefix = prefix
+            # Use DefaultKeyBuilder for actual key building logic
+            self._default_builder = DefaultKeyBuilder()
+        
+        def build(self, key: StorageKey, part: Literal['data', 'state', 'lock']) -> str:
+            """Build Redis key with namespace prefix"""
+            # Delegate to DefaultKeyBuilder and prepend our prefix
+            default_key = self._default_builder.build(key, part)
+            return f"{self.prefix}{default_key}"
+    
+    fsm_storage = None
+    fsm_storage_type = "unknown"
+    
+    # Try to initialize RedisStorage if Redis URL is configured
+    if config.REDIS_URL:
+        try:
+            # Namespace prefix based on environment
+            namespace_prefix = f"fsm:{config.APP_ENV}:"
+            # TTL: 24 hours (86400 seconds)
+            ttl_seconds = 86400
+            
+            # Initialize RedisStorage using existing Redis client
+            redis_client_instance = await redis_client.get_redis_client()
+            if redis_client_instance is None:
+                raise RuntimeError("Redis client is None")
+            
+            # Test connection before creating storage
+            ping_result = await redis_client_instance.ping()
+            if not ping_result:
+                raise RuntimeError("Redis PING failed")
+            
+            # Create custom KeyBuilder with namespace prefix
+            key_builder = NamespaceKeyBuilder(prefix=namespace_prefix)
+            
+            # Create RedisStorage with namespace and TTL
+            fsm_storage = RedisStorage(
+                redis=redis_client_instance,
+                key_builder=key_builder,
+                state_ttl=ttl_seconds,
+                data_ttl=ttl_seconds
+            )
+            fsm_storage_type = "redis"
+            logger.info(
+                f"FSM_STORAGE=redis namespace={namespace_prefix} ttl={ttl_seconds}s",
+                extra={
+                    "component": "infra",
+                    "operation": "fsm_storage_init",
+                    "outcome": "success",
+                    "storage_type": "redis",
+                    "namespace": namespace_prefix,
+                    "ttl_seconds": ttl_seconds
+                }
+            )
+        except Exception as e:
+            # RedisStorage initialization failed
+            if config.IS_PROD:
+                # PROD: Fail fast - Redis is required
+                logger.error(
+                    f"CRITICAL: RedisStorage initialization failed in PROD: {type(e).__name__}: {e}",
+                    extra={
+                        "component": "infra",
+                        "operation": "fsm_storage_init",
+                        "outcome": "failed",
+                        "environment": "prod"
+                    }
+                )
+                print(f"ERROR: FSM RedisStorage initialization failed in PROD: {e}", file=sys.stderr)
+                sys.exit(1)
+            else:
+                # STAGE/LOCAL: Fallback to MemoryStorage
+                logger.warning(
+                    f"RedisStorage initialization failed, falling back to MemoryStorage: {type(e).__name__}: {e}",
+                    extra={
+                        "component": "infra",
+                        "operation": "fsm_storage_init",
+                        "outcome": "degraded",
+                        "fallback": "MemoryStorage",
+                        "environment": config.APP_ENV
+                    }
+                )
+                fsm_storage = MemoryStorage()
+                fsm_storage_type = "memory_fallback"
+    else:
+        # Redis URL not configured
+        if config.IS_PROD:
+            # PROD: Redis is required
+            logger.error(
+                "CRITICAL: REDIS_URL not configured in PROD - FSM requires Redis",
+                extra={
+                    "component": "infra",
+                    "operation": "fsm_storage_init",
+                    "outcome": "failed",
+                    "environment": "prod"
+                }
+            )
+            print("ERROR: REDIS_URL is required in PROD environment", file=sys.stderr)
+            sys.exit(1)
+        else:
+            # STAGE/LOCAL: Use MemoryStorage
+            logger.info(
+                "REDIS_URL not configured, using MemoryStorage for FSM",
+                extra={
+                    "component": "infra",
+                    "operation": "fsm_storage_init",
+                    "outcome": "success",
+                    "storage_type": "memory",
+                    "environment": config.APP_ENV
+                }
+            )
+            fsm_storage = MemoryStorage()
+            fsm_storage_type = "memory"
+    
+    # Ensure storage is initialized
+    if fsm_storage is None:
+        logger.error("CRITICAL: FSM storage is None after initialization")
+        print("ERROR: FSM storage initialization failed", file=sys.stderr)
+        sys.exit(1)
+    
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=fsm_storage)
     
     # Регистрация handlers
     dp.include_router(handlers.router)
@@ -150,8 +281,7 @@ async def main():
     # ====================================================================================
     # REDIS INFRASTRUCTURE: Initialize Redis client and check connectivity
     # ====================================================================================
-    # Redis is optional - app continues if Redis unavailable
-    # Only logs warning, does NOT crash application
+    # Redis is checked BEFORE FSM initialization (FSM needs Redis in PROD)
     # ====================================================================================
     try:
         redis_connected = await redis_client.check_redis_connection()
@@ -163,7 +293,7 @@ async def main():
             else:
                 logger.info("ℹ️ Redis not configured - Redis features disabled (acceptable for single instance)")
     except Exception as e:
-        # Redis connection failure should NOT crash the app
+        # Redis connection failure should NOT crash the app (unless PROD and FSM needs it)
         logger.warning(
             f"Redis initialization error (app continues): {type(e).__name__}: {e}",
             extra={
