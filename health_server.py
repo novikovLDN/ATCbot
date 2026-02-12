@@ -66,12 +66,46 @@ async def health_handler(request: web.Request) -> web.Response:
         # Check Redis connection (non-blocking, does not affect status)
         redis_ready = False
         fsm_storage_type = "unknown"
+        redis_lock_ready = False
         try:
             redis_ready = redis_client.REDIS_READY
             # Determine FSM storage type based on Redis availability
             # Note: This is a best-effort check - actual storage type is set at startup
             if redis_ready:
                 fsm_storage_type = "redis"
+                
+                # Test Redis lock system (write/delete test)
+                try:
+                    redis_client_instance = await redis_client.get_redis_client()
+                    if redis_client_instance:
+                        test_lock_key = f"lock:health_check:{now.timestamp()}"
+                        test_token = "health_check_token"
+                        # Try to set a test lock
+                        test_result = await redis_client_instance.set(
+                            test_lock_key,
+                            test_token,
+                            nx=True,
+                            px=1000  # 1 second TTL
+                        )
+                        if test_result:
+                            # Lock acquired, now release it using Lua script
+                            release_lua = """
+                            if redis.call("get", KEYS[1]) == ARGV[1] then
+                                return redis.call("del", KEYS[1])
+                            else
+                                return 0
+                            end
+                            """
+                            release_script = redis_client_instance.register_script(release_lua)
+                            await release_script(keys=[test_lock_key], args=[test_token])
+                            redis_lock_ready = True
+                        else:
+                            # Lock already exists (shouldn't happen for health check)
+                            redis_lock_ready = False
+                except Exception as lock_test_error:
+                    # Lock test failed - log but don't crash
+                    logger.debug(f"Redis lock health check failed: {lock_test_error}")
+                    redis_lock_ready = False
             else:
                 # If Redis is configured but not ready, FSM might be degraded
                 # If Redis is not configured, FSM is using MemoryStorage
@@ -81,6 +115,7 @@ async def health_handler(request: web.Request) -> web.Response:
             # Redis check failed - treat as unavailable but don't crash
             redis_ready = False
             fsm_storage_type = "unknown"
+            redis_lock_ready = False
         
         # Create SystemState instance (for internal use)
         system_state = SystemState(
@@ -97,12 +132,13 @@ async def health_handler(request: web.Request) -> web.Response:
         # Note: recovery_cooldown import removed to avoid dependency (not needed for health_server)
         # Recovery state is computed in healthcheck.py, not in health_server.py
         
-        # Формируем ответ (preserve exact format, add redis and fsm status)
+        # Формируем ответ (preserve exact format, add redis, fsm, and lock status)
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
             "redis_ready": redis_ready,
             "fsm_storage": fsm_storage_type,
+            "redis_lock_ready": redis_lock_ready,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         # Note: recovery_in_progress is computed but not added to response
@@ -121,6 +157,7 @@ async def health_handler(request: web.Request) -> web.Response:
             "db_ready": False,
             "redis_ready": False,
             "fsm_storage": "unknown",
+            "redis_lock_ready": False,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "error": "Health check error"
         }

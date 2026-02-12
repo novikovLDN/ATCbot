@@ -29,6 +29,8 @@ import random
 import uuid as uuid_module
 from typing import Optional, Dict, Any, Union
 from app.services.subscriptions import service as subscription_service
+import redis_client
+from app.core.redis_lock import RedisDistributedLock
 from app.services.subscriptions.service import (
     is_subscription_active,
     get_subscription_status,
@@ -1566,14 +1568,8 @@ def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False,
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# In-memory async lock per user for reissue (prevents parallel execution in single process)
-_REISSUE_LOCKS: dict[int, asyncio.Lock] = {}
-
-
-def get_reissue_lock(user_id: int) -> asyncio.Lock:
-    if user_id not in _REISSUE_LOCKS:
-        _REISSUE_LOCKS[user_id] = asyncio.Lock()
-    return _REISSUE_LOCKS[user_id]
+# DEPRECATED: In-memory locks removed - using Redis distributed locks instead
+# See app.core.redis_lock.RedisDistributedLock for distributed locking
 
 
 def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
@@ -9973,7 +9969,7 @@ async def noop_handler(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin:user_reissue:"))
 async def callback_admin_user_reissue(callback: CallbackQuery):
-    """Перевыпуск ключа из админ-дашборда. 5 слоёв защиты: immediate ACK, disabled UI, in-memory lock, Postgres advisory lock, correlation logging."""
+    """Перевыпуск ключа из админ-дашборда. 5 слоёв защиты: immediate ACK, disabled UI, Redis distributed lock, Postgres advisory lock, correlation logging."""
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
@@ -9985,33 +9981,85 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         await callback.answer("Ошибка: неверный формат команды", show_alert=True)
         return
 
-    # STEP 3 — IN-MEMORY ASYNC LOCK (fast UX check + real acquire)
-    lock = get_reissue_lock(target_user_id)
-    logger.debug("ADMIN_REISSUE_LOCK_ATTEMPT user=%s locked=%s", target_user_id, lock.locked())
+    # STEP 3 — REDIS DISTRIBUTED LOCK (multi-instance safe)
+    correlation_id = str(uuid_module.uuid4())
+    admin_id = callback.from_user.id
     
-    # STEP 1 — FAST CHECK (UX guard only)
-    if lock.locked():
-        logger.info("ADMIN_REISSUE_REJECTED_ALREADY_RUNNING user=%s", target_user_id)
-        await callback.answer("Перевыпуск уже выполняется...", show_alert=False)
+    # Get Redis client - if unavailable, deny reissue (fail-safe)
+    try:
+        redis_client_instance = await redis_client.get_redis_client()
+        if redis_client_instance is None:
+            logger.error(
+                "REDIS_LOCK_ERROR",
+                extra={
+                    "component": "handler",
+                    "operation": "reissue_lock_init",
+                    "outcome": "failed",
+                    "reason": "redis_client_unavailable",
+                    "admin_id": admin_id,
+                    "target_user_id": target_user_id,
+                    "correlation_id": correlation_id,
+                }
+            )
+            await callback.answer("Ошибка: система блокировок недоступна. Попробуйте позже.", show_alert=True)
+            return
+        
+        # Create Redis distributed lock
+        lock_key = f"lock:{config.APP_ENV}:reissue:{target_user_id}"
+        lock = RedisDistributedLock(
+            redis_client=redis_client_instance,
+            key=lock_key,
+            ttl_seconds=60,
+            wait_timeout=3,
+        )
+        
+        # Try to acquire lock
+        lock_acquired = await lock.acquire(correlation_id=correlation_id)
+        if not lock_acquired:
+            logger.info(
+                "ADMIN_REISSUE_REJECTED_ALREADY_RUNNING",
+                extra={
+                    "correlation_id": correlation_id,
+                    "admin_id": admin_id,
+                    "target_user_id": target_user_id,
+                    "reason": "redis_lock_timeout",
+                }
+            )
+            await callback.answer("Перевыпуск уже выполняется...", show_alert=False)
+            return
+        
+    except Exception as e:
+        # Redis lock initialization failed - deny reissue (fail-safe)
+        logger.error(
+            "REDIS_LOCK_ERROR",
+            extra={
+                "component": "handler",
+                "operation": "reissue_lock_init",
+                "outcome": "error",
+                "reason": str(e)[:100],
+                "admin_id": admin_id,
+                "target_user_id": target_user_id,
+                "correlation_id": correlation_id,
+            }
+        )
+        await callback.answer("Ошибка: система блокировок недоступна. Попробуйте позже.", show_alert=True)
         return
-
-    # STEP 2 — ACQUIRE (real acquire, no timeout)
-    await lock.acquire()
 
     try:
         # STEP 1 — IMMEDIATE CALLBACK ACK (inside protected block to prevent lock leak)
         await callback.answer("Перевыпуск ключа запущен...", show_alert=False)
-        correlation_id = str(uuid_module.uuid4())
         update_id = getattr(getattr(callback, "update", None), "update_id", None)
         logger.info(
             "ADMIN_REISSUE_START",
             extra={
                 "correlation_id": correlation_id,
-                "admin_id": callback.from_user.id,
+                "admin_id": admin_id,
                 "target_user_id": target_user_id,
                 "callback_id": callback.id,
                 "update_id": update_id,
                 "task_id": id(asyncio.current_task()),
+                "instance_id": lock.instance_id,
+                "pid": lock.pid,
             },
         )
 
@@ -10092,8 +10140,8 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         except Exception:
             pass
     finally:
-        # GUARANTEED RELEASE (lock was acquired, no check needed)
-        lock.release()
+        # GUARANTEED RELEASE (Redis lock will auto-release via TTL if process crashes)
+        await lock.release(correlation_id=correlation_id)
 
 
 @router.callback_query(F.data == "admin:system")
