@@ -4696,9 +4696,11 @@ async def process_promo_code(message: Message, state: FSMContext):
         await message.answer(tariff_text, reply_markup=keyboard)
         return
     
-    # Проверяем промокод через базу данных
-    promo_data = await database.check_promo_code_valid(promo_code)
-    if promo_data:
+    # CRITICAL FIX: Используем validate_promocode_atomic для валидации без инкремента
+    # Промокод будет потреблен только при успешной оплате
+    result = await database.validate_promocode_atomic(promo_code)
+    if result["success"]:
+        promo_data = result["promo_data"]
         # Промокод валиден
         discount_percent = promo_data["discount_percent"]
         
@@ -5393,15 +5395,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
         # Валидация уже выполнена внутри finalize_purchase - здесь только отправка
         # КРИТИЧНО: Это гарантирует что пользователь ВСЕГДА получит VPN ключ после оплаты
         
-        # CRITICAL FIX: Атомарное применение промокода после успешной покупки
-        # Используем apply_promocode_atomic для защиты от race conditions
+        # CRITICAL FIX: Промокод уже потреблен в finalize_purchase через consume_promocode_atomic
+        # Здесь только логируем использование для статистики
         if promo_code_used:
             try:
-                # Атомарно применяем промокод (проверка + инкремент в одной транзакции)
-                result = await database.apply_promocode_atomic(telegram_id, promo_code_used)
-                
-                if result["success"]:
-                    promo_data = result["promo_data"]
+                # Получаем данные промокода для логирования
+                promo_data = await database.get_promo_code(promo_code_used)
+                if promo_data:
                     discount_percent = promo_data["discount_percent"]
                     
                     # Рассчитываем price_before (базовая цена тарифа)
@@ -5409,7 +5409,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     price_before = base_price
                     price_after = payment_amount_rubles
                     
-                    # Логируем использование промокода
+                    # Логируем использование промокода (уже потреблен в finalize_purchase)
                     await database.log_promo_code_usage(
                         promo_code=promo_code_used,
                         telegram_id=telegram_id,
@@ -5418,15 +5418,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         price_before=price_before,
                         price_after=price_after
                     )
-                else:
-                    # Промокод стал невалидным между проверкой и применением
-                    error_type = result.get("error", "unknown")
-                    logger.warning(
-                        f"Promocode became invalid during purchase: code={promo_code_used}, "
-                        f"user={telegram_id}, error={error_type}"
-                    )
             except Exception as e:
-                logger.error(f"Error applying promocode atomically: {e}")
+                logger.error(f"Error logging promocode usage: {e}")
     
     # КРИТИЧНО: VPN ключ уже валидирован в finalize_purchase
     # Здесь только отправка пользователю - это атомарная операция после успешного платежа

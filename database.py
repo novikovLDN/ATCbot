@@ -4878,9 +4878,12 @@ async def create_promocode_atomic(
                 return None
 
 
-async def apply_promocode_atomic(user_id: int, code: str) -> Dict[str, Any]:
+async def validate_promocode_atomic(code: str) -> Dict[str, Any]:
     """
-    Применить промокод атомарно с защитой от race conditions.
+    Валидация промокода без инкремента счетчика.
+    Используется для проверки промокода перед созданием промо-сессии.
+    
+    CRITICAL: НЕ изменяет used_count. Промокод потребляется только при успешной оплате.
     
     Returns:
         {
@@ -4952,8 +4955,88 @@ async def apply_promocode_atomic(user_id: int, code: str) -> Dict[str, Any]:
                     logger.info(f"PROMOCODE_LIMIT_REACHED code={code_normalized} used={used_count} max={max_uses}")
                     return {"success": False, "promo_data": None, "error": "limit_reached"}
                 
+                # SUCCESS — только валидация, НЕ инкрементируем счетчик
+                promo_data = dict(row)
+                
+                logger.info(
+                    f"PROMOCODE_VALIDATED code={code_normalized} "
+                    f"used_count={used_count}/{max_uses if max_uses else 'unlimited'}"
+                )
+                
+                return {"success": True, "promo_data": promo_data, "error": None}
+                
+            except Exception as e:
+                logger.exception(f"Error validating promocode {code_normalized}: {e}")
+                return {"success": False, "promo_data": None, "error": "invalid"}
+
+
+async def consume_promocode_atomic(code: str, telegram_id: int) -> None:
+    """
+    Потребление промокода — инкремент счетчика использований.
+    Вызывается ТОЛЬКО при успешной оплате.
+    
+    CRITICAL: Эта функция должна вызываться только после успешной оплаты.
+    
+    Raises:
+        ValueError: Если промокод не найден, уже исчерпан или невалиден
+    """
+    if not DB_READY:
+        raise ValueError("PROMO_DB_NOT_READY")
+    
+    pool = await get_pool()
+    if pool is None:
+        raise ValueError("PROMO_DB_NOT_READY")
+    
+    code_normalized = code.upper().strip()
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # CRITICAL: Advisory lock на код для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    code_normalized
+                )
+                
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки
+                row = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM promo_codes
+                    WHERE code = $1
+                    FOR UPDATE
+                    """,
+                    code_normalized
+                )
+                
+                if not row:
+                    raise ValueError("PROMO_NOT_FOUND")
+                
+                # Проверяем активность
+                if not row.get("is_active", False):
+                    raise ValueError("PROMO_INACTIVE")
+                
+                # Проверяем срок действия
+                expires_at = row.get("expires_at")
+                if expires_at:
+                    expired_check = await conn.fetchval(
+                        "SELECT expires_at < NOW() FROM promo_codes WHERE code = $1",
+                        row["code"]
+                    )
+                    if expired_check:
+                        await conn.execute(
+                            "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                            row["code"]
+                        )
+                        raise ValueError("PROMO_EXPIRED")
+                
+                # Проверяем лимит использований
+                used_count = row.get("used_count", 0)
+                max_uses = row.get("max_uses")
+                if max_uses is not None and used_count >= max_uses:
+                    raise ValueError("PROMO_ALREADY_CONSUMED")
+                
                 # SUCCESS — увеличиваем счетчик использований атомарно
-                # CRITICAL FIX: Используем UPDATE с инкрементом для атомарности
                 await conn.execute(
                     """
                     UPDATE promo_codes
@@ -4982,19 +5065,17 @@ async def apply_promocode_atomic(user_id: int, code: str) -> Dict[str, Any]:
                         row["code"]
                     )
                 
-                promo_data = dict(row)
-                promo_data["used_count"] = new_count
-                
                 logger.info(
-                    f"PROMOCODE_USED code={code_normalized} user={user_id} "
+                    f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
                     f"used_count={new_count}/{max_uses if max_uses else 'unlimited'}"
                 )
                 
-                return {"success": True, "promo_data": promo_data, "error": None}
-                
+            except ValueError:
+                # Пробрасываем ValueError как есть
+                raise
             except Exception as e:
-                logger.exception(f"Error applying promocode {code_normalized}: {e}")
-                return {"success": False, "promo_data": None, "error": "invalid"}
+                logger.exception(f"Error consuming promocode {code_normalized}: {e}")
+                raise ValueError("PROMO_CONSUME_ERROR")
 
 
 async def is_user_first_purchase(telegram_id: int) -> bool:
@@ -6049,6 +6130,7 @@ async def finalize_purchase(
             pending_purchase = dict(pending_row)
             telegram_id = pending_purchase["telegram_id"]
             status = pending_purchase.get("status")
+            promo_code = pending_purchase.get("promo_code")  # Получаем промокод из pending_purchase
             
             if status != "pending":
                 error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
@@ -6139,7 +6221,21 @@ async def finalize_purchase(
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
                 
-                # D) BALANCE TOP-UP FLOW: Process referral reward
+                # D) BALANCE TOP-UP FLOW: Consume promocode (if used)
+                if promo_code:
+                    try:
+                        await consume_promocode_atomic(promo_code, telegram_id)
+                        logger.info(
+                            f"finalize_purchase: PROMOCODE_CONSUMED [BALANCE_TOPUP] "
+                            f"purchase_id={purchase_id}, user={telegram_id}, code={promo_code}"
+                        )
+                    except ValueError as promo_error:
+                        # Промокод стал невалидным между проверкой и оплатой
+                        error_msg = f"Promocode became invalid during balance topup: code={promo_code}, error={promo_error}"
+                        logger.warning(f"finalize_purchase: {error_msg}")
+                        # Продолжаем без промокода (покупка уже оплачена)
+                
+                # E) BALANCE TOP-UP FLOW: Process referral reward
                 referral_reward_result = await process_referral_reward(
                     buyer_id=telegram_id,
                     purchase_id=purchase_id,
@@ -6304,7 +6400,22 @@ async def finalize_purchase(
                 payment_id
             )
             
-            # STEP 7: Обрабатываем реферальный кешбэк
+            # STEP 7: Потребляем промокод (если был использован)
+            # CRITICAL: Промокод потребляется ТОЛЬКО при успешной оплате
+            if promo_code:
+                try:
+                    await consume_promocode_atomic(promo_code, telegram_id)
+                    logger.info(
+                        f"finalize_purchase: PROMOCODE_CONSUMED [purchase_id={purchase_id}, "
+                        f"user={telegram_id}, code={promo_code}]"
+                    )
+                except ValueError as promo_error:
+                    # Промокод стал невалидным между проверкой и оплатой
+                    error_msg = f"Promocode became invalid during payment: code={promo_code}, error={promo_error}"
+                    logger.warning(f"finalize_purchase: {error_msg}")
+                    # Продолжаем без промокода (покупка уже оплачена)
+            
+            # STEP 8: Обрабатываем реферальный кешбэк
             # Обработка реферального кешбэка внутри той же транзакции
             # FINANCIAL errors будут проброшены и откатят всю транзакцию
             # BUSINESS errors вернут success=False и покупка продолжится без награды
