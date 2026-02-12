@@ -6221,19 +6221,79 @@ async def finalize_purchase(
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
                 
-                # D) BALANCE TOP-UP FLOW: Consume promocode (if used)
+                # D) BALANCE TOP-UP FLOW: Consume promocode (if used) - ВНУТРИ ТОЙ ЖЕ ТРАНЗАКЦИИ
                 if promo_code:
-                    try:
-                        await consume_promocode_atomic(promo_code, telegram_id)
-                        logger.info(
-                            f"finalize_purchase: PROMOCODE_CONSUMED [BALANCE_TOPUP] "
-                            f"purchase_id={purchase_id}, user={telegram_id}, code={promo_code}"
+                    code_normalized = promo_code.upper().strip()
+                    
+                    # Advisory lock на промокод для защиты от race conditions
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext($1))",
+                        code_normalized
+                    )
+                    
+                    # Блокируем строку промокода
+                    promo_row = await conn.fetchrow(
+                        """
+                        SELECT *
+                        FROM promo_codes
+                        WHERE code = $1
+                        FOR UPDATE
+                        """,
+                        code_normalized
+                    )
+                    
+                    if not promo_row:
+                        raise ValueError(f"PROMOCODE_NOT_FOUND_DURING_PAYMENT: code={code_normalized}, purchase_id={purchase_id}")
+                    
+                    # Проверяем активность
+                    if not promo_row.get("is_active", False):
+                        raise ValueError(f"PROMOCODE_INACTIVE: code={code_normalized}, purchase_id={purchase_id}")
+                    
+                    # Проверяем срок действия
+                    expires_at_promo = promo_row.get("expires_at")
+                    if expires_at_promo:
+                        expired_check = await conn.fetchval(
+                            "SELECT expires_at < NOW() FROM promo_codes WHERE code = $1",
+                            code_normalized
                         )
-                    except ValueError as promo_error:
-                        # Промокод стал невалидным между проверкой и оплатой
-                        error_msg = f"Promocode became invalid during balance topup: code={promo_code}, error={promo_error}"
-                        logger.warning(f"finalize_purchase: {error_msg}")
-                        # Продолжаем без промокода (покупка уже оплачена)
+                        if expired_check:
+                            await conn.execute(
+                                "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                                code_normalized
+                            )
+                            raise ValueError(f"PROMOCODE_EXPIRED: code={code_normalized}, purchase_id={purchase_id}")
+                    
+                    # Проверяем лимит использований
+                    used_count = promo_row.get("used_count", 0)
+                    max_uses = promo_row.get("max_uses")
+                    if max_uses is not None and used_count >= max_uses:
+                        raise ValueError(f"PROMOCODE_ALREADY_CONSUMED: code={code_normalized}, used={used_count}, max={max_uses}, purchase_id={purchase_id}")
+                    
+                    # Увеличиваем счетчик использований атомарно
+                    await conn.execute(
+                        """
+                        UPDATE promo_codes
+                        SET used_count = used_count + 1
+                        WHERE code = $1
+                        """,
+                        code_normalized
+                    )
+                    
+                    # Автоматическая деактивация при достижении лимита
+                    await conn.execute(
+                        """
+                        UPDATE promo_codes
+                        SET is_active = FALSE
+                        WHERE code = $1
+                        AND used_count >= max_uses
+                        """,
+                        code_normalized
+                    )
+                    
+                    logger.info(
+                        f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
+                        f"purchase_id={purchase_id} [BALANCE_TOPUP] in finalize_purchase transaction"
+                    )
                 
                 # E) BALANCE TOP-UP FLOW: Process referral reward
                 referral_reward_result = await process_referral_reward(
@@ -6400,20 +6460,80 @@ async def finalize_purchase(
                 payment_id
             )
             
-            # STEP 7: Потребляем промокод (если был использован)
-            # CRITICAL: Промокод потребляется ТОЛЬКО при успешной оплате
+            # STEP 7: Потребляем промокод (если был использован) - ВНУТРИ ТОЙ ЖЕ ТРАНЗАКЦИИ
+            # CRITICAL: Промокод потребляется ДО активации подписки и ДО реферального кешбэка
             if promo_code:
-                try:
-                    await consume_promocode_atomic(promo_code, telegram_id)
-                    logger.info(
-                        f"finalize_purchase: PROMOCODE_CONSUMED [purchase_id={purchase_id}, "
-                        f"user={telegram_id}, code={promo_code}]"
+                code_normalized = promo_code.upper().strip()
+                
+                # Advisory lock на промокод для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    code_normalized
+                )
+                
+                # Блокируем строку промокода
+                promo_row = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM promo_codes
+                    WHERE code = $1
+                    FOR UPDATE
+                    """,
+                    code_normalized
+                )
+                
+                if not promo_row:
+                    raise ValueError(f"PROMOCODE_NOT_FOUND_DURING_PAYMENT: code={code_normalized}, purchase_id={purchase_id}")
+                
+                # Проверяем активность
+                if not promo_row.get("is_active", False):
+                    raise ValueError(f"PROMOCODE_INACTIVE: code={code_normalized}, purchase_id={purchase_id}")
+                
+                # Проверяем срок действия
+                expires_at_promo = promo_row.get("expires_at")
+                if expires_at_promo:
+                    expired_check = await conn.fetchval(
+                        "SELECT expires_at < NOW() FROM promo_codes WHERE code = $1",
+                        code_normalized
                     )
-                except ValueError as promo_error:
-                    # Промокод стал невалидным между проверкой и оплатой
-                    error_msg = f"Promocode became invalid during payment: code={promo_code}, error={promo_error}"
-                    logger.warning(f"finalize_purchase: {error_msg}")
-                    # Продолжаем без промокода (покупка уже оплачена)
+                    if expired_check:
+                        await conn.execute(
+                            "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                            code_normalized
+                        )
+                        raise ValueError(f"PROMOCODE_EXPIRED: code={code_normalized}, purchase_id={purchase_id}")
+                
+                # Проверяем лимит использований
+                used_count = promo_row.get("used_count", 0)
+                max_uses = promo_row.get("max_uses")
+                if max_uses is not None and used_count >= max_uses:
+                    raise ValueError(f"PROMOCODE_ALREADY_CONSUMED: code={code_normalized}, used={used_count}, max={max_uses}, purchase_id={purchase_id}")
+                
+                # Увеличиваем счетчик использований атомарно
+                await conn.execute(
+                    """
+                    UPDATE promo_codes
+                    SET used_count = used_count + 1
+                    WHERE code = $1
+                    """,
+                    code_normalized
+                )
+                
+                # Автоматическая деактивация при достижении лимита
+                await conn.execute(
+                    """
+                    UPDATE promo_codes
+                    SET is_active = FALSE
+                    WHERE code = $1
+                    AND used_count >= max_uses
+                    """,
+                    code_normalized
+                )
+                
+                logger.info(
+                    f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
+                    f"purchase_id={purchase_id} in finalize_purchase transaction"
+                )
             
             # STEP 8: Обрабатываем реферальный кешбэк
             # Обработка реферального кешбэка внутри той же транзакции
@@ -7216,7 +7336,8 @@ async def finalize_balance_purchase(
     tariff_type: str,
     period_days: int,
     amount_rubles: float,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    promo_code: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Атомарно обработать покупку подписки с баланса.
@@ -7233,6 +7354,7 @@ async def finalize_balance_purchase(
         period_days: Количество дней подписки
         amount_rubles: Сумма платежа в рублях
         description: Описание платежа (опционально)
+        promo_code: Промокод (опционально, потребляется внутри транзакции)
     
     Returns:
         {
@@ -7297,6 +7419,81 @@ async def finalize_balance_purchase(
                    VALUES ($1, $2, $3, $4, $5)""",
                 telegram_id, -amount_kopecks, "subscription_payment", "subscription_payment", transaction_description
             )
+            
+            # STEP 1.5: Потребляем промокод (если был использован) - ВНУТРИ ТОЙ ЖЕ ТРАНЗАКЦИИ
+            # CRITICAL: Промокод потребляется ДО активации подписки и ДО реферального кешбэка
+            if promo_code:
+                code_normalized = promo_code.upper().strip()
+                
+                # Advisory lock на промокод для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    code_normalized
+                )
+                
+                # Блокируем строку промокода
+                promo_row = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM promo_codes
+                    WHERE code = $1
+                    FOR UPDATE
+                    """,
+                    code_normalized
+                )
+                
+                if not promo_row:
+                    raise ValueError(f"PROMOCODE_NOT_FOUND_DURING_PAYMENT: code={code_normalized}")
+                
+                # Проверяем активность
+                if not promo_row.get("is_active", False):
+                    raise ValueError(f"PROMOCODE_INACTIVE: code={code_normalized}")
+                
+                # Проверяем срок действия
+                expires_at_promo = promo_row.get("expires_at")
+                if expires_at_promo:
+                    expired_check = await conn.fetchval(
+                        "SELECT expires_at < NOW() FROM promo_codes WHERE code = $1",
+                        code_normalized
+                    )
+                    if expired_check:
+                        await conn.execute(
+                            "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                            code_normalized
+                        )
+                        raise ValueError(f"PROMOCODE_EXPIRED: code={code_normalized}")
+                
+                # Проверяем лимит использований
+                used_count = promo_row.get("used_count", 0)
+                max_uses = promo_row.get("max_uses")
+                if max_uses is not None and used_count >= max_uses:
+                    raise ValueError(f"PROMOCODE_ALREADY_CONSUMED: code={code_normalized}, used={used_count}, max={max_uses}")
+                
+                # Увеличиваем счетчик использований атомарно
+                await conn.execute(
+                    """
+                    UPDATE promo_codes
+                    SET used_count = used_count + 1
+                    WHERE code = $1
+                    """,
+                    code_normalized
+                )
+                
+                # Автоматическая деактивация при достижении лимита
+                await conn.execute(
+                    """
+                    UPDATE promo_codes
+                    SET is_active = FALSE
+                    WHERE code = $1
+                    AND used_count >= max_uses
+                    """,
+                    code_normalized
+                )
+                
+                logger.info(
+                    f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
+                    f"in finalize_balance_purchase transaction"
+                )
             
             # STEP 2: Активируем подписку
             duration = timedelta(days=period_days)
