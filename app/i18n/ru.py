@@ -463,7 +463,7 @@ LANG = {
     'profile.auto_renew_disabled': "🔁 Автопродление: выключено",
     'profile.auto_renew_enabled': "🔁 Автопродление: {next_billing_date}",
     'profile.buy_hint': "Нажмите «Купить подписку» в меню, чтобы получить доступ.",
-    'profile.copy_key': "📋 Скопировать ключ",
+    'profile.copy_key': "🔑 Скопировать ключ",
     'profile.renewal_hint': "При продлении выбранный срок\nдобавляется к текущему автоматически.",
     'profile.subscription_active': "📆 Подписка: активна до {date}",
     'profile.subscription_inactive': "📆 Подписка: неактивна",
