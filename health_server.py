@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional
 from aiohttp import web
 from aiogram import Bot
 import database
+import redis_client
 from app.core.system_state import (
     SystemState,
     healthy_component,
@@ -62,6 +63,14 @@ async def health_handler(request: web.Request) -> web.Response:
         vpn_component = healthy_component(last_checked_at=now)
         payments_component = healthy_component(last_checked_at=now)
         
+        # Check Redis connection (non-blocking, does not affect status)
+        redis_ready = False
+        try:
+            redis_ready = redis_client.REDIS_READY
+        except Exception:
+            # Redis check failed - treat as unavailable but don't crash
+            redis_ready = False
+        
         # Create SystemState instance (for internal use)
         system_state = SystemState(
             database=db_component,
@@ -77,23 +86,11 @@ async def health_handler(request: web.Request) -> web.Response:
         # Note: recovery_cooldown import removed to avoid dependency (not needed for health_server)
         # Recovery state is computed in healthcheck.py, not in health_server.py
         
-        # Check Redis health (non-blocking, does not affect status)
-        redis_healthy = False
-        try:
-            from app.core.redis_client import check_redis_health
-            redis_healthy = await check_redis_health()
-        except ImportError:
-            # Redis module not available
-            pass
-        except Exception as e:
-            # Redis check failed - log but don't affect health status
-            logger.debug(f"Redis health check error: {e}")
-        
         # Формируем ответ (preserve exact format, add redis status)
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
-            "redis": "healthy" if redis_healthy else "unhealthy",
+            "redis_ready": redis_ready,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         # Note: recovery_in_progress is computed but not added to response
@@ -107,18 +104,10 @@ async def health_handler(request: web.Request) -> web.Response:
         # Критическая ошибка - логируем, но всё равно отвечаем
         logger.exception(f"Error in health endpoint: {e}")
         # Возвращаем degraded статус при ошибке
-        # Try to check Redis even on error (non-blocking)
-        redis_healthy = False
-        try:
-            from app.core.redis_client import check_redis_health
-            redis_healthy = await check_redis_health()
-        except Exception:
-            pass
-        
         response_data = {
             "status": "degraded",
             "db_ready": False,
-            "redis": "healthy" if redis_healthy else "unhealthy",
+            "redis_ready": False,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "error": "Health check error"
         }

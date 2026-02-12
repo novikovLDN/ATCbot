@@ -170,26 +170,26 @@ CRYPTOBOT_WEBHOOK_SECRET = env("CRYPTOBOT_WEBHOOK_SECRET")
 CRYPTOBOT_ASSETS_STR = env("CRYPTOBOT_ASSETS", default="USDT,TON,BTC")
 CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.split(",") if a.strip()]
 
-# Redis Configuration (OPTIONAL for local dev, REQUIRED for STAGE/PROD)
-# Redis URL format: redis://[password@]host[:port][/database]
-# Example: redis://localhost:6379/0 or redis://:password@redis.example.com:6379/0
+# Redis Configuration (OPTIONAL - required for horizontal scaling, optional for single instance)
+# Format: redis://[password@]host[:port][/db] or rediss:// for TLS
+# Example: redis://localhost:6379/0 or rediss://:password@redis.example.com:6380/0
 REDIS_URL = env("REDIS_URL")
-
-# Validate Redis URL format if provided
 if REDIS_URL:
-    if not REDIS_URL.startswith(("redis://", "rediss://")):
-        print(f"ERROR: Invalid REDIS_URL format: must start with 'redis://' or 'rediss://'", file=sys.stderr)
-        print(f"ERROR: Got: {REDIS_URL[:50]}...", file=sys.stderr)
+    # Validate Redis URL format (basic check)
+    if not (REDIS_URL.startswith("redis://") or REDIS_URL.startswith("rediss://")):
+        print(f"ERROR: Invalid REDIS_URL format: must start with redis:// or rediss://", file=sys.stderr)
         if APP_ENV in ("prod", "stage"):
             sys.exit(1)
         else:
-            print(f"WARNING: Invalid REDIS_URL in LOCAL - Redis will be disabled", file=sys.stderr)
+            print(f"WARNING: Invalid REDIS_URL in {APP_ENV.upper()} - Redis will be disabled", file=sys.stderr)
             REDIS_URL = None
     else:
         print(f"INFO: Using REDIS_URL from {APP_ENV.upper()}_REDIS_URL", flush=True)
 elif APP_ENV in ("prod", "stage"):
+    # Redis is optional but recommended for STAGE/PROD
     print(f"WARNING: {APP_ENV.upper()}_REDIS_URL is not set - Redis features will be disabled", file=sys.stderr)
-    print(f"WARNING: Redis is recommended for horizontal scaling", file=sys.stderr)
+    print(f"WARNING: Horizontal scaling will not be available without Redis", file=sys.stderr)
 else:
-    print(f"INFO: REDIS_URL not configured (LOCAL dev mode) - Redis features disabled", flush=True)
+    # LOCAL environment - Redis optional
+    print(f"INFO: REDIS_URL not set in LOCAL - Redis features disabled (acceptable for local dev)", flush=True)
 
