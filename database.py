@@ -5,6 +5,8 @@ import sys
 import hashlib
 import base64
 import uuid
+import random
+import string
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
@@ -4670,6 +4672,11 @@ async def check_promo_code_valid(code: str) -> Optional[Dict[str, Any]]:
     if not promo.get("is_active", False):
         return None
     
+    # Проверяем срок действия
+    expires_at = promo.get("expires_at")
+    if expires_at and expires_at < datetime.utcnow():
+        return None
+    
     # Проверяем лимит использований (если задан)
     max_uses = promo.get("max_uses")
     if max_uses is not None:
@@ -4681,16 +4688,41 @@ async def check_promo_code_valid(code: str) -> Optional[Dict[str, Any]]:
 
 
 async def increment_promo_code_use(code: str):
-    """Увеличить счетчик использований промокода"""
+    """
+    Увеличить счетчик использований промокода.
+    
+    DEPRECATED: Используйте apply_promocode_atomic для атомарного применения промокода.
+    Эта функция оставлена для обратной совместимости.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Получаем текущее значение used_count и max_uses
+            # CRITICAL: Advisory lock для защиты от race conditions
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                code.upper()
+            )
+            
+            # Получаем текущее значение used_count и max_uses с FOR UPDATE
             row = await conn.fetchrow(
-                "SELECT used_count, max_uses FROM promo_codes WHERE UPPER(code) = UPPER($1) FOR UPDATE",
+                "SELECT used_count, max_uses, expires_at, is_active FROM promo_codes WHERE UPPER(code) = UPPER($1) FOR UPDATE",
                 code
             )
             if not row:
+                return
+            
+            # Проверяем срок действия
+            expires_at = row.get("expires_at")
+            if expires_at and expires_at < datetime.utcnow():
+                # Деактивируем промокод при истечении срока
+                await conn.execute(
+                    "UPDATE promo_codes SET is_active = FALSE WHERE UPPER(code) = UPPER($1)",
+                    code
+                )
+                return
+            
+            # Проверяем активность
+            if not row.get("is_active", False):
                 return
             
             used_count = row["used_count"]
@@ -4742,11 +4774,220 @@ async def get_promo_stats() -> list:
                 discount_percent,
                 max_uses,
                 used_count,
-                is_active
+                is_active,
+                expires_at,
+                created_at,
+                created_by
             FROM promo_codes
             ORDER BY code
         """)
         return [dict(row) for row in rows]
+
+
+def generate_promo_code(length: int = 6) -> str:
+    """Генерировать случайный промокод из заглавных букв A-Z"""
+    return ''.join(random.choices(string.ascii_uppercase, k=length))
+
+
+async def create_promocode_atomic(
+    code: str,
+    discount_percent: int,
+    duration_seconds: int,
+    max_uses: int,
+    created_by: int
+) -> Optional[int]:
+    """
+    Создать промокод атомарно.
+    
+    Args:
+        code: Код промокода (A-Z, 0-9, 3-32 символа)
+        discount_percent: Процент скидки (0-100)
+        duration_seconds: Длительность действия в секундах
+        max_uses: Максимальное количество использований (> 0)
+        created_by: Telegram ID администратора
+    
+    Returns:
+        ID созданного промокода или None при ошибке
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, create_promocode_atomic skipped")
+        return None
+    
+    pool = await get_pool()
+    if pool is None:
+        return None
+    
+    # Нормализуем код: uppercase, убираем пробелы
+    code_normalized = code.upper().strip()
+    
+    # Валидация
+    if len(code_normalized) < 3 or len(code_normalized) > 32:
+        logger.error(f"Invalid promocode length: {len(code_normalized)}")
+        return None
+    
+    if not all(c.isalnum() for c in code_normalized):
+        logger.error(f"Invalid promocode characters: {code_normalized}")
+        return None
+    
+    if discount_percent < 0 or discount_percent > 100:
+        logger.error(f"Invalid discount_percent: {discount_percent}")
+        return None
+    
+    if max_uses <= 0:
+        logger.error(f"Invalid max_uses: {max_uses}")
+        return None
+    
+    if duration_seconds <= 0:
+        logger.error(f"Invalid duration_seconds: {duration_seconds}")
+        return None
+    
+    expires_at = datetime.utcnow() + timedelta(seconds=duration_seconds)
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # Проверяем уникальность (UNIQUE constraint также защищает)
+                existing = await conn.fetchrow(
+                    "SELECT code FROM promo_codes WHERE UPPER(code) = $1",
+                    code_normalized
+                )
+                if existing:
+                    logger.warning(f"Promocode already exists: {code_normalized}")
+                    return None
+                
+                # Создаем промокод
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO promo_codes
+                    (code, discount_percent, duration_seconds, max_uses, expires_at, created_by, is_active)
+                    VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+                    RETURNING code
+                    """,
+                    code_normalized,
+                    discount_percent,
+                    duration_seconds,
+                    max_uses,
+                    expires_at,
+                    created_by
+                )
+                
+                if row:
+                    logger.info(
+                        f"PROMOCODE_CREATED code={code_normalized} discount={discount_percent}% "
+                        f"max_uses={max_uses} expires_at={expires_at} created_by={created_by}"
+                    )
+                    return row["code"]
+                return None
+            except asyncpg.UniqueViolationError:
+                logger.warning(f"Promocode already exists (unique violation): {code_normalized}")
+                return None
+            except Exception as e:
+                logger.exception(f"Error creating promocode {code_normalized}: {e}")
+                return None
+
+
+async def apply_promocode_atomic(user_id: int, code: str) -> Dict[str, Any]:
+    """
+    Применить промокод атомарно с защитой от race conditions.
+    
+    Returns:
+        {
+            "success": bool,
+            "promo_data": Optional[Dict] (если success=True),
+            "error": str (если success=False): "invalid" | "expired" | "limit_reached"
+        }
+    """
+    if not DB_READY:
+        return {"success": False, "promo_data": None, "error": "invalid"}
+    
+    pool = await get_pool()
+    if pool is None:
+        return {"success": False, "promo_data": None, "error": "invalid"}
+    
+    code_normalized = code.upper().strip()
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # CRITICAL: Advisory lock на код для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    code_normalized
+                )
+                
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки
+                row = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM promo_codes
+                    WHERE UPPER(code) = $1
+                    AND is_active = TRUE
+                    FOR UPDATE
+                    """,
+                    code_normalized
+                )
+                
+                if not row:
+                    return {"success": False, "promo_data": None, "error": "invalid"}
+                
+                # Проверяем срок действия
+                expires_at = row.get("expires_at")
+                if expires_at and expires_at < datetime.utcnow():
+                    # Деактивируем промокод
+                    await conn.execute(
+                        "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                        row["code"]
+                    )
+                    logger.info(f"PROMOCODE_EXPIRED code={code_normalized}")
+                    return {"success": False, "promo_data": None, "error": "expired"}
+                
+                # Проверяем лимит использований
+                used_count = row.get("used_count", 0)
+                max_uses = row.get("max_uses")
+                if max_uses is not None and used_count >= max_uses:
+                    # Деактивируем промокод
+                    await conn.execute(
+                        "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                        row["code"]
+                    )
+                    logger.info(f"PROMOCODE_LIMIT_REACHED code={code_normalized} used={used_count} max={max_uses}")
+                    return {"success": False, "promo_data": None, "error": "limit_reached"}
+                
+                # SUCCESS — увеличиваем счетчик использований
+                new_count = used_count + 1
+                if max_uses is not None and new_count >= max_uses:
+                    # Достигли лимита — деактивируем
+                    await conn.execute(
+                        """
+                        UPDATE promo_codes
+                        SET used_count = $1, is_active = FALSE
+                        WHERE code = $2
+                        """,
+                        new_count, row["code"]
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        UPDATE promo_codes
+                        SET used_count = $1
+                        WHERE code = $2
+                        """,
+                        new_count, row["code"]
+                    )
+                
+                promo_data = dict(row)
+                promo_data["used_count"] = new_count
+                
+                logger.info(
+                    f"PROMOCODE_USED code={code_normalized} user={user_id} "
+                    f"used_count={new_count}/{max_uses if max_uses else 'unlimited'}"
+                )
+                
+                return {"success": True, "promo_data": promo_data, "error": None}
+                
+            except Exception as e:
+                logger.exception(f"Error applying promocode {code_normalized}: {e}")
+                return {"success": False, "promo_data": None, "error": "invalid"}
 
 
 async def is_user_first_purchase(telegram_id: int) -> bool:
