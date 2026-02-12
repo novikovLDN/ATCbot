@@ -3207,6 +3207,7 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     await state.set_state(PurchaseState.choose_tariff)
     
     text = (
+        f"💎 Тарифы Atlas Secure\n\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_corporate')}"
