@@ -1056,10 +1056,23 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
     # Конвертируем рубли в копейки для хранения
     amount_kopecks = int(amount * 100)
     
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, increase_balance skipped")
+        return False
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, increase_balance skipped")
+        return False
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
+                )
+                
                 # Обновляем баланс
                 await conn.execute(
                     "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
@@ -1118,23 +1131,33 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Проверяем баланс
-                current_balance = await conn.fetchval(
-                    "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
                 )
                 
-                if current_balance is None:
+                # SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
                     logger.error(f"User {telegram_id} not found")
                     return False
+                
+                current_balance = row["balance"]
                 
                 if current_balance < amount_kopecks:
                     logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount_kopecks}")
                     return False
                 
                 # Обновляем баланс
+                new_balance = current_balance - amount_kopecks
                 await conn.execute(
-                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
-                    amount_kopecks, telegram_id
+                    "UPDATE users SET balance = $1 WHERE telegram_id = $2",
+                    new_balance, telegram_id
                 )
                 
                 # Определяем тип транзакции на основе source
@@ -1382,11 +1405,20 @@ async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
         return False
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # CRITICAL: SELECT FOR UPDATE для защиты от двойного подтверждения
             row = await conn.fetchrow(
-                "UPDATE withdrawal_requests SET status = 'approved', processed_at = NOW(), processed_by = $1 WHERE id = $2 AND status = 'pending' RETURNING id",
+                "SELECT id FROM withdrawal_requests WHERE id = $1 AND status = 'pending' FOR UPDATE",
+                wid
+            )
+            if not row:
+                return False
+            
+            # Обновляем статус
+            result = await conn.execute(
+                "UPDATE withdrawal_requests SET status = 'approved', processed_at = NOW(), processed_by = $1 WHERE id = $2",
                 processed_by, wid
             )
-            if row:
+            if result == "UPDATE 1":
                 logger.info(f"Withdrawal request {wid} approved by {processed_by}")
                 return True
             return False
@@ -6778,13 +6810,22 @@ async def finalize_balance_purchase(
     
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # STEP 1: Проверяем и списываем баланс
-            current_balance = await conn.fetchval(
-                "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+            # CRITICAL: advisory lock per user для защиты от race conditions
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1)",
+                telegram_id
             )
             
-            if current_balance is None:
+            # STEP 1: Проверяем и списываем баланс (SELECT FOR UPDATE для блокировки строки)
+            row = await conn.fetchrow(
+                "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id
+            )
+            
+            if not row:
                 raise ValueError(f"User {telegram_id} not found")
+            
+            current_balance = row["balance"]
             
             if current_balance < amount_kopecks:
                 raise ValueError(
@@ -6793,9 +6834,10 @@ async def finalize_balance_purchase(
                 )
             
             # Списываем баланс
+            new_balance = current_balance - amount_kopecks
             await conn.execute(
-                "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
-                amount_kopecks, telegram_id
+                "UPDATE users SET balance = $1 WHERE telegram_id = $2",
+                new_balance, telegram_id
             )
             
             # Записываем транзакцию баланса
