@@ -4846,16 +4846,8 @@ async def create_promocode_atomic(
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Проверяем уникальность (UNIQUE constraint также защищает)
-                existing = await conn.fetchrow(
-                    "SELECT code FROM promo_codes WHERE UPPER(code) = $1",
-                    code_normalized
-                )
-                if existing:
-                    logger.warning(f"Promocode already exists: {code_normalized}")
-                    return None
-                
-                # Создаем промокод
+                # CRITICAL FIX: Убрана SELECT проверка - полагаемся только на UNIQUE constraint
+                # Это устраняет TOCTOU race condition
                 row = await conn.fetchrow(
                     """
                     INSERT INTO promo_codes
@@ -4916,11 +4908,12 @@ async def apply_promocode_atomic(user_id: int, code: str) -> Dict[str, Any]:
                 )
                 
                 # CRITICAL: SELECT FOR UPDATE для блокировки строки
+                # Используем code напрямую (уже нормализован) для консистентности с UNIQUE constraint
                 row = await conn.fetchrow(
                     """
                     SELECT *
                     FROM promo_codes
-                    WHERE UPPER(code) = $1
+                    WHERE code = $1
                     AND is_active = TRUE
                     FOR UPDATE
                     """,
@@ -4930,16 +4923,22 @@ async def apply_promocode_atomic(user_id: int, code: str) -> Dict[str, Any]:
                 if not row:
                     return {"success": False, "promo_data": None, "error": "invalid"}
                 
-                # Проверяем срок действия
+                # Проверяем срок действия (используем NOW() для консистентности с БД)
                 expires_at = row.get("expires_at")
-                if expires_at and expires_at < datetime.utcnow():
-                    # Деактивируем промокод
-                    await conn.execute(
-                        "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                if expires_at:
+                    # Проверяем через SQL для консистентности с БД временем
+                    expired_check = await conn.fetchval(
+                        "SELECT expires_at < NOW() FROM promo_codes WHERE code = $1",
                         row["code"]
                     )
-                    logger.info(f"PROMOCODE_EXPIRED code={code_normalized}")
-                    return {"success": False, "promo_data": None, "error": "expired"}
+                    if expired_check:
+                        # Деактивируем промокод
+                        await conn.execute(
+                            "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                            row["code"]
+                        )
+                        logger.info(f"PROMOCODE_EXPIRED code={code_normalized}")
+                        return {"success": False, "promo_data": None, "error": "expired"}
                 
                 # Проверяем лимит использований
                 used_count = row.get("used_count", 0)
@@ -4953,26 +4952,34 @@ async def apply_promocode_atomic(user_id: int, code: str) -> Dict[str, Any]:
                     logger.info(f"PROMOCODE_LIMIT_REACHED code={code_normalized} used={used_count} max={max_uses}")
                     return {"success": False, "promo_data": None, "error": "limit_reached"}
                 
-                # SUCCESS — увеличиваем счетчик использований
-                new_count = used_count + 1
+                # SUCCESS — увеличиваем счетчик использований атомарно
+                # CRITICAL FIX: Используем UPDATE с инкрементом для атомарности
+                await conn.execute(
+                    """
+                    UPDATE promo_codes
+                    SET used_count = used_count + 1
+                    WHERE code = $1
+                    """,
+                    row["code"]
+                )
+                
+                # Получаем обновленное значение used_count
+                updated_row = await conn.fetchrow(
+                    "SELECT used_count, max_uses FROM promo_codes WHERE code = $1",
+                    row["code"]
+                )
+                new_count = updated_row["used_count"]
+                
+                # Автоматическая деактивация при достижении лимита
                 if max_uses is not None and new_count >= max_uses:
-                    # Достигли лимита — деактивируем
                     await conn.execute(
                         """
                         UPDATE promo_codes
-                        SET used_count = $1, is_active = FALSE
-                        WHERE code = $2
+                        SET is_active = FALSE
+                        WHERE code = $1
+                        AND used_count >= max_uses
                         """,
-                        new_count, row["code"]
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        UPDATE promo_codes
-                        SET used_count = $1
-                        WHERE code = $2
-                        """,
-                        new_count, row["code"]
+                        row["code"]
                     )
                 
                 promo_data = dict(row)
