@@ -67,6 +67,7 @@ async def health_handler(request: web.Request) -> web.Response:
         redis_ready = False
         fsm_storage_type = "unknown"
         redis_lock_ready = False
+        redis_rate_limit_ready = False
         try:
             redis_ready = redis_client.REDIS_READY
             # Determine FSM storage type based on Redis availability
@@ -99,9 +100,29 @@ async def health_handler(request: web.Request) -> web.Response:
                             release_script = redis_client_instance.register_script(release_lua)
                             await release_script(keys=[test_lock_key], args=[test_token])
                             redis_lock_ready = True
+                            
+                            # Test rate limiter (INCR + EXPIRE)
+                            try:
+                                rate_test_key = f"rate:health_check:{now.timestamp()}"
+                                rate_limit_lua = """
+                                local current = redis.call('INCR', KEYS[1])
+                                if current == 1 then
+                                    redis.call('EXPIRE', KEYS[1], ARGV[1])
+                                end
+                                return current
+                                """
+                                rate_script = redis_client_instance.register_script(rate_limit_lua)
+                                rate_count = await rate_script(keys=[rate_test_key], args=[1])
+                                # Clean up test key
+                                await redis_client_instance.delete(rate_test_key)
+                                redis_rate_limit_ready = rate_count == 1
+                            except Exception as rate_test_error:
+                                logger.debug(f"Redis rate limit health check failed: {rate_test_error}")
+                                redis_rate_limit_ready = False
                         else:
                             # Lock already exists (shouldn't happen for health check)
                             redis_lock_ready = False
+                            redis_rate_limit_ready = False
                 except Exception as lock_test_error:
                     # Lock test failed - log but don't crash
                     logger.debug(f"Redis lock health check failed: {lock_test_error}")
@@ -116,6 +137,7 @@ async def health_handler(request: web.Request) -> web.Response:
             redis_ready = False
             fsm_storage_type = "unknown"
             redis_lock_ready = False
+            redis_rate_limit_ready = False
         
         # Create SystemState instance (for internal use)
         system_state = SystemState(
@@ -132,13 +154,14 @@ async def health_handler(request: web.Request) -> web.Response:
         # Note: recovery_cooldown import removed to avoid dependency (not needed for health_server)
         # Recovery state is computed in healthcheck.py, not in health_server.py
         
-        # Формируем ответ (preserve exact format, add redis, fsm, and lock status)
+        # Формируем ответ (preserve exact format, add redis, fsm, lock, and rate limit status)
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
             "redis_ready": redis_ready,
             "fsm_storage": fsm_storage_type,
             "redis_lock_ready": redis_lock_ready,
+            "redis_rate_limit_ready": redis_rate_limit_ready,
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         # Note: recovery_in_progress is computed but not added to response
@@ -158,6 +181,7 @@ async def health_handler(request: web.Request) -> web.Response:
             "redis_ready": False,
             "fsm_storage": "unknown",
             "redis_lock_ready": False,
+            "redis_rate_limit_ready": False,
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "error": "Health check error"
         }

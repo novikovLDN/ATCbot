@@ -31,6 +31,7 @@ from typing import Optional, Dict, Any, Union
 from app.services.subscriptions import service as subscription_service
 import redis_client
 from app.core.redis_lock import RedisDistributedLock
+from app.core.rate_limiter import create_redis_rate_limiter
 from app.services.subscriptions.service import (
     is_subscription_active,
     get_subscription_status,
@@ -1592,6 +1593,22 @@ def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    
+    # REDIS DISTRIBUTED RATE LIMITING: 10 per 30 sec per user
+    telegram_id = message.from_user.id
+    correlation_id = str(message.message_id) if hasattr(message, 'message_id') else str(uuid_module.uuid4())
+    rate_limiter = create_redis_rate_limiter("start_command", max_requests=10, window_seconds=30)
+    rate_limit_key = f"user:{telegram_id}"
+    is_allowed = await rate_limiter.allow(
+        key=rate_limit_key,
+        correlation_id=correlation_id,
+        telegram_id=telegram_id,
+    )
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await message.answer("Слишком много запросов. Попробуйте позже.")
+        return
+    
     # SAFE STARTUP GUARD: Проверка готовности БД
     # /start может работать в деградированном режиме (только показ меню),
     # но если БД недоступна, не пытаемся создавать пользователя
@@ -2817,6 +2834,20 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         return
     language = await resolve_user_language(callback.from_user.id)
     telegram_id = callback.from_user.id
+    
+    # REDIS DISTRIBUTED RATE LIMITING: 2 per 60 sec per user
+    correlation_id = str(callback.id) if hasattr(callback, 'id') else str(uuid_module.uuid4())
+    rate_limiter = create_redis_rate_limiter("withdraw_create", max_requests=2, window_seconds=60)
+    rate_limit_key = f"user:{telegram_id}"
+    is_allowed = await rate_limiter.allow(
+        key=rate_limit_key,
+        correlation_id=correlation_id,
+        telegram_id=telegram_id,
+    )
+    if not is_allowed:
+        await callback.answer("Слишком много запросов. Попробуйте позже.", show_alert=True)
+        return
+    
     data = await state.get_data()
     amount = data.get("withdraw_amount")
     requisites = data.get("withdraw_requisites", "")
@@ -4688,6 +4719,20 @@ async def process_promo_code(message: Message, state: FSMContext):
     # STEP 4 — PART A: INPUT TRUST BOUNDARIES
     # Validate telegram_id
     telegram_id = message.from_user.id
+    
+    # REDIS DISTRIBUTED RATE LIMITING: 5 per 60 sec per user
+    correlation_id = str(message.message_id) if hasattr(message, 'message_id') else str(uuid_module.uuid4())
+    rate_limiter = create_redis_rate_limiter("promo_validate", max_requests=5, window_seconds=60)
+    rate_limit_key = f"user:{telegram_id}"
+    is_allowed = await rate_limiter.allow(
+        key=rate_limit_key,
+        correlation_id=correlation_id,
+        telegram_id=telegram_id,
+    )
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await message.answer("Слишком много запросов. Попробуйте позже.", reply_markup=_get_promo_error_keyboard(language))
+        return
     is_valid, error = validate_telegram_id(telegram_id)
     if not is_valid:
         log_security_warning(
@@ -9981,10 +10026,31 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         await callback.answer("Ошибка: неверный формат команды", show_alert=True)
         return
 
-    # STEP 3 — REDIS DISTRIBUTED LOCK (multi-instance safe)
+    # STEP 3 — REDIS DISTRIBUTED RATE LIMITING (multi-instance safe)
     correlation_id = str(uuid_module.uuid4())
     admin_id = callback.from_user.id
     
+    # Rate limit: 3 per 60 sec per admin
+    rate_limiter = create_redis_rate_limiter("reissue", max_requests=3, window_seconds=60)
+    rate_limit_key = f"admin:{admin_id}"
+    is_allowed = await rate_limiter.allow(
+        key=rate_limit_key,
+        correlation_id=correlation_id,
+        telegram_id=admin_id,
+    )
+    if not is_allowed:
+        logger.info(
+            "ADMIN_REISSUE_RATE_LIMIT_HIT",
+            extra={
+                "correlation_id": correlation_id,
+                "admin_id": admin_id,
+                "target_user_id": target_user_id,
+            }
+        )
+        await callback.answer("Слишком много запросов. Попробуйте позже.", show_alert=False)
+        return
+    
+    # STEP 4 — REDIS DISTRIBUTED LOCK (multi-instance safe)
     # Get Redis client - if unavailable, deny reissue (fail-safe)
     try:
         redis_client_instance = await redis_client.get_redis_client()
@@ -11500,6 +11566,20 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
+    # REDIS DISTRIBUTED RATE LIMITING: 10 per 60 sec per admin
+    admin_id = callback.from_user.id
+    correlation_id = str(callback.id) if hasattr(callback, 'id') else str(uuid_module.uuid4())
+    rate_limiter = create_redis_rate_limiter("admin_balance", max_requests=10, window_seconds=60)
+    rate_limit_key = f"admin:{admin_id}"
+    is_allowed = await rate_limiter.allow(
+        key=rate_limit_key,
+        correlation_id=correlation_id,
+        telegram_id=admin_id,
+    )
+    if not is_allowed:
+        await callback.answer("Слишком много запросов. Попробуйте позже.", show_alert=True)
+        return
+    
     try:
         data = await state.get_data()
         target_user_id = data.get("target_user_id")
@@ -11657,6 +11737,21 @@ async def callback_admin_debit_confirm(callback: CallbackQuery, state: FSMContex
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
+    
+    # REDIS DISTRIBUTED RATE LIMITING: 10 per 60 sec per admin
+    admin_id = callback.from_user.id
+    correlation_id = str(callback.id) if hasattr(callback, 'id') else str(uuid_module.uuid4())
+    rate_limiter = create_redis_rate_limiter("admin_balance", max_requests=10, window_seconds=60)
+    rate_limit_key = f"admin:{admin_id}"
+    is_allowed = await rate_limiter.allow(
+        key=rate_limit_key,
+        correlation_id=correlation_id,
+        telegram_id=admin_id,
+    )
+    if not is_allowed:
+        await callback.answer("Слишком много запросов. Попробуйте позже.", show_alert=True)
+        return
+    
     try:
         data = await state.get_data()
         target_user_id = data.get("target_user_id")
