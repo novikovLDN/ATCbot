@@ -9330,10 +9330,9 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         await callback.answer("Перевыпуск уже выполняется...", show_alert=False)
         return
 
-    # STEP 1 — IMMEDIATE CALLBACK ACK (before any DB/VPN)
-    await callback.answer("Перевыпуск ключа запущен...", show_alert=False)
-
     try:
+        # STEP 1 — IMMEDIATE CALLBACK ACK (inside protected block to prevent lock leak)
+        await callback.answer("Перевыпуск ключа запущен...", show_alert=False)
         correlation_id = str(uuid_module.uuid4())
         update_id = getattr(getattr(callback, "update", None), "update_id", None)
         logger.info(
@@ -9425,7 +9424,9 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
         except Exception:
             pass
     finally:
-        lock.release()
+        # GUARANTEED RELEASE: protect against lock leak
+        if lock.locked():
+            lock.release()
 
 
 @router.callback_query(F.data == "admin:system")
@@ -10624,8 +10625,8 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
 @router.message(AdminCreditBalance.waiting_for_user_search)
 async def process_admin_credit_balance_user_search(message: Message, state: FSMContext):
     """Обработка поиска пользователя для выдачи средств"""
+    language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -10665,8 +10666,8 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
 @router.message(AdminCreditBalance.waiting_for_amount)
 async def process_admin_credit_balance_amount(message: Message, state: FSMContext):
     """Обработка ввода суммы для выдачи средств"""
+    language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -10723,8 +10724,8 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
 @router.callback_query(F.data == "admin:credit_balance_confirm")
 async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение выдачи средств"""
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
