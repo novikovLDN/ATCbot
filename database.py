@@ -3450,6 +3450,10 @@ async def grant_access(
     Raises:
         Exception: При любых ошибках (транзакция откатывается, исключение пробрасывается)
     """
+    # GUARD: admin_reissue MUST use reissue service, NOT grant_access
+    if source == "admin_reissue":
+        raise RuntimeError("admin_reissue must use reissue service (app.services.vpn.reissue_service), not grant_access")
+
     if conn is None:
         pool = await get_pool()
         conn = await pool.acquire()
@@ -3599,7 +3603,7 @@ async def grant_access(
                 # Определяем action_type для истории
                 if source == "payment":
                     history_action_type = "renewal"
-                elif source == "admin":
+                elif source in ("admin", "admin_paid"):
                     history_action_type = "admin_grant"
                 else:
                     history_action_type = source
@@ -3694,7 +3698,7 @@ async def grant_access(
             # Определяем action_type для истории
             if source == "payment":
                 history_action_type = "purchase"
-            elif source == "admin":
+            elif source in ("admin", "admin_paid"):
                 history_action_type = "admin_grant"
             else:
                 history_action_type = source
@@ -3969,7 +3973,7 @@ async def grant_access(
         # Определяем action_type для истории
         if source == "payment":
             history_action_type = "purchase"
-        elif source == "admin":
+        elif source in ("admin", "admin_paid"):
             history_action_type = "admin_grant"
         else:
             history_action_type = source
@@ -6546,11 +6550,11 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
             try:
                 duration = timedelta(days=days)
                 
-                # Используем единую функцию grant_access
+                # Используем единую функцию grant_access (admin_paid = manual paid access, NOT trial/payment)
                 result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
-                    source="admin",
+                    source="admin_paid",
                     admin_telegram_id=admin_telegram_id,
                     admin_grant_days=days,
                     conn=conn
@@ -6968,11 +6972,11 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
             try:
                 duration = timedelta(minutes=minutes)
                 
-                # Используем единую функцию grant_access
+                # Используем единую функцию grant_access (admin_paid = manual paid access)
                 result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
-                    source="admin",
+                    source="admin_paid",
                     admin_telegram_id=admin_telegram_id,
                     admin_grant_days=None,  # Для минутного доступа не используется
                     conn=conn

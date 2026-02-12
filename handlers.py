@@ -54,7 +54,12 @@ from app.services.admin.exceptions import (
     AdminServiceError,
     UserNotFoundError,
     InvalidAdminActionError,
+    AdminOperationError,
+    SubscriptionNotFoundError,
+    ReissueFailedError,
 )
+from app.services.subscriptions import admin_service as subscription_admin_service
+from app.services.vpn import reissue_service as vpn_reissue_service
 from app.utils.logging_helpers import (
     log_handler_entry,
     log_handler_exit,
@@ -7302,37 +7307,28 @@ async def callback_admin_keys(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin:keys:reissue_all")
 async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
-    """Массовый перевыпуск ключей для всех активных пользователей"""
-    user = await database.get_user(callback.from_user.id)
+    """Массовый перевыпуск ключей для всех активных пользователей — использует reissue service."""
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
+    logger.info(f"ADMIN_REISSUE_CONFIRM_RECEIVED [admin={callback.from_user.id}, action=bulk_reissue]")
+
     await callback.answer("Начинаю массовый перевыпуск...")
-    
+
     try:
-        admin_telegram_id = callback.from_user.id
-        
-        # Получаем все активные подписки
-        pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            now = datetime.now()
-            subscriptions = await conn.fetch(
-                """SELECT telegram_id, uuid, vpn_key, expires_at 
-                   FROM subscriptions 
-                   WHERE status = 'active' 
-                   AND expires_at > $1 
-                   AND uuid IS NOT NULL
-                   ORDER BY telegram_id""",
-                now
-            )
-        
-        total_count = len(subscriptions)
-        success_count = 0
-        failed_count = 0
-        failed_users = []
-        
+        logger.info(f"ADMIN_REISSUE_EXECUTION_STARTED [action=bulk, admin={callback.from_user.id}]")
+
+        result = await vpn_reissue_service.reissue_vpn_keys_for_all_active_users(
+            initiated_by=callback.from_user.id
+        )
+
+        total_count = result["total"]
+        success_count = result["success"]
+        failed_count = result["failed"]
+        failed_users = result["failed_users"]
+
         if total_count == 0:
             await safe_edit_text(
                 callback.message,
@@ -7340,74 +7336,27 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                 reply_markup=get_admin_back_keyboard(language)
             )
             return
-        
-        # Отправляем начальное сообщение
-        status_text = f"🔄 Массовый перевыпуск ключей\n\nВсего пользователей: {total_count}\nОбработано: 0/{total_count}\nУспешно: 0\nОшибок: 0"
-        status_message = await callback.message.edit_text(status_text, reply_markup=None)
-        # Примечание: status_message используется для динамического обновления, защита не нужна
-        
-        # Обрабатываем каждую подписку
-        for idx, sub_row in enumerate(subscriptions, 1):
-            subscription = dict(sub_row)
-            telegram_id = subscription["telegram_id"]
-            
-            try:
-                # Перевыпускаем ключ
-                result = await database.reissue_vpn_key_atomic(telegram_id, admin_telegram_id)
-                new_vpn_key, old_vpn_key = result
-                
-                if new_vpn_key is None:
-                    failed_count += 1
-                    failed_users.append(telegram_id)
-                    logging.error(f"Failed to reissue key for user {telegram_id} in bulk operation")
-                    continue
-                
-                success_count += 1
-                
-                # Отправляем уведомление пользователю
+
+        # Send notifications to successful users (reissue_service doesn't send notifications)
+        for detail in result.get("details", []):
+            if detail.get("success") and detail.get("telegram_id"):
+                telegram_id = detail["telegram_id"]
                 try:
-                    notify_lang = await resolve_user_language(telegram_id)
-                    
-                    try:
-                        user_text = i18n_get_text(notify_lang, "admin.reissue_user_notification", vpn_key=f"<code>{new_vpn_key}</code>")
-                    except (KeyError, TypeError):
-                        # Fallback to default if localization not found
-                        user_text = get_reissue_notification_text(new_vpn_key)
-                    
-                    keyboard = get_reissue_notification_keyboard(notify_lang)
-                    await bot.send_message(telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
+                    subscription = await database.get_subscription(telegram_id)
+                    new_vpn_key = subscription.get("vpn_key") if subscription else None
+                    if new_vpn_key:
+                        notify_lang = await resolve_user_language(telegram_id)
+                        try:
+                            user_text = i18n_get_text(notify_lang, "admin.reissue_user_notification", vpn_key=f"<code>{new_vpn_key}</code>")
+                        except (KeyError, TypeError):
+                            user_text = get_reissue_notification_text(new_vpn_key)
+                        keyboard = get_reissue_notification_keyboard(notify_lang)
+                        await bot.send_message(telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
                 except Exception as e:
                     logging.warning(f"Failed to send reissue notification to user {telegram_id}: {e}")
-                
-                # Обновляем статус каждые 10 пользователей или в конце
-                if idx % 10 == 0 or idx == total_count:
-                    status_text = (
-                        f"🔄 Массовый перевыпуск ключей\n\n"
-                        f"Всего пользователей: {total_count}\n"
-                        f"Обработано: {idx}/{total_count}\n"
-                        f"✅ Успешно: {success_count}\n"
-                        f"❌ Ошибок: {failed_count}"
-                    )
-                    try:
-                        try:
-                            await status_message.edit_text(status_text)
-                        except TelegramBadRequest as e:
-                            if "message is not modified" not in str(e):
-                                raise
-                    except Exception:
-                        pass
-                
-                # Rate limiting: 1-2 секунды между запросами
-                if idx < total_count:
-                    import asyncio
-                    await asyncio.sleep(1.5)
-                    
-            except Exception as e:
-                failed_count += 1
-                failed_users.append(telegram_id)
-                logging.exception(f"Error reissuing key for user {telegram_id} in bulk operation: {e}")
-                continue
-        
+
+        logger.info(f"ADMIN_REISSUE_EXECUTION_COMPLETED [action=bulk, total={total_count}, success={success_count}, failed={failed_count}]")
+
         # Финальное сообщение
         final_text = (
             f"✅ Массовый перевыпуск завершён\n\n"
@@ -7415,27 +7364,27 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
             f"✅ Успешно: {success_count}\n"
             f"❌ Ошибок: {failed_count}"
         )
-        
+
         if failed_users:
             failed_list = ", ".join(map(str, failed_users[:10]))
             if len(failed_users) > 10:
                 failed_list += f" и ещё {len(failed_users) - 10}"
             final_text += f"\n\nОшибки у пользователей: {failed_list}"
-        
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:keys")]
         ])
-        
+
         try:
-            await status_message.edit_text(final_text, reply_markup=keyboard)
+            await callback.message.edit_text(final_text, reply_markup=keyboard)
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
                 raise
-        
+
         # Логируем в audit_log
         await database._log_audit_event_atomic_standalone(
             "admin_reissue_all",
-            admin_telegram_id,
+            callback.from_user.id,
             None,
             f"Bulk reissue: total={total_count}, success={success_count}, failed={failed_count}"
         )
@@ -8029,12 +7978,14 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         return
     
     await callback.answer()
-    
+
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         parts = callback.data.split(":")
         user_id = int(parts[2])
         minutes = int(parts[3])
-        
+
         # 1️⃣ FIX CONTRACT MISUSE: Execute grant FIRST (treat as side-effect only)
         try:
             await database.admin_grant_access_minutes_atomic(
@@ -8088,14 +8039,16 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
         return
     
     await callback.answer()
-    
+
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         parts = callback.data.split(":")
         user_id = int(parts[2])
-        
+
         # Save user_id in FSM, ask for notify choice
         await state.update_data(user_id=user_id, days=365, action_type="grant_1_year")
-        
+
         text = "✅ Выдать доступ на 1 год\n\nУведомить пользователя?"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data="admin:notify:yes")],
@@ -8283,7 +8236,9 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
         return
     
     await callback.answer()
-    
+
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         notify_user = callback.data.split(":")[3] == "yes"
         data = await state.get_data()
@@ -8307,18 +8262,19 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
         
         logger.debug(f"FSM: Executing grant for user {user_id}, duration={duration}, notify_user={notify_user}")
         
-        # PART 3: Execute grant_access
+        # PART 3: Execute grant via admin service (admin_paid, NOT grant_access directly)
         try:
-            result = await database.grant_access(
+            result = await subscription_admin_service.grant_paid_access_by_admin_duration(
                 telegram_id=user_id,
                 duration=duration,
-                source="admin",
-                admin_telegram_id=callback.from_user.id,
-                admin_grant_days=None  # Custom duration
+                initiated_by=callback.from_user.id
             )
-            
-            expires_at = result["subscription_end"]
-            vpn_key = result.get("vless_url") or result.get("uuid", "")
+
+            if not result.get("success"):
+                raise Exception(result.get("error", "Grant failed"))
+
+            expires_at = result["expires_at"]
+            vpn_key = result.get("vpn_key", "")
             
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(duration_unit, duration_unit)
@@ -8478,14 +8434,15 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 await state.clear()
                 return
             
-            # FIX: Execute grant (treat as side-effect, don't check return value)
+            # Execute grant via admin service (grant_paid_access_by_admin)
             try:
-                await database.admin_grant_access_atomic(
+                result = await subscription_admin_service.grant_paid_access_by_admin(
                     telegram_id=user_id,
-                    days=days,
-                    admin_telegram_id=callback.from_user.id
+                    duration_days=days,
+                    initiated_by=callback.from_user.id
                 )
-                # If no exception → grant is successful (don't check return value)
+                if not result.get("success"):
+                    raise Exception(result.get("error", "Grant failed"))
             except Exception as e:
                 logger.exception(f"Failed to grant access: {e}")
                 await callback.answer("Ошибка выдачи доступа", show_alert=True)
@@ -8518,14 +8475,15 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
             )
         
         elif action_type == "grant_1_year":
-            # FIX: Execute grant (treat as side-effect, don't check return value)
+            # Execute grant via admin service (grant_paid_access_by_admin)
             try:
-                await database.admin_grant_access_atomic(
+                result = await subscription_admin_service.grant_paid_access_by_admin(
                     telegram_id=user_id,
-                    days=365,
-                    admin_telegram_id=callback.from_user.id
+                    duration_days=365,
+                    initiated_by=callback.from_user.id
                 )
-                # If no exception → grant is successful (don't check return value)
+                if not result.get("success"):
+                    raise Exception(result.get("error", "Grant failed"))
             except Exception as e:
                 logger.exception(f"Failed to grant access: {e}")
                 await callback.answer("Ошибка выдачи доступа", show_alert=True)
@@ -8546,6 +8504,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 if success:
                     logger.info(f"NOTIFICATION_SENT [type=admin_grant, user_id={user_id}, duration=1_year]")
                     text += "\nПользователь уведомлён."
+                else:
                     text += "\nОшибка отправки уведомления."
             else:
                 logger.info(f"ADMIN_GRANT_NOTIFY_SKIPPED [user_id={user_id}, duration=1_year]")
@@ -9355,31 +9314,40 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin:user_reissue:"))
 async def callback_admin_user_reissue(callback: CallbackQuery):
-    """Перевыпуск ключа из админ-дашборда"""
+    """Перевыпуск ключа из админ-дашборда — использует reissue service (НЕ grant_access)."""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
+    logger.info(f"ADMIN_REISSUE_CONFIRM_RECEIVED [admin={callback.from_user.id}, callback_data={callback.data}]")
+
     try:
         # Получаем user_id из callback_data
         target_user_id = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
         await callback.answer("Ошибка: неверный формат команды", show_alert=True)
         return
-    
+
     try:
-        admin_telegram_id = callback.from_user.id
+        logger.info(f"ADMIN_REISSUE_EXECUTION_STARTED [telegram_id={target_user_id}, admin={callback.from_user.id}]")
+
+        result = await vpn_reissue_service.reissue_vpn_key_for_user(
+            telegram_id=target_user_id,
+            initiated_by=callback.from_user.id
+        )
+
+        new_vpn_key = result.get("new_vpn_key")
+        old_vpn_key = result.get("old_vpn_key")
         
-        # Атомарно перевыпускаем ключ
-        result = await database.reissue_vpn_key_atomic(target_user_id, admin_telegram_id)
-        new_vpn_key, old_vpn_key = result
-        
-        if new_vpn_key is None:
+        if not result.get("success") or new_vpn_key is None:
+            logger.warning(f"ADMIN_REISSUE_EXECUTION_FAILED [telegram_id={target_user_id}, reason={result.get('error', 'no_active_subscription')}]")
             await callback.answer("Не удалось перевыпустить ключ. Нет активной подписки или ошибка создания ключа.", show_alert=True)
             return
-        
+
+        logger.info(f"ADMIN_REISSUE_EXECUTION_COMPLETED [telegram_id={target_user_id}, admin={callback.from_user.id}]")
+
         # Обновляем информацию о пользователе
         user = await database.get_user(target_user_id)
         subscription = await database.get_subscription(target_user_id)
@@ -10468,12 +10436,17 @@ async def cmd_reissue_key(message: Message):
             return
         
         admin_telegram_id = message.from_user.id
-        
-        # Атомарно перевыпускаем ключ
-        result = await database.reissue_vpn_key_atomic(target_telegram_id, admin_telegram_id)
-        new_vpn_key, old_vpn_key = result
-        
-        if new_vpn_key is None:
+
+        # Используем reissue service (НЕ grant_access)
+        result = await vpn_reissue_service.reissue_vpn_key_for_user(
+            telegram_id=target_telegram_id,
+            initiated_by=admin_telegram_id
+        )
+
+        new_vpn_key = result.get("new_vpn_key")
+        old_vpn_key = result.get("old_vpn_key")
+
+        if not result.get("success") or new_vpn_key is None:
             await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
             return
         
@@ -10488,9 +10461,10 @@ async def cmd_reissue_key(message: Message):
             await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}")
             return
         
+        old_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
         await message.answer(
             f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\n"
-            f"Старый ключ: <code>{old_vpn_key[:20]}...</code>\n"
+            f"Старый ключ: <code>{old_preview}</code>\n"
             f"Новый ключ: <code>{new_vpn_key}</code>",
             parse_mode="HTML"
         )
