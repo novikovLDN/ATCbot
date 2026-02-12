@@ -26,6 +26,7 @@ import tempfile
 import os
 import asyncio
 import random
+import uuid as uuid_module
 from typing import Optional, Dict, Any, Union
 from app.services.subscriptions import service as subscription_service
 from app.services.subscriptions.service import (
@@ -1497,6 +1498,39 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
     buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
+
+
+def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False, is_vip: bool = False, language: str = "ru"):
+    """Клавиатура во время перевыпуска ключа: кнопка «Перевыпуск» заменена на disabled состояние (callback_data=noop)"""
+    buttons = []
+    buttons.append([InlineKeyboardButton(text="⏳ Перевыпуск...", callback_data="noop")])
+    if user_id:
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
+        buttons.append([
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_access"), callback_data=f"admin:grant:{user_id}"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")
+        ])
+        if has_discount:
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
+        else:
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.create_discount"), callback_data=f"admin:discount_create:{user_id}")])
+        if is_vip:
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_vip"), callback_data=f"admin:vip_revoke:{user_id}")])
+        else:
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
+    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# In-memory async lock per user for reissue (prevents parallel execution in single process)
+_REISSUE_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def get_reissue_lock(user_id: int) -> asyncio.Lock:
+    if user_id not in _REISSUE_LOCKS:
+        _REISSUE_LOCKS[user_id] = asyncio.Lock()
+    return _REISSUE_LOCKS[user_id]
 
 
 def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
@@ -9266,61 +9300,112 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
+@router.callback_query(F.data == "noop")
+async def noop_handler(callback: CallbackQuery):
+    """Обработчик disabled кнопки во время перевыпуска ключа"""
+    await callback.answer("Операция уже выполняется...", show_alert=False)
+
+
 @router.callback_query(F.data.startswith("admin:user_reissue:"))
 async def callback_admin_user_reissue(callback: CallbackQuery):
-    """Перевыпуск ключа из админ-дашборда"""
-    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
+    """Перевыпуск ключа из админ-дашборда. 5 слоёв защиты: immediate ACK, disabled UI, in-memory lock, Postgres advisory lock, correlation logging."""
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
     try:
-        # Получаем user_id из callback_data
         target_user_id = int(callback.data.split(":")[2])
     except (IndexError, ValueError):
         await callback.answer("Ошибка: неверный формат команды", show_alert=True)
         return
-    
+
+    # STEP 3 — IN-MEMORY ASYNC LOCK (atomic non-blocking acquire, eliminates TOCTOU)
+    lock = get_reissue_lock(target_user_id)
+    logger.debug("ADMIN_REISSUE_LOCK_ATTEMPT user=%s locked=%s", target_user_id, lock.locked())
     try:
+        await asyncio.wait_for(lock.acquire(), timeout=0)
+    except asyncio.TimeoutError:
+        logger.info("ADMIN_REISSUE_REJECTED_ALREADY_RUNNING user=%s", target_user_id)
+        await callback.answer("Перевыпуск уже выполняется...", show_alert=False)
+        return
+
+    # STEP 1 — IMMEDIATE CALLBACK ACK (before any DB/VPN)
+    await callback.answer("Перевыпуск ключа запущен...", show_alert=False)
+
+    try:
+        correlation_id = str(uuid_module.uuid4())
+        update_id = getattr(getattr(callback, "update", None), "update_id", None)
+        logger.info(
+            "ADMIN_REISSUE_START",
+            extra={
+                "correlation_id": correlation_id,
+                "admin_id": callback.from_user.id,
+                "target_user_id": target_user_id,
+                "callback_id": callback.id,
+                "update_id": update_id,
+                "task_id": id(asyncio.current_task()),
+            },
+        )
+
+        # STEP 2 — DISABLE BUTTON DURING PROCESSING
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=get_admin_user_keyboard_processing(target_user_id, language=language)
+            )
+        except TelegramBadRequest:
+            pass  # Message may be edited by other handler
+
         admin_telegram_id = callback.from_user.id
-        
-        # Атомарно перевыпускаем ключ
-        result = await database.reissue_vpn_key_atomic(target_user_id, admin_telegram_id)
+        result = await database.reissue_vpn_key_atomic(
+            target_user_id, admin_telegram_id, correlation_id=correlation_id
+        )
         new_vpn_key, old_vpn_key = result
-        
+
         if new_vpn_key is None:
-            await callback.answer("Не удалось перевыпустить ключ. Нет активной подписки или ошибка создания ключа.", show_alert=True)
+            await safe_edit_text(
+                callback.message,
+                "❌ Не удалось перевыпустить ключ. Нет активной подписки или ошибка создания ключа.",
+                reply_markup=get_admin_back_keyboard(language),
+            )
             return
-        
-        # Обновляем информацию о пользователе
+
+        # STEP 6 — RESTORE KEYBOARD AFTER SUCCESS
         user = await database.get_user(target_user_id)
         subscription = await database.get_subscription(target_user_id)
-        
+        is_vip = await database.is_vip_user(target_user_id)
+        has_discount = await database.get_user_discount(target_user_id) is not None
+
         text = "👤 Информация о пользователе\n\n"
         text += f"Telegram ID: {target_user_id}\n"
-        text += f"Username: @{user.get('username', 'не указан') if user else 'не указан'}\n"
-        text += "\n"
-        
+        text += f"Username: @{user.get('username', 'не указан') if user else 'не указан'}\n\n"
         if subscription:
             expires_at = subscription["expires_at"]
             if isinstance(expires_at, str):
                 expires_at = datetime.fromisoformat(expires_at)
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
-            
             text += "Статус подписки: ✅ Активна\n"
             text += f"Срок действия: до {expires_str}\n"
             text += f"VPN-ключ: <code>{new_vpn_key}</code>\n"
             text += f"\n✅ Ключ перевыпущен!\nСтарый ключ: {old_vpn_key[:20]}..."
-            
-            # Проверяем VIP-статус и скидку
-            is_vip = await database.is_vip_user(target_user_id)
-            has_discount = await database.get_user_discount(target_user_id) is not None
-            
-            await callback.message.edit_text(text, reply_markup=get_admin_user_keyboard(has_active_subscription=True, user_id=target_user_id, has_discount=has_discount, is_vip=is_vip), parse_mode="HTML")
-        
-        await callback.answer("Ключ успешно перевыпущен")
-        
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_admin_user_keyboard(
+                has_active_subscription=True,
+                user_id=target_user_id,
+                has_discount=has_discount,
+                is_vip=is_vip,
+                language=language,
+            ),
+            parse_mode="HTML",
+        )
+
+        logger.info(
+            "ADMIN_REISSUE_COMPLETE",
+            extra={"correlation_id": correlation_id, "target_user_id": target_user_id},
+        )
+
         # Уведомляем пользователя
         try:
             user_text = get_reissue_notification_text(new_vpn_key)
@@ -9328,10 +9413,19 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
             await callback.bot.send_message(target_user_id, user_text, reply_markup=keyboard, parse_mode="HTML")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_user_id}: {e}")
-        
+
     except Exception as e:
         logging.exception(f"Error in callback_admin_user_reissue: {e}")
-        await callback.answer("Ошибка при перевыпуске ключа", show_alert=True)
+        try:
+            await safe_edit_text(
+                callback.message,
+                "❌ Ошибка при перевыпуске ключа. Проверь логи.",
+                reply_markup=get_admin_back_keyboard(language),
+            )
+        except Exception:
+            pass
+    finally:
+        lock.release()
 
 
 @router.callback_query(F.data == "admin:system")
