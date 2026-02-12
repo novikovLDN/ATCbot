@@ -112,7 +112,7 @@ async def health_handler(request: web.Request) -> web.Response:
                                 return current
                                 """
                                 rate_script = redis_client_instance.register_script(rate_limit_lua)
-                                rate_count = await rate_script(keys=[rate_test_key], args=[1])
+                                    rate_count = await rate_script(keys=[rate_test_key], args=[1])
                                 # Clean up test key
                                 await redis_client_instance.delete(rate_test_key)
                                 redis_rate_limit_ready = rate_count == 1
