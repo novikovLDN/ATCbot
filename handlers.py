@@ -3822,12 +3822,17 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         tariff_name = "Basic" if tariff_type == "basic" else "Plus"
         transaction_description = f"Оплата подписки {tariff_name} на {months} месяц(ев)"
         
+        # CRITICAL FIX: Получаем промокод из промо-сессии для передачи в finalize_balance_purchase
+        promo_session = await get_promo_session(state)
+        promo_code_from_session = promo_session.get("promo_code") if promo_session else None
+        
         result = await database.finalize_balance_purchase(
             telegram_id=telegram_id,
             tariff_type=tariff_type,
             period_days=period_days,
             amount_rubles=final_price_rubles,
-            description=transaction_description
+            description=transaction_description,
+            promo_code=promo_code_from_session  # CRITICAL: Промокод потребляется внутри транзакции
         )
         
         if not result or not result.get("success"):
@@ -5395,7 +5400,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         # Валидация уже выполнена внутри finalize_purchase - здесь только отправка
         # КРИТИЧНО: Это гарантирует что пользователь ВСЕГДА получит VPN ключ после оплаты
         
-        # CRITICAL FIX: Промокод уже потреблен в finalize_purchase через consume_promocode_atomic
+        # CRITICAL FIX: Промокод уже потреблен в finalize_purchase внутри транзакции
         # Здесь только логируем использование для статистики
         if promo_code_used:
             try:
