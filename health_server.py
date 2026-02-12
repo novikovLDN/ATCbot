@@ -77,10 +77,23 @@ async def health_handler(request: web.Request) -> web.Response:
         # Note: recovery_cooldown import removed to avoid dependency (not needed for health_server)
         # Recovery state is computed in healthcheck.py, not in health_server.py
         
-        # Формируем ответ (preserve exact format)
+        # Check Redis health (non-blocking, does not affect status)
+        redis_healthy = False
+        try:
+            from app.core.redis_client import check_redis_health
+            redis_healthy = await check_redis_health()
+        except ImportError:
+            # Redis module not available
+            pass
+        except Exception as e:
+            # Redis check failed - log but don't affect health status
+            logger.debug(f"Redis health check error: {e}")
+        
+        # Формируем ответ (preserve exact format, add redis status)
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
+            "redis": "healthy" if redis_healthy else "unhealthy",
             "timestamp": datetime.utcnow().isoformat() + "Z"
         }
         # Note: recovery_in_progress is computed but not added to response
@@ -94,9 +107,18 @@ async def health_handler(request: web.Request) -> web.Response:
         # Критическая ошибка - логируем, но всё равно отвечаем
         logger.exception(f"Error in health endpoint: {e}")
         # Возвращаем degraded статус при ошибке
+        # Try to check Redis even on error (non-blocking)
+        redis_healthy = False
+        try:
+            from app.core.redis_client import check_redis_health
+            redis_healthy = await check_redis_health()
+        except Exception:
+            pass
+        
         response_data = {
             "status": "degraded",
             "db_ready": False,
+            "redis": "healthy" if redis_healthy else "unhealthy",
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "error": "Health check error"
         }

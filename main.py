@@ -101,6 +101,31 @@ async def main():
     # Сбрасываем флаги уведомлений при старте (чтобы уведомления отправлялись при каждом старте)
     admin_notifications.reset_notification_flags()
     
+    # ====================================================================================
+    # REDIS INFRASTRUCTURE: Initialize Redis client (non-blocking)
+    # ====================================================================================
+    # Redis is optional - app continues even if Redis is unavailable
+    # ====================================================================================
+    try:
+        from app.core.redis_client import get_redis_client, check_redis_health
+        # Initialize Redis client (creates connection pool)
+        redis_client = await get_redis_client()
+        if redis_client:
+            # Test connectivity
+            redis_healthy = await check_redis_health()
+            if redis_healthy:
+                logger.info("✅ Redis infrastructure initialized successfully")
+            else:
+                logger.warning("⚠️ Redis client created but health check failed - Redis features disabled")
+        else:
+            logger.info("ℹ️ Redis not configured - Redis features disabled (acceptable for local dev)")
+    except ImportError:
+        logger.warning("⚠️ Redis module not available - install redis>=5.0 for Redis features")
+    except Exception as e:
+        # Redis initialization failure should NOT crash the app
+        logger.warning(f"⚠️ Redis initialization failed - Redis features disabled: {type(e).__name__}: {str(e)[:100]}")
+        logger.debug("Full Redis initialization error:", exc_info=True)
+    
     try:
         success = await database.init_db()
         # init_db() уже устанавливает DB_READY внутри себя после создания всех таблиц
@@ -456,6 +481,15 @@ async def main():
         # Закрываем пул соединений к БД
         await database.close_pool()
         logger.info("Database connection pool closed")
+        
+        # Закрываем Redis client
+        try:
+            from app.core.redis_client import close_redis_client
+            await close_redis_client()
+        except ImportError:
+            pass  # Redis module not available
+        except Exception as e:
+            logger.error(f"Error closing Redis client: {e}")
 
 
 if __name__ == "__main__":
