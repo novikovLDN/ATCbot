@@ -719,6 +719,18 @@ async def clear_promo_session(state: FSMContext):
     await state.update_data(promo_session=None)
 
 
+def _get_promo_error_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура с кнопкой 'Назад' при ошибке промокода"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="promo_back"
+            )
+        ]
+    ])
+
+
 # ====================================================================================
 async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: bool = False) -> bool:
     """
@@ -2036,13 +2048,19 @@ async def callback_language(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "menu_main")
-async def callback_main_menu(callback: CallbackQuery):
+async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     """Главное меню. Delete + answer to support navigation from photo message (loyalty screen)."""
     # SAFE STARTUP GUARD: Главное меню может работать в деградированном режиме
     # В STAGE разрешаем read-only операции (навигация, меню)
     # В PROD блокируем если БД не готова
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
+    
+    # CRITICAL FIX: Очищаем FSM state при переходе на главное меню
+    # Это закрывает ввод промокода и другие FSM состояния
+    current_state = await state.get_state()
+    if current_state == PromoCodeInput.waiting_for_promo.state:
+        await state.clear()
     
     try:
         await callback.message.delete()
@@ -2269,6 +2287,12 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
+    
+    # CRITICAL FIX: Очищаем FSM state при переходе на профиль
+    # Это закрывает ввод промокода и другие FSM состояния
+    current_state = await state.get_state()
+    if current_state == PromoCodeInput.waiting_for_promo.state:
+        await state.clear()
     
     # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
     await database.check_and_disable_expired_subscription(callback.from_user.id)
@@ -3411,8 +3435,14 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
-    # КРИТИЧНО: Проверяем FSM state - должен быть choose_tariff или None (начало покупки)
+    # CRITICAL FIX: Очищаем PromoCodeInput state при переходе к выбору тарифа
+    # Это закрывает ввод промокода если пользователь был в этом состоянии
     current_state = await state.get_state()
+    if current_state == PromoCodeInput.waiting_for_promo.state:
+        await state.set_state(None)
+        current_state = None
+    
+    # КРИТИЧНО: Проверяем FSM state - должен быть choose_tariff или None (начало покупки)
     if current_state not in [PurchaseState.choose_tariff, None]:
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
@@ -3552,6 +3582,12 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     - Открывает экран выбора способа оплаты
     """
     telegram_id = callback.from_user.id
+    
+    # CRITICAL FIX: Очищаем PromoCodeInput state при переходе к выбору периода
+    # Это закрывает ввод промокода если пользователь был в этом состоянии
+    current_state = await state.get_state()
+    if current_state == PromoCodeInput.waiting_for_promo.state:
+        await state.set_state(None)
     language = await resolve_user_language(telegram_id)
     
     # КРИТИЧНО: Парсим callback_data безопасно (формат: "period:basic:30")
@@ -4397,6 +4433,10 @@ async def callback_topup_crypto(callback: CallbackQuery):
 @router.callback_query(F.data == "enter_promo")
 async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     """Обработчик кнопки ввода промокода"""
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_callback(callback):
+        return
+    
     await callback.answer()
     
     telegram_id = callback.from_user.id
@@ -4410,6 +4450,10 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer(text)
         return
 
+    # CRITICAL FIX: Очищаем предыдущие FSM состояния перед установкой нового
+    # Это гарантирует, что пользователь не останется в "зависшем" состоянии
+    await state.set_state(None)
+    
     # Устанавливаем состояние ожидания промокода
     await state.set_state(PromoCodeInput.waiting_for_promo)
 
@@ -4628,6 +4672,13 @@ async def callback_crypto_disabled(callback: CallbackQuery):
 
 @router.message(PromoCodeInput.waiting_for_promo)
 async def process_promo_code(message: Message, state: FSMContext):
+    """Обработчик ввода промокода - работает ТОЛЬКО в состоянии waiting_for_promo"""
+    # CRITICAL FIX: Дополнительная проверка state для защиты от спама
+    current_state = await state.get_state()
+    if current_state != PromoCodeInput.waiting_for_promo.state:
+        # Пользователь уже покинул экран ввода промокода - игнорируем сообщение
+        return
+    
     # STEP 4 — PART A: INPUT TRUST BOUNDARIES
     # Validate telegram_id
     telegram_id = message.from_user.id
@@ -4641,39 +4692,40 @@ async def process_promo_code(message: Message, state: FSMContext):
         )
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "errors.try_later"))
+        await state.clear()
         return
     
+    # SAFE STARTUP GUARD: Проверка готовности БД
+    if not await ensure_db_ready_message(message):
+        await state.clear()
+        return
+    
+    language = await resolve_user_language(telegram_id)
+    
+    # ⛔ Защита от non-text апдейтов (callback / invoice / system)
+    if not message.text:
+        await message.answer(
+            i18n_get_text(language, "buy.promo_enter_text_hint"),
+            reply_markup=_get_promo_error_keyboard(language)
+        )
+        return
+
+    promo_code = message.text.strip().upper()
+    
     # STEP 4 — PART A: INPUT TRUST BOUNDARIES
-    # Validate message text
-    promo_code = message.text.strip().upper() if message.text else None
+    # Validate message text format
     is_valid_promo, promo_error = validate_promo_code(promo_code)
     if not is_valid_promo:
+        # Только логируем SECURITY_WARNING если пользователь действительно в FSM
         log_security_warning(
             event="Invalid promo code format",
             telegram_id=telegram_id,
             correlation_id=str(message.message_id) if hasattr(message, 'message_id') else None,
             details={"error": promo_error, "promo_code_preview": promo_code[:20] if promo_code else None}
         )
-        language = await resolve_user_language(telegram_id)
         text = i18n_get_text(language, "main.invalid_promo")
-        await message.answer(text)
+        await message.answer(text, reply_markup=_get_promo_error_keyboard(language))
         return
-    """Обработчик ввода промокода"""
-    # SAFE STARTUP GUARD: Проверка готовности БД
-    if not await ensure_db_ready_message(message):
-        await state.clear()
-        return
-    
-    telegram_id = message.from_user.id
-    language = await resolve_user_language(telegram_id)
-    
-    
-    # ⛔ Защита от non-text апдейтов (callback / invoice / system)
-    if not message.text:
-        await message.answer(i18n_get_text(language, "buy.promo_enter_text_hint"))
-        return
-
-    promo_code = message.text.strip().upper()
     
     # КРИТИЧНО: Проверяем активную промо-сессию
     promo_session = await get_promo_session(state)
@@ -4755,8 +4807,48 @@ async def process_promo_code(message: Message, state: FSMContext):
         await state.set_state(PurchaseState.choose_tariff)
     else:
         # Промокод невалиден
+        error_reason = result.get("error", "invalid")
         text = i18n_get_text(language, "main.invalid_promo")
-        await message.answer(text)
+        await message.answer(text, reply_markup=_get_promo_error_keyboard(language))
+        logger.info(
+            f"promo_validation_failed: user={telegram_id}, promo_code={promo_code}, "
+            f"reason={error_reason}"
+        )
+
+
+@router.callback_query(F.data == "promo_back")
+async def callback_promo_back(callback: CallbackQuery, state: FSMContext):
+    """Обработчик кнопки 'Назад' при ошибке промокода - возвращает на экран выбора тарифа"""
+    # CRITICAL FIX: Очищаем FSM state при выходе с экрана ввода промокода
+    await state.clear()
+    
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    
+    # Возвращаем пользователя на экран выбора тарифа
+    await state.set_state(PurchaseState.choose_tariff)
+    tariff_text = i18n_get_text(language, "buy.select_tariff")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "buy.tariff_basic"),
+            callback_data="tariff:basic"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "buy.tariff_plus"),
+            callback_data="tariff:plus"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "buy.enter_promo"),
+            callback_data="enter_promo"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main"
+        )],
+    ])
+    
+    await callback.message.edit_text(tariff_text, reply_markup=keyboard)
+    await callback.answer()
 
 
 # Старый обработчик tariff_* удалён - теперь используется новый флоу tariff_type -> tariff_period

@@ -6263,36 +6263,43 @@ async def finalize_purchase(
                             )
                             raise ValueError(f"PROMOCODE_EXPIRED: code={code_normalized}, purchase_id={purchase_id}")
                     
-                    # Проверяем лимит использований
-                    used_count = promo_row.get("used_count", 0)
-                    max_uses = promo_row.get("max_uses")
-                    if max_uses is not None and used_count >= max_uses:
-                        raise ValueError(f"PROMOCODE_ALREADY_CONSUMED: code={code_normalized}, used={used_count}, max={max_uses}, purchase_id={purchase_id}")
-                    
-                    # Увеличиваем счетчик использований атомарно
-                    await conn.execute(
+                    # CRITICAL FIX: Атомарный UPDATE с проверкой лимита в WHERE
+                    # Это устраняет race condition между проверкой и инкрементом
+                    result = await conn.execute(
                         """
                         UPDATE promo_codes
-                        SET used_count = used_count + 1
+                        SET used_count = used_count + 1,
+                            is_active = CASE
+                                WHEN max_uses IS NOT NULL AND used_count + 1 >= max_uses THEN FALSE
+                                ELSE is_active
+                            END
                         WHERE code = $1
+                          AND is_active = TRUE
+                          AND (expires_at IS NULL OR expires_at > NOW())
+                          AND (max_uses IS NULL OR used_count < max_uses)
                         """,
                         code_normalized
                     )
                     
-                    # Автоматическая деактивация при достижении лимита
-                    await conn.execute(
-                        """
-                        UPDATE promo_codes
-                        SET is_active = FALSE
-                        WHERE code = $1
-                        AND used_count >= max_uses
-                        """,
+                    if result != "UPDATE 1":
+                        logger.warning(
+                            f"PROMOCODE_CONSUME_BLOCKED code={code_normalized} user={telegram_id} "
+                            f"purchase_id={purchase_id} [BALANCE_TOPUP] reason=already_used_or_expired"
+                        )
+                        raise ValueError("PROMOCODE_ALREADY_USED_OR_EXPIRED")
+                    
+                    # Получаем обновленное значение для логирования
+                    updated_row = await conn.fetchrow(
+                        "SELECT used_count, max_uses FROM promo_codes WHERE code = $1",
                         code_normalized
                     )
+                    new_count = updated_row["used_count"] if updated_row else None
+                    max_uses = updated_row["max_uses"] if updated_row else None
                     
                     logger.info(
                         f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
-                        f"purchase_id={purchase_id} [BALANCE_TOPUP] in finalize_purchase transaction"
+                        f"purchase_id={purchase_id} [BALANCE_TOPUP] used_count={new_count}/{max_uses if max_uses else 'unlimited'} "
+                        f"in finalize_purchase transaction"
                     )
                 
                 # E) BALANCE TOP-UP FLOW: Process referral reward
@@ -6503,36 +6510,43 @@ async def finalize_purchase(
                         )
                         raise ValueError(f"PROMOCODE_EXPIRED: code={code_normalized}, purchase_id={purchase_id}")
                 
-                # Проверяем лимит использований
-                used_count = promo_row.get("used_count", 0)
-                max_uses = promo_row.get("max_uses")
-                if max_uses is not None and used_count >= max_uses:
-                    raise ValueError(f"PROMOCODE_ALREADY_CONSUMED: code={code_normalized}, used={used_count}, max={max_uses}, purchase_id={purchase_id}")
-                
-                # Увеличиваем счетчик использований атомарно
-                await conn.execute(
+                # CRITICAL FIX: Атомарный UPDATE с проверкой лимита в WHERE
+                # Это устраняет race condition между проверкой и инкрементом
+                result = await conn.execute(
                     """
                     UPDATE promo_codes
-                    SET used_count = used_count + 1
+                    SET used_count = used_count + 1,
+                        is_active = CASE
+                            WHEN max_uses IS NOT NULL AND used_count + 1 >= max_uses THEN FALSE
+                            ELSE is_active
+                        END
                     WHERE code = $1
+                      AND is_active = TRUE
+                      AND (expires_at IS NULL OR expires_at > NOW())
+                      AND (max_uses IS NULL OR used_count < max_uses)
                     """,
                     code_normalized
                 )
                 
-                # Автоматическая деактивация при достижении лимита
-                await conn.execute(
-                    """
-                    UPDATE promo_codes
-                    SET is_active = FALSE
-                    WHERE code = $1
-                    AND used_count >= max_uses
-                    """,
+                if result != "UPDATE 1":
+                    logger.warning(
+                        f"PROMOCODE_CONSUME_BLOCKED code={code_normalized} user={telegram_id} "
+                        f"purchase_id={purchase_id} reason=already_used_or_expired"
+                    )
+                    raise ValueError("PROMOCODE_ALREADY_USED_OR_EXPIRED")
+                
+                # Получаем обновленное значение для логирования
+                updated_row = await conn.fetchrow(
+                    "SELECT used_count, max_uses FROM promo_codes WHERE code = $1",
                     code_normalized
                 )
+                new_count = updated_row["used_count"] if updated_row else None
+                max_uses = updated_row["max_uses"] if updated_row else None
                 
                 logger.info(
                     f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
-                    f"purchase_id={purchase_id} in finalize_purchase transaction"
+                    f"purchase_id={purchase_id} used_count={new_count}/{max_uses if max_uses else 'unlimited'} "
+                    f"in finalize_purchase transaction"
                 )
             
             # STEP 8: Обрабатываем реферальный кешбэк
@@ -7463,35 +7477,42 @@ async def finalize_balance_purchase(
                         )
                         raise ValueError(f"PROMOCODE_EXPIRED: code={code_normalized}")
                 
-                # Проверяем лимит использований
-                used_count = promo_row.get("used_count", 0)
-                max_uses = promo_row.get("max_uses")
-                if max_uses is not None and used_count >= max_uses:
-                    raise ValueError(f"PROMOCODE_ALREADY_CONSUMED: code={code_normalized}, used={used_count}, max={max_uses}")
-                
-                # Увеличиваем счетчик использований атомарно
-                await conn.execute(
+                # CRITICAL FIX: Атомарный UPDATE с проверкой лимита в WHERE
+                # Это устраняет race condition между проверкой и инкрементом
+                result = await conn.execute(
                     """
                     UPDATE promo_codes
-                    SET used_count = used_count + 1
+                    SET used_count = used_count + 1,
+                        is_active = CASE
+                            WHEN max_uses IS NOT NULL AND used_count + 1 >= max_uses THEN FALSE
+                            ELSE is_active
+                        END
                     WHERE code = $1
+                      AND is_active = TRUE
+                      AND (expires_at IS NULL OR expires_at > NOW())
+                      AND (max_uses IS NULL OR used_count < max_uses)
                     """,
                     code_normalized
                 )
                 
-                # Автоматическая деактивация при достижении лимита
-                await conn.execute(
-                    """
-                    UPDATE promo_codes
-                    SET is_active = FALSE
-                    WHERE code = $1
-                    AND used_count >= max_uses
-                    """,
+                if result != "UPDATE 1":
+                    logger.warning(
+                        f"PROMOCODE_CONSUME_BLOCKED code={code_normalized} user={telegram_id} "
+                        f"reason=already_used_or_expired"
+                    )
+                    raise ValueError("PROMOCODE_ALREADY_USED_OR_EXPIRED")
+                
+                # Получаем обновленное значение для логирования
+                updated_row = await conn.fetchrow(
+                    "SELECT used_count, max_uses FROM promo_codes WHERE code = $1",
                     code_normalized
                 )
+                new_count = updated_row["used_count"] if updated_row else None
+                max_uses = updated_row["max_uses"] if updated_row else None
                 
                 logger.info(
                     f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
+                    f"used_count={new_count}/{max_uses if max_uses else 'unlimited'} "
                     f"in finalize_balance_purchase transaction"
                 )
             
