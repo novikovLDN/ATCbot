@@ -7272,8 +7272,8 @@ async def callback_admin_audit(callback: CallbackQuery):
 @router.callback_query(F.data == "admin:keys")
 async def callback_admin_keys(callback: CallbackQuery):
     """Раздел VPN-ключи в админ-дашборде"""
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -7846,8 +7846,8 @@ async def process_admin_user_id(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("admin:user_history:"))
 async def callback_admin_user_history(callback: CallbackQuery):
     """История подписок пользователя (админ)"""
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -7981,8 +7981,8 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
     Quick action: Grant access for N days.
     Ask for notify_user choice before executing.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8023,8 +8023,8 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
     
     Quick action: Grant access for N minutes, then ask for notify choice.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8074,6 +8074,21 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
         await state.clear()
 
 
+async def _do_grant_1_year_setup(callback: CallbackQuery, state: FSMContext, language: str) -> None:
+    """Shared logic: parse user_id, update FSM, show notify choice. Used by primary and fallback."""
+    parts = callback.data.split(":")
+    user_id = int(parts[2])
+    await state.update_data(user_id=user_id, days=365, action_type="grant_1_year")
+    text = "✅ Выдать доступ на 1 год\n\nУведомить пользователя?"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data="admin:notify:yes")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:notify:no")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await state.set_state(AdminGrantAccess.waiting_for_notify)
+
+
 @router.callback_query(F.data.startswith("admin:grant_1_year:"), StateFilter(AdminGrantAccess.waiting_for_days))
 async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """
@@ -8082,35 +8097,49 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
     Quick action: Grant access for 1 year (365 days).
     Ask for notify_user choice before executing.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
     await callback.answer()
     
     try:
-        parts = callback.data.split(":")
-        user_id = int(parts[2])
-        
-        # Save user_id in FSM, ask for notify choice
-        await state.update_data(user_id=user_id, days=365, action_type="grant_1_year")
-        
-        text = "✅ Выдать доступ на 1 год\n\nУведомить пользователя?"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data="admin:notify:yes")],
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:notify:no")],
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
-        ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
-        await state.set_state(AdminGrantAccess.waiting_for_notify)
-        
+        await _do_grant_1_year_setup(callback, state, language)
         logger.debug(f"FSM: AdminGrantAccess.waiting_for_notify set for quick action (1 year)")
         
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_1_year: {e}")
         user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin:grant_1_year:"))
+async def callback_admin_grant_1_year_fallback(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """
+    FSM fallback: when FSM cleared, grant_1_year callback would be Unhandled.
+    Runs when primary (StateFilter waiting_for_days) does not match.
+    Re-establishes notify choice flow statelessly from callback_data.
+    """
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    
+    logger.warning(
+        "ADMIN_FSM_FALLBACK_EXECUTED "
+        f"user={callback.from_user.id} "
+        f"callback={callback.data}"
+    )
+    await callback.answer()
+    
+    try:
+        await _do_grant_1_year_setup(callback, state, language)
+        logger.debug("FSM: grant_1_year fallback - notify choice restored")
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_1_year_fallback: {e}")
         await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
 
@@ -8123,8 +8152,8 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
     Start custom grant flow from waiting_for_days state.
     This is the handler that was missing - works when FSM is in waiting_for_days.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8162,8 +8191,8 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
     Start custom grant flow - select duration unit first.
     Fallback handler (no state filter) - works from any state.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8201,8 +8230,8 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
     Process duration unit selection, move to value input.
     Handler works ONLY in state waiting_for_unit.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8235,8 +8264,8 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
     """
     PART 1: Process duration value input, move to notify choice.
     """
+    language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -8277,8 +8306,8 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
     """
     PART 1: Execute grant access with notify_user choice.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8332,7 +8361,6 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             # PART 6: Notify user if flag is True
             if notify_user and vpn_key:
                 import admin_notifications
-                language = await resolve_user_language(user_id)
                 vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
                 user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
                 # Use unified notification service
@@ -8376,8 +8404,8 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
     Works WITHOUT FSM - all data encoded in callback_data.
     Format: admin:notify:yes|no:minutes:<user_id>:<minutes>
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8448,8 +8476,8 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
     
     FIX: Missing handler for admin:notify:yes and admin:notify:no used by grant_days and grant_1_year.
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8546,6 +8574,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 if success:
                     logger.info(f"NOTIFICATION_SENT [type=admin_grant, user_id={user_id}, duration=1_year]")
                     text += "\nПользователь уведомлён."
+                else:
                     text += "\nОшибка отправки уведомления."
             else:
                 logger.info(f"ADMIN_GRANT_NOTIFY_SKIPPED [user_id={user_id}, duration=1_year]")
@@ -8575,6 +8604,29 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
         await state.clear()
 
 
+@router.callback_query((F.data == "admin:notify:yes") | (F.data == "admin:notify:no"))
+async def callback_admin_grant_notify_fallback(callback: CallbackQuery, state: FSMContext):
+    """
+    FSM fallback: when FSM cleared, notify:yes/no would be Unhandled.
+    Runs when primary (StateFilter waiting_for_notify) does not match.
+    Without FSM data we cannot execute grant; inform user to retry.
+    """
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    
+    logger.warning(
+        "ADMIN_FSM_FALLBACK_EXECUTED "
+        f"user={callback.from_user.id} "
+        f"callback={callback.data}"
+    )
+    await callback.answer(
+        "Сессия сброшена. Выберите пользователя заново и повторите действие.",
+        show_alert=True
+    )
+
+
 @router.callback_query(F.data.startswith("admin:revoke:user:"))
 async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMContext):
     """
@@ -8584,8 +8636,8 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
     Admin revoke access - ask for notify choice first.
     Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:user:<id>
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8637,8 +8689,8 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     Execute revoke with notify_user choice.
     Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:notify:yes|no
     """
+    language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -8741,145 +8793,6 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
         await state.clear()
-    """Обработчик кнопки 'Лишить доступа'"""
-    # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
-        return
-    
-    await callback.answer()
-    
-    try:
-        # P1 FIX: Safe callback parsing with validation
-        # Expected format: admin_revoke:{notify|skip}:{telegram_user_id}
-        parts = callback.data.split(":")
-        
-        if len(parts) != 3:
-            logger.error(
-                "INVALID_ADMIN_REVOKE_CALLBACK",
-                extra={
-                    "callback_data": callback.data,
-                    "parts_count": len(parts),
-                    "admin_id": callback.from_user.id,
-                    "correlation_id": str(callback.message.message_id) if callback.message else None
-                }
-            )
-            await callback.answer("Ошибка формата команды", show_alert=True)
-            return
-        
-        _, notify_flag, user_id_raw = parts
-        
-        # Validate notify_flag
-        if notify_flag not in ("notify", "skip"):
-            logger.error(
-                "INVALID_ADMIN_REVOKE_NOTIFY_FLAG",
-                extra={
-                    "callback_data": callback.data,
-                    "notify_flag": notify_flag,
-                    "admin_id": callback.from_user.id,
-                    "correlation_id": str(callback.message.message_id) if callback.message else None
-                }
-            )
-            await callback.answer("Ошибка формата команды", show_alert=True)
-            return
-        
-        # Parse user_id safely
-        try:
-            user_id = int(user_id_raw)
-        except ValueError:
-            logger.error(
-                "INVALID_ADMIN_REVOKE_USER_ID",
-                extra={
-                    "callback_data": callback.data,
-                    "user_id_raw": user_id_raw,
-                    "notify_flag": notify_flag,
-                    "admin_id": callback.from_user.id,
-                    "correlation_id": str(callback.message.message_id) if callback.message else None
-                }
-            )
-            await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
-            return
-        
-        notify = notify_flag == "notify"
-        
-        # Лишаем доступа
-        revoked = await database.admin_revoke_access_atomic(
-            telegram_id=user_id,
-            admin_telegram_id=callback.from_user.id
-        )
-        
-        if not revoked:
-            # Нет активной подписки
-            text = "❌ У пользователя нет активной подписки"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
-            await callback.answer("Нет активной подписки", show_alert=True)
-        else:
-            # Успешно
-            if notify:
-                text = "✅ Доступ отозван\nПользователь уведомлён."
-            else:
-                text = "✅ Доступ отозван"
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
-            
-            # Уведомляем пользователя только если notify=True
-            if notify:
-                try:
-                    language = await resolve_user_language(user_id)
-                    
-                    user_text = i18n_get_text(language, "admin.revoke_user_notification", "admin_revoke_user_notification")
-                    await bot.send_message(user_id, user_text)
-                    logger.info(
-                        "ADMIN_REVOKE_NOTIFICATION_SENT",
-                        extra={
-                            "admin_id": callback.from_user.id,
-                            "user_id": user_id,
-                            "correlation_id": str(callback.message.message_id) if callback.message else None
-                        }
-                    )
-                except Exception as e:
-                    logger.exception(
-                        "ADMIN_REVOKE_NOTIFICATION_FAILED",
-                        extra={
-                            "admin_id": callback.from_user.id,
-                            "user_id": user_id,
-                            "error": str(e),
-                            "correlation_id": str(callback.message.message_id) if callback.message else None
-                        }
-                    )
-            else:
-                logger.info(
-                    "ADMIN_REVOKE_NOTIFY_SKIPPED",
-                    extra={
-                        "admin_id": callback.from_user.id,
-                        "user_id": user_id,
-                        "correlation_id": str(callback.message.message_id) if callback.message else None
-                    }
-                )
-        
-    except ValueError as e:
-        # P1 FIX: ValueError уже обработан выше, но на всякий случай
-        logger.error(
-            "ADMIN_REVOKE_VALUE_ERROR",
-            extra={
-                "callback_data": callback.data if hasattr(callback, 'data') else None,
-                "error": str(e),
-                "admin_id": callback.from_user.id if hasattr(callback, 'from_user') else None,
-                "correlation_id": str(callback.message.message_id) if callback.message else None
-            }
-        )
-        await callback.answer("Ошибка: неверный формат команды", show_alert=True)
-    except Exception as e:
-        logger.exception(
-            "ADMIN_REVOKE_ERROR",
-            extra={
-                "callback_data": callback.data if hasattr(callback, 'data') else None,
-                "error": str(e),
-                "admin_id": callback.from_user.id if hasattr(callback, 'from_user') else None,
-                "correlation_id": str(callback.message.message_id) if callback.message else None
-            }
-        )
-        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
 # ==================== ОБРАБОТЧИКИ ДЛЯ УПРАВЛЕНИЯ ПЕРСОНАЛЬНЫМИ СКИДКАМИ ====================
