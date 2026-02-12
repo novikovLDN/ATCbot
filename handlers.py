@@ -7366,6 +7366,8 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         success_count = 0
         failed_count = 0
         failed_users = []
+        successful_ids = []
+        failed_ids = []
         
         if total_count == 0:
             await safe_edit_text(
@@ -7393,10 +7395,12 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                 if new_vpn_key is None:
                     failed_count += 1
                     failed_users.append(telegram_id)
+                    failed_ids.append(f"{telegram_id} (no key returned)")
                     logging.error(f"Failed to reissue key for user {telegram_id} in bulk operation")
                     continue
                 
                 success_count += 1
+                successful_ids.append(telegram_id)
                 
                 # Отправляем уведомление пользователю
                 try:
@@ -7439,6 +7443,8 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
             except Exception as e:
                 failed_count += 1
                 failed_users.append(telegram_id)
+                error_type = type(e).__name__
+                failed_ids.append(f"{telegram_id} ({error_type})")
                 logging.exception(f"Error reissuing key for user {telegram_id} in bulk operation: {e}")
                 continue
         
@@ -7450,12 +7456,6 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
             f"❌ Ошибок: {failed_count}"
         )
         
-        if failed_users:
-            failed_list = ", ".join(map(str, failed_users[:10]))
-            if len(failed_users) > 10:
-                failed_list += f" и ещё {len(failed_users) - 10}"
-            final_text += f"\n\nОшибки у пользователей: {failed_list}"
-        
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:keys")]
         ])
@@ -7465,6 +7465,49 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
                 raise
+        
+        # Отправляем детальный отчёт админу
+        report_lines = []
+        report_lines.append("🔁 Массовый перевыпуск завершён\n")
+        report_lines.append(f"✅ Успешно: {len(successful_ids)}")
+        
+        if successful_ids:
+            report_lines.append("IDs:")
+            # Разбиваем на части если слишком много (Telegram limit 4096 chars)
+            if len(successful_ids) <= 50:
+                for uid in successful_ids:
+                    report_lines.append(f"- {uid}")
+            else:
+                for uid in successful_ids[:50]:
+                    report_lines.append(f"- {uid}")
+                report_lines.append(f"... и ещё {len(successful_ids) - 50} успешных")
+        
+        report_lines.append("")
+        report_lines.append(f"❌ Ошибки: {len(failed_ids)}")
+        
+        if failed_ids:
+            report_lines.append("IDs:")
+            # Разбиваем на части если слишком много
+            if len(failed_ids) <= 50:
+                for item in failed_ids:
+                    report_lines.append(f"- {item}")
+            else:
+                for item in failed_ids[:50]:
+                    report_lines.append(f"- {item}")
+                report_lines.append(f"... и ещё {len(failed_ids) - 50} ошибок")
+        
+        report_text = "\n".join(report_lines)
+        
+        # Проверяем длину и разбиваем на части если нужно
+        if len(report_text) > 4000:
+            # Отправляем первую часть
+            first_part = "\n".join(report_lines[:len(report_lines)//2])
+            await callback.message.answer(first_part)
+            # Отправляем вторую часть
+            second_part = "\n".join(report_lines[len(report_lines)//2:])
+            await callback.message.answer(second_part)
+        else:
+            await callback.message.answer(report_text)
         
         # Логируем в audit_log
         await database._log_audit_event_atomic_standalone(
