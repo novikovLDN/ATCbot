@@ -1457,6 +1457,35 @@ async def get_withdrawal_request(wid: int) -> Optional[Dict[str, Any]]:
 
 async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
     """Подтвердить заявку (status=approved). Средства уже списаны при создании."""
+    # REDIS DISTRIBUTED IDEMPOTENCY: Check if withdrawal already processed
+    # Must be checked BEFORE DB mutation
+    try:
+        from app.core.idempotency import create_idempotency
+        idempotency = create_idempotency()
+        is_allowed = await idempotency.acquire(
+            operation="withdrawal_approve",
+            unique_id=str(wid),
+            correlation_id=None,
+            telegram_id=processed_by,
+        )
+        if not is_allowed:
+            logger.warning(
+                "DUPLICATE_ATTEMPT",
+                extra={
+                    "component": "database",
+                    "operation": "withdrawal_approve",
+                    "outcome": "duplicate",
+                    "withdrawal_id": wid,
+                    "processed_by": processed_by,
+                }
+            )
+            # Already processed - return False to match existing behavior
+            return False
+    except Exception as idempotency_error:
+        # If idempotency check fails, log but continue (fail-safe)
+        logger.warning(f"Idempotency check failed for withdrawal_id={wid}: {idempotency_error}")
+        # Continue with DB check (existing idempotency via FOR UPDATE)
+    
     if not DB_READY:
         return False
     pool = await get_pool()
@@ -1486,6 +1515,35 @@ async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
 
 async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
     """Отклонить заявку и вернуть средства на баланс."""
+    # REDIS DISTRIBUTED IDEMPOTENCY: Check if withdrawal already processed
+    # Must be checked BEFORE DB mutation
+    try:
+        from app.core.idempotency import create_idempotency
+        idempotency = create_idempotency()
+        is_allowed = await idempotency.acquire(
+            operation="withdrawal_reject",
+            unique_id=str(wid),
+            correlation_id=None,
+            telegram_id=processed_by,
+        )
+        if not is_allowed:
+            logger.warning(
+                "DUPLICATE_ATTEMPT",
+                extra={
+                    "component": "database",
+                    "operation": "withdrawal_reject",
+                    "outcome": "duplicate",
+                    "withdrawal_id": wid,
+                    "processed_by": processed_by,
+                }
+            )
+            # Already processed - return False to match existing behavior
+            return False
+    except Exception as idempotency_error:
+        # If idempotency check fails, log but continue (fail-safe)
+        logger.warning(f"Idempotency check failed for withdrawal_id={wid}: {idempotency_error}")
+        # Continue with DB check (existing idempotency via FOR UPDATE)
+    
     if not DB_READY:
         return False
     pool = await get_pool()
@@ -6116,7 +6174,7 @@ async def finalize_purchase(
     async with pool.acquire() as conn:
         # Начинаем транзакцию
         async with conn.transaction():
-            # STEP 1: Получаем и проверяем pending_purchase
+            # STEP 1: Получаем и проверяем pending_purchase (read-only check first)
             pending_row = await conn.fetchrow(
                 "SELECT * FROM pending_purchases WHERE purchase_id = $1",
                 purchase_id
@@ -6136,6 +6194,38 @@ async def finalize_purchase(
                 error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
                 logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
                 raise ValueError(error_msg)
+            
+            # REDIS DISTRIBUTED IDEMPOTENCY: Check if purchase already processed
+            # Must be checked AFTER read but BEFORE DB mutation
+            try:
+                from app.core.idempotency import create_idempotency
+                idempotency = create_idempotency()
+                is_allowed = await idempotency.acquire(
+                    operation="purchase",
+                    unique_id=purchase_id,
+                    correlation_id=None,  # Will be set by caller if available
+                    telegram_id=telegram_id,
+                )
+                if not is_allowed:
+                    logger.warning(
+                        "DUPLICATE_ATTEMPT",
+                        extra={
+                            "component": "database",
+                            "operation": "purchase_finalization",
+                            "outcome": "duplicate",
+                            "purchase_id": purchase_id,
+                            "telegram_id": telegram_id,
+                        }
+                    )
+                    # Purchase already processed - raise ValueError to match existing behavior
+                    raise ValueError(f"Purchase already processed: purchase_id={purchase_id}")
+            except ValueError:
+                # Re-raise ValueError (already processed)
+                raise
+            except Exception as idempotency_error:
+                # If idempotency check fails, log but continue (fail-safe)
+                logger.warning(f"Idempotency check failed for purchase_id={purchase_id}: {idempotency_error}")
+                # Continue with DB mutation (existing idempotency via status check)
             
             tariff_type = pending_purchase.get("tariff")
             period_days = pending_purchase.get("period_days")

@@ -32,6 +32,7 @@ from app.services.subscriptions import service as subscription_service
 import redis_client
 from app.core.redis_lock import RedisDistributedLock
 from app.core.rate_limiter import create_redis_rate_limiter
+from app.core.idempotency import create_idempotency
 from app.services.subscriptions.service import (
     is_subscription_active,
     get_subscription_status,
@@ -5066,6 +5067,29 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )
                 error_text = i18n_get_text(language, "errors.payment_processing")
                 await message.answer(error_text)
+                return
+            
+            # REDIS DISTRIBUTED IDEMPOTENCY: Check if payment already processed
+            idempotency = create_idempotency()
+            is_allowed = await idempotency.acquire(
+                operation="balance_topup",
+                unique_id=provider_charge_id,
+                correlation_id=str(message.message_id),
+                telegram_id=telegram_id,
+            )
+            if not is_allowed:
+                logger.warning(
+                    "DUPLICATE_ATTEMPT",
+                    extra={
+                        "component": "handler",
+                        "operation": "balance_topup",
+                        "outcome": "duplicate",
+                        "provider_charge_id": provider_charge_id,
+                        "telegram_id": telegram_id,
+                        "correlation_id": str(message.message_id),
+                    }
+                )
+                # Payment already processed - skip silently (user already received notification)
                 return
             
             try:

@@ -158,6 +158,39 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
                         # Оплата еще не выполнена
                         continue
                     
+                    # REDIS DISTRIBUTED IDEMPOTENCY: Check if crypto transaction already processed
+                    # Must be checked BEFORE DB mutation
+                    try:
+                        from app.core.idempotency import create_idempotency
+                        idempotency = create_idempotency()
+                        # Use invoice_id as unique identifier for crypto transactions
+                        # TTL: 7 days for crypto transactions (longer than default)
+                        is_allowed = await idempotency.acquire(
+                            operation="crypto_tx",
+                            unique_id=invoice_id_str,
+                            ttl=604800,  # 7 days
+                            correlation_id=None,
+                            telegram_id=telegram_id,
+                        )
+                        if not is_allowed:
+                            logger.warning(
+                                "DUPLICATE_ATTEMPT",
+                                extra={
+                                    "component": "worker",
+                                    "operation": "crypto_tx",
+                                    "outcome": "duplicate",
+                                    "invoice_id": invoice_id_str,
+                                    "purchase_id": purchase_id,
+                                    "telegram_id": telegram_id,
+                                }
+                            )
+                            # Transaction already processed - skip
+                            continue
+                    except Exception as idempotency_error:
+                        # If idempotency check fails, log but continue (fail-safe)
+                        logger.warning(f"Idempotency check failed for invoice_id={invoice_id_str}: {idempotency_error}")
+                        # Continue with finalize_purchase (existing idempotency via status check)
+                    
                     # Оплата успешна - финализируем покупку
                     payload = invoice_status.get("payload", "")
                     if not payload.startswith("purchase:"):
