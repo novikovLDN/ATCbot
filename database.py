@@ -1294,6 +1294,140 @@ async def subtract_balance(telegram_id: int, amount: int, transaction_type: str,
                 return False
 
 
+# ====================================================================================
+# WITHDRAWAL REQUESTS (Atlas Secure balance withdrawal system)
+# ====================================================================================
+
+async def create_withdrawal_request(
+    telegram_id: int,
+    username: Optional[str],
+    amount_kopecks: int,
+    requisites: str,
+) -> Optional[int]:
+    """
+    Создать заявку на вывод средств (в транзакции со списанием баланса).
+    Advisory lock по telegram_id для защиты от гонок.
+
+    Args:
+        telegram_id: Telegram ID пользователя
+        username: Username (опционально)
+        amount_kopecks: Сумма в копейках
+        requisites: Реквизиты (СБП, карта, счёт)
+
+    Returns:
+        ID созданной заявки или None при ошибке/недостатке средств
+    """
+    if amount_kopecks <= 0:
+        logger.error(f"Invalid amount_kopecks for create_withdrawal_request: {amount_kopecks}")
+        return None
+    if not DB_READY:
+        logger.warning("DB not ready, create_withdrawal_request skipped")
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+                current = await conn.fetchval("SELECT balance FROM users WHERE telegram_id = $1", telegram_id)
+                if current is None:
+                    logger.error(f"User {telegram_id} not found for withdrawal")
+                    return None
+                if current < amount_kopecks:
+                    logger.warning(f"Insufficient balance for withdrawal: user={telegram_id}, balance={current}, amount={amount_kopecks}")
+                    return None
+                await conn.execute(
+                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
+                    amount_kopecks, telegram_id
+                )
+                await conn.execute(
+                    """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                       VALUES ($1, $2, $3, $4, $5)""",
+                    telegram_id, -amount_kopecks, "withdrawal", "withdrawal_request",
+                    f"Вывод средств: {requisites[:50]}"
+                )
+                row = await conn.fetchrow(
+                    """INSERT INTO withdrawal_requests (telegram_id, username, amount, requisites, status)
+                       VALUES ($1, $2, $3, $4, 'pending')
+                       RETURNING id""",
+                    telegram_id, username, amount_kopecks, requisites
+                )
+                wid = row["id"]
+                logger.info(f"Created withdrawal request id={wid} user={telegram_id} amount={amount_kopecks} kopecks")
+                return wid
+            except Exception as e:
+                logger.exception(f"Error creating withdrawal request for user {telegram_id}: {e}")
+                return None
+
+
+async def get_withdrawal_request(wid: int) -> Optional[Dict[str, Any]]:
+    """Получить заявку на вывод по ID."""
+    if not DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM withdrawal_requests WHERE id = $1", wid)
+        return dict(row) if row else None
+
+
+async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
+    """Подтвердить заявку (status=approved). Средства уже списаны при создании."""
+    if not DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "UPDATE withdrawal_requests SET status = 'approved', processed_at = NOW(), processed_by = $1 WHERE id = $2 AND status = 'pending' RETURNING id",
+                processed_by, wid
+            )
+            if row:
+                logger.info(f"Withdrawal request {wid} approved by {processed_by}")
+                return True
+            return False
+
+
+async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
+    """Отклонить заявку и вернуть средства на баланс."""
+    if not DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT id, telegram_id, amount FROM withdrawal_requests WHERE id = $1 AND status = 'pending' FOR UPDATE",
+                wid
+            )
+            if not row:
+                return False
+            telegram_id = row["telegram_id"]
+            amount_kopecks = row["amount"]
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            await conn.execute(
+                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                amount_kopecks, telegram_id
+            )
+            await conn.execute(
+                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                telegram_id, amount_kopecks, "refund", "withdrawal_rejected",
+                f"Возврат средств: заявка #{wid} отклонена"
+            )
+            await conn.execute(
+                "UPDATE withdrawal_requests SET status = 'rejected', processed_at = NOW(), processed_by = $1 WHERE id = $2",
+                processed_by, wid
+            )
+            logger.info(f"Withdrawal request {wid} rejected, refunded {amount_kopecks} kopecks to user {telegram_id}")
+            return True
+
+
 async def find_user_by_id_or_username(telegram_id: Optional[int] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Найти пользователя по Telegram ID или username
     

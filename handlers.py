@@ -853,6 +853,22 @@ class AdminCreditBalance(StatesGroup):
     waiting_for_confirmation = State()
 
 
+class AdminDebitBalance(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_confirmation = State()
+
+
+class AdminBalanceManagement(StatesGroup):
+    waiting_for_user_search = State()
+
+
+class WithdrawStates(StatesGroup):
+    withdraw_amount = State()
+    withdraw_confirm = State()
+    withdraw_requisites = State()
+    withdraw_final_confirm = State()
+
+
 class PurchaseState(StatesGroup):
     """FSM состояния для процесса покупки"""
     choose_tariff = State()           # Выбор тарифа (Basic/Plus)
@@ -955,8 +971,8 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     )])
     buttons.append([
         InlineKeyboardButton(
-            text=i18n_get_text(language, "main.about"),
-            callback_data="menu_about"
+            text=i18n_get_text(language, "main.ecosystem", "main.ecosystem"),
+            callback_data="menu_ecosystem"
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
@@ -964,8 +980,8 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         ),
     ])
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "lang.change"),
-        callback_data="change_language"
+        text=i18n_get_text(language, "main.settings", "main.settings"),
+        callback_data="menu_settings"
     )])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1015,6 +1031,11 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "profile.topup_balance"),
         callback_data="topup_balance"
+    )])
+    # Кнопка вывода средств
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "profile.withdraw_funds"),
+        callback_data="withdraw_start"
     )])
     
     # Кнопка копирования ключа (one-tap copy, всегда показываем)
@@ -1361,7 +1382,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data="admin:credit_balance")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast")],
@@ -2674,6 +2695,211 @@ async def process_topup_amount(message: Message, state: FSMContext):
     ])
     
     await message.answer(text, reply_markup=keyboard)
+
+
+# --- User withdrawal flow ---
+MIN_WITHDRAW_RUBLES = 500
+
+
+@router.callback_query(F.data == "withdraw_start")
+async def callback_withdraw_start(callback: CallbackQuery, state: FSMContext):
+    """Начало вывода средств"""
+    if not await ensure_db_ready_callback(callback):
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "withdraw.amount_prompt")
+    await state.set_state(WithdrawStates.withdraw_amount)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_profile")]
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.message(WithdrawStates.withdraw_amount)
+async def process_withdraw_amount(message: Message, state: FSMContext):
+    """Обработка суммы вывода (мин 500 ₽, <= баланс)"""
+    if not await ensure_db_ready_message(message):
+        await state.clear()
+        return
+    language = await resolve_user_language(message.from_user.id)
+    try:
+        amount = float(message.text.strip().replace(",", "."))
+        if amount < MIN_WITHDRAW_RUBLES:
+            await message.answer(i18n_get_text(language, "withdraw.min_amount_error"))
+            return
+        balance = await database.get_user_balance(message.from_user.id)
+        if amount > balance:
+            await message.answer(i18n_get_text(language, "withdraw.insufficient_funds"))
+            return
+        await state.update_data(withdraw_amount=amount)
+        await state.set_state(WithdrawStates.withdraw_confirm)
+        text = i18n_get_text(language, "withdraw.confirm_amount", amount=amount)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_confirm_amount")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_cancel")]
+        ])
+        await message.answer(text, reply_markup=keyboard)
+    except ValueError:
+        await message.answer(i18n_get_text(language, "errors.invalid_amount"))
+
+
+@router.callback_query(F.data == "withdraw_confirm_amount", StateFilter(WithdrawStates.withdraw_confirm))
+async def callback_withdraw_confirm_amount(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение суммы → переход к вводу реквизитов"""
+    language = await resolve_user_language(callback.from_user.id)
+    await state.set_state(WithdrawStates.withdraw_requisites)
+    text = i18n_get_text(language, "withdraw.requisites_prompt")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_amount")]
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.message(WithdrawStates.withdraw_requisites)
+async def process_withdraw_requisites(message: Message, state: FSMContext):
+    """Обработка реквизитов → финальное подтверждение"""
+    if not await ensure_db_ready_message(message):
+        await state.clear()
+        return
+    language = await resolve_user_language(message.from_user.id)
+    requisites = (message.text or "").strip()
+    if len(requisites) < 5:
+        await message.answer("Укажите корректные реквизиты (минимум 5 символов).")
+        return
+    await state.update_data(withdraw_requisites=requisites)
+    await state.set_state(WithdrawStates.withdraw_final_confirm)
+    data = await state.get_data()
+    amount = data["withdraw_amount"]
+    text = i18n_get_text(language, "withdraw.final_confirm", amount=amount, requisites=requisites[:80])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_final_confirm")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_requisites")]
+    ])
+    await message.answer(text, reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "withdraw_final_confirm", StateFilter(WithdrawStates.withdraw_final_confirm))
+async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Финальное подтверждение: списание, создание заявки, уведомление админу"""
+    if not await ensure_db_ready_callback(callback):
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    telegram_id = callback.from_user.id
+    data = await state.get_data()
+    amount = data.get("withdraw_amount")
+    requisites = data.get("withdraw_requisites", "")
+    if not amount or not requisites:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.clear()
+        return
+    amount_kopecks = int(amount * 100)
+    username = callback.from_user.username
+    wid = await database.create_withdrawal_request(telegram_id, username, amount_kopecks, requisites)
+    if not wid:
+        await callback.answer(i18n_get_text(language, "withdraw.insufficient_funds"), show_alert=True)
+        await state.clear()
+        return
+    await state.clear()
+    await callback.answer()
+    in_progress_text = i18n_get_text(language, "withdraw.in_progress")
+    has_any_sub, auto_renew = False, False
+    try:
+        sub = await database.get_subscription(telegram_id)
+        has_any_sub = bool(sub and sub.get("expires_at"))
+        auto_renew = bool(sub and sub.get("auto_renew"))
+    except Exception:
+        pass
+    await safe_edit_text(callback.message, in_progress_text, reply_markup=get_profile_keyboard(language, has_any_sub, auto_renew), bot=callback.bot)
+    try:
+        balance = await database.get_user_balance(telegram_id)
+        has_active = await subscription_service.is_subscription_active(telegram_id)
+        sub_text = "активна" if has_active else "нет"
+        admin_text = (
+            f"💸 Новая заявка на вывод #{wid}\n\n"
+            f"👤 Пользователь: @{username or '—'} (ID: {telegram_id})\n"
+            f"📊 Баланс: {balance:.2f} ₽\n"
+            f"💰 Сумма: {amount:.2f} ₽\n"
+            f"📶 Подписка: {sub_text}\n"
+            f"🏦 Реквизиты: {requisites[:200]}"
+        )
+        admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"withdraw_approve:{wid}")],
+            [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"withdraw_reject:{wid}")],
+        ])
+        await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb)
+    except Exception as e:
+        logger.warning(f"Failed to send withdrawal notification to admin: {e}")
+
+
+@router.callback_query(F.data == "withdraw_cancel")
+@router.callback_query(F.data == "withdraw_back_to_amount")
+@router.callback_query(F.data == "withdraw_back_to_requisites")
+async def callback_withdraw_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отмена или назад в выводе средств"""
+    await state.clear()
+    language = await resolve_user_language(callback.from_user.id)
+    await callback_profile(callback, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("withdraw_approve:"))
+async def callback_withdraw_approve(callback: CallbackQuery, bot: Bot):
+    """Админ: подтвердить вывод средств"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+    try:
+        wid = int(callback.data.split(":")[1])
+        wr = await database.get_withdrawal_request(wid)
+        if not wr or wr["status"] != "pending":
+            await callback.answer("Заявка уже обработана", show_alert=True)
+            return
+        ok = await database.approve_withdrawal_request(wid, callback.from_user.id)
+        if ok:
+            lang = await resolve_user_language(wr["telegram_id"])
+            text = i18n_get_text(lang, "withdraw.approved")
+            try:
+                await bot.send_message(wr["telegram_id"], text)
+            except Exception as e:
+                logger.warning(f"Failed to send withdrawal approved notification to {wr['telegram_id']}: {e}")
+            await callback.answer("✅ Подтверждено", show_alert=True)
+            await safe_edit_reply_markup(callback.message, reply_markup=None)
+        else:
+            await callback.answer("Ошибка подтверждения", show_alert=True)
+    except Exception as e:
+        logging.exception(f"Error in withdraw_approve: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("withdraw_reject:"))
+async def callback_withdraw_reject(callback: CallbackQuery, bot: Bot):
+    """Админ: отклонить вывод (возврат средств)"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+    try:
+        wid = int(callback.data.split(":")[1])
+        wr = await database.get_withdrawal_request(wid)
+        if not wr or wr["status"] != "pending":
+            await callback.answer("Заявка уже обработана", show_alert=True)
+            return
+        ok = await database.reject_withdrawal_request(wid, callback.from_user.id)
+        if ok:
+            lang = await resolve_user_language(wr["telegram_id"])
+            text = i18n_get_text(lang, "withdraw.rejected")
+            try:
+                await bot.send_message(wr["telegram_id"], text)
+            except Exception as e:
+                logger.warning(f"Failed to send withdrawal rejected notification to {wr['telegram_id']}: {e}")
+            await callback.answer("❌ Отклонено", show_alert=True)
+            await safe_edit_reply_markup(callback.message, reply_markup=None)
+        else:
+            await callback.answer("Ошибка отклонения", show_alert=True)
+    except Exception as e:
+        logging.exception(f"Error in withdraw_reject: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
 @router.callback_query(F.data == "copy_key")
@@ -5552,9 +5778,46 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
         await event.answer()
 
 
+@router.callback_query(F.data == "menu_ecosystem")
+async def callback_ecosystem(callback: CallbackQuery):
+    """⚪️ Наша экосистема"""
+    language = await resolve_user_language(callback.from_user.id)
+    title = i18n_get_text(language, "main.ecosystem_title", "main.ecosystem_title")
+    text = i18n_get_text(language, "main.ecosystem_text", "main.ecosystem_text")
+    full_text = f"{title}\n\n{text}"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about")],
+        [InlineKeyboardButton(text="✍️ Трекер Only (скоро)", callback_data="tracker_soon")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+    ])
+    await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "tracker_soon")
+async def callback_tracker_soon(callback: CallbackQuery):
+    """Трекер Only - в разработке"""
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "main.tracker_soon", "main.tracker_soon")
+    await callback.answer(text, show_alert=False)
+
+
+@router.callback_query(F.data == "menu_settings")
+async def callback_settings(callback: CallbackQuery):
+    """⚙️ Настройки"""
+    language = await resolve_user_language(callback.from_user.id)
+    title = i18n_get_text(language, "main.settings_title", "main.settings_title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "lang.change"), callback_data="change_language")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+    ])
+    await safe_edit_text(callback.message, title, reply_markup=keyboard, bot=callback.bot)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "menu_about")
 async def callback_about(callback: CallbackQuery):
-    """О сервисе. Entry from inline button."""
+    """О сервисе. Entry from ecosystem."""
     await _open_about_screen(callback, callback.bot)
 
 
@@ -10625,15 +10888,70 @@ async def reject_payment(callback: CallbackQuery):
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
-@router.callback_query(F.data == "admin:credit_balance")
-async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FSMContext):
-    """Начало процесса выдачи средств - запрос поиска пользователя"""
+@router.callback_query(F.data == "admin:balance_management")
+async def callback_admin_balance_management_start(callback: CallbackQuery, state: FSMContext):
+    """💰 Управление балансом - запрос поиска пользователя"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
-    user = await database.get_user(callback.from_user.id)
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "admin.balance_management_prompt", "admin_balance_management_prompt")
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
+    await state.set_state(AdminBalanceManagement.waiting_for_user_search)
+    await callback.answer()
+
+
+@router.message(AdminBalanceManagement.waiting_for_user_search)
+async def process_admin_balance_user_search(message: Message, state: FSMContext):
+    """Обработка поиска пользователя для управления балансом → показ профиля с ➕➖"""
+    language = await resolve_user_language(message.from_user.id)
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await state.clear()
+        return
+    try:
+        user_input = message.text.strip()
+        try:
+            target_user_id = int(user_input)
+            user = await database.find_user_by_id_or_username(telegram_id=target_user_id)
+        except ValueError:
+            username = user_input.lstrip('@').lower()
+            user = await database.find_user_by_id_or_username(username=username)
+        if not user:
+            await message.answer(i18n_get_text(language, "admin.user_not_found_check_id"))
+            return
+        target_user_id = user["telegram_id"]
+        balance = await database.get_user_balance(target_user_id)
+        has_active = await subscription_service.is_subscription_active(target_user_id)
+        sub_text = i18n_get_text(language, "admin.no_active_subscription") if not has_active else "Подписка активна"
+        text = (
+            f"💰 Управление балансом\n\n"
+            f"👤 Пользователь: {target_user_id}\n"
+            f"📊 Баланс: {balance:.2f} ₽\n"
+            f"📶 {sub_text}\n\n"
+            f"Выберите действие:"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Пополнить", callback_data=f"admin:credit_balance:{target_user_id}")],
+            [InlineKeyboardButton(text="➖ Снять", callback_data=f"admin:debit_balance:{target_user_id}")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+        ])
+        await message.answer(text, reply_markup=keyboard)
+        await state.clear()
+    except Exception as e:
+        logging.exception(f"Error in process_admin_balance_user_search: {e}")
+        await message.answer("Ошибка при поиске пользователя.")
+        await state.clear()
+
+
+@router.callback_query(F.data == "admin:credit_balance")
+async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса выдачи средств - запрос поиска пользователя (legacy entry)"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "admin.credit_balance_prompt", "admin_credit_balance_prompt")
     await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
@@ -10847,6 +11165,138 @@ async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: F
         i18n_get_text(language, "admin.operation_cancelled"),
         reply_markup=get_admin_back_keyboard(language)
     )
+    await state.clear()
+    await callback.answer()
+
+
+# --- Admin debit (снятие средств) ---
+@router.callback_query(F.data.startswith("admin:debit_balance:"))
+async def callback_admin_debit_balance_start(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса снятия средств с баланса пользователя"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    try:
+        user_id = int(callback.data.split(":")[2])
+        await state.update_data(target_user_id=user_id)
+        language = await resolve_user_language(callback.from_user.id)
+        balance = await database.get_user_balance(user_id)
+        text = i18n_get_text(language, "admin.debit_prompt", user_id=user_id, balance=balance)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:main")]
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await state.set_state(AdminDebitBalance.waiting_for_amount)
+        await callback.answer()
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_debit_balance_start: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@router.message(AdminDebitBalance.waiting_for_amount)
+async def process_admin_debit_amount(message: Message, state: FSMContext):
+    """Обработка ввода суммы для снятия средств"""
+    language = await resolve_user_language(message.from_user.id)
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await state.clear()
+        return
+    try:
+        amount = float(message.text.strip().replace(",", "."))
+        if amount <= 0:
+            await message.answer("❌ Сумма должна быть положительной.")
+            return
+        data = await state.get_data()
+        target_user_id = data.get("target_user_id")
+        if not target_user_id:
+            await message.answer("Ошибка: пользователь не найден.")
+            await state.clear()
+            return
+        balance = await database.get_user_balance(target_user_id)
+        if amount > balance:
+            await message.answer(i18n_get_text(language, "admin.debit_insufficient", balance=balance))
+            return
+        await state.update_data(amount=amount)
+        text = (
+            f"➖ Подтверждение снятия\n\n"
+            f"👤 Пользователь: {target_user_id}\n"
+            f"💳 Баланс: {balance:.2f} ₽\n"
+            f"➖ Сумма к снятию: {amount:.2f} ₽\n"
+            f"💵 Новый баланс: {balance - amount:.2f} ₽\n\n"
+            f"Подтвердите операцию:"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="admin:debit_confirm"),
+                InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:debit_cancel")
+            ]
+        ])
+        await message.answer(text, reply_markup=keyboard)
+        await state.set_state(AdminDebitBalance.waiting_for_confirmation)
+    except ValueError:
+        await message.answer("❌ Неверный формат суммы. Введите число:")
+    except Exception as e:
+        logging.exception(f"Error in process_admin_debit_amount: {e}")
+        await message.answer("Ошибка при обработке суммы.")
+        await state.clear()
+
+
+@router.callback_query(F.data == "admin:debit_confirm")
+async def callback_admin_debit_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Подтверждение снятия средств"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    try:
+        data = await state.get_data()
+        target_user_id = data.get("target_user_id")
+        amount = data.get("amount")
+        if not target_user_id or not amount:
+            await callback.answer("Ошибка: данные не найдены", show_alert=True)
+            await state.clear()
+            return
+        success = await database.decrease_balance(
+            telegram_id=target_user_id,
+            amount=amount,
+            source="admin",
+            description=f"Снятие средств администратором {callback.from_user.id}"
+        )
+        if success:
+            await database._log_audit_event_atomic_standalone(
+                "admin_debit_balance", callback.from_user.id, target_user_id,
+                f"Admin debited balance: {amount:.2f} RUB"
+            )
+            try:
+                notif = i18n_get_text(language, "admin.debit_user_notification", amount=amount)
+                await bot.send_message(chat_id=target_user_id, text=notif)
+            except Exception as e:
+                logger.warning(f"Failed to send debit notification to user {target_user_id}: {e}")
+            new_balance = await database.get_user_balance(target_user_id)
+            text = i18n_get_text(language, "admin.debit_success", user_id=target_user_id, amount=amount, new_balance=new_balance)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
+            ])
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
+            await state.clear()
+            await callback.answer("✅ Средства сняты", show_alert=True)
+        else:
+            await callback.answer(i18n_get_text(language, "admin.debit_insufficient", balance=await database.get_user_balance(target_user_id)), show_alert=True)
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_debit_confirm: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+        await state.clear()
+
+
+@router.callback_query(F.data == "admin:debit_cancel")
+async def callback_admin_debit_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отмена снятия средств"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"), reply_markup=get_admin_back_keyboard(language))
     await state.clear()
     await callback.answer()
 
