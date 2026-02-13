@@ -22,6 +22,7 @@ STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
 import httpx
 import logging
 import asyncio
+import uuid as uuid_module
 from datetime import datetime, timezone
 from typing import Dict, Optional
 from urllib.parse import quote
@@ -57,6 +58,21 @@ class AuthError(VPNAPIError):
 class InvalidResponseError(VPNAPIError):
     """Некорректный ответ от VPN API"""
     pass
+
+
+class CriticalUUIDMismatchError(VPNAPIError):
+    """Xray API returned UUID different from what we sent"""
+    pass
+
+
+def _validate_uuid_no_prefix(uuid_val: str) -> None:
+    """Reject any UUID with environment prefix. UUID must be raw 36-char only."""
+    if not uuid_val:
+        return
+    u = uuid_val.strip()
+    if "stage-" in u or u.startswith("stage-") or "prod-" in u or u.startswith("prod-") or "test-" in u or u.startswith("test-"):
+        logger.critical(f"INVALID_UUID_PREFIX_DETECTED [uuid={repr(uuid_val)[:50]}]")
+        raise RuntimeError("UUID must not contain environment prefix (stage-, prod-, test-)")
 
 
 async def check_xray_health() -> bool:
@@ -182,7 +198,7 @@ def generate_vless_url(uuid: str) -> str:
     return vless_url
 
 
-async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
+async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
     
@@ -195,8 +211,8 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
     Args:
         telegram_id: Telegram ID пользователя
         subscription_end: Дата окончания подписки (используется как expiryTime в Xray)
-        uuid: Optional explicit UUID to use (for recreating missing client, e.g. renewal self-heal).
-              If provided, API will use it instead of generating new. Must be valid UUID.
+        uuid: REQUIRED. Backend must generate UUID locally and pass it. API uses it exactly.
+              No server-side generation. Must be raw 36-char UUID.
     
     Returns:
         Словарь с ключами:
@@ -234,7 +250,12 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
         error_msg = "XRAY_API_KEY environment variable is not set"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
+
+    # UUID is REQUIRED. Backend generates, never API.
+    if not uuid or not str(uuid).strip():
+        raise ValueError("add_vless_user requires uuid; backend must generate and pass it")
+    _validate_uuid_no_prefix(uuid)
+
     # STAGE изоляция: проверяем окружение
     if config.IS_STAGE:
         logger.info("XRAY_CALL_START [operation=add_user, environment=stage]")
@@ -291,19 +312,13 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
         headers["X-Environment"] = "stage"
         headers["X-Inbound-Tag"] = "stage"
     
+    uuid_sent = str(uuid).strip()
     json_body = {
         "telegram_id": telegram_id,
-        "expiry_timestamp_ms": expiry_ms
+        "expiry_timestamp_ms": expiry_ms,
+        "uuid": uuid_sent
     }
-    uuid_sent = None
-    # UUID sent exactly as provided (whitespace trim only). No prefix add/strip.
-    if uuid:
-        uuid_sent = uuid.strip()
-        json_body["uuid"] = uuid_sent
-
-    logger.info(
-        f"UUID_AUDIT_ADD_REQUEST [uuid_arg={repr(uuid)}, uuid_sent_to_api={repr(uuid_sent) if uuid_sent else 'generated_by_api'}]"
-    )
+    logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(uuid_sent)}]")
     
     # Логируем начало операции
     logger.info(
@@ -380,48 +395,52 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
                 raise InvalidResponseError(error_msg)
             
             # Validate response structure
-            uuid = data.get("uuid")
+            returned_uuid = data.get("uuid")
             vless_link = data.get("vless_link")
-            
-            if not uuid:
+
+            if not returned_uuid:
                 error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
                 logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
                 raise InvalidResponseError(error_msg)
-            
-            uuid = str(uuid)
-            
+
+            returned_uuid = str(returned_uuid).strip()
+            if returned_uuid != uuid_sent:
+                logger.critical(
+                    f"UUID_MISMATCH [sent={repr(uuid_sent)}, returned={repr(returned_uuid)}]"
+                )
+                raise CriticalUUIDMismatchError(
+                    f"Xray API returned UUID {returned_uuid[:8]}... != sent {uuid_sent[:8]}..."
+                )
+
             # Use vless_link from API response if available, otherwise generate locally
             if vless_link:
                 vless_url = vless_link
             else:
-                vless_url = generate_vless_url(uuid)
-            
-            # Safe UUID logging (first 8 characters only)
-            uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
+                vless_url = generate_vless_url(uuid_sent)
+
+            uuid_preview = f"{uuid_sent[:8]}..." if len(uuid_sent) > 8 else uuid_sent
             logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
-            
-            # VPN AUDIT LOG: Log successful UUID creation (non-blocking)
+
             try:
                 import database
-                # Create async task for logging (don't block main flow)
                 import asyncio
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     asyncio.create_task(
                         database._log_vpn_lifecycle_audit_async(
                             action="vpn_add_user",
-                            telegram_id=0,  # Will be updated by caller with real telegram_id
-                            uuid=str(uuid),
-                            source=None,  # Will be updated by caller
+                            telegram_id=0,
+                            uuid=uuid_sent,
+                            source=None,
                             result="success",
                             details="UUID created via VPN API"
                         )
                     )
             except Exception as e:
                 logger.warning(f"Failed to log VPN add_user audit (non-blocking): {e}")
-            
+
             return {
-                "uuid": str(uuid),
+                "uuid": uuid_sent,
                 "vless_url": vless_url
             }
             
@@ -468,16 +487,14 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    if not uuid or not uuid.strip():
+    if not uuid or not str(uuid).strip():
         error_msg = f"Invalid UUID provided: {uuid}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
+    _validate_uuid_no_prefix(uuid)
     assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
     assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
-    
-    # UUID sent exactly as stored. No prefix add/strip.
-    uuid_clean = uuid.strip()
+    uuid_clean = str(uuid).strip()
     logger.info(f"UUID_AUDIT_UPDATE_REQUEST [uuid={repr(uuid_clean)}]")
     
     expiry_ms = int(subscription_end.timestamp() * 1000)
@@ -569,12 +586,12 @@ async def remove_vless_user(uuid: str) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    if not uuid or not uuid.strip():
+    if not uuid or not str(uuid).strip():
         error_msg = f"Invalid UUID provided: {uuid}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
-    uuid_clean = uuid.strip()
+    _validate_uuid_no_prefix(uuid)
+    uuid_clean = str(uuid).strip()
     if config.IS_STAGE:
         logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=stage]")
     elif config.IS_PROD:
@@ -776,13 +793,15 @@ async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: 
         # КРИТИЧНО: Если не удалось удалить старый UUID - прерываем операцию
         raise VPNAPIError(error_msg) from e
     
-    # ШАГ 2: Создаём новый UUID
+    # ШАГ 2: Создаём новый UUID (backend generates, API uses exactly)
+    new_uuid = str(uuid_module.uuid4())
     try:
         vless_result = await add_vless_user(
             telegram_id=telegram_id,
-            subscription_end=subscription_end
+            subscription_end=subscription_end,
+            uuid=new_uuid
         )
-        new_uuid = vless_result.get("uuid")
+        assert vless_result.get("uuid") == new_uuid, "UUID mismatch after add_vless_user"
         
         if not new_uuid:
             error_msg = "VPN API returned empty UUID during reissue"

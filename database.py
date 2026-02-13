@@ -3677,7 +3677,8 @@ async def reissue_vpn_key_atomic(
                             pass
                         # Продолжаем, даже если не удалось удалить старый UUID (идемпотентность)
                 
-                # 3. Создаем новый UUID через Xray API (POST /add-user)
+                # 3. Backend generates UUID; API uses it exactly
+                new_uuid = str(uuid.uuid4())
                 # PART D.7: If vpn_api != healthy, NEVER call VPN API
                 try:
                     from app.core.system_state import recalculate_from_runtime, ComponentStatus
@@ -3687,24 +3688,24 @@ async def reissue_vpn_key_atomic(
                             f"reissue_vpn_access: VPN_API_DISABLED [user={telegram_id}] - "
                             f"VPN API is {system_state.vpn_api.status.value}, skipping VPN call"
                         )
-                        # PART D.7: Cannot reissue if VPN API is disabled
                         raise Exception(f"VPN API is {system_state.vpn_api.status.value}, cannot reissue access")
                     else:
                         vless_result = await vpn_utils.add_vless_user(
                             telegram_id=telegram_id,
-                            subscription_end=expires_at
+                            subscription_end=expires_at,
+                            uuid=new_uuid
                         )
-                        new_uuid = vless_result["uuid"]
+                        assert vless_result["uuid"] == new_uuid, "UUID mismatch after add_vless_user"
                         new_vpn_key = vless_result["vless_url"]
                 except Exception as e:
                     if "VPN API is" in str(e):
-                        raise  # Re-raise VPN API disabled errors
-                    # Fallback for other errors
+                        raise
                     vless_result = await vpn_utils.add_vless_user(
                         telegram_id=telegram_id,
-                        subscription_end=expires_at
+                        subscription_end=expires_at,
+                        uuid=new_uuid
                     )
-                    new_uuid = vless_result["uuid"]
+                    assert vless_result["uuid"] == new_uuid, "UUID mismatch after add_vless_user"
                     new_vpn_key = vless_result["vless_url"]
                     
                     # VPN AUDIT LOG: Логируем создание нового UUID
@@ -4290,19 +4291,18 @@ async def grant_access(
             f"duration_days={duration_days}, expiry_timestamp_ms={expiry_ms}]"
         )
         
-        # Создаем новый UUID через Xray API с retry логикой
-        logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, subscription_end={subscription_end.isoformat()}, source={source}]")
-        
-        # КРИТИЧНО: Retry логика для VPN API (2 попытки = 3 всего с задержкой)
+        # Backend generates UUID; API uses it exactly. No server-side generation.
+        new_uuid = str(uuid.uuid4())
+        logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, uuid={new_uuid[:8]}..., subscription_end={subscription_end.isoformat()}, source={source}]")
+
         import asyncio
         MAX_VPN_RETRIES = 2
         RETRY_DELAY_SECONDS = 1.0
-        
+
         last_exception = None
         vless_result = None
-        new_uuid = None
         vless_url = None
-        
+
         for attempt in range(MAX_VPN_RETRIES + 1):
             if attempt > 0:
                 delay = RETRY_DELAY_SECONDS * attempt
@@ -4332,17 +4332,19 @@ async def grant_access(
                     else:
                         vless_result = await vpn_utils.add_vless_user(
                             telegram_id=telegram_id,
-                            subscription_end=subscription_end
+                            subscription_end=subscription_end,
+                            uuid=new_uuid
                         )
-                        new_uuid = vless_result.get("uuid")
+                        assert vless_result.get("uuid") == new_uuid, "UUID mismatch after add_vless_user"
                         vless_url = vless_result.get("vless_url")
                 except Exception as e:
                     logger.warning(f"grant_access: VPN_API_CHECK_FAILED [user={telegram_id}]: {e}, proceeding with VPN call")
                     vless_result = await vpn_utils.add_vless_user(
                         telegram_id=telegram_id,
-                        subscription_end=subscription_end
+                        subscription_end=subscription_end,
+                        uuid=new_uuid
                     )
-                    new_uuid = vless_result.get("uuid")
+                    assert vless_result.get("uuid") == new_uuid, "UUID mismatch after add_vless_user"
                     vless_url = vless_result.get("vless_url")
                 
                 # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены
