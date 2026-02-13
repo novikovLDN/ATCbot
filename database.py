@@ -4,7 +4,7 @@ import os
 import sys
 import hashlib
 import base64
-import uuid
+import uuid as uuid_lib
 import random
 import string
 from datetime import datetime, timedelta, timezone
@@ -1539,7 +1539,7 @@ async def create_withdrawal_request(
                 wid = row["id"]
                 
                 # Structured logging with correlation_id
-                correlation_id = str(uuid.uuid4())
+                correlation_id = str(uuid_lib.uuid4())
                 logger.info(
                     f"WITHDRAWAL_REQUEST_CREATED withdrawal_id={wid} user={telegram_id} "
                     f"amount={amount_kopecks} kopecks correlation_id={correlation_id}"
@@ -3678,7 +3678,7 @@ async def reissue_vpn_key_atomic(
                         # Продолжаем, даже если не удалось удалить старый UUID (идемпотентность)
                 
                 # 3. Backend generates UUID; API uses it exactly
-                new_uuid = str(uuid.uuid4())
+                new_uuid = str(uuid_lib.uuid4())
                 # PART D.7: If vpn_api != healthy, NEVER call VPN API
                 try:
                     from app.core.system_state import recalculate_from_runtime, ComponentStatus
@@ -4257,7 +4257,11 @@ async def grant_access(
         )
         
         # Backend generates UUID; API uses it exactly. No server-side generation.
-        new_uuid = str(uuid.uuid4())
+        # CRITICAL: use uuid_lib to avoid shadowing by local variable 'uuid' from subscription
+        new_uuid = str(uuid_lib.uuid4())
+        if not new_uuid:
+            raise RuntimeError("UUID generation failed: empty UUID")
+        logger.info(f"grant_access: USING_UUID [user={telegram_id}, uuid={new_uuid[:8]}...]")
         logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, uuid={new_uuid[:8]}..., subscription_end={subscription_end.isoformat()}, source={source}]")
 
         import asyncio
@@ -6166,7 +6170,7 @@ async def create_pending_balance_topup_purchase(
             "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending'",
             telegram_id
         )
-        purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
+        purchase_id = f"purchase_{uuid_lib.uuid4().hex[:16]}"
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
         await conn.execute(
             """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
@@ -6209,7 +6213,7 @@ async def create_pending_purchase(
         )
         
         # Генерируем уникальный purchase_id
-        purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
+        purchase_id = f"purchase_{uuid_lib.uuid4().hex[:16]}"
         
         # Срок действия контекста покупки (30 минут)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
