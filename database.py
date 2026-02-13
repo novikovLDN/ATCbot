@@ -37,11 +37,38 @@ DB_READY: bool = False
 
 
 # ====================================================================================
-# UTC HELPERS: Ensure timezone-aware UTC for subscription/expiry logic
+# UTC HELPERS: DB boundary — TIMESTAMP WITHOUT TIME ZONE requires naive UTC
+# ====================================================================================
+# PostgreSQL schema uses TIMESTAMP (without time zone). asyncpg expects naive datetime
+# for these columns. Application layer uses timezone-aware UTC.
+# STRICT RULE: All datetime passed TO asyncpg → _to_db_utc. All datetime read FROM DB → _from_db_utc.
 # ====================================================================================
 
+def _to_db_utc(dt: datetime) -> datetime:
+    """
+    Convert aware UTC datetime to naive UTC for DB storage.
+    Must raise if dt is not timezone-aware UTC.
+    """
+    if dt is None:
+        return None
+    assert dt.tzinfo == timezone.utc, f"Expected UTC, got tzinfo={dt.tzinfo}"
+    return dt.replace(tzinfo=None)
+
+
+def _from_db_utc(dt: datetime) -> datetime:
+    """
+    Convert naive DB datetime to aware UTC.
+    DB TIMESTAMP columns return naive datetime (stored as UTC).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc)
+    return dt.replace(tzinfo=timezone.utc)
+
+
 def _ensure_utc(dt: datetime) -> datetime:
-    """Ensure datetime is timezone-aware UTC. Naive assumed UTC. Other TZ converted."""
+    """Ensure datetime is timezone-aware UTC. Naive assumed UTC. Other TZ converted. Use _from_db_utc for DB reads."""
     if dt is None:
         return None
     if dt.tzinfo is not None and dt.tzinfo == timezone.utc:
@@ -52,6 +79,18 @@ def _ensure_utc(dt: datetime) -> datetime:
             tzinfo=timezone.utc
         )
     return dt.astimezone(timezone.utc)
+
+
+def _normalize_subscription_row(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Convert naive DB datetime columns to aware UTC. Use when returning subscription dicts."""
+    if row is None:
+        return None
+    d = dict(row)
+    for k in ("expires_at", "trial_expires_at", "created_at", "activated_at", "last_reminder_at",
+              "last_auto_renewal_at", "last_notification_sent_at", "first_traffic_at"):
+        if k in d and d[k] is not None and isinstance(d[k], datetime):
+            d[k] = _from_db_utc(d[k])
+    return d
 
 
 # ====================================================================================
@@ -2865,7 +2904,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                        AND expires_at <= $2 
                        AND status = 'active'
                        AND uuid IS NOT NULL""",
-                    telegram_id, now
+                    telegram_id, _to_db_utc(now)
                 )
                 
                 if not row:
@@ -2928,7 +2967,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     """UPDATE subscriptions 
                        SET status = 'expired', uuid = NULL, vpn_key = NULL 
                        WHERE telegram_id = $1 AND expires_at <= $2 AND status = 'active'""",
-                    telegram_id, now
+                    telegram_id, _to_db_utc(now)
                 )
                 
                 return True
@@ -2964,9 +3003,9 @@ async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
         now = datetime.now(timezone.utc)
         row = await conn.fetchrow(
             "SELECT * FROM subscriptions WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2",
-            telegram_id, now
+            telegram_id, _to_db_utc(now)
         )
-        return dict(row) if row else None
+        return _normalize_subscription_row(row) if row else None
 
 
 async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -2987,7 +3026,7 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
             "SELECT * FROM subscriptions WHERE telegram_id = $1",
             telegram_id
         )
-        return dict(row) if row else None
+        return _normalize_subscription_row(row) if row else None
 
 
 async def has_any_subscription(telegram_id: int) -> bool:
@@ -3054,8 +3093,8 @@ async def get_trial_info(telegram_id: int) -> Optional[Dict[str, Any]]:
         if not row:
             return None
         return {
-            "trial_used_at": row["trial_used_at"],
-            "trial_expires_at": row["trial_expires_at"]
+            "trial_used_at": _from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None,
+            "trial_expires_at": _from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
         }
 
 
@@ -3068,7 +3107,7 @@ async def get_active_paid_subscription(conn, telegram_id: int, now: datetime):
         SELECT expires_at FROM subscriptions
         WHERE telegram_id = $1 AND source != 'trial' AND status = 'active' AND expires_at > $2
         LIMIT 1
-    """, telegram_id, now)
+    """, telegram_id, _to_db_utc(now))
 
 
 async def mark_trial_used(telegram_id: int, trial_expires_at: datetime) -> bool:
@@ -3089,7 +3128,7 @@ async def mark_trial_used(telegram_id: int, trial_expires_at: datetime) -> bool:
                 SET trial_used_at = CURRENT_TIMESTAMP,
                     trial_expires_at = $1
                 WHERE telegram_id = $2
-            """, trial_expires_at, telegram_id)
+            """, _to_db_utc(trial_expires_at), telegram_id)
             logger.info(f"Trial marked as used: user={telegram_id}, expires_at={trial_expires_at.isoformat()}")
             return True
         except Exception as e:
@@ -3148,7 +3187,7 @@ async def is_trial_available(telegram_id: int) -> bool:
                AND status = 'active' 
                AND expires_at > $2
                LIMIT 1""",
-            telegram_id, now
+            telegram_id, _to_db_utc(now)
         )
         if active_subscription:
             return False
@@ -3186,9 +3225,9 @@ async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, An
                WHERE id = $1 
                AND status = 'active' 
                AND expires_at > $2""",
-            subscription_id, now
+            subscription_id, _to_db_utc(now)
         )
-        return dict(row) if row else None
+        return _normalize_subscription_row(row) if row else None
 
 
 async def update_subscription_uuid(subscription_id: int, new_uuid: str, vpn_key: Optional[str] = None) -> None:
@@ -3232,9 +3271,9 @@ async def get_all_active_subscriptions() -> List[Dict[str, Any]]:
                WHERE status = 'active' 
                AND expires_at > $1
                ORDER BY id ASC""",
-            now
+            _to_db_utc(now)
         )
-        return [dict(row) for row in rows]
+        return [_normalize_subscription_row(row) for row in rows]
 
 
 async def reissue_subscription_key(subscription_id: int) -> str:
@@ -3500,7 +3539,7 @@ async def _log_subscription_history_atomic(conn, telegram_id: int, vpn_key: str,
     await conn.execute(
         """INSERT INTO subscription_history (telegram_id, vpn_key, start_date, end_date, action_type)
            VALUES ($1, $2, $3, $4, $5)""",
-        telegram_id, vpn_key, start_date, end_date, action_type
+        telegram_id, vpn_key, _to_db_utc(start_date), _to_db_utc(end_date), action_type
     )
 
 
@@ -3589,7 +3628,7 @@ async def reissue_vpn_key_atomic(
                        WHERE telegram_id = $1 
                        AND status = 'active' 
                        AND expires_at > $2""",
-                    telegram_id, now
+                    telegram_id, _to_db_utc(now)
                 )
                 
                 if not subscription_row:
@@ -3947,7 +3986,7 @@ async def grant_access(
                                reminder_6h_sent = FALSE,
                                activation_status = 'active'
                            WHERE telegram_id = $3""",
-                        subscription_end, source, telegram_id
+                        _to_db_utc(subscription_end), source, telegram_id
                     )
                     
                     # ВАЛИДАЦИЯ: Проверяем что запись обновлена
@@ -3955,7 +3994,7 @@ async def grant_access(
                         "SELECT expires_at, status, uuid FROM subscriptions WHERE telegram_id = $1",
                         telegram_id
                     )
-                    if not updated_subscription or updated_subscription["expires_at"] != subscription_end:
+                    if not updated_subscription or _from_db_utc(updated_subscription["expires_at"]) != subscription_end:
                         error_msg = f"Failed to verify subscription renewal for user {telegram_id}"
                         logger.error(f"grant_access: ERROR_RENEWAL_VERIFICATION [user={telegram_id}, error={error_msg}]")
                         raise Exception(error_msg)
@@ -3978,10 +4017,10 @@ async def grant_access(
                 if source == "payment":
                     user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
                     old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
-                    if old_trial_expires_at and old_trial_expires_at > now:
+                    if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
                         await conn.execute(
                             "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
-                            now, telegram_id
+                            _to_db_utc(now), telegram_id
                         )
                         logger.info(
                             f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
@@ -4133,7 +4172,7 @@ async def grant_access(
                            last_activation_error = NULL,
                            uuid = NULL,
                            vpn_key = NULL""",
-                    telegram_id, subscription_end, source, admin_grant_days, subscription_start
+                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start)
                 )
                 
                 # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
@@ -4141,7 +4180,7 @@ async def grant_access(
                     "SELECT expires_at, status, activation_status FROM subscriptions WHERE telegram_id = $1",
                     telegram_id
                 )
-                if not saved_subscription or saved_subscription["expires_at"] != subscription_end:
+                if not saved_subscription or _from_db_utc(saved_subscription["expires_at"]) != subscription_end:
                     error_msg = f"Failed to verify subscription save for user {telegram_id}"
                     logger.error(f"grant_access: ERROR_DB_VERIFICATION [user={telegram_id}, error={error_msg}]")
                     raise Exception(error_msg)
@@ -4393,7 +4432,7 @@ async def grant_access(
         try:
             # DEBUG: Валидация количества аргументов
             activation_status_value = 'pending' if pending_activation else 'active'
-            args = (telegram_id, new_uuid, vless_url, subscription_end, source, admin_grant_days, subscription_start, activation_status_value)
+            args = (telegram_id, new_uuid, vless_url, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), activation_status_value)
             logger.debug(
                 f"grant_access: SQL_ARGS_COUNT [user={telegram_id}, "
                 f"placeholders=8, args_count={len(args)}, "
@@ -4466,10 +4505,10 @@ async def grant_access(
         if source == "payment":
             user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
             old_trial_expires_at = user_row["trial_expires_at"] if user_row else None
-            if old_trial_expires_at and old_trial_expires_at > now:
+            if old_trial_expires_at and _from_db_utc(old_trial_expires_at) > now:
                 await conn.execute(
                     "UPDATE users SET trial_expires_at = $1 WHERE telegram_id = $2 AND trial_expires_at > $1",
-                    now, telegram_id
+                    _to_db_utc(now), telegram_id
                 )
                 logger.info(
                     f"TRIAL_OVERRIDDEN_BY_PAID_SUBSCRIPTION: user_id={telegram_id}, "
@@ -4722,9 +4761,9 @@ async def get_subscriptions_needing_reminder() -> list:
                AND expires_at <= $2
                AND reminder_sent = FALSE
                ORDER BY expires_at ASC""",
-            now, reminder_date
+            _to_db_utc(now), _to_db_utc(reminder_date)
         )
-        return [dict(row) for row in rows]
+        return [_normalize_subscription_row(row) for row in rows]
 
 
 async def mark_reminder_sent(telegram_id: int):
@@ -4879,7 +4918,7 @@ async def increment_promo_code_use(code: str):
             
             # Проверяем срок действия
             expires_at = row.get("expires_at")
-            if expires_at and expires_at < datetime.now(timezone.utc):
+            if expires_at and _from_db_utc(expires_at) < datetime.now(timezone.utc):
                 # Деактивируем промокод при истечении срока
                 await conn.execute(
                     "UPDATE promo_codes SET is_active = FALSE WHERE UPPER(code) = UPPER($1)",
@@ -5033,7 +5072,7 @@ async def create_promocode_atomic(
                         VALUES ($1, $2, $3, $4, $5, $6, TRUE, 0)
                         RETURNING id
                         """,
-                        code_normalized, discount_percent, duration_seconds, max_uses, expires_at, created_by
+                        code_normalized, discount_percent, duration_seconds, max_uses, _to_db_utc(expires_at), created_by
                     )
                 else:
                     row = await conn.fetchrow(
@@ -5043,7 +5082,7 @@ async def create_promocode_atomic(
                         VALUES ($1, $2, $3, $4, $5, $6, TRUE)
                         RETURNING code
                         """,
-                        code_normalized, discount_percent, duration_seconds, max_uses, expires_at, created_by
+                        code_normalized, discount_percent, duration_seconds, max_uses, _to_db_utc(expires_at), created_by
                     )
                 if not row:
                     return None
@@ -5379,11 +5418,11 @@ async def get_subscriptions_for_reminders() -> list:
             WHERE s.expires_at > $1
             ORDER BY s.expires_at ASC"""
         try:
-            rows = await conn.fetch(query_with_reachable, now)
+            rows = await conn.fetch(query_with_reachable, _to_db_utc(now))
         except asyncpg.UndefinedColumnError:
             logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, fallback to legacy query")
-            rows = await conn.fetch(fallback_query, now)
-        return [dict(row) for row in rows]
+            rows = await conn.fetch(fallback_query, _to_db_utc(now))
+        return [_normalize_subscription_row(row) for row in rows]
 
 
 async def get_admin_stats() -> Dict[str, int]:
@@ -5409,13 +5448,13 @@ async def get_admin_stats() -> Dict[str, int]:
         # Активных подписок (expires_at > now)
         active_subscriptions = await conn.fetchval(
             "SELECT COUNT(*) FROM subscriptions WHERE expires_at > $1",
-            now
+            _to_db_utc(now)
         )
         
         # Истёкших подписок (expires_at <= now)
         expired_subscriptions = await conn.fetchval(
             "SELECT COUNT(*) FROM subscriptions WHERE expires_at <= $1",
-            now
+            _to_db_utc(now)
         )
         
         # Всего платежей
@@ -8369,13 +8408,15 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
     
     pool = await get_pool()
     async with pool.acquire() as conn:
+        start_naive = _to_db_utc(start_date)
+        end_naive = _to_db_utc(end_date)
         # Доход за день (утвержденные платежи)
         revenue_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(amount), 0) 
                FROM payments 
                WHERE status = 'approved' 
                AND created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         revenue = revenue_kopecks / 100.0
@@ -8386,7 +8427,7 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
                FROM payments 
                WHERE status = 'approved' 
                AND created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         # Новые пользователи
@@ -8394,7 +8435,7 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
             """SELECT COUNT(*) 
                FROM users 
                WHERE created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         # Новые подписки
@@ -8402,7 +8443,7 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
             """SELECT COUNT(*) 
                FROM subscriptions 
                WHERE created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         return {
@@ -8425,21 +8466,23 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
     Returns:
         Словарь с ключами: revenue, payments_count, new_users, new_subscriptions
     """
-    start_date = datetime(year, month, 1)
+    start_date = datetime(year, month, 1, tzinfo=timezone.utc)
     if month == 12:
-        end_date = datetime(year + 1, 1, 1)
+        end_date = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
     else:
-        end_date = datetime(year, month + 1, 1)
+        end_date = datetime(year, month + 1, 1, tzinfo=timezone.utc)
     
     pool = await get_pool()
     async with pool.acquire() as conn:
+        start_naive = _to_db_utc(start_date)
+        end_naive = _to_db_utc(end_date)
         # Доход за месяц (утвержденные платежи)
         revenue_kopecks = await conn.fetchval(
             """SELECT COALESCE(SUM(amount), 0) 
                FROM payments 
                WHERE status = 'approved' 
                AND created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         revenue = revenue_kopecks / 100.0
@@ -8450,7 +8493,7 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
                FROM payments 
                WHERE status = 'approved' 
                AND created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         # Новые пользователи
@@ -8458,7 +8501,7 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
             """SELECT COUNT(*) 
                FROM users 
                WHERE created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         # Новые подписки
@@ -8466,7 +8509,7 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
             """SELECT COUNT(*) 
                FROM subscriptions 
                WHERE created_at >= $1 AND created_at < $2""",
-            start_date, end_date
+            start_naive, end_naive
         ) or 0
         
         return {

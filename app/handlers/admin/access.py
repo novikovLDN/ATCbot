@@ -89,7 +89,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                    AND expires_at > $1 
                    AND uuid IS NOT NULL
                    ORDER BY telegram_id""",
-                now
+                database._to_db_utc(now)
             )
         
         total_count = len(subscriptions)

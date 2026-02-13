@@ -83,8 +83,9 @@ async def send_smart_reminders(bot: Bot):
                 last_reminder_at = subscription.get("last_reminder_at")
                 if last_reminder_at and isinstance(last_reminder_at, datetime):
                     try:
-                        naive_at = last_reminder_at.replace(tzinfo=None) if last_reminder_at.tzinfo else last_reminder_at
-                        delta = datetime.now(timezone.utc) - naive_at
+                        # subscription from get_subscriptions_for_reminders is normalized (aware UTC via _from_db_utc)
+                        last_at = last_reminder_at if last_reminder_at.tzinfo else last_reminder_at.replace(tzinfo=timezone.utc)
+                        delta = datetime.now(timezone.utc) - last_at
                         if 0 <= delta.total_seconds() < REMINDER_IDEMPOTENCY_WINDOW.total_seconds():
                             logger.debug(f"Skipping reminder for user {telegram_id}: last_reminder_at within idempotency window")
                             continue

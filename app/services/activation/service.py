@@ -216,8 +216,8 @@ async def _fetch_pending_subscriptions(
             telegram_id=row["telegram_id"],
             activation_attempts=row["activation_attempts"],
             last_activation_error=row.get("last_activation_error"),
-            expires_at=row.get("expires_at"),
-            activated_at=row.get("activated_at")
+            expires_at=database._from_db_utc(row["expires_at"]) if row.get("expires_at") else None,
+            activated_at=database._from_db_utc(row["activated_at"]) if row.get("activated_at") else None
         ))
     
     return result
@@ -265,7 +265,7 @@ async def _fetch_pending_for_notification(
                   OR (activated_at IS NOT NULL AND activated_at < $1))
            ORDER BY COALESCE(activated_at, '1970-01-01'::timestamp) ASC
            LIMIT 10""",
-        notification_threshold
+        database._to_db_utc(notification_threshold)
     )
     
     result = []

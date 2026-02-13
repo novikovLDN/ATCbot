@@ -95,10 +95,10 @@ async def process_auto_renewals(bot: Bot):
             AND (s.last_auto_renewal_at IS NULL OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
             FOR UPDATE SKIP LOCKED"""
         try:
-            subscriptions = await conn.fetch(query_with_reachable, renewal_threshold, now)
+            subscriptions = await conn.fetch(query_with_reachable, database._to_db_utc(renewal_threshold), database._to_db_utc(now))
         except asyncpg.UndefinedColumnError:
             logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, auto_renewal fallback to legacy query")
-            subscriptions = await conn.fetch(fallback_query, renewal_threshold, now)
+            subscriptions = await conn.fetch(fallback_query, database._to_db_utc(renewal_threshold), database._to_db_utc(now))
         
         logger.info(
             f"Auto-renewal check: Found {len(subscriptions)} subscriptions expiring within {RENEWAL_WINDOW_HOURS} hours"
@@ -122,7 +122,7 @@ async def process_auto_renewals(bot: Bot):
                            AND status = 'active'
                            AND auto_renew = TRUE
                            AND (last_auto_renewal_at IS NULL OR last_auto_renewal_at < expires_at - INTERVAL '12 hours')""",
-                        now, telegram_id
+                        database._to_db_utc(now), telegram_id
                     )
                     
                     # Если UPDATE не затронул ни одной строки - подписка уже обрабатывается или не подходит
