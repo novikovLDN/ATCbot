@@ -10,6 +10,7 @@ or asyncio.create_subprocess_exec to keep the API non-blocking.
 import asyncio
 import os
 import json
+import time
 import uuid
 import logging
 import shutil
@@ -55,12 +56,23 @@ logger.info(f"Xray API initialized: config_path={XRAY_CONFIG_PATH}, server_ip={X
 # Lock for config file write operations (prevents concurrent write races)
 _config_file_lock = asyncio.Lock()
 
+# Debounced restart: max 1 restart per 5 seconds (prevents restart storm under load)
+_last_restart_time: float = 0.0
+_restart_lock = asyncio.Lock()
+
 
 # ============================================================================
 # Модели данных
 # ============================================================================
 
-# RemoveUserRequest больше не нужна - UUID передается в пути
+class AddUserRequest(BaseModel):
+    telegram_id: int
+    expiry_timestamp_ms: int
+
+
+class UpdateUserRequest(BaseModel):
+    uuid: str
+    expiry_timestamp_ms: int
 
 
 class AddUserResponse(BaseModel):
@@ -69,6 +81,10 @@ class AddUserResponse(BaseModel):
 
 
 class RemoveUserResponse(BaseModel):
+    status: str
+
+
+class UpdateUserResponse(BaseModel):
     status: str
 
 
@@ -184,6 +200,7 @@ def _save_xray_config_file(config: dict, config_path: str) -> None:
 
 async def _restart_xray_async() -> None:
     """Перезапустить Xray через systemctl (non-blocking via asyncio subprocess)"""
+    global _last_restart_time
     try:
         proc = await asyncio.create_subprocess_exec(
             "systemctl", "restart", "xray",
@@ -210,6 +227,7 @@ async def _restart_xray_async() -> None:
             )
 
         logger.info("Xray restarted successfully")
+        _last_restart_time = time.time()
     except FileNotFoundError:
         logger.error("systemctl command not found")
         raise HTTPException(
@@ -224,6 +242,17 @@ async def _restart_xray_async() -> None:
             status_code=500,
             detail=f"Error restarting Xray: {e}"
         )
+
+
+async def _debounced_restart() -> None:
+    """Debounced Xray restart: max 1 restart per 5 seconds (prevents restart storm under load)"""
+    global _last_restart_time
+    async with _restart_lock:
+        now = time.time()
+        if now - _last_restart_time < 5:
+            logger.debug("Xray restart debounced (within 5s cooldown)")
+            return
+        await _restart_xray_async()
 
 
 def find_client_in_config(config: dict, target_uuid: str) -> Optional[int]:
@@ -292,64 +321,69 @@ async def health_check():
 
 
 @app.post("/add-user", response_model=AddUserResponse)
-async def add_user():
+async def add_user(request: AddUserRequest):
     """
     Добавить нового пользователя в Xray.
     
-    Генерирует UUID, добавляет клиента в config.json и перезапускает Xray.
+    Генерирует UUID, добавляет клиента в config.json с expiryTime и перезапускает Xray.
+    expiryTime контролирует срок жизни ключа в Xray (мс, Unix timestamp).
     """
     try:
         # Генерируем новый UUID
         new_uuid = str(uuid.uuid4())
-        logger.info(f"Generating new UUID: {new_uuid}")
+        logger.info(
+            f"Generating new UUID: {new_uuid}, telegram_id={request.telegram_id}, "
+            f"expiry_timestamp_ms={request.expiry_timestamp_ms}"
+        )
         
-        # Загружаем конфигурацию (off event loop)
-        config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
-        
-        # Находим первый VLESS inbound
-        inbounds = config.get("inbounds", [])
-        vless_inbound = None
-        
-        for inbound in inbounds:
-            if inbound.get("protocol") == "vless":
-                vless_inbound = inbound
-                break
-        
-        if not vless_inbound:
-            raise HTTPException(
-                status_code=500,
-                detail="VLESS inbound not found in Xray config"
-            )
-        
-        # Получаем список клиентов
-        if "settings" not in vless_inbound:
-            vless_inbound["settings"] = {}
-        settings = vless_inbound["settings"]
-        
-        if "clients" not in settings:
-            settings["clients"] = []
-        clients = settings["clients"]
-        
-        # Проверяем, что UUID ещё не существует
-        existing_uuids = [client.get("id") for client in clients if client.get("id")]
-        if new_uuid in existing_uuids:
-            logger.warning(f"UUID {new_uuid} already exists, generating new one")
-            new_uuid = str(uuid.uuid4())
-        
-        # Добавляем нового клиента (БЕЗ flow в конфиге - согласно требованиям)
-        new_client = {
-            "id": new_uuid
-        }
-        clients.append(new_client)
-        
-        logger.info(f"Adding client to config: uuid={new_uuid}")
-        
-        # Сохраняем конфигурацию (off event loop, with lock)
+        # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
+            config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
+            
+            # Находим первый VLESS inbound
+            inbounds = config.get("inbounds", [])
+            vless_inbound = None
+            
+            for inbound in inbounds:
+                if inbound.get("protocol") == "vless":
+                    vless_inbound = inbound
+                    break
+            
+            if not vless_inbound:
+                raise HTTPException(
+                    status_code=500,
+                    detail="VLESS inbound not found in Xray config"
+                )
+            
+            # Получаем список клиентов
+            if "settings" not in vless_inbound:
+                vless_inbound["settings"] = {}
+            settings = vless_inbound["settings"]
+            
+            if "clients" not in settings:
+                settings["clients"] = []
+            clients = settings["clients"]
+            
+            # Проверяем, что UUID ещё не существует
+            existing_uuids = [client.get("id") for client in clients if client.get("id")]
+            if new_uuid in existing_uuids:
+                logger.warning(f"UUID {new_uuid} already exists, generating new one")
+                new_uuid = str(uuid.uuid4())
+            
+            # Добавляем нового клиента с expiryTime (БЕЗ flow - REALITY)
+            new_client = {
+                "id": new_uuid,
+                "email": f"user_{request.telegram_id}",
+                "expiryTime": request.expiry_timestamp_ms
+            }
+            clients.append(new_client)
+            
+            logger.info(f"Adding client to config: uuid={new_uuid}")
+            
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
-        # Перезапускаем Xray (non-blocking)
-        await _restart_xray_async()
+        # Перезапускаем Xray (debounced, non-blocking)
+        await _debounced_restart()
         
         # Генерируем VLESS ссылку
         vless_link = generate_vless_link(new_uuid)
@@ -391,39 +425,37 @@ async def remove_user(uuid: str):
         
         logger.info(f"Removing user: uuid={target_uuid}")
         
-        # Загружаем конфигурацию (off event loop)
-        config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
-        
-        # Находим клиента в конфигурации
-        inbounds = config.get("inbounds", [])
-        client_found = False
-        
-        for inbound in inbounds:
-            if inbound.get("protocol") != "vless":
-                continue
-            
-            clients = inbound.get("settings", {}).get("clients", [])
-            
-            # Удаляем клиента с указанным UUID
-            original_count = len(clients)
-            clients[:] = [client for client in clients if client.get("id") != target_uuid]
-            
-            if len(clients) < original_count:
-                client_found = True
-                logger.info(f"Client removed from inbound: uuid={target_uuid}")
-                break
-        
-        if not client_found:
-            logger.warning(f"Client not found in config: uuid={target_uuid}")
-            # Возвращаем успех даже если клиент не найден (идемпотентность)
-            return RemoveUserResponse(status="ok")
-        
-        # Сохраняем конфигурацию (off event loop, with lock)
+        # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add/remove)
         async with _config_file_lock:
+            config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
+            
+            # Находим клиента в конфигурации
+            inbounds = config.get("inbounds", [])
+            client_found = False
+            
+            for inbound in inbounds:
+                if inbound.get("protocol") != "vless":
+                    continue
+                
+                clients = inbound.get("settings", {}).get("clients", [])
+                
+                # Удаляем клиента с указанным UUID
+                original_count = len(clients)
+                clients[:] = [client for client in clients if client.get("id") != target_uuid]
+                
+                if len(clients) < original_count:
+                    client_found = True
+                    logger.info(f"Client removed from inbound: uuid={target_uuid}")
+                    break
+            
+            if not client_found:
+                logger.warning(f"Client not found in config: uuid={target_uuid}")
+                return RemoveUserResponse(status="ok")
+            
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
-        # Перезапускаем Xray (non-blocking)
-        await _restart_xray_async()
+        # Перезапускаем Xray (debounced, non-blocking)
+        await _debounced_restart()
         
         logger.info(f"User removed successfully: uuid={target_uuid}")
         
@@ -431,6 +463,74 @@ async def remove_user(uuid: str):
         
     except asyncio.CancelledError:
         raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
+@app.post("/update-user", response_model=UpdateUserResponse)
+async def update_user(request: UpdateUserRequest):
+    """
+    Обновить expiryTime существующего клиента в Xray.
+    
+    Используется при продлении подписки — UUID остаётся, обновляется только срок.
+    """
+    try:
+        target_uuid = request.uuid.strip()
+        
+        if not validate_uuid(target_uuid):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid UUID format: {target_uuid}"
+            )
+        
+        logger.info(
+            f"Updating user: uuid={target_uuid}, "
+            f"expiry_timestamp_ms={request.expiry_timestamp_ms}"
+        )
+        
+        async with _config_file_lock:
+            config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
+            
+            inbounds = config.get("inbounds", [])
+            client_found = False
+            old_expiry = None
+            
+            for inbound in inbounds:
+                if inbound.get("protocol") != "vless":
+                    continue
+                
+                clients = inbound.get("settings", {}).get("clients", [])
+                for client in clients:
+                    if client.get("id") == target_uuid:
+                        old_expiry = client.get("expiryTime")
+                        client["expiryTime"] = request.expiry_timestamp_ms
+                        if "email" not in client:
+                            client["email"] = f"uuid_{target_uuid[:8]}"
+                        client_found = True
+                        break
+                if client_found:
+                    break
+            
+            if not client_found:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Client not found: {target_uuid}"
+                )
+            
+            logger.info(
+                f"User expiry updated: uuid={target_uuid}, "
+                f"old_expiry={old_expiry}, new_expiry={request.expiry_timestamp_ms}"
+            )
+            
+            await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
+        
+        await _debounced_restart()
+        
+        return UpdateUserResponse(status="ok")
+        
     except HTTPException:
         raise
     except Exception as e:

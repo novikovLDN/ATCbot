@@ -22,6 +22,7 @@ STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
 import httpx
 import logging
 import asyncio
+from datetime import datetime
 from typing import Dict, Optional
 from urllib.parse import quote
 import config
@@ -181,14 +182,19 @@ def generate_vless_url(uuid: str) -> str:
     return vless_url
 
 
-async def add_vless_user() -> Dict[str, str]:
+async def add_vless_user(telegram_id: int, subscription_end: datetime) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
     
     Вызывает POST /add-user на локальном FastAPI VPN API сервере.
-    API возвращает только UUID, а VLESS URL генерируется локально.
+    Передаёт telegram_id и expiry_timestamp_ms (subscription_end в мс).
+    API возвращает uuid и vless_link.
     
     В STAGE окружении UUID получает префикс "stage-" для изоляции.
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        subscription_end: Дата окончания подписки (используется как expiryTime в Xray)
     
     Returns:
         Словарь с ключами:
@@ -269,6 +275,7 @@ async def add_vless_user() -> Dict[str, str]:
         # This is logged by should_skip() (throttled)
         raise VPNAPIError("VPN API circuit breaker is OPEN")
     
+    expiry_ms = int(subscription_end.timestamp() * 1000)
     url = f"{api_url}/add-user"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
@@ -280,14 +287,22 @@ async def add_vless_user() -> Dict[str, str]:
         headers["X-Environment"] = "stage"
         headers["X-Inbound-Tag"] = "stage"
     
+    json_body = {
+        "telegram_id": telegram_id,
+        "expiry_timestamp_ms": expiry_ms
+    }
+    
     # Логируем начало операции
-    logger.info(f"vpn_api add_user: START [url={url}, environment={config.APP_ENV}]")
+    logger.info(
+        f"vpn_api add_user: START [url={url}, telegram_id={telegram_id}, "
+        f"expiry_timestamp_ms={expiry_ms}, subscription_end={subscription_end.isoformat()}]"
+    )
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
     async def _make_request():
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             logger.debug("vpn_api add_user: HTTP_REQUEST")
-            response = await client.post(url, headers=headers)
+            response = await client.post(url, headers=headers, json=json_body)
             
             # Log response
             response_text_preview = response.text[:200] if response.text else "empty"
@@ -418,6 +433,85 @@ async def add_vless_user() -> Dict[str, str]:
             error_msg = f"Failed to create VLESS user: {e}"
             logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
             raise VPNAPIError(error_msg) from e
+
+
+async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
+    """
+    Обновить expiryTime существующего клиента в Xray Core.
+    
+    Вызывает POST /update-user на Xray API сервере.
+    Используется при продлении подписки — UUID остаётся, обновляется только срок.
+    
+    В STAGE окружении UUID может иметь префикс "stage-", который удаляется перед отправкой.
+    
+    Args:
+        uuid: UUID пользователя для обновления
+        subscription_end: Новая дата окончания подписки
+    
+    Raises:
+        ValueError: Если конфигурация неверна
+        httpx.HTTPStatusError: При 404 (клиент не найден) или других HTTP ошибках
+    """
+    if not config.VPN_PROVISIONING_ENABLED:
+        error_msg = "VPN provisioning is disabled (VPN_PROVISIONING_ENABLED=false)"
+        logger.warning(error_msg)
+        raise ValueError(error_msg)
+    
+    if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        error_msg = "VPN API is not configured"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    if not uuid or not uuid.strip():
+        error_msg = f"Invalid UUID provided: {uuid}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    uuid_clean = uuid.strip()
+    if config.IS_STAGE and uuid_clean.startswith("stage-"):
+        uuid_clean = uuid_clean[6:]
+    
+    expiry_ms = int(subscription_end.timestamp() * 1000)
+    api_url = config.XRAY_API_URL.rstrip('/')
+    url = f"{api_url}/update-user"
+    headers = {
+        "X-API-Key": config.XRAY_API_KEY,
+        "Content-Type": "application/json"
+    }
+    if config.IS_STAGE:
+        headers["X-Environment"] = "stage"
+        headers["X-Inbound-Tag"] = "stage"
+    
+    json_body = {
+        "uuid": uuid_clean,
+        "expiry_timestamp_ms": expiry_ms
+    }
+    
+    logger.info(
+        f"vpn_api update_user: START [uuid={uuid_clean[:8]}..., "
+        f"expiry_timestamp_ms={expiry_ms}, subscription_end={subscription_end.isoformat()}]"
+    )
+    
+    from app.core.circuit_breaker import get_circuit_breaker
+    vpn_breaker = get_circuit_breaker("vpn_api")
+    if vpn_breaker.should_skip():
+        raise VPNAPIError("VPN API circuit breaker is OPEN")
+    
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=headers, json=json_body)
+            if response.status_code == 404:
+                error_msg = f"Client not found in Xray: {uuid_clean[:8]}..."
+                logger.error(f"vpn_api update_user: NOT_FOUND [{error_msg}]")
+                raise InvalidResponseError(error_msg)
+            response.raise_for_status()
+        
+        logger.info(f"vpn_api update_user: SUCCESS [uuid={uuid_clean[:8]}...]")
+    except (AuthError, InvalidResponseError):
+        raise
+    except Exception as e:
+        vpn_breaker.record_failure()
+        raise VPNAPIError(f"Failed to update VLESS user expiry: {e}") from e
 
 
 async def remove_vless_user(uuid: str) -> None:
@@ -642,7 +736,7 @@ async def remove_vless_user(uuid: str) -> None:
             raise VPNAPIError(error_msg) from e
 
 
-async def reissue_vpn_access(old_uuid: str) -> str:
+async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: datetime) -> str:
     """
     Перевыпустить VPN доступ: удалить старый UUID и создать новый.
     
@@ -653,6 +747,8 @@ async def reissue_vpn_access(old_uuid: str) -> str:
     
     Args:
         old_uuid: Старый UUID для удаления
+        telegram_id: Telegram ID пользователя
+        subscription_end: Дата окончания подписки (expiryTime для нового ключа)
     
     Returns:
         Новый UUID (str)
@@ -683,7 +779,10 @@ async def reissue_vpn_access(old_uuid: str) -> str:
     
     # ШАГ 2: Создаём новый UUID
     try:
-        vless_result = await add_vless_user()
+        vless_result = await add_vless_user(
+            telegram_id=telegram_id,
+            subscription_end=subscription_end
+        )
         new_uuid = vless_result.get("uuid")
         
         if not new_uuid:

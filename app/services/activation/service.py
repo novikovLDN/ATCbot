@@ -358,7 +358,7 @@ async def _attempt_activation_with_idempotency(
     # IDEMPOTENCY CHECK: Verify subscription is still pending before proceeding
     # Use row-level locking to prevent race conditions
     subscription_row = await conn.fetchrow(
-        """SELECT activation_status, uuid, vpn_key, activation_attempts
+        """SELECT activation_status, uuid, vpn_key, activation_attempts, expires_at
            FROM subscriptions
            WHERE id = $1
            FOR UPDATE SKIP LOCKED""",
@@ -390,9 +390,16 @@ async def _attempt_activation_with_idempotency(
     if not config.VPN_ENABLED:
         raise VPNActivationError("VPN API is not enabled")
     
-    # Call VPN API to create UUID
+    subscription_end = subscription_row.get("expires_at")
+    if not subscription_end:
+        raise VPNActivationError("Subscription has no expires_at")
+    
+    # Call VPN API to create UUID with expiryTime
     try:
-        vless_result = await vpn_utils.add_vless_user()
+        vless_result = await vpn_utils.add_vless_user(
+            telegram_id=telegram_id,
+            subscription_end=subscription_end
+        )
         new_uuid = vless_result.get("uuid")
         vless_url = vless_result.get("vless_url")
     except Exception as e:
