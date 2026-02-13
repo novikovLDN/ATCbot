@@ -6,6 +6,7 @@ import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state
 from aiogram.filters import StateFilter
 
 import config
