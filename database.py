@@ -7961,11 +7961,12 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
         async with conn.transaction():
             try:
                 now = datetime.now(timezone.utc)
-                
+                now_db = _to_db_utc(now)
+
                 # 1. Проверяем, есть ли активная подписка
                 subscription_row = await conn.fetchrow(
                     "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
-                    telegram_id, now
+                    telegram_id, now_db
                 )
                 
                 if not subscription_row:
@@ -8000,7 +8001,7 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                 # 3. Очищаем подписку: устанавливаем expires_at = NOW(), очищаем outline_key_id и vpn_key
                 await conn.execute(
                     "UPDATE subscriptions SET expires_at = $1, status = 'expired', uuid = NULL, vpn_key = NULL WHERE telegram_id = $2",
-                    now, telegram_id
+                    now_db, telegram_id
                 )
                 
                 # 4. Записываем в историю подписок (используем старый vpn_key для истории, если был)
