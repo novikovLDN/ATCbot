@@ -3173,12 +3173,13 @@ async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, An
         return dict(row) if row else None
 
 
-async def update_subscription_uuid(subscription_id: int, new_uuid: str) -> None:
-    """Обновить UUID подписки
+async def update_subscription_uuid(subscription_id: int, new_uuid: str, vpn_key: Optional[str] = None) -> None:
+    """Обновить UUID подписки (и vpn_key при перевыпуске)
     
     Args:
         subscription_id: ID подписки
         new_uuid: Новый UUID
+        vpn_key: VLESS URL (опционально, при перевыпуске)
     
     Note:
         НЕ меняет статус
@@ -3186,10 +3187,16 @@ async def update_subscription_uuid(subscription_id: int, new_uuid: str) -> None:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE subscriptions SET uuid = $1 WHERE id = $2",
-            new_uuid, subscription_id
-        )
+        if vpn_key is not None:
+            await conn.execute(
+                "UPDATE subscriptions SET uuid = $1, vpn_key = $2 WHERE id = $3",
+                new_uuid, vpn_key, subscription_id
+            )
+        else:
+            await conn.execute(
+                "UPDATE subscriptions SET uuid = $1 WHERE id = $2",
+                new_uuid, subscription_id
+            )
         logger.info(f"Subscription UUID updated: subscription_id={subscription_id}, new_uuid={new_uuid[:8]}...")
 
 
@@ -3255,8 +3262,18 @@ async def reissue_subscription_key(subscription_id: int) -> str:
     )
     
     # 2. Перевыпускаем VPN доступ
+    expires_at = subscription.get("expires_at")
+    if not expires_at:
+        error_msg = f"Subscription {subscription_id} has no expires_at"
+        logger.error(f"reissue_subscription_key: {error_msg}")
+        raise ValueError(error_msg)
+    
     try:
-        new_uuid = await vpn_utils.reissue_vpn_access(old_uuid)
+        new_uuid = await vpn_utils.reissue_vpn_access(
+            old_uuid=old_uuid,
+            telegram_id=telegram_id,
+            subscription_end=expires_at
+        )
     except Exception as e:
         logger.error(
             f"reissue_subscription_key: VPN_API_FAILED [subscription_id={subscription_id}, "
@@ -3264,9 +3281,13 @@ async def reissue_subscription_key(subscription_id: int) -> str:
         )
         raise
     
-    # 3. Обновляем UUID в БД
+    # Генерируем vless_url для нового UUID (STAGE-префикс уже в new_uuid, для URL нужен raw)
+    new_uuid_raw = new_uuid[6:] if new_uuid.startswith("stage-") else new_uuid
+    vless_url = vpn_utils.generate_vless_url(new_uuid_raw)
+    
+    # 3. Обновляем UUID и vpn_key в БД
     try:
-        await update_subscription_uuid(subscription_id, new_uuid)
+        await update_subscription_uuid(subscription_id, new_uuid, vpn_key=vless_url)
     except Exception as e:
         logger.error(
             f"reissue_subscription_key: DB_UPDATE_FAILED [subscription_id={subscription_id}, "
@@ -3613,14 +3634,20 @@ async def reissue_vpn_key_atomic(
                         # PART D.7: Cannot reissue if VPN API is disabled
                         raise Exception(f"VPN API is {system_state.vpn_api.status.value}, cannot reissue access")
                     else:
-                        vless_result = await vpn_utils.add_vless_user()
+                        vless_result = await vpn_utils.add_vless_user(
+                            telegram_id=telegram_id,
+                            subscription_end=expires_at
+                        )
                         new_uuid = vless_result["uuid"]
                         new_vpn_key = vless_result["vless_url"]
                 except Exception as e:
                     if "VPN API is" in str(e):
                         raise  # Re-raise VPN API disabled errors
                     # Fallback for other errors
-                    vless_result = await vpn_utils.add_vless_user()
+                    vless_result = await vpn_utils.add_vless_user(
+                        telegram_id=telegram_id,
+                        subscription_end=expires_at
+                    )
                     new_uuid = vless_result["uuid"]
                     new_vpn_key = vless_result["vless_url"]
                     
@@ -3903,6 +3930,20 @@ async def grant_access(
                     logger.error(f"grant_access: RENEWAL_SAVE_FAILED [user={telegram_id}, error={str(e)}]")
                     raise Exception(f"Failed to renew subscription in database: {e}") from e
                 
+                # Обновляем expiryTime в Xray (UUID остаётся, обновляется только срок)
+                try:
+                    await vpn_utils.update_vless_user(uuid=uuid, subscription_end=subscription_end)
+                    logger.info(
+                        f"grant_access: XRAY_EXPIRY_UPDATED [action=renewal, user={telegram_id}, uuid={uuid[:8]}..., "
+                        f"new_expiry={subscription_end.isoformat()}]"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"grant_access: XRAY_UPDATE_EXPIRY_FAILED [user={telegram_id}, uuid={uuid[:8]}..., error={e}]. "
+                        "DB renewed, but Xray expiry may be stale. User may need reconnect."
+                    )
+                    # Не прерываем — БД обновлена, Xray update — best-effort
+                
                 # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
                 if source == "payment":
                     user_row = await conn.fetchrow("SELECT trial_expires_at FROM users WHERE telegram_id = $1", telegram_id)
@@ -4129,8 +4170,18 @@ async def grant_access(
                     "Continuing with new UUID creation."
                 )
         
+        # Вычисляем subscription_end ДО вызова VPN API (передаётся в Xray как expiryTime)
+        subscription_start = now
+        subscription_end = now + duration
+        duration_days = duration.days
+        expiry_ms = int(subscription_end.timestamp() * 1000)
+        logger.info(
+            f"grant_access: CALCULATED_DATES [user={telegram_id}, subscription_end={subscription_end.isoformat()}, "
+            f"duration_days={duration_days}, expiry_timestamp_ms={expiry_ms}]"
+        )
+        
         # Создаем новый UUID через Xray API с retry логикой
-        logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, source={source}]")
+        logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, subscription_end={subscription_end.isoformat()}, source={source}]")
         
         # КРИТИЧНО: Retry логика для VPN API (2 попытки = 3 всего с задержкой)
         import asyncio
@@ -4169,12 +4220,18 @@ async def grant_access(
                         vless_url = None
                         # Skip VPN API call, will be handled in activation worker
                     else:
-                        vless_result = await vpn_utils.add_vless_user()
+                        vless_result = await vpn_utils.add_vless_user(
+                            telegram_id=telegram_id,
+                            subscription_end=subscription_end
+                        )
                         new_uuid = vless_result.get("uuid")
                         vless_url = vless_result.get("vless_url")
                 except Exception as e:
                     logger.warning(f"grant_access: VPN_API_CHECK_FAILED [user={telegram_id}]: {e}, proceeding with VPN call")
-                    vless_result = await vpn_utils.add_vless_user()
+                    vless_result = await vpn_utils.add_vless_user(
+                        telegram_id=telegram_id,
+                        subscription_end=subscription_end
+                    )
                     new_uuid = vless_result.get("uuid")
                     vless_url = vless_result.get("vless_url")
                 
@@ -4273,10 +4330,7 @@ async def grant_access(
         else:
             pending_activation = False
         
-        # Вычисляем даты
-        subscription_start = now
-        subscription_end = now + duration
-        
+        # subscription_start, subscription_end уже вычислены выше (перед VPN API вызовом)
         # ВАЛИДАЦИЯ: Проверяем что subscription_end вычислен корректно
         if not subscription_end or subscription_end <= subscription_start:
             error_msg = f"Invalid subscription_end for user {telegram_id}: start={subscription_start}, end={subscription_end}"
@@ -4406,7 +4460,7 @@ async def grant_access(
         duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
         logger.info(
             f"grant_access: NEW_ISSUANCE_SUCCESS [action=new_issuance, telegram_id={telegram_id}, uuid={uuid_preview}, "
-            f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
+            f"subscription_end={subscription_end.isoformat()}, expiry_timestamp_ms={expiry_ms}, duration_days={duration_days}, "
             f"source={source}, duration={duration_str}, vless_url_length={len(vless_url) if vless_url else 0}]"
         )
         logger.info(
