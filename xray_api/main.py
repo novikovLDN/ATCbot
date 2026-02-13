@@ -161,7 +161,7 @@ async def _flusher_loop(queue: XrayMutationQueue) -> None:
 class AddUserRequest(BaseModel):
     telegram_id: int
     expiry_timestamp_ms: int
-    uuid: Optional[str] = None  # If provided, use instead of generating new (recreate missing client)
+    uuid: str  # REQUIRED. Backend is source of truth. API must NEVER generate UUID.
 
 
 class UpdateUserRequest(BaseModel):
@@ -431,18 +431,14 @@ async def health_check():
 async def add_user(request: AddUserRequest):
     """
     Добавить нового пользователя в Xray.
-    
-    UUID MUST be provided by backend. API uses it exactly. No server-side generation.
-    If client exists: update expiryTime only (idempotent). If not: create with provided UUID.
+    DB — источник истины. API — исполнитель. UUID НИКОГДА не генерируется.
     """
     try:
         logger.info(f"UUID_AUDIT_API_RECEIVED [request.uuid={repr(request.uuid)}]")
-        if not request.uuid or not request.uuid.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="uuid is required; backend must generate and provide it"
-            )
-        new_uuid = request.uuid.strip()
+        if not request.uuid or not str(request.uuid).strip():
+            raise HTTPException(status_code=400, detail="uuid is required")
+        # STRICT: use exactly the UUID from request. NO generation.
+        uuid_from_request = str(request.uuid).strip()
         
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
@@ -473,41 +469,31 @@ async def add_user(request: AddUserRequest):
             clients = settings["clients"]
             
             existing_uuids = [client.get("id") for client in clients if client.get("id")]
-            client_already_exists = new_uuid in existing_uuids
+            client_already_exists = uuid_from_request in existing_uuids
             if client_already_exists:
-                # Idempotent: client exists, update expiryTime only
-                logger.info(f"UUID {new_uuid[:8]}... already in config, updating expiry")
+                logger.info(f"UUID {uuid_from_request[:8]}... already in config, updating expiry")
                 for client in clients:
-                    if client.get("id") == new_uuid:
+                    if client.get("id") == uuid_from_request:
                         client["expiryTime"] = request.expiry_timestamp_ms
                         if "email" not in client:
                             client["email"] = f"user_{request.telegram_id}"
                         break
-            
-            if not client_already_exists:
-                # Добавляем нового клиента с expiryTime (БЕЗ flow - REALITY)
+            else:
                 new_client = {
-                    "id": new_uuid,
+                    "id": uuid_from_request,
                     "email": f"user_{request.telegram_id}",
                     "expiryTime": request.expiry_timestamp_ms
                 }
                 clients.append(new_client)
             
-            logger.info(f"Adding client to config: uuid={new_uuid}")
-            
+            logger.info(f"Adding client to config: uuid={uuid_from_request[:8]}...")
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
         _mark_restart_pending("add_user")
-        
-        # Генерируем VLESS ссылку
-        vless_link = generate_vless_link(new_uuid)
-        
-        logger.info(f"User added successfully: uuid={new_uuid}")
-        
-        return AddUserResponse(
-            uuid=new_uuid,
-            vless_link=vless_link
-        )
+        vless_link = generate_vless_link(uuid_from_request)
+        logger.info(f"User added successfully: uuid={uuid_from_request[:8]}... (returning SAME uuid)")
+        # CRITICAL: Response MUST return the exact UUID we received. No substitution.
+        return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
 
     except asyncio.CancelledError:
         raise
