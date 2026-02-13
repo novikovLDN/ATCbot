@@ -311,17 +311,22 @@ class SubscriptionStatus:
 def parse_expires_at(expires_at: Any) -> Optional[datetime]:
     """
     Parse expires_at from various formats (datetime, string, None).
+    DB returns naive UTC; ensures aware UTC for comparisons.
     
     Args:
         expires_at: Expiration date in various formats
         
     Returns:
-        datetime object or None
+        datetime object (timezone-aware UTC) or None
     """
     if expires_at is None:
         return None
     
     if isinstance(expires_at, datetime):
+        if expires_at.tzinfo is None:
+            return expires_at.replace(tzinfo=timezone.utc)
+        if expires_at.tzinfo != timezone.utc:
+            return expires_at.astimezone(timezone.utc)
         return expires_at
     
     if isinstance(expires_at, str):
