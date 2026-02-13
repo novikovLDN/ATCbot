@@ -67,6 +67,14 @@ def _from_db_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc)
 
 
+def _generate_subscription_uuid() -> str:
+    """Canonical subscription UUID generation. DB is source of truth. Single place for new UUIDs."""
+    u = str(uuid_lib.uuid4())
+    assert u, "UUID generation failed: empty"
+    assert len(u) >= 32, f"UUID generation failed: invalid length {len(u)}"
+    return u
+
+
 def _ensure_utc(dt: datetime) -> datetime:
     """Ensure datetime is timezone-aware UTC. Naive assumed UTC. Other TZ converted. Use _from_db_utc for DB reads."""
     if dt is None:
@@ -3677,8 +3685,8 @@ async def reissue_vpn_key_atomic(
                             pass
                         # Продолжаем, даже если не удалось удалить старый UUID (идемпотентность)
                 
-                # 3. Backend generates UUID; API uses it exactly
-                new_uuid = str(uuid_lib.uuid4())
+                # 3. DB generates UUID; API uses it exactly (canonical new UUID)
+                new_uuid = _generate_subscription_uuid()
                 # PART D.7: If vpn_api != healthy, NEVER call VPN API
                 try:
                     from app.core.system_state import recalculate_from_runtime, ComponentStatus
@@ -3959,6 +3967,7 @@ async def grant_access(
                 assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
                 assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
                 expiry_ms = int(subscription_end.timestamp() * 1000)
+                logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, uuid={uuid[:8]}..., operation=update]")
                 try:
                     await vpn_utils.ensure_user_in_xray(
                         telegram_id=telegram_id,
@@ -4256,12 +4265,11 @@ async def grant_access(
             f"duration_days={duration_days}, expiry_timestamp_ms={expiry_ms}]"
         )
         
-        # Backend generates UUID; API uses it exactly. No server-side generation.
-        # CRITICAL: use uuid_lib to avoid shadowing by local variable 'uuid' from subscription
-        new_uuid = str(uuid_lib.uuid4())
-        if not new_uuid:
-            raise RuntimeError("UUID generation failed: empty UUID")
-        logger.info(f"grant_access: USING_UUID [user={telegram_id}, uuid={new_uuid[:8]}...]")
+        # DB generates UUID; API uses it exactly. Canonical new subscription.
+        new_uuid = _generate_subscription_uuid()
+        assert new_uuid is not None, "UUID generation failed"
+        assert len(new_uuid) >= 32, f"UUID generation failed: len={len(new_uuid)}"
+        logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, uuid={new_uuid[:8]}..., operation=add]")
         logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, uuid={new_uuid[:8]}..., subscription_end={subscription_end.isoformat()}, source={source}]")
 
         import asyncio
