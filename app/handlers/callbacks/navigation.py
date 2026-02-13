@@ -13,6 +13,7 @@ import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
+from app.services.subscriptions.service import check_and_disable_expired_subscription as check_subscription_expiry
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
 from app.handlers.common.screens import show_profile
