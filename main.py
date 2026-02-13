@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import uuid
 
 # Configure logging FIRST (before any other imports that may log)
 # Routes INFO/WARNING → stdout, ERROR/CRITICAL → stderr for correct container classification
@@ -74,7 +75,8 @@ async def main():
     # Конфигурация уже проверена в config.py
     # Если переменные окружения не заданы, программа завершится с ошибкой
     
-    logger.info(f"BOT_INSTANCE_STARTED pid={os.getpid()}")
+    instance_id = os.getenv("POLLING_INSTANCE_ID", str(uuid.uuid4()))
+    logger.info("BOT_INSTANCE_STARTED pid=%s instance_id=%s", os.getpid(), instance_id)
     # Логируем информацию о конфигурации при старте
     logger.info(f"Starting bot in {config.APP_ENV.upper()} environment")
     logger.info(f"Using BOT_TOKEN from {config.APP_ENV.upper()}_BOT_TOKEN")
@@ -410,7 +412,13 @@ async def main():
                     logger.info("Webhook deleted before polling start")
                 except Exception as e:
                     logger.warning("Webhook cleanup failed: %s", e)
-                log_event(logger, component="polling", operation="polling_start", outcome="success")
+                log_event(
+                    logger,
+                    component="polling",
+                    operation="polling_start",
+                    outcome="success",
+                    correlation_id=instance_id,
+                )
                 await dp.start_polling(
                     bot,
                     allowed_updates=used_updates if used_updates else None,
