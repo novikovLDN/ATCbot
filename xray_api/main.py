@@ -159,9 +159,10 @@ async def _flusher_loop(queue: XrayMutationQueue) -> None:
 # ============================================================================
 
 class AddUserRequest(BaseModel):
+    """Strict contract: uuid MUST be provided by caller. API NEVER generates UUID."""
+    uuid: str = Field(..., min_length=1, description="REQUIRED. Use exactly as received. No generation.")
     telegram_id: int
     expiry_timestamp_ms: int
-    uuid: str  # REQUIRED. Backend is source of truth. API must NEVER generate UUID.
 
 
 class UpdateUserRequest(BaseModel):
@@ -431,14 +432,15 @@ async def health_check():
 async def add_user(request: AddUserRequest):
     """
     Добавить нового пользователя в Xray.
-    DB — источник истины. API — исполнитель. UUID НИКОГДА не генерируется.
+    Contract: UUID from request MUST be used exactly. API NEVER generates UUID.
     """
     try:
-        logger.info(f"UUID_AUDIT_API_RECEIVED [request.uuid={repr(request.uuid)}]")
-        if not request.uuid or not str(request.uuid).strip():
-            raise HTTPException(status_code=400, detail="uuid is required")
-        # STRICT: use exactly the UUID from request. NO generation.
         uuid_from_request = str(request.uuid).strip()
+        if not uuid_from_request:
+            raise HTTPException(status_code=400, detail="uuid is required")
+        if not validate_uuid(uuid_from_request):
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_from_request[:36]}")
+        logger.info(f"UUID_AUDIT_API_RECEIVED [uuid={uuid_from_request[:8]}...]")
         
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
@@ -492,7 +494,6 @@ async def add_user(request: AddUserRequest):
         _mark_restart_pending("add_user")
         vless_link = generate_vless_link(uuid_from_request)
         logger.info(f"User added successfully: uuid={uuid_from_request[:8]}... (returning SAME uuid)")
-        # CRITICAL: Response MUST return the exact UUID we received. No substitution.
         return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
 
     except asyncio.CancelledError:
