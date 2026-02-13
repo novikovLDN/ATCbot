@@ -16,6 +16,7 @@ from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.screens import _open_buy_screen
+from handlers import show_payment_method_selection
 from app.handlers.common.utils import safe_edit_text, get_promo_session
 from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
 
