@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 
 from aiogram import Router, F
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery
 from aiogram.fsm.context import FSMContext
 
 import database
@@ -43,6 +43,23 @@ from app.handlers.common.utils import clear_promo_session
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
+
+
+@payments_router.pre_checkout_query()
+async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
+    """Подтверждение платежа перед списанием. КРИТИЧНО: ответить ok=True в течение таймаута Telegram."""
+    # КРИТИЧНО: Сначала отвечаем Telegram — иначе платеж не пройдет
+    await pre_checkout_query.answer(ok=True)
+    payload = pre_checkout_query.invoice_payload or ""
+    telegram_id = pre_checkout_query.from_user.id if pre_checkout_query.from_user else 0
+    purchase_id = payload.split(":", 1)[1] if payload.startswith("purchase:") else payload
+    logger.info(
+        "PRE_CHECKOUT_RECEIVED purchase_id=%s telegram_id=%s amount=%s",
+        purchase_id,
+        telegram_id,
+        pre_checkout_query.total_amount / 100 if pre_checkout_query.total_amount else 0,
+    )
+
 
 @payments_router.message(F.photo)
 async def log_incoming_photo_file_id(message: Message):
@@ -213,6 +230,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
     payload = payment.invoice_payload
     
     # КРИТИЧНО: Логируем получение события оплаты от Telegram
+    purchase_id_from_payload = payload.split(":", 1)[1] if payload and payload.startswith("purchase:") else payload
+    logger.info(
+        "SUCCESSFUL_PAYMENT_RECEIVED purchase_id=%s telegram_id=%s amount=%s RUB",
+        purchase_id_from_payload,
+        telegram_id,
+        payment.total_amount / 100.0 if payment.total_amount else 0,
+    )
     logger.info(
         f"payment_event_received: provider=telegram_payment, user={telegram_id}, "
         f"payload={payload}, amount={payment.total_amount / 100.0:.2f} RUB, "
