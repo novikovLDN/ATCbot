@@ -150,6 +150,9 @@ else:
     print(f"INFO: VPN_PROVISIONING_ENABLED={VPN_PROVISIONING_ENABLED}", flush=True)
     print("INFO: VPN API configured successfully (VLESS + REALITY)", file=sys.stderr)
 
+# Xray sync worker: background reconciliation (default false for production safety)
+XRAY_SYNC_ENABLED = os.getenv("XRAY_SYNC_ENABLED", "false").lower() == "true"
+
 # Xray VLESS REALITY Server Constants (REQUIRED)
 # Эти параметры используются для генерации VLESS ссылок
 # Используем прямые переменные без префикса (они общие для всех окружений)
