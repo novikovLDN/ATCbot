@@ -11,10 +11,12 @@ All functions are pure business logic:
 - Pure business logic only
 """
 
+import logging
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
+
 import database
 from app.services.notifications.exceptions import (
     NotificationServiceError,
@@ -22,6 +24,8 @@ from app.services.notifications.exceptions import (
     InvalidReminderTypeError,
     ReminderNotApplicableError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ====================================================================================
@@ -131,7 +135,8 @@ def should_send_reminder(
     if isinstance(expires_at, str):
         try:
             expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-        except:
+        except Exception as e:
+            logger.debug("Invalid expiration date format: %s", e)
             return ReminderDecision(
                 should_send=False,
                 reminder_type=None,
