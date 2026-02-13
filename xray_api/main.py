@@ -484,6 +484,8 @@ async def add_user(request: AddUserRequest):
         if not validate_uuid(uuid_from_request):
             raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_from_request[:36]}")
         
+        logger.info(f"ADD_USER_REQUEST uuid={uuid_from_request}")
+        
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
             config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
@@ -535,6 +537,7 @@ async def add_user(request: AddUserRequest):
         
         _mark_restart_pending("add_user")
         vless_link = generate_vless_link(uuid_from_request)
+        logger.info(f"ADD_USER_RESPONSE uuid={uuid_from_request}")
         logger.info(f"XRAY_ADD uuid={uuid_from_request[:8]}... success")
         return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
 
