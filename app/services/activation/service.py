@@ -395,9 +395,8 @@ async def _attempt_activation_with_idempotency(
         raise VPNActivationError("Subscription has no expires_at")
     subscription_end = database._from_db_utc(subscription_end_raw)
     
-    # Backend generates UUID; API uses it exactly
-    import uuid as uuid_module
-    new_uuid = str(uuid_module.uuid4())
+    # DB is source of truth; use canonical generation
+    new_uuid = database._generate_subscription_uuid()
     try:
         vless_result = await vpn_utils.add_vless_user(
             telegram_id=telegram_id,

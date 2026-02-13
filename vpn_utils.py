@@ -22,7 +22,6 @@ STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
 import httpx
 import logging
 import asyncio
-import uuid as uuid_module
 from datetime import datetime, timezone
 from typing import Dict, Optional
 from urllib.parse import quote
@@ -487,7 +486,7 @@ async def ensure_user_in_xray(telegram_id: int, uuid: str, subscription_end: dat
     except InvalidResponseError as e:
         if "Client not found" not in str(e) and "client not found" not in str(e).lower():
             raise
-        logger.warning(f"XRAY_MISS uuid={uuid_preview} → add_user")
+        logger.warning(f"XRAY_MISS uuid={uuid_preview} → add_user (same uuid, no regeneration)")
         try:
             await add_vless_user(
                 telegram_id=telegram_id,
@@ -836,8 +835,9 @@ async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: 
         # КРИТИЧНО: Если не удалось удалить старый UUID - прерываем операцию
         raise VPNAPIError(error_msg) from e
     
-    # ШАГ 2: Создаём новый UUID (backend generates, API uses exactly)
-    new_uuid = str(uuid_module.uuid4())
+    # ШАГ 2: DB generates new UUID (canonical, single source of truth)
+    import database
+    new_uuid = database._generate_subscription_uuid()
     try:
         vless_result = await add_vless_user(
             telegram_id=telegram_id,
