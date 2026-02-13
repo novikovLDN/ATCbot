@@ -3,8 +3,8 @@ User command: /referral
 """
 import logging
 
-from aiogram import Router, F
-from aiogram.types import Message, Bot, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Router, F, Bot
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 
 from app.handlers.common.guards import ensure_db_ready_message

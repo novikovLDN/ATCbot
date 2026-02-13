@@ -3,8 +3,8 @@ Payment command: /buy
 """
 import logging
 
-from aiogram import Router
-from aiogram.types import Message, Bot
+from aiogram import Router, Bot
+from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 

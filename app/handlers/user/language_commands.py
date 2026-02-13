@@ -3,8 +3,8 @@ User command: /language
 """
 import logging
 
-from aiogram import Router
-from aiogram.types import Message, Bot
+from aiogram import Router, Bot
+from aiogram.types import Message
 from aiogram.filters import Command
 
 from app.i18n import get_text as i18n_get_text
