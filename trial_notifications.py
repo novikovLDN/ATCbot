@@ -26,6 +26,7 @@ from app.utils.logging_helpers import (
     log_worker_iteration_end,
     classify_error,
 )
+from app.core.structured_logger import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -659,7 +660,12 @@ async def run_trial_scheduler(bot: Bot):
             )
             
         except asyncio.CancelledError:
-            logger.info("Trial notifications task cancelled")
+            log_event(
+                logger,
+                component="worker",
+                operation="trial_notifications_iteration",
+                outcome="cancelled",
+            )
             break
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop

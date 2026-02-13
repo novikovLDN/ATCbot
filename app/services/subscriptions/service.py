@@ -327,10 +327,12 @@ def parse_expires_at(expires_at: Any) -> Optional[datetime]:
     if isinstance(expires_at, str):
         try:
             return datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-        except:
+        except Exception as e:
+            logger.debug("Date parse (Z format) failed: %s", e)
             try:
                 return datetime.fromisoformat(expires_at)
-            except:
+            except Exception as e2:
+                logger.debug("Date parse (plain) failed: %s", e2)
                 return None
     
     return None

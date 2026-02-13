@@ -282,7 +282,13 @@ async def verify_api_key(request: Request, call_next):
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Проверка здоровья сервера"""
-    return HealthResponse(status="ok")
+    try:
+        return HealthResponse(status="ok")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 @app.post("/add-user", response_model=AddUserResponse)
@@ -354,15 +360,14 @@ async def add_user():
             uuid=new_uuid,
             vless_link=vless_link
         )
-        
+
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error adding user: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 @app.post("/remove-user/{uuid}", response_model=RemoveUserResponse)
@@ -424,14 +429,13 @@ async def remove_user(uuid: str):
         
         return RemoveUserResponse(status="ok")
         
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error removing user: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 # ============================================================================
