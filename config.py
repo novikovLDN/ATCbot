@@ -60,7 +60,7 @@ print(f"INFO: Config loaded for environment: {APP_ENV.upper()}", flush=True)
 # ====================================================================================
 # Secrets are validated at startup and never logged.
 # Required secrets: BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL
-# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, CRYPTOBOT_API_TOKEN
+# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, CRYPTOBOT_TOKEN (via env prefix)
 # ====================================================================================
 
 # Telegram Bot Token (получить у @BotFather)
@@ -163,7 +163,10 @@ XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
 XRAY_FP = os.getenv("XRAY_FP", "ios")  # По умолчанию ios согласно требованиям
 
 # Crypto Bot (Telegram Crypto Pay) Configuration
+# All CryptoBot vars use env() prefix: STAGE_CRYPTOBOT_* or PROD_CRYPTOBOT_*
 CRYPTOBOT_TOKEN = env("CRYPTOBOT_TOKEN")
 CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
 CRYPTOBOT_WEBHOOK_SECRET = env("CRYPTOBOT_WEBHOOK_SECRET")
+CRYPTOBOT_ASSETS_STR = env("CRYPTOBOT_ASSETS", default="USDT,TON,BTC")
+CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.split(",") if a.strip()]
 

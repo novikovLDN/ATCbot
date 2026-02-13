@@ -5,6 +5,8 @@ import sys
 import hashlib
 import base64
 import uuid
+import random
+import string
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
@@ -179,6 +181,21 @@ async def is_payment_notification_sent(
 # Получаем DATABASE_URL из переменных окружения через config.env()
 # Используем префикс окружения (STAGE_DATABASE_URL / PROD_DATABASE_URL)
 DATABASE_URL = config.env("DATABASE_URL")
+
+# ====================================================================================
+# DB POOL CONFIG — Production-safe, ENV-overridable, single source of truth
+# ====================================================================================
+def _get_pool_config() -> dict:
+    """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation."""
+    return {
+        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "2")),
+        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "15")),
+        "max_inactive_connection_lifetime": 300,
+        "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "10")),
+        "command_timeout": int(os.getenv("DB_POOL_COMMAND_TIMEOUT", "30")),
+    }
+
+
 if not DATABASE_URL:
     # В PROD DATABASE_URL обязателен
     if config.APP_ENV == "prod":
@@ -222,10 +239,11 @@ async def get_pool() -> asyncpg.Pool:
             retries = 1  # Normal retry behavior
         
         # C1.1 - METRICS: Measure pool creation latency
+        pool_config = _get_pool_config()
         with timer("db_latency_ms"):
             # Retry pool creation on transient errors only
             _pool = await retry_async(
-                lambda: asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10),
+                lambda: asyncpg.create_pool(DATABASE_URL, **pool_config),
                 retries=retries,
                 base_delay=0.5,
                 max_delay=5.0,
@@ -241,7 +259,11 @@ async def get_pool() -> asyncpg.Pool:
         cost_model = get_cost_model()
         cost_model.record_cost(CostCenter.DB_CONNECTIONS, cost_units=1.0)
         
-        logger.info("Database connection pool created")
+        logger.info(
+            "DB_POOL_CONFIG min=%s max=%s acquire_timeout=%s command_timeout=%s",
+            pool_config["min_size"], pool_config["max_size"],
+            pool_config["timeout"], pool_config["command_timeout"],
+        )
     return _pool
 
 
@@ -354,14 +376,15 @@ async def init_db() -> bool:
         logger.error(f"DB connectivity probe failed: {e}")
         return False
     
-    # 2️⃣ CREATE POOL — AND NOTHING ELSE
+    # 2️⃣ CREATE POOL — AND NOTHING ELSE (single source of truth via _get_pool_config)
+    pool_config = _get_pool_config()
     try:
-        _pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            min_size=1,
-            max_size=5
+        _pool = await asyncpg.create_pool(DATABASE_URL, **pool_config)
+        logger.info(
+            "DB_POOL_CONFIG min=%s max=%s acquire_timeout=%s command_timeout=%s",
+            pool_config["min_size"], pool_config["max_size"],
+            pool_config["timeout"], pool_config["command_timeout"],
         )
-        logger.info("Database connection pool created")
     except Exception as e:
         logger.error(f"Failed to create database pool: {e}")
         return False
@@ -385,12 +408,12 @@ async def init_db() -> bool:
     # Schema changes can invalidate cached prepared statements; fresh pool clears cache.
     try:
         await _pool.close()
-        _pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            min_size=1,
-            max_size=5
+        _pool = await asyncpg.create_pool(DATABASE_URL, **pool_config)
+        logger.info(
+            "DB_POOL_RECREATED_AFTER_MIGRATIONS min=%s max=%s acquire_timeout=%s command_timeout=%s",
+            pool_config["min_size"], pool_config["max_size"],
+            pool_config["timeout"], pool_config["command_timeout"],
         )
-        logger.info("DB_POOL_RECREATED_AFTER_MIGRATIONS")
     except Exception as e:
         logger.error(f"Failed to recreate pool after migrations: {e}")
         return False
@@ -965,27 +988,56 @@ async def init_db() -> bool:
 
 async def _init_promo_codes(conn):
     """Инициализация промокодов в базе данных"""
+    # Check if promo_codes has id/deleted_at (post-021 schema)
+    has_id = await conn.fetchval(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'id'"
+    )
+    has_deleted_at = await conn.fetchval(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'deleted_at'"
+    )
+    use_new_schema = bool(has_id and has_deleted_at)
 
     # 1. Деактивируем устаревший промокод
-    await conn.execute("""
-        UPDATE promo_codes
-        SET is_active = FALSE
-        WHERE code = 'COURIER40'
-    """)
+    if use_new_schema:
+        await conn.execute("""
+            UPDATE promo_codes
+            SET is_active = FALSE, deleted_at = NOW()
+            WHERE UPPER(code) = 'COURIER40' AND (deleted_at IS NULL OR is_active = TRUE)
+        """)
+    else:
+        await conn.execute("""
+            UPDATE promo_codes SET is_active = FALSE WHERE code = 'COURIER40'
+        """)
 
     # 2. Добавляем актуальные промокоды
-    await conn.execute("""
-        INSERT INTO promo_codes (code, discount_percent, max_uses, is_active)
-        VALUES
-            ('ELVIRA064', 64, 50, TRUE),
-            ('YAbx30', 30, NULL, TRUE),
-            ('FAM50', 50, 50, TRUE),
-            ('COURIER30', 30, 40, TRUE)
-        ON CONFLICT (code) DO UPDATE SET
-            discount_percent = EXCLUDED.discount_percent,
-            max_uses = EXCLUDED.max_uses,
-            is_active = EXCLUDED.is_active
-    """)
+    if use_new_schema:
+        # Partial unique index: ON CONFLICT (code) WHERE is_active AND deleted_at IS NULL
+        for row in [
+            ("ELVIRA064", 64, 50),
+            ("YAbx30", 30, None),
+            ("FAM50", 50, 50),
+            ("COURIER30", 30, 40),
+        ]:
+            code, discount, max_uses = row
+            await conn.execute("""
+                INSERT INTO promo_codes (code, discount_percent, max_uses, is_active, deleted_at)
+                VALUES ($1, $2, $3, TRUE, NULL)
+                ON CONFLICT (code) WHERE (is_active = true AND deleted_at IS NULL)
+                DO UPDATE SET discount_percent = EXCLUDED.discount_percent, max_uses = EXCLUDED.max_uses
+            """, code, discount, max_uses)
+    else:
+        await conn.execute("""
+            INSERT INTO promo_codes (code, discount_percent, max_uses, is_active)
+            VALUES
+                ('ELVIRA064', 64, 50, TRUE),
+                ('YAbx30', 30, NULL, TRUE),
+                ('FAM50', 50, 50, TRUE),
+                ('COURIER30', 30, 40, TRUE)
+            ON CONFLICT (code) DO UPDATE SET
+                discount_percent = EXCLUDED.discount_percent,
+                max_uses = EXCLUDED.max_uses,
+                is_active = EXCLUDED.is_active
+        """)
 
 
 async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -1056,10 +1108,23 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
     # Конвертируем рубли в копейки для хранения
     amount_kopecks = int(amount * 100)
     
+    # Защита от работы с неинициализированной БД
+    if not DB_READY:
+        logger.warning("DB not ready, increase_balance skipped")
+        return False
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, increase_balance skipped")
+        return False
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
+                )
+                
                 # Обновляем баланс
                 await conn.execute(
                     "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
@@ -1080,7 +1145,11 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
                     telegram_id, amount_kopecks, transaction_type, source, description
                 )
                 
-                logger.info(f"Increased balance by {amount} RUB ({amount_kopecks} kopecks) for user {telegram_id}, source={source}")
+                # Structured logging
+                logger.info(
+                    f"BALANCE_INCREASED user={telegram_id} amount={amount:.2f} RUB "
+                    f"({amount_kopecks} kopecks) source={source}"
+                )
                 return True
             except Exception as e:
                 logger.exception(f"Error increasing balance for user {telegram_id}")
@@ -1118,23 +1187,33 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Проверяем баланс
-                current_balance = await conn.fetchval(
-                    "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
                 )
                 
-                if current_balance is None:
+                # SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
                     logger.error(f"User {telegram_id} not found")
                     return False
+                
+                current_balance = row["balance"]
                 
                 if current_balance < amount_kopecks:
                     logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount_kopecks}")
                     return False
                 
                 # Обновляем баланс
+                new_balance = current_balance - amount_kopecks
                 await conn.execute(
-                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
-                    amount_kopecks, telegram_id
+                    "UPDATE users SET balance = $1 WHERE telegram_id = $2",
+                    new_balance, telegram_id
                 )
                 
                 # Определяем тип транзакции на основе source
@@ -1153,7 +1232,11 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
                     telegram_id, -amount_kopecks, transaction_type, source, description
                 )
                 
-                logger.info(f"Decreased balance by {amount} RUB ({amount_kopecks} kopecks) for user {telegram_id}, source={source}")
+                # Structured logging
+                logger.info(
+                    f"BALANCE_DECREASED user={telegram_id} amount={amount:.2f} RUB "
+                    f"({amount_kopecks} kopecks) source={source}"
+                )
                 return True
             except Exception as e:
                 logger.exception(f"Error decreasing balance for user {telegram_id}")
@@ -1203,6 +1286,9 @@ async def add_balance(telegram_id: int, amount: int, transaction_type: str, desc
     """
     Добавить средства на баланс пользователя (атомарно)
     
+    DEPRECATED: Используйте increase_balance() вместо этой функции.
+    Эта функция оставлена для обратной совместимости и защищена advisory lock + FOR UPDATE.
+    
     Args:
         telegram_id: Telegram ID пользователя
         amount: Сумма в копейках (положительное число)
@@ -1220,7 +1306,23 @@ async def add_balance(telegram_id: int, amount: int, transaction_type: str, desc
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Обновляем баланс
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
+                )
+                
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
+                    logger.error(f"User {telegram_id} not found")
+                    return False
+                
+                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
                 await conn.execute(
                     "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
                     amount, telegram_id
@@ -1244,6 +1346,9 @@ async def subtract_balance(telegram_id: int, amount: int, transaction_type: str,
     """
     Списать средства с баланса пользователя (атомарно)
     
+    DEPRECATED: Используйте decrease_balance() вместо этой функции.
+    Эта функция оставлена для обратной совместимости и защищена advisory lock + FOR UPDATE.
+    
     Args:
         telegram_id: Telegram ID пользователя
         amount: Сумма в копейках (положительное число)
@@ -1261,20 +1366,29 @@ async def subtract_balance(telegram_id: int, amount: int, transaction_type: str,
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # Проверяем баланс
-                current_balance = await conn.fetchval(
-                    "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock($1)",
+                    telegram_id
                 )
                 
-                if current_balance is None:
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
                     logger.error(f"User {telegram_id} not found")
                     return False
+                
+                current_balance = row["balance"]
                 
                 if current_balance < amount:
                     logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount}")
                     return False
                 
-                # Обновляем баланс
+                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
                 await conn.execute(
                     "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
                     amount, telegram_id
@@ -1292,6 +1406,186 @@ async def subtract_balance(telegram_id: int, amount: int, transaction_type: str,
             except Exception as e:
                 logger.exception(f"Error subtracting balance for user {telegram_id}")
                 return False
+
+
+# ====================================================================================
+# WITHDRAWAL REQUESTS (Atlas Secure balance withdrawal system)
+# ====================================================================================
+
+async def create_withdrawal_request(
+    telegram_id: int,
+    username: Optional[str],
+    amount_kopecks: int,
+    requisites: str,
+) -> Optional[int]:
+    """
+    Создать заявку на вывод средств (в транзакции со списанием баланса).
+    Advisory lock по telegram_id для защиты от гонок.
+
+    Args:
+        telegram_id: Telegram ID пользователя
+        username: Username (опционально)
+        amount_kopecks: Сумма в копейках
+        requisites: Реквизиты (СБП, карта, счёт)
+
+    Returns:
+        ID созданной заявки или None при ошибке/недостатке средств
+    """
+    if amount_kopecks <= 0:
+        logger.error(f"Invalid amount_kopecks for create_withdrawal_request: {amount_kopecks}")
+        return None
+    if not DB_READY:
+        logger.warning("DB not ready, create_withdrawal_request skipped")
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # CRITICAL: advisory lock per user для защиты от race conditions
+                await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+                
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+                row = await conn.fetchrow(
+                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                    telegram_id
+                )
+                
+                if not row:
+                    logger.error(f"User {telegram_id} not found for withdrawal")
+                    return None
+                
+                current = row["balance"]
+                
+                if current < amount_kopecks:
+                    logger.warning(f"Insufficient balance for withdrawal: user={telegram_id}, balance={current}, amount={amount_kopecks}")
+                    return None
+                
+                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
+                await conn.execute(
+                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
+                    amount_kopecks, telegram_id
+                )
+                await conn.execute(
+                    """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                       VALUES ($1, $2, $3, $4, $5)""",
+                    telegram_id, -amount_kopecks, "withdrawal", "withdrawal_request",
+                    f"Вывод средств: {requisites[:50]}"
+                )
+                row = await conn.fetchrow(
+                    """INSERT INTO withdrawal_requests (telegram_id, username, amount, requisites, status)
+                       VALUES ($1, $2, $3, $4, 'pending')
+                       RETURNING id""",
+                    telegram_id, username, amount_kopecks, requisites
+                )
+                wid = row["id"]
+                
+                # Structured logging with correlation_id
+                correlation_id = str(uuid.uuid4())
+                logger.info(
+                    f"WITHDRAWAL_REQUEST_CREATED withdrawal_id={wid} user={telegram_id} "
+                    f"amount={amount_kopecks} kopecks correlation_id={correlation_id}"
+                )
+                return wid
+            except Exception as e:
+                logger.exception(f"Error creating withdrawal request for user {telegram_id}: {e}")
+                return None
+
+
+async def get_withdrawal_request(wid: int) -> Optional[Dict[str, Any]]:
+    """Получить заявку на вывод по ID."""
+    if not DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM withdrawal_requests WHERE id = $1", wid)
+        return dict(row) if row else None
+
+
+async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
+    """Подтвердить заявку (status=approved). Средства уже списаны при создании."""
+    if not DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # CRITICAL: SELECT FOR UPDATE для защиты от двойного подтверждения
+            row = await conn.fetchrow(
+                "SELECT id FROM withdrawal_requests WHERE id = $1 AND status = 'pending' FOR UPDATE",
+                wid
+            )
+            if not row:
+                return False
+            
+            # Обновляем статус
+            result = await conn.execute(
+                "UPDATE withdrawal_requests SET status = 'approved', processed_at = NOW(), processed_by = $1 WHERE id = $2",
+                processed_by, wid
+            )
+            if result == "UPDATE 1":
+                # Structured logging
+                logger.info(f"WITHDRAWAL_APPROVED withdrawal_id={wid} processed_by={processed_by}")
+                return True
+            return False
+
+
+async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
+    """Отклонить заявку и вернуть средства на баланс."""
+    if not DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT id, telegram_id, amount FROM withdrawal_requests WHERE id = $1 AND status = 'pending' FOR UPDATE",
+                wid
+            )
+            if not row:
+                return False
+            telegram_id = row["telegram_id"]
+            amount_kopecks = row["amount"]
+            
+            # CRITICAL: advisory lock per user для защиты от race conditions
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            
+            # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+            user_row = await conn.fetchrow(
+                "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id
+            )
+            
+            if not user_row:
+                logger.error(f"User {telegram_id} not found for withdrawal rejection refund")
+                return False
+            
+            # Обновляем баланс (строка уже заблокирована FOR UPDATE)
+            await conn.execute(
+                "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+                amount_kopecks, telegram_id
+            )
+            await conn.execute(
+                """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                telegram_id, amount_kopecks, "refund", "withdrawal_rejected",
+                f"Возврат средств: заявка #{wid} отклонена"
+            )
+            await conn.execute(
+                "UPDATE withdrawal_requests SET status = 'rejected', processed_at = NOW(), processed_by = $1 WHERE id = $2",
+                processed_by, wid
+            )
+            # Structured logging
+            logger.info(
+                f"WITHDRAWAL_REJECTED withdrawal_id={wid} processed_by={processed_by} "
+                f"user={telegram_id} refunded={amount_kopecks} kopecks"
+            )
+            return True
 
 
 async def find_user_by_id_or_username(telegram_id: Optional[int] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -2269,7 +2563,22 @@ async def process_referral_reward(
         
         # FINANCIAL OPERATIONS (raise exceptions on failure, do not catch):
         # 7. Начисляем кешбэк на баланс реферера
-        # Если это упадет - исключение пробросится вверх, транзакция откатится
+        # CRITICAL: advisory lock per user для защиты от race conditions
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock($1)",
+            referrer_id
+        )
+        
+        # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
+        balance_row = await conn.fetchrow(
+            "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+            referrer_id
+        )
+        
+        if not balance_row:
+            raise ValueError(f"Referrer {referrer_id} not found for reward")
+        
+        # Обновляем баланс (строка уже заблокирована FOR UPDATE)
         await conn.execute(
             "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
             reward_amount_kopecks, referrer_id
@@ -3201,11 +3510,16 @@ async def _log_audit_event_atomic_standalone(
         logger.warning(f"Error logging audit event (standalone): {e}")
 
 
-async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tuple[Optional[str], Optional[str]]:
+async def reissue_vpn_key_atomic(
+    telegram_id: int,
+    admin_telegram_id: int,
+    correlation_id: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     """Атомарно перевыпустить VPN-ключ для пользователя
     
     Перевыпуск возможен ТОЛЬКО если у пользователя есть активная подписка.
     В одной транзакции:
+    - pg_advisory_xact_lock (cross-process) — гарантирует один reissue на user_id
     - удаляет старый UUID из Xray API (POST /remove-user/{uuid})
     - создает новый UUID через Xray API (POST /add-user)
     - обновляет subscriptions (uuid, vpn_key)
@@ -3215,6 +3529,7 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
     Args:
         telegram_id: Telegram ID пользователя
         admin_telegram_id: Telegram ID администратора, который выполняет перевыпуск
+        correlation_id: Опциональный ID для корреляции логов
     
     Returns:
         (new_vpn_key, old_vpn_key) или (None, None) если нет активной подписки или ошибка создания ключа
@@ -3223,7 +3538,10 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                # 1. Проверяем, что у пользователя есть активная подписка
+                # STEP 4 — POSTGRES ADVISORY LOCK (cross-process safe)
+                await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+
+                # 1. Проверяем, что у пользователя есть активная подписку
                 # КРИТИЧНО: Проверяем status='active', а не только expires_at
                 now = datetime.now()
                 subscription_row = await conn.fetchrow(
@@ -3351,9 +3669,13 @@ async def reissue_vpn_key_atomic(telegram_id: int, admin_telegram_id: int) -> Tu
                 
                 # Безопасное логирование UUID
                 new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
+                log_extra = {"user": telegram_id, "admin": admin_telegram_id, "new_uuid": new_uuid_preview}
+                if correlation_id:
+                    log_extra["correlation_id"] = correlation_id
                 logger.info(
                     f"VPN key reissued [action=admin_reissue, user={telegram_id}, admin={admin_telegram_id}, "
-                    f"new_uuid={new_uuid_preview}, expires_at={expires_at.isoformat()}]"
+                    f"new_uuid={new_uuid_preview}, expires_at={expires_at.isoformat()}]",
+                    extra=log_extra,
                 )
                 return new_vpn_key, old_vpn_key
                 
@@ -4380,47 +4702,107 @@ async def update_last_reminder_at(subscription_id: int) -> None:
         logger.warning(f"update_last_reminder_at failed for subscription_id={subscription_id}: {e}")
 
 
+# Active promo definition: is_active=true AND deleted_at IS NULL AND expires_at > now() AND used_count < max_uses
+_ACTIVE_PROMO_WHERE = (
+    "is_active = true AND deleted_at IS NULL "
+    "AND (expires_at IS NULL OR expires_at > NOW()) "
+    "AND (max_uses IS NULL OR used_count < max_uses)"
+)
+
+
 async def get_promo_code(code: str) -> Optional[Dict[str, Any]]:
-    """Получить промокод по коду"""
+    """Получить любой промокод по коду (может быть неактивным). Для валидации используйте get_active_promo_by_code."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM promo_codes WHERE UPPER(code) = UPPER($1)", code
+            "SELECT * FROM promo_codes WHERE UPPER(code) = UPPER($1) ORDER BY created_at DESC LIMIT 1",
+            code
         )
         return dict(row) if row else None
 
 
+async def get_active_promo_by_code(conn, code: str) -> Optional[Dict[str, Any]]:
+    """Получить активный промокод по коду (is_active, !deleted, !expired, !exhausted). Требует conn."""
+    has_deleted_at = await conn.fetchval(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'deleted_at'"
+    )
+    if has_deleted_at:
+        row = await conn.fetchrow(
+            f"""
+            SELECT * FROM promo_codes
+            WHERE UPPER(code) = UPPER($1) AND {_ACTIVE_PROMO_WHERE}
+            ORDER BY id DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            """,
+            code
+        )
+    else:
+        row = await conn.fetchrow(
+            """
+            SELECT * FROM promo_codes
+            WHERE UPPER(code) = UPPER($1)
+              AND is_active = true
+              AND (expires_at IS NULL OR expires_at > NOW())
+              AND (max_uses IS NULL OR used_count < max_uses)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            code
+        )
+    return dict(row) if row else None
+
+
+async def has_active_promo(code: str) -> bool:
+    """Проверить, есть ли активный промокод с таким кодом"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        promo = await get_active_promo_by_code(conn, code)
+        return promo is not None
+
+
 async def check_promo_code_valid(code: str) -> Optional[Dict[str, Any]]:
-    """Проверить, валиден ли промокод и вернуть его данные"""
-    promo = await get_promo_code(code)
-    if not promo:
-        return None
-    
-    # Проверяем, активен ли промокод
-    if not promo.get("is_active", False):
-        return None
-    
-    # Проверяем лимит использований (если задан)
-    max_uses = promo.get("max_uses")
-    if max_uses is not None:
-        used_count = promo.get("used_count", 0)
-        if used_count >= max_uses:
-            return None
-    
-    return promo
+    """Проверить, валиден ли промокод и вернуть его данные (только активный)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await get_active_promo_by_code(conn, code)
 
 
 async def increment_promo_code_use(code: str):
-    """Увеличить счетчик использований промокода"""
+    """
+    Увеличить счетчик использований промокода.
+    
+    DEPRECATED: Используйте apply_promocode_atomic для атомарного применения промокода.
+    Эта функция оставлена для обратной совместимости.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Получаем текущее значение used_count и max_uses
+            # CRITICAL: Advisory lock для защиты от race conditions
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                code.upper()
+            )
+            
+            # Получаем текущее значение used_count и max_uses с FOR UPDATE
             row = await conn.fetchrow(
-                "SELECT used_count, max_uses FROM promo_codes WHERE UPPER(code) = UPPER($1) FOR UPDATE",
+                "SELECT used_count, max_uses, expires_at, is_active FROM promo_codes WHERE UPPER(code) = UPPER($1) FOR UPDATE",
                 code
             )
             if not row:
+                return
+            
+            # Проверяем срок действия
+            expires_at = row.get("expires_at")
+            if expires_at and expires_at < datetime.utcnow():
+                # Деактивируем промокод при истечении срока
+                await conn.execute(
+                    "UPDATE promo_codes SET is_active = FALSE WHERE UPPER(code) = UPPER($1)",
+                    code
+                )
+                return
+            
+            # Проверяем активность
+            if not row.get("is_active", False):
                 return
             
             used_count = row["used_count"]
@@ -4463,20 +4845,380 @@ async def log_promo_code_usage(
 
 
 async def get_promo_stats() -> list:
-    """Получить статистику по всем промокодам"""
+    """
+    Получить статистику по промокодам через SQL-агрегацию.
+    Без кеширования. Активный промокод: is_active, !deleted, !expired, !exhausted.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
+        has_id = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'id'"
+        )
+        if not has_id:
+            rows = await conn.fetch("""
+                SELECT code, discount_percent, max_uses, used_count, is_active, expires_at, created_at, created_by
+                FROM promo_codes ORDER BY code
+            """)
+            return [dict(row) for row in rows]
         rows = await conn.fetch("""
-            SELECT 
-                code,
-                discount_percent,
-                max_uses,
-                used_count,
-                is_active
+            SELECT id, code, discount_percent, max_uses, used_count, is_active, deleted_at,
+                   expires_at, created_at, created_by,
+                   (is_active = true AND deleted_at IS NULL
+                    AND (expires_at IS NULL OR expires_at > NOW())
+                    AND (max_uses IS NULL OR used_count < max_uses)) AS is_effective_active
             FROM promo_codes
-            ORDER BY code
+            ORDER BY code, created_at DESC
         """)
         return [dict(row) for row in rows]
+
+
+def generate_promo_code(length: int = 6) -> str:
+    """Генерировать случайный промокод из заглавных букв A-Z"""
+    return ''.join(random.choices(string.ascii_uppercase, k=length))
+
+
+async def create_promocode_atomic(
+    code: str,
+    discount_percent: int,
+    duration_seconds: int,
+    max_uses: int,
+    created_by: int
+) -> Optional[int]:
+    """
+    Создать промокод атомарно. Разрешает пересоздание, если предыдущий удалён/истёк/исчерпан.
+    Блокирует создание, если активный промокод с таким кодом уже существует.
+    
+    Returns:
+        ID созданного промокода или None при конфликте/ошибке
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, create_promocode_atomic skipped")
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+
+    code_normalized = code.upper().strip()
+    if len(code_normalized) < 3 or len(code_normalized) > 32:
+        logger.error(f"Invalid promocode length: {len(code_normalized)}")
+        return None
+    if not all(c.isalnum() for c in code_normalized):
+        logger.error(f"Invalid promocode characters: {code_normalized}")
+        return None
+    if discount_percent < 0 or discount_percent > 100:
+        logger.error(f"Invalid discount_percent: {discount_percent}")
+        return None
+    if max_uses <= 0:
+        logger.error(f"Invalid max_uses: {max_uses}")
+        return None
+    if duration_seconds <= 0:
+        logger.error(f"Invalid duration_seconds: {duration_seconds}")
+        return None
+
+    expires_at = datetime.utcnow() + timedelta(seconds=duration_seconds)
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                has_id = await conn.fetchval(
+                    "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'id'"
+                )
+                if has_id:
+                    conflict = await conn.fetchrow(
+                        """
+                        SELECT id FROM promo_codes
+                        WHERE UPPER(code) = UPPER($1)
+                          AND is_active = true AND deleted_at IS NULL
+                          AND (expires_at IS NULL OR expires_at > NOW())
+                          AND (max_uses IS NULL OR used_count < max_uses)
+                        LIMIT 1
+                        """,
+                        code_normalized
+                    )
+                    if conflict:
+                        logger.warning(f"PROMO_CONFLICT code={code_normalized} active promo exists id={conflict['id']}")
+                        return None
+
+                if has_id:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO promo_codes
+                        (code, discount_percent, duration_seconds, max_uses, expires_at, created_by, is_active, used_count)
+                        VALUES ($1, $2, $3, $4, $5, $6, TRUE, 0)
+                        RETURNING id
+                        """,
+                        code_normalized, discount_percent, duration_seconds, max_uses, expires_at, created_by
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        """
+                        INSERT INTO promo_codes
+                        (code, discount_percent, duration_seconds, max_uses, expires_at, created_by, is_active)
+                        VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+                        RETURNING code
+                        """,
+                        code_normalized, discount_percent, duration_seconds, max_uses, expires_at, created_by
+                    )
+                if not row:
+                    return None
+
+                promo_id = row.get("id") or row.get("code")
+                prev_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM promo_codes WHERE UPPER(code) = UPPER($1)",
+                    code_normalized
+                ) or 0
+                is_recreate = has_id and int(prev_count) > 1
+                if is_recreate:
+                    logger.info(
+                        f"PROMO_RECREATED code={code_normalized} id={promo_id} discount={discount_percent}% "
+                        f"max_uses={max_uses} created_by={created_by}"
+                    )
+                else:
+                    logger.info(
+                        f"PROMO_CREATED code={code_normalized} id={promo_id} discount={discount_percent}% "
+                        f"max_uses={max_uses} expires_at={expires_at} created_by={created_by}"
+                    )
+                return int(promo_id) if promo_id else None
+            except asyncpg.UniqueViolationError:
+                logger.warning(f"Promocode unique violation (active conflict): {code_normalized}")
+                return None
+            except Exception as e:
+                logger.exception(f"Error creating promocode {code_normalized}: {e}")
+                return None
+
+
+async def deactivate_promocode(promo_id: Optional[int] = None, code: Optional[str] = None) -> bool:
+    """
+    Деактивировать промокод: UPDATE is_active=false, deleted_at=now().
+    Передайте promo_id (предпочтительно) или code. Логирует PROMO_DEACTIVATED.
+    """
+    if not DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        has_deleted_at = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'deleted_at'"
+        )
+        if promo_id is not None:
+            if has_deleted_at:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = false, deleted_at = NOW() WHERE id = $1 RETURNING code",
+                    promo_id
+                )
+            else:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = false WHERE id = $1 RETURNING code",
+                    promo_id
+                )
+        elif code:
+            code_n = code.upper().strip()
+            if has_deleted_at:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = false, deleted_at = NOW() WHERE UPPER(code) = UPPER($1) RETURNING code",
+                    code_n
+                )
+            else:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = false WHERE UPPER(code) = UPPER($1) RETURNING code",
+                    code_n
+                )
+        else:
+            return False
+        if row:
+            logger.info(f"PROMO_DEACTIVATED code={row['code']} id={promo_id or 'N/A'}")
+            return True
+        return False
+
+
+async def _consume_promo_in_transaction(
+    conn, code: str, telegram_id: int, purchase_id: Optional[str] = None
+) -> None:
+    """
+    Потребление промокода внутри транзакции: UPDATE ... WHERE id = ? AND used_count < max_uses RETURNING *
+    Если строк не возвращено — промокод исчерпан. Логирует PROMO_USAGE_INCREMENTED.
+    Raises ValueError при ошибке.
+    """
+    code_normalized = code.upper().strip()
+    promo = await get_active_promo_by_code(conn, code_normalized)
+    if not promo:
+        ctx = f" purchase_id={purchase_id}" if purchase_id else ""
+        raise ValueError(f"PROMO_INVALID_OR_EXPIRED: code={code_normalized}{ctx}")
+
+    promo_id = promo.get("id")
+    has_id = promo_id is not None
+    if has_id:
+        updated = await conn.fetchrow(
+            """
+            UPDATE promo_codes
+            SET used_count = used_count + 1
+            WHERE id = $1 AND (max_uses IS NULL OR used_count < max_uses)
+            RETURNING *
+            """,
+            promo_id
+        )
+    else:
+        updated = await conn.fetchrow(
+            """
+            UPDATE promo_codes
+            SET used_count = used_count + 1
+            WHERE UPPER(code) = UPPER($1)
+              AND is_active = true
+              AND (expires_at IS NULL OR expires_at > NOW())
+              AND (max_uses IS NULL OR used_count < max_uses)
+            RETURNING *
+            """,
+            code_normalized
+        )
+    if not updated:
+        ctx = f" purchase_id={purchase_id}" if purchase_id else ""
+        logger.warning(f"PROMO_EXHAUSTED code={code_normalized} user={telegram_id}{ctx}")
+        raise ValueError("PROMO_EXHAUSTED")
+
+    used = updated["used_count"]
+    max_uses_val = updated["max_uses"]
+    logger.info(
+        f"PROMO_USAGE_INCREMENTED code={code_normalized} id={promo_id or 'N/A'} user={telegram_id} "
+        f"used_count={used}/{max_uses_val if max_uses_val else 'unlimited'}"
+    )
+
+
+async def validate_promocode_atomic(code: str) -> Dict[str, Any]:
+    """
+    Валидация промокода без инкремента счетчика.
+    Использует определение активного промо: is_active, !deleted, !expired, !exhausted.
+    
+    Returns:
+        {"success": bool, "promo_data": Optional[Dict], "error": Optional[str]}
+    """
+    if not DB_READY:
+        return {"success": False, "promo_data": None, "error": "invalid"}
+    pool = await get_pool()
+    if pool is None:
+        return {"success": False, "promo_data": None, "error": "invalid"}
+    code_normalized = code.upper().strip()
+    async with pool.acquire() as conn:
+        try:
+            promo = await get_active_promo_by_code(conn, code_normalized)
+            if not promo:
+                return {"success": False, "promo_data": None, "error": "invalid"}
+            logger.info(
+                f"PROMOCODE_VALIDATED code={code_normalized} "
+                f"used_count={promo.get('used_count', 0)}/{promo.get('max_uses') or 'unlimited'}"
+            )
+            return {"success": True, "promo_data": dict(promo), "error": None}
+        except Exception as e:
+            logger.exception(f"Error validating promocode {code_normalized}: {e}")
+            return {"success": False, "promo_data": None, "error": "invalid"}
+
+
+async def consume_promocode_atomic(code: str, telegram_id: int) -> None:
+    """
+    Потребление промокода — инкремент счетчика использований.
+    Вызывается ТОЛЬКО при успешной оплате.
+    
+    CRITICAL: Эта функция должна вызываться только после успешной оплаты.
+    
+    Raises:
+        ValueError: Если промокод не найден, уже исчерпан или невалиден
+    """
+    if not DB_READY:
+        raise ValueError("PROMO_DB_NOT_READY")
+    
+    pool = await get_pool()
+    if pool is None:
+        raise ValueError("PROMO_DB_NOT_READY")
+    
+    code_normalized = code.upper().strip()
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                # CRITICAL: Advisory lock на код для защиты от race conditions
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    code_normalized
+                )
+                
+                # CRITICAL: SELECT FOR UPDATE для блокировки строки
+                row = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM promo_codes
+                    WHERE code = $1
+                    FOR UPDATE
+                    """,
+                    code_normalized
+                )
+                
+                if not row:
+                    raise ValueError("PROMO_NOT_FOUND")
+                
+                # Проверяем активность
+                if not row.get("is_active", False):
+                    raise ValueError("PROMO_INACTIVE")
+                
+                # Проверяем срок действия
+                expires_at = row.get("expires_at")
+                if expires_at:
+                    expired_check = await conn.fetchval(
+                        "SELECT expires_at < NOW() FROM promo_codes WHERE code = $1",
+                        row["code"]
+                    )
+                    if expired_check:
+                        await conn.execute(
+                            "UPDATE promo_codes SET is_active = FALSE WHERE code = $1",
+                            row["code"]
+                        )
+                        raise ValueError("PROMO_EXPIRED")
+                
+                # Проверяем лимит использований
+                used_count = row.get("used_count", 0)
+                max_uses = row.get("max_uses")
+                if max_uses is not None and used_count >= max_uses:
+                    raise ValueError("PROMO_ALREADY_CONSUMED")
+                
+                # SUCCESS — увеличиваем счетчик использований атомарно
+                await conn.execute(
+                    """
+                    UPDATE promo_codes
+                    SET used_count = used_count + 1
+                    WHERE code = $1
+                    """,
+                    row["code"]
+                )
+                
+                # Получаем обновленное значение used_count
+                updated_row = await conn.fetchrow(
+                    "SELECT used_count, max_uses FROM promo_codes WHERE code = $1",
+                    row["code"]
+                )
+                new_count = updated_row["used_count"]
+                
+                # Автоматическая деактивация при достижении лимита
+                if max_uses is not None and new_count >= max_uses:
+                    await conn.execute(
+                        """
+                        UPDATE promo_codes
+                        SET is_active = FALSE
+                        WHERE code = $1
+                        AND used_count >= max_uses
+                        """,
+                        row["code"]
+                    )
+                
+                logger.info(
+                    f"PROMOCODE_CONSUMED code={code_normalized} user={telegram_id} "
+                    f"used_count={new_count}/{max_uses if max_uses else 'unlimited'}"
+                )
+                
+            except ValueError:
+                # Пробрасываем ValueError как есть
+                raise
+            except Exception as e:
+                logger.exception(f"Error consuming promocode {code_normalized}: {e}")
+                raise ValueError("PROMO_CONSUME_ERROR")
 
 
 async def is_user_first_purchase(telegram_id: int) -> bool:
@@ -5279,6 +6021,34 @@ async def calculate_final_price(
     }
 
 
+async def create_pending_balance_topup_purchase(
+    telegram_id: int,
+    amount_kopecks: int,
+) -> str:
+    """
+    Create pending purchase for balance top-up only.
+    No tariff, no period_days. Separate from subscription logic.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending'",
+            telegram_id
+        )
+        purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
+        expires_at = datetime.now() + timedelta(minutes=30)
+        await conn.execute(
+            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
+               VALUES ($1, $2, 'balance_topup', $3, 'pending', $4)""",
+            purchase_id, telegram_id, amount_kopecks, expires_at
+        )
+        logger.info(
+            f"BALANCE_TOPUP_PURCHASE_CREATED purchase_id={purchase_id} telegram_id={telegram_id} "
+            f"amount={amount_kopecks} kopecks"
+        )
+        return purchase_id
+
+
 async def create_pending_purchase(
     telegram_id: int,
     tariff: str,  # "basic" или "plus"
@@ -5313,10 +6083,10 @@ async def create_pending_purchase(
         # Срок действия контекста покупки (30 минут)
         expires_at = datetime.now() + timedelta(minutes=30)
         
-        # Создаем запись о покупке
+        # Создаем запись о покупке (subscription only)
         await conn.execute(
-            """INSERT INTO pending_purchases (purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, status, expires_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at)
+               VALUES ($1, $2, 'subscription', $3, $4, $5, $6, $7, $8)""",
             purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", expires_at
         )
         
@@ -5503,16 +6273,21 @@ async def finalize_purchase(
             pending_purchase = dict(pending_row)
             telegram_id = pending_purchase["telegram_id"]
             status = pending_purchase.get("status")
+            promo_code = pending_purchase.get("promo_code")  # Получаем промокод из pending_purchase
             
             if status != "pending":
                 error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
                 logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
                 raise ValueError(error_msg)
             
-            tariff_type = pending_purchase["tariff"]
-            period_days = pending_purchase["period_days"]
+            tariff_type = pending_purchase.get("tariff")
+            period_days = pending_purchase.get("period_days")
+            purchase_type = pending_purchase.get("purchase_type", "subscription")
             price_kopecks = pending_purchase["price_kopecks"]
             expected_amount_rubles = price_kopecks / 100.0
+
+            # STEP 4: Balance top-up: purchase_type=='balance_topup' OR legacy period_days==0
+            is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
             
             # КРИТИЧНО: Проверка суммы платежа перед активацией подписки
             # Разрешаем отклонение до 1 рубля (округление, комиссии)
@@ -5529,7 +6304,7 @@ async def finalize_purchase(
             logger.info(
                 f"finalize_purchase: START [purchase_id={purchase_id}, user={telegram_id}, "
                 f"provider={payment_provider}, amount={amount_rubles:.2f} RUB (expected={expected_amount_rubles:.2f} RUB), "
-                f"tariff={tariff_type}, period_days={period_days}]"
+                f"purchase_type={purchase_type}, tariff={tariff_type}, period_days={period_days}]"
             )
             
             # Логируем событие получения платежа для аудита
@@ -5555,9 +6330,6 @@ async def finalize_purchase(
                 error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
                 logger.error(f"finalize_purchase: payment_rejected: reason=db_update_failed, {error_msg}")
                 raise Exception(error_msg)
-            
-            # STEP 4: Проверяем, является ли это пополнением баланса (period_days == 0)
-            is_balance_topup = (period_days == 0)
             
             if is_balance_topup:
                 # ОБРАБОТКА ПОПОЛНЕНИЯ БАЛАНСА
@@ -5592,7 +6364,11 @@ async def finalize_purchase(
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
                 
-                # D) BALANCE TOP-UP FLOW: Process referral reward
+                # D) BALANCE TOP-UP FLOW: Consume promocode (if used) - atomic UPDATE ... RETURNING
+                if promo_code:
+                    await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
+                
+                # E) BALANCE TOP-UP FLOW: Process referral reward
                 referral_reward_result = await process_referral_reward(
                     buyer_id=telegram_id,
                     purchase_id=purchase_id,
@@ -5636,7 +6412,12 @@ async def finalize_purchase(
                     "referral_reward": referral_reward_result
                 }
             
-            # STEP 5: ОБРАБОТКА ПОДПИСКИ (period_days > 0)
+            # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)
+            if tariff_type is None or period_days is None or period_days <= 0:
+                error_msg = f"Invalid subscription purchase: tariff={tariff_type}, period_days={period_days}"
+                logger.error(f"finalize_purchase: {error_msg}")
+                raise ValueError(error_msg)
+
             # Создаем payment record
             payment_id = await conn.fetchval(
                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
@@ -5752,7 +6533,11 @@ async def finalize_purchase(
                 payment_id
             )
             
-            # STEP 7: Обрабатываем реферальный кешбэк
+            # STEP 7: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
+            if promo_code:
+                await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
+            
+            # STEP 8: Обрабатываем реферальный кешбэк
             # Обработка реферального кешбэка внутри той же транзакции
             # FINANCIAL errors будут проброшены и откатят всю транзакцию
             # BUSINESS errors вернут success=False и покупка продолжится без награды
@@ -6553,7 +7338,8 @@ async def finalize_balance_purchase(
     tariff_type: str,
     period_days: int,
     amount_rubles: float,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    promo_code: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Атомарно обработать покупку подписки с баланса.
@@ -6570,6 +7356,7 @@ async def finalize_balance_purchase(
         period_days: Количество дней подписки
         amount_rubles: Сумма платежа в рублях
         description: Описание платежа (опционально)
+        promo_code: Промокод (опционально, потребляется внутри транзакции)
     
     Returns:
         {
@@ -6597,13 +7384,22 @@ async def finalize_balance_purchase(
     
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # STEP 1: Проверяем и списываем баланс
-            current_balance = await conn.fetchval(
-                "SELECT balance FROM users WHERE telegram_id = $1", telegram_id
+            # CRITICAL: advisory lock per user для защиты от race conditions
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1)",
+                telegram_id
             )
             
-            if current_balance is None:
+            # STEP 1: Проверяем и списываем баланс (SELECT FOR UPDATE для блокировки строки)
+            row = await conn.fetchrow(
+                "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                telegram_id
+            )
+            
+            if not row:
                 raise ValueError(f"User {telegram_id} not found")
+            
+            current_balance = row["balance"]
             
             if current_balance < amount_kopecks:
                 raise ValueError(
@@ -6612,9 +7408,10 @@ async def finalize_balance_purchase(
                 )
             
             # Списываем баланс
+            new_balance = current_balance - amount_kopecks
             await conn.execute(
-                "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
-                amount_kopecks, telegram_id
+                "UPDATE users SET balance = $1 WHERE telegram_id = $2",
+                new_balance, telegram_id
             )
             
             # Записываем транзакцию баланса
@@ -6624,6 +7421,10 @@ async def finalize_balance_purchase(
                    VALUES ($1, $2, $3, $4, $5)""",
                 telegram_id, -amount_kopecks, "subscription_payment", "subscription_payment", transaction_description
             )
+            
+            # STEP 1.5: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
+            if promo_code:
+                await _consume_promo_in_transaction(conn, promo_code, telegram_id, None)
             
             # STEP 2: Активируем подписку
             duration = timedelta(days=period_days)

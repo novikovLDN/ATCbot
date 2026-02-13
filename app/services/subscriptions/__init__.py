@@ -5,6 +5,8 @@ Subscription Service Package
 from app.services.subscriptions.service import (
     calculate_price,
     create_purchase,
+    create_subscription_purchase,
+    create_balance_topup_purchase,
     finalize_purchase,
     calculate_renewal_price,
     renew_subscription,
@@ -23,6 +25,8 @@ from app.services.subscriptions.service import (
 __all__ = [
     "calculate_price",
     "create_purchase",
+    "create_subscription_purchase",
+    "create_balance_topup_purchase",
     "finalize_purchase",
     "calculate_renewal_price",
     "renew_subscription",

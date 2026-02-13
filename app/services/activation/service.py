@@ -11,9 +11,11 @@ All functions are pure business logic:
 - Pure business logic only
 """
 
+import logging
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
+
 import database
 import config
 import vpn_utils
@@ -24,6 +26,8 @@ from app.services.activation.exceptions import (
     ActivationFailedError,
     VPNActivationError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ====================================================================================
@@ -270,7 +274,8 @@ async def _fetch_pending_for_notification(
         if activated_at and isinstance(activated_at, str):
             try:
                 activated_at = datetime.fromisoformat(activated_at.replace('Z', '+00:00'))
-            except:
+            except Exception as e:
+                logger.debug("Activated_at parse failed, using now: %s", e)
                 activated_at = datetime.now()
         elif not activated_at:
             activated_at = datetime.now()

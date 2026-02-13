@@ -28,6 +28,7 @@ from app.utils.logging_helpers import (
     log_worker_iteration_end,
     classify_error,
 )
+from app.core.structured_logger import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -448,8 +449,9 @@ async def crypto_payment_watcher_task(bot: Bot):
                     continue
                 
                 # B4.4 - GRACEFUL BACKGROUND RECOVERY: Warm-up iteration after recovery
-                global _recovery_warmup_iterations
-                if system_state.database.status.value == "healthy" and _recovery_warmup_iterations < _recovery_warmup_threshold:
+                # FIX: Corrected variable name to prevent NameError during recovery warmup
+                global _recovery_warmup_iterations_db
+                if system_state.database.status.value == "healthy" and _recovery_warmup_iterations_db < _recovery_warmup_threshold:
                     if _recovery_warmup_iterations_db == 0:
                         logger.info(
                             "[RECOVERY] warm-up iteration started in crypto_payment_watcher "
@@ -488,7 +490,13 @@ async def crypto_payment_watcher_task(bot: Bot):
             )
             
         except asyncio.CancelledError:
-            logger.info("Crypto payment watcher task cancelled")
+            log_event(
+                logger,
+                component="worker",
+                operation="crypto_payment_watcher_iteration",
+                correlation_id=str(iteration_number),
+                outcome="cancelled",
+            )
             break
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop

@@ -9,8 +9,10 @@ STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
 - External failure does NOT break handler/worker
 - System continues degraded when CryptoBot API unavailable
 - Retries handled by retry_async (transient errors only)
+
+Configuration: Token/API URL resolved via config.py only (Railway env-safe).
 """
-import os
+import config
 import json
 import logging
 from typing import Optional, Dict, Any
@@ -19,12 +21,11 @@ from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-CRYPTOBOT_API_TOKEN = os.getenv("CRYPTOBOT_API_TOKEN", "")
-CRYPTOBOT_API_URL = os.getenv("CRYPTOBOT_API_URL", "https://pay.crypt.bot/api")
-CRYPTOBOT_ASSETS = os.getenv("CRYPTOBOT_ASSETS", "USDT,TON,BTC").split(",")
-
-ALLOWED_ASSETS = [asset.strip().upper() for asset in CRYPTOBOT_ASSETS if asset.strip()]
+# Configuration — single source: config.py (STAGE_CRYPTOBOT_TOKEN / PROD_CRYPTOBOT_TOKEN)
+# Strip token to remove Railway ENV whitespace/newlines that cause 401
+CRYPTOBOT_API_TOKEN = (config.CRYPTOBOT_TOKEN or "").strip()
+CRYPTOBOT_API_URL = config.CRYPTOBOT_API_URL
+ALLOWED_ASSETS = config.CRYPTOBOT_ALLOWED_ASSETS
 
 # Exchange rate: RUB to USD (fixed rate for conversion)
 RUB_TO_USD_RATE = 95.0
@@ -61,8 +62,14 @@ def rub_kopecks_to_usd(kopecks: int) -> float:
 
 
 def is_enabled() -> bool:
-    """Check if CryptoBot is configured"""
-    return bool(CRYPTOBOT_API_TOKEN and ALLOWED_ASSETS)
+    """Check if CryptoBot is configured (token + assets from config, Railway env-safe)."""
+    if not CRYPTOBOT_API_TOKEN:
+        logger.warning("CRYPTOBOT_DISABLED_NO_TOKEN")
+        return False
+    if not ALLOWED_ASSETS:
+        logger.warning("CRYPTOBOT_DISABLED_NO_ASSETS")
+        return False
+    return True
 
 
 def _get_auth_headers() -> Dict[str, str]:
@@ -96,7 +103,14 @@ async def create_invoice(
     """
     if not is_enabled():
         raise Exception("CryptoBot not configured")
-    
+
+    if not CRYPTOBOT_API_TOKEN:
+        raise CryptoBotAuthError("CryptoBot token is empty after config resolution")
+
+    logger.info(
+        f"CRYPTOBOT_DEBUG token_prefix={CRYPTOBOT_API_TOKEN[:6]}..., length={len(CRYPTOBOT_API_TOKEN)}"
+    )
+
     if asset.upper() not in ALLOWED_ASSETS:
         raise ValueError(f"Invalid asset: {asset}. Allowed: {ALLOWED_ASSETS}")
     

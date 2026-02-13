@@ -404,14 +404,17 @@ async def health_check_task(bot: Bot):
             
             previous_all_ok = all_ok
                 
+        except asyncio.CancelledError:
+            logger.info("Healthcheck task cancelled")
+            break
         except Exception as e:
             logger.exception(f"Error in health_check_task: {e}")
             # При критической ошибке тоже отправляем алерт (with spam protection)
             try:
                 error_msg = f"Критическая ошибка health-check: {str(e)}"
                 await send_health_alert(bot, [error_msg])
-            except:
-                pass  # Не падаем, если не можем отправить алерт
+            except Exception as alert_error:
+                logger.debug(f"Failed to send health check alert: {alert_error}")
         
         # Ждем 10 минут до следующей проверки
         await asyncio.sleep(10 * 60)  # 10 минут в секундах

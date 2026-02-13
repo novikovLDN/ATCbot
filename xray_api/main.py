@@ -3,12 +3,15 @@ FastAPI сервер для управления пользователями Xr
 
 Сервер работает локально (127.0.0.1:8000) и управляет UUID в Xray config.json.
 Защищён через API-ключ в заголовке X-API-Key.
+
+Production: All file I/O and subprocess calls run off the event loop via asyncio.to_thread
+or asyncio.create_subprocess_exec to keep the API non-blocking.
 """
+import asyncio
 import os
 import json
 import uuid
 import logging
-import subprocess
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -48,6 +51,9 @@ XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
 XRAY_FP = os.getenv("XRAY_FP", "ios")  # По умолчанию ios согласно требованиям
 
 logger.info(f"Xray API initialized: config_path={XRAY_CONFIG_PATH}, server_ip={XRAY_SERVER_IP}")
+
+# Lock for config file write operations (prevents concurrent write races)
+_config_file_lock = asyncio.Lock()
 
 
 # ============================================================================
@@ -125,20 +131,20 @@ def generate_vless_link(uuid_str: str) -> str:
     return vless_url
 
 
-def load_xray_config() -> dict:
-    """Загрузить конфигурацию Xray из файла"""
-    config_path = Path(XRAY_CONFIG_PATH)
-    
-    if not config_path.exists():
+def _load_xray_config_file(config_path: str) -> dict:
+    """
+    Sync helper: load Xray config from file.
+    Runs off event loop via asyncio.to_thread.
+    """
+    path = Path(config_path)
+    if not path.exists():
         raise HTTPException(
             status_code=500,
-            detail=f"Xray config file not found: {XRAY_CONFIG_PATH}"
+            detail=f"Xray config file not found: {config_path}"
         )
-    
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        return config
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Xray config JSON: {e}")
         raise HTTPException(
@@ -153,26 +159,20 @@ def load_xray_config() -> dict:
         )
 
 
-def save_xray_config(config: dict) -> None:
+def _save_xray_config_file(config: dict, config_path: str) -> None:
     """
-    Сохранить конфигурацию Xray в файл атомарно.
-    
-    Использует временный файл и переименование для атомарности записи.
+    Sync helper: save Xray config to file atomically.
+    Runs off event loop via asyncio.to_thread.
+    Uses temp file + rename for atomic write.
     """
-    config_path = Path(XRAY_CONFIG_PATH)
-    temp_path = config_path.with_suffix('.json.tmp')
-    
+    path = Path(config_path)
+    temp_path = path.with_suffix('.json.tmp')
     try:
-        # Записываем во временный файл
         with open(temp_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
-        
-        # Атомарно переименовываем
-        shutil.move(str(temp_path), str(config_path))
-        
-        logger.info(f"Xray config saved successfully: {XRAY_CONFIG_PATH}")
+        shutil.move(str(temp_path), str(path))
+        logger.info(f"Xray config saved successfully: {config_path}")
     except Exception as e:
-        # Удаляем временный файл при ошибке
         if temp_path.exists():
             temp_path.unlink()
         logger.error(f"Failed to save Xray config: {e}")
@@ -182,36 +182,42 @@ def save_xray_config(config: dict) -> None:
         )
 
 
-def restart_xray() -> None:
-    """Перезапустить Xray через systemctl"""
+async def _restart_xray_async() -> None:
+    """Перезапустить Xray через systemctl (non-blocking via asyncio subprocess)"""
     try:
-        result = subprocess.run(
-            ["systemctl", "restart", "xray"],
-            capture_output=True,
-            text=True,
-            timeout=10
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "restart", "xray",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
-        
-        if result.returncode != 0:
-            logger.error(f"Failed to restart Xray: {result.stderr}")
+        try:
+            _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            logger.error("Timeout while restarting Xray")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to restart Xray: {result.stderr}"
+                detail="Timeout while restarting Xray"
+            ) from None
+
+        stderr = stderr_bytes.decode() if stderr_bytes else ""
+        if proc.returncode != 0:
+            logger.error(f"Failed to restart Xray: {stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to restart Xray: {stderr}"
             )
-        
+
         logger.info("Xray restarted successfully")
-    except subprocess.TimeoutExpired:
-        logger.error("Timeout while restarting Xray")
-        raise HTTPException(
-            status_code=500,
-            detail="Timeout while restarting Xray"
-        )
     except FileNotFoundError:
         logger.error("systemctl command not found")
         raise HTTPException(
             status_code=500,
             detail="systemctl command not found. Is this running on a systemd system?"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error restarting Xray: {e}")
         raise HTTPException(
@@ -276,7 +282,13 @@ async def verify_api_key(request: Request, call_next):
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """Проверка здоровья сервера"""
-    return HealthResponse(status="ok")
+    try:
+        return HealthResponse(status="ok")
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 @app.post("/add-user", response_model=AddUserResponse)
@@ -291,8 +303,8 @@ async def add_user():
         new_uuid = str(uuid.uuid4())
         logger.info(f"Generating new UUID: {new_uuid}")
         
-        # Загружаем конфигурацию
-        config = load_xray_config()
+        # Загружаем конфигурацию (off event loop)
+        config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
         
         # Находим первый VLESS inbound
         inbounds = config.get("inbounds", [])
@@ -332,11 +344,12 @@ async def add_user():
         
         logger.info(f"Adding client to config: uuid={new_uuid}")
         
-        # Сохраняем конфигурацию
-        save_xray_config(config)
+        # Сохраняем конфигурацию (off event loop, with lock)
+        async with _config_file_lock:
+            await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
-        # Перезапускаем Xray
-        restart_xray()
+        # Перезапускаем Xray (non-blocking)
+        await _restart_xray_async()
         
         # Генерируем VLESS ссылку
         vless_link = generate_vless_link(new_uuid)
@@ -347,15 +360,14 @@ async def add_user():
             uuid=new_uuid,
             vless_link=vless_link
         )
-        
+
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error adding user: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 @app.post("/remove-user/{uuid}", response_model=RemoveUserResponse)
@@ -379,8 +391,8 @@ async def remove_user(uuid: str):
         
         logger.info(f"Removing user: uuid={target_uuid}")
         
-        # Загружаем конфигурацию
-        config = load_xray_config()
+        # Загружаем конфигурацию (off event loop)
+        config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
         
         # Находим клиента в конфигурации
         inbounds = config.get("inbounds", [])
@@ -406,24 +418,24 @@ async def remove_user(uuid: str):
             # Возвращаем успех даже если клиент не найден (идемпотентность)
             return RemoveUserResponse(status="ok")
         
-        # Сохраняем конфигурацию
-        save_xray_config(config)
+        # Сохраняем конфигурацию (off event loop, with lock)
+        async with _config_file_lock:
+            await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
-        # Перезапускаем Xray
-        restart_xray()
+        # Перезапускаем Xray (non-blocking)
+        await _restart_xray_async()
         
         logger.info(f"User removed successfully: uuid={target_uuid}")
         
         return RemoveUserResponse(status="ok")
         
+    except asyncio.CancelledError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error removing user: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
 
 
 # ============================================================================

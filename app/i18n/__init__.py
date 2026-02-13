@@ -6,11 +6,15 @@ Strict localization: no hardcoded UI strings in logic.
 Language resolution:
 - If language not in LANGUAGES → use DEFAULT_LANGUAGE (ru)
 - Otherwise → use exact language module
-NO cross-language fallback. NEVER auto-use English.
-If key missing: STAGE → strict raise; PROD → [MISSING:key]
+- If key missing in requested language → fallback to English
+- If key missing in all languages → return key (safe fallback, never crash)
 """
 
+import logging
+
 from . import ru, en, uz, tj, de, kk, ar
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_LANGUAGE = "ru"
 
@@ -32,31 +36,33 @@ def get_text(language: str, key: str, strict: bool = None, **kwargs) -> str:
     Args:
         language: Language code (ru, en, uz, tj, de, kk, ar)
         key: Dot-separated key (e.g. main.profile, common.back)
-        strict: If True, raise ValueError on missing key. If False, return [MISSING:key].
-                If None, uses STAGE strict mode: strict=True in STAGE, False otherwise.
+        strict: Deprecated, kept for backward compatibility. No longer raises.
         **kwargs: Format placeholders (e.g. user="John" for {user})
 
     Returns:
-        Localized string, optionally formatted.
+        Localized string, optionally formatted. Never raises.
     """
-    if strict is None:
-        try:
-            from config import IS_STAGE
-            strict = IS_STAGE
-        except ImportError:
-            strict = False
+    # 1. Try requested language
     lang_dict = LANGUAGES.get(language, LANGUAGES[DEFAULT_LANGUAGE])
     text = lang_dict.get(key)
 
-    if text is None:
-        if strict:
-            raise ValueError(f"[I18N] Missing key: {key} ({language})")
-        return f"[MISSING:{key}]"
+    if text is not None:
+        if kwargs:
+            return text.format(**kwargs)
+        return text
 
-    if kwargs:
-        return text.format(**kwargs)
+    # 2. Fallback to English
+    en_dict = LANGUAGES.get("en", {})
+    if key in en_dict:
+        logger.warning("I18N fallback to EN for key=%s, lang=%s", key, language)
+        text = en_dict[key]
+        if kwargs:
+            return text.format(**kwargs)
+        return text
 
-    return text
+    # 3. Return key itself (safe fallback)
+    logger.error("I18N missing key in all languages: %s", key)
+    return key
 
 
 __all__ = ["get_text", "LANGUAGES"]
