@@ -540,6 +540,9 @@ async def add_user(request: AddUserRequest):
         if response.uuid != uuid_from_request:
             logger.critical(f"UUID_MISMATCH_INTERNAL request={repr(uuid_from_request)} response={repr(response.uuid)}")
             raise HTTPException(status_code=500, detail="UUID mismatch inside API")
+        logger.info(
+            f"UUID_CONTRACT_CHECK sent={uuid_from_request} returned={response.uuid}"
+        )
         logger.info(f"User added successfully: uuid={uuid_from_request[:8]}... (returning SAME uuid)")
         return response
 
