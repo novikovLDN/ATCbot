@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import sys
@@ -76,9 +78,14 @@ async def main():
     # Если переменные окружения не заданы, программа завершится с ошибкой
     
     instance_id = os.getenv("POLLING_INSTANCE_ID", str(uuid.uuid4()))
-    logger.info("BOT_INSTANCE_STARTED pid=%s instance_id=%s", os.getpid(), instance_id)
-
     from datetime import datetime, timezone
+    process_start_dt = datetime.now(timezone.utc).isoformat()
+    logger.info(
+        "BOT_INSTANCE_STARTED pid=%s instance_id=%s PROCESS_START_TIMESTAMP=%s",
+        os.getpid(), instance_id, process_start_dt
+    )
+    bot_token_hash = hashlib.sha256(config.BOT_TOKEN.encode()).hexdigest()[:8] if config.BOT_TOKEN else "N/A"
+    logger.info("BOT_TOKEN_HASH=%s (first 8 chars of sha256)", bot_token_hash)
     from app.core.runtime_context import set_bot_start_time
     set_bot_start_time(datetime.now(timezone.utc))
 
@@ -403,20 +410,59 @@ async def main():
     except Exception as e:
         logger.warning(f"Failed to resolve update types: {e}")
         used_updates = None
-    
+
+    # ====================================================================================
+    # PHASE 1 — TELEGRAM WEBHOOK AUDIT (before polling)
+    # Ensure webhook is not interfering with polling
+    # ====================================================================================
+    try:
+        webhook_info = await bot.get_webhook_info()
+        webhook_audit = {
+            "url": webhook_info.url or "",
+            "has_custom_certificate": getattr(webhook_info, "has_custom_certificate", None),
+            "pending_update_count": getattr(webhook_info, "pending_update_count", None),
+            "ip_address": getattr(webhook_info, "ip_address", None),
+            "last_error_date": getattr(webhook_info, "last_error_date", None),
+            "last_error_message": getattr(webhook_info, "last_error_message", None),
+            "max_connections": getattr(webhook_info, "max_connections", None),
+        }
+        logger.info("WEBHOOK_AUDIT_STATE %s", json.dumps(webhook_audit, default=str))
+
+        if webhook_info.url and webhook_info.url.strip():
+            logger.warning("WEBHOOK_ACTIVE url=%s — deleting before polling", webhook_info.url)
+            await bot.delete_webhook(drop_pending_updates=True)
+            webhook_info_after = await bot.get_webhook_info()
+            webhook_after = {
+                "url": webhook_info_after.url or "",
+                "pending_update_count": getattr(webhook_info_after, "pending_update_count", None),
+            }
+            logger.info("WEBHOOK_AFTER_DELETE_STATE %s", json.dumps(webhook_after, default=str))
+            if webhook_info_after.url and webhook_info_after.url.strip():
+                logger.critical(
+                    "CRITICAL: webhook.url still non-empty after delete: %s — exiting",
+                    webhook_info_after.url
+                )
+                sys.exit(1)
+    except Exception as e:
+        logger.exception("Webhook audit failed: %s", e)
+        sys.exit(1)
+
     try:
         # 2️⃣ Wrap dispatcher.start_polling() so it is called ONLY from the primary process
         # Polling is started ONCE and ONLY AFTER DB init attempt finishes
         # Restart guard: dispatcher crash does not kill process
         from aiogram.exceptions import TelegramConflictError
-        
+
         while True:
             try:
-                try:
-                    await bot.delete_webhook(drop_pending_updates=True)
-                    logger.info("Webhook deleted before polling start")
-                except Exception as e:
-                    logger.warning("Webhook cleanup failed: %s", e)
+                # PHASE 2: delete_webhook BEFORE dp.start_polling (no conditional skip)
+                await bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Webhook deleted before polling start")
+
+                logger.info(
+                    "POLLING_START pid=%s instance_id=%s",
+                    os.getpid(), instance_id
+                )
                 log_event(
                     logger,
                     component="polling",
@@ -431,9 +477,25 @@ async def main():
                     handle_signals=False
                 )
             except asyncio.CancelledError:
+                logger.info("POLLING_STOP reason=cancelled")
                 log_event(logger, component="polling", operation="polling_cancelled", outcome="cancelled")
                 break
             except TelegramConflictError as e:
+                try:
+                    webhook_info = await bot.get_webhook_info()
+                    webhook_snapshot = {
+                        "url": webhook_info.url or "",
+                        "pending_update_count": getattr(webhook_info, "pending_update_count", None),
+                    }
+                except Exception as we:
+                    webhook_snapshot = {"error": str(we)}
+                logger.critical(
+                    "TELEGRAM_CONFLICT_DETECTED timestamp=%s instance_id=%s pid=%s webhook_state=%s",
+                    datetime.now(timezone.utc).isoformat(),
+                    instance_id,
+                    os.getpid(),
+                    json.dumps(webhook_snapshot, default=str),
+                )
                 log_event(
                     logger,
                     component="polling",
@@ -445,6 +507,11 @@ async def main():
                 logger.critical("polling conflict traceback", exc_info=True)
                 raise SystemExit(1)
             except Exception as e:
+                logger.error(
+                    "POLLING_EXCEPTION type=%s reason=%s instance_id=%s pid=%s",
+                    type(e).__name__, str(e)[:200], instance_id, os.getpid(),
+                    exc_info=True
+                )
                 log_event(
                     logger,
                     component="polling",
@@ -453,7 +520,6 @@ async def main():
                     reason=str(e)[:200],
                     level="error",
                 )
-                logger.error("polling crash traceback", exc_info=True)
                 logger.info("Restarting polling in 5 seconds...")
                 await asyncio.sleep(5)
     except SystemExit:
