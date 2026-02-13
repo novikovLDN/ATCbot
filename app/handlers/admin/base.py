@@ -2,7 +2,7 @@
 Admin base entry handlers: /admin command and dashboard callbacks.
 """
 import logging
-import time
+from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -17,6 +17,7 @@ from app.utils.security import require_admin
 from app.handlers.admin.keyboards import get_admin_dashboard_keyboard, get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.states import AdminCreatePromocode
+from app.core.runtime_context import get_bot_start_time
 
 admin_base_router = Router()
 logger = logging.getLogger(__name__)
@@ -501,14 +502,21 @@ async def callback_admin_system(callback: CallbackQuery):
             text += "\n"
         else:
             text += "✅ Проблем не обнаружено\n\n"
-        
-        # Uptime
-        uptime_seconds = int(time.time() - _bot_start_time)
+
+        # Uptime (via runtime_context — no cross-module globals)
+        start_time = get_bot_start_time()
+        if start_time:
+            uptime_seconds = int(
+                (datetime.now(timezone.utc) - start_time).total_seconds()
+            )
+        else:
+            uptime_seconds = 0
         uptime_days = uptime_seconds // 86400
         uptime_hours = (uptime_seconds % 86400) // 3600
         uptime_minutes = (uptime_seconds % 3600) // 60
         uptime_str = f"{uptime_days}д {uptime_hours}ч {uptime_minutes}м"
         text += f"⏱ Время работы: {uptime_str}"
+        logger.info("SYSTEM_PANEL_REQUESTED uptime_seconds=%s", uptime_seconds)
         
         # PART C.5: Add test menu button
         user = await database.get_user(callback.from_user.id)
