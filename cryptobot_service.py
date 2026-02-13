@@ -411,7 +411,7 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
         expires_str = expires_at.strftime("%d.%m.%Y")
         text = i18n_get_text(language, "payment.approved", date=expires_str)
         
-        from handlers import get_vpn_key_keyboard
+        from app.handlers.common.keyboards import get_vpn_key_keyboard
         await bot.send_message(telegram_id, text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
         await bot.send_message(telegram_id, f"<code>{vpn_key}</code>", parse_mode="HTML")
         

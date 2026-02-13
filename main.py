@@ -89,6 +89,15 @@ async def main():
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     
+    # Global concurrency limiter for update processing
+    MAX_CONCURRENT_UPDATES = int(os.getenv("MAX_CONCURRENT_UPDATES", "20"))
+    update_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPDATES)
+    logger.info("CONCURRENCY_LIMIT=%s", MAX_CONCURRENT_UPDATES)
+    
+    # Register concurrency limiter middleware
+    from app.core.concurrency_middleware import ConcurrencyLimiterMiddleware
+    dp.update.middleware(ConcurrencyLimiterMiddleware(update_semaphore))
+    
     # Регистрация handlers
     dp.include_router(root_router)
     
@@ -377,17 +386,44 @@ async def main():
     except Exception as e:
         logger.warning(f"Failed to register bot commands: {e}")
     
+    # Log dispatcher configuration before polling
+    try:
+        used_updates = dp.resolve_used_update_types()
+        logger.info(f"DISPATCHER_READY updates={used_updates}")
+    except Exception as e:
+        logger.warning(f"Failed to resolve update types: {e}")
+        used_updates = None
+    
     try:
         # 2️⃣ Wrap dispatcher.start_polling() so it is called ONLY from the primary process
         # Polling is started ONCE and ONLY AFTER DB init attempt finishes
+        # Restart guard: dispatcher crash does not kill process
         from aiogram.exceptions import TelegramConflictError
-        await dp.start_polling(bot)
-    except TelegramConflictError as e:
-        logger.critical(
-            "POLLING_CONFLICT_DETECTED — another bot instance is running",
-            exc_info=True
-        )
-        raise SystemExit(1)
+        
+        while True:
+            try:
+                logger.info("POLLING_START")
+                await dp.start_polling(
+                    bot,
+                    allowed_updates=used_updates if used_updates else None,
+                    polling_timeout=30,
+                    handle_signals=False
+                )
+            except asyncio.CancelledError:
+                logger.info("POLLING_CANCELLED")
+                break
+            except TelegramConflictError as e:
+                logger.critical(
+                    "POLLING_CONFLICT_DETECTED — another bot instance is running",
+                    exc_info=True
+                )
+                raise SystemExit(1)
+            except Exception as e:
+                logger.error(f"POLLING_CRASH: {e}", exc_info=True)
+                logger.info("Restarting polling in 5 seconds...")
+                await asyncio.sleep(5)
+    except SystemExit:
+        raise
     finally:
         logger.info("SHUTDOWN_STARTED")
         
@@ -398,28 +434,39 @@ async def main():
         except Exception as e:
             logger.debug("stop_polling: %s", e)
         
-        # Cancel and await all background tasks
+        # Cancel and await all background tasks gracefully
         logger.info("SHUTDOWN: Cancelling background tasks (count=%d)", len(background_tasks))
+        
+        # Step 1: Cancel all tasks
         for task in background_tasks:
             if task and not task.done():
                 task.cancel()
         
-        results = await asyncio.gather(*background_tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
-                logger.error("Task error during shutdown: %s", result)
+        # Step 2: Await all tasks (handle CancelledError gracefully)
+        for task in background_tasks:
+            if task:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    # Expected during shutdown - task was cancelled gracefully
+                    pass
+                except Exception as e:
+                    logger.error(f"Error during shutdown of task {task.get_name() if hasattr(task, 'get_name') else 'unknown'}: {e}")
         
         logger.info("SHUTDOWN_TASKS_CANCELLED")
         
         # Close DB pool
-        await database.close_pool()
-        logger.info("Database connection pool closed")
+        try:
+            await database.close_pool()
+        except Exception as e:
+            logger.error(f"Error closing database pool: {e}")
         
         # Close bot session
         try:
             await bot.session.close()
+            logger.info("Bot session closed")
         except Exception as e:
-            logger.debug("bot.session.close: %s", e)
+            logger.debug(f"Error closing bot session: {e}")
         
         logger.info("SHUTDOWN_COMPLETED")
 
