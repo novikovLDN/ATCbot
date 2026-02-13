@@ -3974,16 +3974,11 @@ async def grant_access(
                         uuid=uuid,
                         subscription_end=subscription_end
                     )
-                except vpn_utils.VPNAPIError as e:
-                    from app.core.exceptions import RenewalSyncError
+                except Exception as e:
                     logger.critical(
-                        f"grant_access: RENEWAL_SYNC_FAILED [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
-                        f"old_expiry={old_expires_at.isoformat()}, attempted_new_expiry={subscription_end.isoformat()}, "
-                        f"error={e}]"
+                        f"XRAY_SYNC_FAILED_BUT_PAYMENT_OK "
+                        f"[telegram_id={telegram_id}, error={e}]"
                     )
-                    raise RenewalSyncError(
-                        f"Renewal aborted: Xray sync failed for user {telegram_id}: {e}"
-                    ) from e
                 
                 # PHASE 2: DB update (only reached if Xray succeeded)
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
