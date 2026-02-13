@@ -544,7 +544,10 @@ async def add_user(request: AddUserRequest):
                 status_code=500,
                 detail="UUID mismatch between request and generated link"
             )
-        logger.info(f"XRAY_ADD_CONTRACT_OK uuid_response={client_uuid}")
+        logger.info(
+            f"ADD_USER_CONTRACT uuid_request={request.uuid} "
+            f"uuid_response={client_uuid}"
+        )
         return AddUserResponse(uuid=client_uuid, vless_link=vless_link, link=vless_link)
 
     except asyncio.CancelledError:
