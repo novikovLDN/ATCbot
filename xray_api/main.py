@@ -159,7 +159,10 @@ async def _flusher_loop(queue: XrayMutationQueue) -> None:
 # ============================================================================
 
 class AddUserRequest(BaseModel):
-    """Strict contract: uuid MUST be provided by caller. API NEVER generates UUID."""
+    """
+    Strict contract: uuid MUST be provided by caller. API NEVER generates UUID.
+    If uuid is missing → return HTTP 400.
+    """
     uuid: str = Field(..., min_length=1, description="REQUIRED. Use exactly as received. No generation.")
     telegram_id: int
     expiry_timestamp_ms: int
@@ -493,8 +496,13 @@ async def add_user(request: AddUserRequest):
         
         _mark_restart_pending("add_user")
         vless_link = generate_vless_link(uuid_from_request)
+        response = AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
+        # Hard safety: response MUST contain same UUID as request (no internal generation)
+        if response.uuid != uuid_from_request:
+            logger.critical(f"UUID_MISMATCH_INTERNAL request={repr(uuid_from_request)} response={repr(response.uuid)}")
+            raise HTTPException(status_code=500, detail="UUID mismatch inside API")
         logger.info(f"User added successfully: uuid={uuid_from_request[:8]}... (returning SAME uuid)")
-        return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
+        return response
 
     except asyncio.CancelledError:
         raise
