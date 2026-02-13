@@ -246,10 +246,11 @@ async def callback_admin_stats(callback: CallbackQuery):
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "errors.stats"), show_alert=True)
 
+
+@admin_stats_router.callback_query(F.data == "admin:referral_stats")
 async def callback_admin_referral_stats(callback: CallbackQuery):
-
     """Реферальная статистика - главный экран с общей статистикой"""
-
+    logger.info("REFERRAL_STATS_REQUESTED telegram_id=%s", callback.from_user.id)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
 
         language = await resolve_user_language(callback.from_user.id)
