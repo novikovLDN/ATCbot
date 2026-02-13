@@ -419,6 +419,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
                 vless_url = generate_vless_url(uuid_sent)
 
             uuid_preview = f"{uuid_sent[:8]}..." if len(uuid_sent) > 8 else uuid_sent
+            logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
             logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
 
             try:
@@ -458,6 +459,48 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
             error_msg = f"Failed to create VLESS user: {e}"
             logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
             raise VPNAPIError(error_msg) from e
+
+
+async def ensure_user_in_xray(telegram_id: int, uuid: str, subscription_end: datetime) -> None:
+    """
+    Единая функция синхронизации: гарантирует, что пользователь есть в Xray.
+    DB — источник истины. Xray — исполнитель. UUID НЕ меняется.
+
+    1. Попытка update_user(uuid)
+    2. Если 200 → OK
+    3. Если 404 → add_user(uuid) с тем же UUID
+    4. Если add не 200 → CRITICAL и raise
+
+    Args:
+        telegram_id: Telegram ID (для add_user)
+        uuid: UUID из БД (не меняется)
+        subscription_end: Новая дата окончания
+    """
+    _validate_uuid_no_prefix(uuid)
+    uuid_clean = str(uuid).strip()
+    uuid_preview = f"{uuid_clean[:8]}..." if len(uuid_clean) > 8 else uuid_clean
+
+    logger.info(f"XRAY_UPDATE uuid={uuid_preview}")
+    try:
+        await update_vless_user(uuid=uuid_clean, subscription_end=subscription_end)
+        return  # 200 OK
+    except InvalidResponseError as e:
+        if "Client not found" not in str(e) and "client not found" not in str(e).lower():
+            raise
+        logger.warning(f"XRAY_MISS uuid={uuid_preview} → add_user")
+        try:
+            await add_vless_user(
+                telegram_id=telegram_id,
+                subscription_end=subscription_end,
+                uuid=uuid_clean
+            )
+            logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
+        except Exception as add_e:
+            logger.critical(
+                f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}",
+                exc_info=True
+            )
+            raise VPNAPIError(f"ensure_user_in_xray: add_user failed after 404: {add_e}") from add_e
 
 
 async def update_vless_user(uuid: str, subscription_end: datetime) -> None:

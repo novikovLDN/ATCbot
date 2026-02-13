@@ -3955,60 +3955,25 @@ async def grant_access(
                 )
                 
                 # TWO-PHASE SAFE RENEWAL: Xray FIRST, DB ONLY after Xray success.
-                # Guarantee: DB and Xray never diverge on expiryTime.
-                # If Xray fails → no DB change → raise RenewalSyncError.
-                # SELF-HEAL: If Xray returns 404 (client missing), recreate with same UUID.
+                # ensure_user_in_xray: update → 200 OK; 404 → add with SAME uuid.
                 assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
                 assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
                 expiry_ms = int(subscription_end.timestamp() * 1000)
                 try:
-                    await vpn_utils.update_vless_user(uuid=uuid, subscription_end=subscription_end)
-                except vpn_utils.InvalidResponseError as e:
-                    if "Client not found" in str(e) or "client not found" in str(e).lower():
-                        logger.warning(
-                            f"grant_access: XRAY_CLIENT_MISSING_RECREATING [telegram_id={telegram_id}, "
-                            f"uuid={uuid[:8]}..., old_expiry={old_expires_at.isoformat()}, "
-                            f"new_expiry={subscription_end.isoformat()}]"
-                        )
-                        try:
-                            await vpn_utils.add_vless_user(
-                                telegram_id=telegram_id,
-                                subscription_end=subscription_end,
-                                uuid=uuid
-                            )
-                            logger.info(
-                                f"grant_access: XRAY_CLIENT_RECREATED_SUCCESS [telegram_id={telegram_id}, "
-                                f"uuid={uuid[:8]}...]"
-                            )
-                        except Exception as recreate_e:
-                            from app.core.exceptions import RenewalSyncError
-                            logger.critical(
-                                f"grant_access: RENEWAL_RECREATE_FAILED [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
-                                f"error={recreate_e}]"
-                            )
-                            raise RenewalSyncError(
-                                f"Renewal aborted: Xray client recreate failed for user {telegram_id}: {recreate_e}"
-                            ) from recreate_e
-                    else:
-                        from app.core.exceptions import RenewalSyncError
-                        logger.critical(
-                            f"grant_access: RENEWAL_SYNC_FAILED [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
-                            f"old_expiry={old_expires_at.isoformat()}, attempted_new_expiry={subscription_end.isoformat()}, "
-                            f"error_type={type(e).__name__}, error={str(e)}]"
-                        )
-                        raise RenewalSyncError(
-                            f"Renewal aborted: Xray expiry update failed for user {telegram_id}: {e}"
-                        ) from e
-                except Exception as e:
+                    await vpn_utils.ensure_user_in_xray(
+                        telegram_id=telegram_id,
+                        uuid=uuid,
+                        subscription_end=subscription_end
+                    )
+                except vpn_utils.VPNAPIError as e:
                     from app.core.exceptions import RenewalSyncError
                     logger.critical(
                         f"grant_access: RENEWAL_SYNC_FAILED [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
                         f"old_expiry={old_expires_at.isoformat()}, attempted_new_expiry={subscription_end.isoformat()}, "
-                        f"expiry_timestamp_ms={expiry_ms}, error_type={type(e).__name__}, error={str(e)}] - "
-                        "Xray update failed, DB NOT modified. Renewal aborted."
+                        f"error={e}]"
                     )
                     raise RenewalSyncError(
-                        f"Renewal aborted: Xray expiry update failed for user {telegram_id}: {e}"
+                        f"Renewal aborted: Xray sync failed for user {telegram_id}: {e}"
                     ) from e
                 
                 # PHASE 2: DB update (only reached if Xray succeeded)
