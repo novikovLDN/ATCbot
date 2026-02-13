@@ -3,7 +3,6 @@ Common handlers module: guards, decorators, utils, keyboards, FSM states.
 Shared across all handler domains. Zero domain logic.
 """
 from app.handlers.common.guards import ensure_db_ready_message, ensure_db_ready_callback
-from app.handlers.common.decorators import handler_exception_boundary
 from app.handlers.common.utils import (
     safe_resolve_username,
     safe_resolve_username_from_db,
@@ -51,7 +50,6 @@ from app.handlers.common.keyboards import (
 __all__ = [
     "ensure_db_ready_message",
     "ensure_db_ready_callback",
-    "handler_exception_boundary",
     "safe_resolve_username",
     "safe_resolve_username_from_db",
     "safe_edit_text",

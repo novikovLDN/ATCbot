@@ -181,6 +181,21 @@ async def is_payment_notification_sent(
 # Получаем DATABASE_URL из переменных окружения через config.env()
 # Используем префикс окружения (STAGE_DATABASE_URL / PROD_DATABASE_URL)
 DATABASE_URL = config.env("DATABASE_URL")
+
+# ====================================================================================
+# DB POOL CONFIG — Production-safe, ENV-overridable, single source of truth
+# ====================================================================================
+def _get_pool_config() -> dict:
+    """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation."""
+    return {
+        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "2")),
+        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "15")),
+        "max_inactive_connection_lifetime": 300,
+        "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "10")),
+        "command_timeout": int(os.getenv("DB_POOL_COMMAND_TIMEOUT", "30")),
+    }
+
+
 if not DATABASE_URL:
     # В PROD DATABASE_URL обязателен
     if config.APP_ENV == "prod":
@@ -224,10 +239,11 @@ async def get_pool() -> asyncpg.Pool:
             retries = 1  # Normal retry behavior
         
         # C1.1 - METRICS: Measure pool creation latency
+        pool_config = _get_pool_config()
         with timer("db_latency_ms"):
             # Retry pool creation on transient errors only
             _pool = await retry_async(
-                lambda: asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10),
+                lambda: asyncpg.create_pool(DATABASE_URL, **pool_config),
                 retries=retries,
                 base_delay=0.5,
                 max_delay=5.0,
@@ -243,7 +259,11 @@ async def get_pool() -> asyncpg.Pool:
         cost_model = get_cost_model()
         cost_model.record_cost(CostCenter.DB_CONNECTIONS, cost_units=1.0)
         
-        logger.info("Database connection pool created")
+        logger.info(
+            "DB_POOL_CONFIG min=%s max=%s acquire_timeout=%s command_timeout=%s",
+            pool_config["min_size"], pool_config["max_size"],
+            pool_config["timeout"], pool_config["command_timeout"],
+        )
     return _pool
 
 
@@ -356,14 +376,15 @@ async def init_db() -> bool:
         logger.error(f"DB connectivity probe failed: {e}")
         return False
     
-    # 2️⃣ CREATE POOL — AND NOTHING ELSE
+    # 2️⃣ CREATE POOL — AND NOTHING ELSE (single source of truth via _get_pool_config)
+    pool_config = _get_pool_config()
     try:
-        _pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            min_size=1,
-            max_size=5
+        _pool = await asyncpg.create_pool(DATABASE_URL, **pool_config)
+        logger.info(
+            "DB_POOL_CONFIG min=%s max=%s acquire_timeout=%s command_timeout=%s",
+            pool_config["min_size"], pool_config["max_size"],
+            pool_config["timeout"], pool_config["command_timeout"],
         )
-        logger.info("Database connection pool created")
     except Exception as e:
         logger.error(f"Failed to create database pool: {e}")
         return False
@@ -387,12 +408,12 @@ async def init_db() -> bool:
     # Schema changes can invalidate cached prepared statements; fresh pool clears cache.
     try:
         await _pool.close()
-        _pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            min_size=1,
-            max_size=5
+        _pool = await asyncpg.create_pool(DATABASE_URL, **pool_config)
+        logger.info(
+            "DB_POOL_RECREATED_AFTER_MIGRATIONS min=%s max=%s acquire_timeout=%s command_timeout=%s",
+            pool_config["min_size"], pool_config["max_size"],
+            pool_config["timeout"], pool_config["command_timeout"],
         )
-        logger.info("DB_POOL_RECREATED_AFTER_MIGRATIONS")
     except Exception as e:
         logger.error(f"Failed to recreate pool after migrations: {e}")
         return False

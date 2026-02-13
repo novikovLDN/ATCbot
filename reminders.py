@@ -1,6 +1,7 @@
 """Модуль для отправки напоминаний об окончании подписки"""
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,6 +12,7 @@ from app.services.language_service import resolve_user_language
 from app.services.notifications import service as notification_service
 from app.services.notifications.service import ReminderType
 from app.utils.telegram_safe import safe_send_message
+from app.core.structured_logger import log_event
 # import outline_api  # DISABLED - мигрировали на Xray Core (VLESS)
 
 # Idempotency: skip if reminder sent within this window (container restart guard)
@@ -155,16 +157,45 @@ async def reminders_task(bot: Bot):
     """Фоновая задача для отправки напоминаний об окончании подписки (выполняется каждые 30-60 минут)"""
     # Небольшая задержка при старте, чтобы БД успела инициализироваться
     await asyncio.sleep(60)
-    
+
+    iteration = 0
     while True:
+        iteration += 1
+        start_time = time.time()
         try:
             # Отправляем напоминания об окончании подписки
             await send_smart_reminders(bot)
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_event(
+                logger,
+                component="worker",
+                operation="reminders_iteration",
+                correlation_id=str(iteration),
+                outcome="success",
+                duration_ms=duration_ms,
+            )
         except asyncio.CancelledError:
-            logger.info("Reminders task cancelled")
+            log_event(
+                logger,
+                component="worker",
+                operation="reminders_iteration",
+                correlation_id=str(iteration),
+                outcome="cancelled",
+            )
             break
         except Exception as e:
-            logger.exception(f"Error in reminders_task: {e}")
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_event(
+                logger,
+                component="worker",
+                operation="reminders_iteration",
+                correlation_id=str(iteration),
+                outcome="failed",
+                duration_ms=duration_ms,
+                reason=str(e)[:200],
+                level="error",
+            )
+            logger.exception("Error in reminders_task: %s", e)
         
         # Проверяем каждые 45 минут для баланса между точностью и нагрузкой
         await asyncio.sleep(45 * 60)  # 45 минут в секундах

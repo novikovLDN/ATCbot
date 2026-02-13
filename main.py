@@ -14,6 +14,7 @@ from aiogram.types import BotCommand
 import config
 import database
 from app.core.feature_flags import get_feature_flags
+from app.core.structured_logger import log_event
 from app.handlers import router as root_router
 import reminders
 import healthcheck
@@ -94,9 +95,11 @@ async def main():
     update_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPDATES)
     logger.info("CONCURRENCY_LIMIT=%s", MAX_CONCURRENT_UPDATES)
     
-    # Register concurrency limiter middleware
+    # Register middlewares (order: 1 ConcurrencyLimiter, 2 TelegramErrorBoundary, 3 Routers)
     from app.core.concurrency_middleware import ConcurrencyLimiterMiddleware
+    from app.core.telegram_error_middleware import TelegramErrorBoundaryMiddleware
     dp.update.middleware(ConcurrencyLimiterMiddleware(update_semaphore))
+    dp.update.middleware(TelegramErrorBoundaryMiddleware())
     
     # Регистрация handlers
     dp.include_router(root_router)
@@ -402,7 +405,7 @@ async def main():
         
         while True:
             try:
-                logger.info("POLLING_START")
+                log_event(logger, component="polling", operation="polling_start", outcome="success")
                 await dp.start_polling(
                     bot,
                     allowed_updates=used_updates if used_updates else None,
@@ -410,22 +413,35 @@ async def main():
                     handle_signals=False
                 )
             except asyncio.CancelledError:
-                logger.info("POLLING_CANCELLED")
+                log_event(logger, component="polling", operation="polling_cancelled", outcome="cancelled")
                 break
             except TelegramConflictError as e:
-                logger.critical(
-                    "POLLING_CONFLICT_DETECTED — another bot instance is running",
-                    exc_info=True
+                log_event(
+                    logger,
+                    component="polling",
+                    operation="conflict",
+                    outcome="failed",
+                    reason="another bot instance is running",
+                    level="critical",
                 )
+                logger.critical("polling conflict traceback", exc_info=True)
                 raise SystemExit(1)
             except Exception as e:
-                logger.error(f"POLLING_CRASH: {e}", exc_info=True)
+                log_event(
+                    logger,
+                    component="polling",
+                    operation="polling_crash",
+                    outcome="failed",
+                    reason=str(e)[:200],
+                    level="error",
+                )
+                logger.error("polling crash traceback", exc_info=True)
                 logger.info("Restarting polling in 5 seconds...")
                 await asyncio.sleep(5)
     except SystemExit:
         raise
     finally:
-        logger.info("SHUTDOWN_STARTED")
+        log_event(logger, component="shutdown", operation="shutdown_start", outcome="success")
         
         # Stop polling cleanly
         try:
@@ -435,7 +451,13 @@ async def main():
             logger.debug("stop_polling: %s", e)
         
         # Cancel and await all background tasks gracefully
-        logger.info("SHUTDOWN: Cancelling background tasks (count=%d)", len(background_tasks))
+        log_event(
+            logger,
+            component="shutdown",
+            operation="shutdown_tasks_cancelling",
+            outcome="success",
+            reason=f"count={len(background_tasks)}",
+        )
         
         # Step 1: Cancel all tasks
         for task in background_tasks:
@@ -453,7 +475,7 @@ async def main():
                 except Exception as e:
                     logger.error(f"Error during shutdown of task {task.get_name() if hasattr(task, 'get_name') else 'unknown'}: {e}")
         
-        logger.info("SHUTDOWN_TASKS_CANCELLED")
+        log_event(logger, component="shutdown", operation="shutdown_tasks_cancelled", outcome="success")
         
         # Close DB pool
         try:
@@ -468,7 +490,7 @@ async def main():
         except Exception as e:
             logger.debug(f"Error closing bot session: {e}")
         
-        logger.info("SHUTDOWN_COMPLETED")
+        log_event(logger, component="shutdown", operation="shutdown_completed", outcome="success")
 
 
 if __name__ == "__main__":
