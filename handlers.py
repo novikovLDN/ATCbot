@@ -1875,6 +1875,23 @@ async def cmd_admin_audit(message: Message):
         await message.answer("Ошибка при получении audit log. Проверь логи.")
 
 
+@router.message(Command("xray_sync"))
+async def cmd_xray_sync(message: Message):
+    """Full Xray sync (admin only) — sync all active subscriptions from DB to Xray."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        logging.warning(f"Unauthorized xray_sync attempt by user {message.from_user.id}")
+        await message.answer("Нет доступа")
+        return
+    try:
+        import xray_sync
+        await message.answer("⏳ Синхронизация Xray...")
+        count = await xray_sync.full_sync(force=True)
+        await message.answer(f"✅ Xray full sync completed: {count} users processed")
+    except Exception as e:
+        logging.exception(f"Error in cmd_xray_sync: {e}")
+        await message.answer(f"Ошибка: {str(e)[:200]}")
+
+
 @router.message(Command("reissue_key"))
 async def cmd_reissue_key(message: Message):
     """Перевыпустить VPN-ключ для пользователя (только для админа)"""
