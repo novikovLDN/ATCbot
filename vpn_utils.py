@@ -312,11 +312,10 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
         "telegram_id": telegram_id,
         "expiry_timestamp_ms": expiry_ms,
     }
-    if uuid and str(uuid).strip():
-        json_body["uuid"] = str(uuid).strip()
-        logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}]")
-    else:
-        logger.info("UUID_AUDIT_ADD_REQUEST [uuid=omit, xray_will_generate]")
+    if not uuid or not str(uuid).strip():
+        raise ValueError("add_vless_user requires uuid; DB is source of truth")
+    json_body["uuid"] = str(uuid).strip()
+    logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}]")
     
     # Логируем начало операции
     logger.info(
@@ -455,10 +454,10 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
 
 async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
     """
-    Sync user to Xray. Xray is source of truth.
-    1. If user has UUID: try update_user. If 404 → add_user (Xray generates), return new uuid.
-    2. If user has no UUID: add_user (Xray generates), return new uuid.
-    Returns effective uuid (for DB update) or None on failure (best-effort).
+    Sync user to Xray. DB is source of truth for UUID.
+    1. If user has UUID: try update_user. If 404 → add_user with SAME uuid, return it.
+    2. If user has no UUID: cannot add (caller must generate and pass uuid).
+    Returns effective uuid (same as input) or None on failure (best-effort).
     """
     uuid_clean = str(uuid).strip() if uuid and str(uuid).strip() else None
     uuid_preview = f"{uuid_clean[:8]}..." if uuid_clean and len(uuid_clean) > 8 else (uuid_clean or "N/A")
@@ -473,19 +472,20 @@ async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscriptio
         except InvalidResponseError as e:
             if "Client not found" not in str(e) and "client not found" not in str(e).lower():
                 raise
-            logger.warning(f"XRAY_UPDATE_404_RECOVERY uuid={uuid_preview} → add_user")
+            logger.warning(f"XRAY_UPDATE_404_RECOVERY uuid={uuid_preview} → add_user (same UUID)")
 
-    # No uuid in DB, or update 404 — add_user (Xray generates)
+    # Update 404 fallback — add_user with SAME uuid (DB is source of truth)
+    if not uuid_clean:
+        logger.error("ensure_user_in_xray: cannot add without uuid; DB is source of truth")
+        return None
     try:
-        resp = await add_vless_user(
+        await add_vless_user(
             telegram_id=telegram_id,
             subscription_end=subscription_end,
-            uuid=None
+            uuid=uuid_clean
         )
-        returned_uuid = resp.get("uuid") if isinstance(resp, dict) else getattr(resp, "uuid", None)
-        if returned_uuid:
-            logger.info(f"XRAY_ADD_SUCCESS uuid={str(returned_uuid)[:8]}... XRAY_UUID_REPLACED")
-            return str(returned_uuid).strip()
+        logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={uuid_preview}")
+        return uuid_clean
     except Exception as add_e:
         logger.critical(f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}", exc_info=True)
     return None
