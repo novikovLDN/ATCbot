@@ -22,8 +22,6 @@ from app.handlers.common.keyboards import (
     get_about_keyboard,
     get_service_status_keyboard,
 )
-from app.handlers.common.states import PromoCodeInput
-
 router = Router()
 logger = logging.getLogger(__name__)
 
@@ -34,8 +32,9 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
 
+    # Clear all FSM state on navigation (withdrawal, promo, etc.)
     current_state = await state.get_state()
-    if current_state == PromoCodeInput.waiting_for_promo.state:
+    if current_state is not None:
         await state.clear()
 
     try:
@@ -54,8 +53,9 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data == "back_to_main")
-async def callback_back_to_main(callback: CallbackQuery):
+async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню с экрана выдачи ключа"""
+    await state.clear()
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
