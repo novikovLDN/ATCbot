@@ -182,7 +182,7 @@ def generate_vless_url(uuid: str) -> str:
     return vless_url
 
 
-async def add_vless_user(telegram_id: int, subscription_end: datetime) -> Dict[str, str]:
+async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
     
@@ -195,6 +195,8 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime) -> Dict[s
     Args:
         telegram_id: Telegram ID пользователя
         subscription_end: Дата окончания подписки (используется как expiryTime в Xray)
+        uuid: Optional explicit UUID to use (for recreating missing client, e.g. renewal self-heal).
+              If provided, API will use it instead of generating new. Must be valid UUID.
     
     Returns:
         Словарь с ключами:
@@ -293,6 +295,11 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime) -> Dict[s
         "telegram_id": telegram_id,
         "expiry_timestamp_ms": expiry_ms
     }
+    if uuid:
+        uuid_clean = uuid.strip()
+        if config.IS_STAGE and uuid_clean.startswith("stage-"):
+            uuid_clean = uuid_clean[6:]
+        json_body["uuid"] = uuid_clean
     
     # Логируем начало операции
     logger.info(
