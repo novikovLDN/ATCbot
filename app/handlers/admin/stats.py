@@ -30,32 +30,44 @@ async def format_promo_stats_text(stats: list) -> str:
     """Форматировать статистику промокодов в текст"""
     if not stats:
         return "Промокоды не найдены."
-    
     text = "📊 Статистика промокодов\n\n"
-    
     for promo in stats:
-        code = promo["code"]
-        discount_percent = promo["discount_percent"]
-        max_uses = promo["max_uses"]
-        used_count = promo["used_count"]
-        is_active = promo["is_active"]
-        
+        code = promo.get("code", "?")
+        discount_percent = promo.get("discount_percent", 0)
+        max_uses = promo.get("max_uses")
+        used_count = promo.get("used_count", 0)
+        is_eff = promo.get("is_effective_active", promo.get("is_active", False))
         text += f"{code}\n"
         text += f"— Скидка: {discount_percent}%\n"
-        
         if max_uses is not None:
             text += f"— Использовано: {used_count} / {max_uses}\n"
-            if is_active:
-                text += "— Статус: активен\n"
-            else:
-                text += "— Статус: исчерпан\n"
+            text += "— Статус: активен\n" if is_eff else "— Статус: неактивен\n"
         else:
             text += f"— Использовано: {used_count}\n"
-            text += "— Статус: без ограничений\n"
-        
+            text += "— Статус: активен\n" if is_eff else "— Статус: неактивен\n"
         text += "\n"
-    
     return text
+
+
+def get_promo_stats_keyboard(stats: list, language: str) -> InlineKeyboardMarkup:
+    """Клавиатура со статистикой и кнопками деактивации"""
+    from app.i18n import get_text as i18n_get_text
+    rows = []
+    seen_codes = set()
+    for promo in stats:
+        code = promo.get("code")
+        promo_id = promo.get("id")
+        is_eff = promo.get("is_effective_active", promo.get("is_active", False))
+        if code and promo_id and is_eff and code not in seen_codes:
+            seen_codes.add(code)
+            rows.append([
+                InlineKeyboardButton(
+                    text=f"⛔ Деактивировать {code}",
+                    callback_data=f"admin:deactivate_promo:{promo_id}"
+                )
+            ])
+    rows.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 @admin_stats_router.message(Command("promo_stats"))
 async def cmd_promo_stats(message: Message):
@@ -111,19 +123,43 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
     try:
-        # Получаем статистику промокодов
         stats = await database.get_promo_stats()
-        
-        # Формируем текст ответа
         text = await format_promo_stats_text(stats)
-        
-        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        keyboard = get_promo_stats_keyboard(stats, language)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
         user = await database.get_user(callback.from_user.id)
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "errors.promo_stats"), show_alert=True)
+
+
+@admin_stats_router.callback_query(F.data.startswith("admin:deactivate_promo:"))
+async def callback_admin_deactivate_promo(callback: CallbackQuery):
+    """Деактивация промокода по id"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    try:
+        promo_id = int(callback.data.split(":")[-1])
+        ok = await database.deactivate_promocode(promo_id=promo_id)
+        language = await resolve_user_language(callback.from_user.id)
+        if ok:
+            stats = await database.get_promo_stats()
+            text = await format_promo_stats_text(stats)
+            keyboard = get_promo_stats_keyboard(stats, language)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard)
+            await callback.answer("✅ Промокод деактивирован", show_alert=True)
+        else:
+            await callback.answer("❌ Не удалось деактивировать", show_alert=True)
+    except (ValueError, IndexError) as e:
+        logger.warning(f"Invalid deactivate promo callback: {callback.data} {e}")
+        await callback.answer("Ошибка параметра", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error deactivating promo: {e}")
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "errors.promo_stats"), show_alert=True)
 
