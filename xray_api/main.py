@@ -159,8 +159,8 @@ async def _flusher_loop(queue: XrayMutationQueue) -> None:
 # ============================================================================
 
 class AddUserRequest(BaseModel):
-    """Strict contract: uuid MUST be provided by caller. API NEVER generates UUID. Missing uuid → 400."""
-    uuid: str
+    """UUID optional: if provided, use it; else Xray generates. Returned UUID is canonical."""
+    uuid: Optional[str] = None
     telegram_id: int
     expiry_timestamp_ms: int
 
@@ -474,15 +474,16 @@ async def self_test(request: Request):
 async def add_user(request: AddUserRequest):
     """
     Добавить нового пользователя в Xray.
-    Contract: UUID from request MUST be used exactly. API NEVER generates UUID.
+    Xray is source of truth: use request.uuid if provided, else generate. Return same UUID used.
     """
     try:
-        if not request.uuid or not str(request.uuid).strip():
-            raise HTTPException(status_code=400, detail="uuid is required")
-        uuid_from_request = str(request.uuid).strip()
-        if not validate_uuid(uuid_from_request):
-            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_from_request[:36]}")
-        logger.info(f"UUID_AUDIT_API_RECEIVED [uuid={uuid_from_request[:8]}...]")
+        if request.uuid and str(request.uuid).strip():
+            uuid_final = str(request.uuid).strip()
+            if not validate_uuid(uuid_final):
+                raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_final[:36]}")
+        else:
+            uuid_final = str(uuid.uuid4())
+            logger.info(f"XRAY_GENERATED_UUID [uuid={uuid_final[:8]}...]")
         
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
@@ -513,39 +514,35 @@ async def add_user(request: AddUserRequest):
             clients = settings["clients"]
             
             existing_uuids = [client.get("id") for client in clients if client.get("id")]
-            client_already_exists = uuid_from_request in existing_uuids
+            client_already_exists = uuid_final in existing_uuids
             if client_already_exists:
-                logger.info(f"UUID {uuid_from_request[:8]}... already in config, updating expiry")
+                logger.info(f"UUID {uuid_final[:8]}... already in config, updating expiry")
                 for client in clients:
-                    if client.get("id") == uuid_from_request:
+                    if client.get("id") == uuid_final:
                         client["expiryTime"] = request.expiry_timestamp_ms
                         if "email" not in client:
                             client["email"] = f"user_{request.telegram_id}"
                         break
             else:
                 new_client = {
-                    "id": uuid_from_request,
+                    "id": uuid_final,
                     "email": f"user_{request.telegram_id}",
                     "expiryTime": request.expiry_timestamp_ms
                 }
                 clients.append(new_client)
             
-            logger.info(f"Adding client to config: uuid={uuid_from_request[:8]}...")
+            logger.info(f"Adding client to config: uuid={uuid_final[:8]}...")
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
         _mark_restart_pending("add_user")
-        vless_link = generate_vless_link(uuid_from_request)
-        response = AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
+        vless_link = generate_vless_link(uuid_final)
+        response = AddUserResponse(uuid=uuid_final, vless_link=vless_link)
         # Hard safety: response MUST contain same UUID as request (no internal generation)
-        if response.uuid != uuid_from_request:
-            logger.critical(f"UUID_MISMATCH_INTERNAL request={repr(uuid_from_request)} response={repr(response.uuid)}")
+        if response.uuid != uuid_final:
+            logger.critical(f"UUID_MISMATCH_INTERNAL request={repr(uuid_final)} response={repr(response.uuid)}")
             raise HTTPException(status_code=500, detail="UUID mismatch inside API")
-        logger.info(
-            f"UUID_CONTRACT_CHECK "
-            f"sent={uuid_from_request} "
-            f"returned={uuid_from_request}"
-        )
-        logger.info(f"User added successfully: uuid={uuid_from_request[:8]}... (returning SAME uuid)")
+        logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={uuid_final}")
+        logger.info(f"User added successfully: uuid={uuid_final[:8]}... (returning SAME uuid)")
         return response
 
     except asyncio.CancelledError:

@@ -197,7 +197,7 @@ def generate_vless_url(uuid: str) -> str:
     return vless_url
 
 
-async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str) -> Dict[str, str]:
+async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
     
@@ -210,8 +210,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
     Args:
         telegram_id: Telegram ID пользователя
         subscription_end: Дата окончания подписки (используется как expiryTime в Xray)
-        uuid: REQUIRED. Backend must generate UUID locally and pass it. API uses it exactly.
-              No server-side generation. Must be raw 36-char UUID.
+        uuid: Optional. If provided, sent to API; else Xray generates. Returned UUID is canonical.
     
     Returns:
         Словарь с ключами:
@@ -250,10 +249,8 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
         logger.error(error_msg)
         raise ValueError(error_msg)
 
-    # UUID is REQUIRED. Backend generates, never API.
-    if not uuid or not str(uuid).strip():
-        raise ValueError("add_vless_user requires uuid; backend must generate and pass it")
-    _validate_uuid_no_prefix(uuid)
+    if uuid and str(uuid).strip():
+        _validate_uuid_no_prefix(uuid)
 
     # STAGE изоляция: проверяем окружение
     if config.IS_STAGE:
@@ -311,13 +308,15 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
         headers["X-Environment"] = "stage"
         headers["X-Inbound-Tag"] = "stage"
     
-    uuid_sent = str(uuid).strip()
-    json_body = {
+    json_body: dict = {
         "telegram_id": telegram_id,
         "expiry_timestamp_ms": expiry_ms,
-        "uuid": uuid_sent
     }
-    logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(uuid_sent)}]")
+    if uuid and str(uuid).strip():
+        json_body["uuid"] = str(uuid).strip()
+        logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}]")
+    else:
+        logger.info("UUID_AUDIT_ADD_REQUEST [uuid=omit, xray_will_generate]")
     
     # Логируем начало операции
     logger.info(
@@ -403,42 +402,15 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
                 raise InvalidResponseError(error_msg)
 
             returned_uuid = str(returned_uuid).strip()
-            if returned_uuid != uuid_sent:
-                logger.critical(
-                    f"UUID_MISMATCH [sent={repr(uuid_sent)}, returned={repr(returned_uuid)}]"
-                )
-                try:
-                    await remove_vless_user(returned_uuid)
-                    logger.info("UUID_MISMATCH: removed orphan uuid from Xray, retrying add_user")
-                except Exception as rm_e:
-                    logger.warning("UUID_MISMATCH: failed to remove orphan: %s", rm_e)
-                try:
-                    retry_response = await _make_request()
-                    retry_data = retry_response.json()
-                    retry_returned = retry_data.get("uuid") and str(retry_data.get("uuid")).strip()
-                    if retry_returned == uuid_sent:
-                        returned_uuid = retry_returned
-                        data = retry_data
-                        vless_link = retry_data.get("vless_link")
-                        logger.info("UUID_MISMATCH_RETRY_SUCCESS")
-                    else:
-                        raise CriticalUUIDMismatchError(
-                            f"Xray API returned UUID {retry_returned[:8] if retry_returned else '?'}... != sent {uuid_sent[:8]}... (retry failed)"
-                        )
-                except CriticalUUIDMismatchError:
-                    raise
-                except Exception as retry_e:
-                    raise CriticalUUIDMismatchError(
-                        f"Xray API UUID mismatch and retry failed: {retry_e}"
-                    ) from retry_e
+            # Xray is source of truth: always trust returned UUID (no mismatch assertion)
+            logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={returned_uuid}")
 
-            # Use vless_link from API response if available, otherwise generate locally
             if vless_link:
                 vless_url = vless_link
             else:
-                vless_url = generate_vless_url(uuid_sent)
+                vless_url = generate_vless_url(returned_uuid)
 
-            uuid_preview = f"{uuid_sent[:8]}..." if len(uuid_sent) > 8 else uuid_sent
+            uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
             logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
             logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
 
@@ -451,21 +423,21 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
                         database._log_vpn_lifecycle_audit_async(
                             action="vpn_add_user",
                             telegram_id=0,
-                            uuid=uuid_sent,
+                            uuid=returned_uuid,
                             source=None,
                             result="success",
-                            details="UUID created via VPN API"
+                            details="UUID from Xray (source of truth)"
                         )
                     )
             except Exception as e:
                 logger.warning(f"Failed to log VPN add_user audit (non-blocking): {e}")
 
             return {
-                "uuid": uuid_sent,
+                "uuid": returned_uuid,
                 "vless_url": vless_url
             }
             
-        except (AuthError, InvalidResponseError, CriticalUUIDMismatchError) as e:
+        except (AuthError, InvalidResponseError) as e:
             # Domain exceptions should NOT be retried - raise immediately
             # STEP 6 — F2: CIRCUIT BREAKER LITE
             # Don't record failure for domain errors (not transient)
@@ -481,52 +453,42 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
             raise VPNAPIError(error_msg) from e
 
 
-async def ensure_user_in_xray(telegram_id: int, uuid: str, subscription_end: datetime) -> None:
+async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
     """
-    Единая функция синхронизации: гарантирует, что пользователь есть в Xray.
-    DB — источник истины. Xray — исполнитель. UUID НЕ меняется.
-
-    1. Попытка update_user(uuid)
-    2. Если 200 → OK
-    3. Если 404 → add_user(uuid) с тем же UUID
-    4. Если add не 200 → CRITICAL и raise
-
-    Args:
-        telegram_id: Telegram ID (для add_user)
-        uuid: UUID из БД (не меняется)
-        subscription_end: Новая дата окончания
+    Sync user to Xray. Xray is source of truth.
+    1. If user has UUID: try update_user. If 404 → add_user (Xray generates), return new uuid.
+    2. If user has no UUID: add_user (Xray generates), return new uuid.
+    Returns effective uuid (for DB update) or None on failure (best-effort).
     """
-    _validate_uuid_no_prefix(uuid)
-    uuid_clean = str(uuid).strip()
-    uuid_preview = f"{uuid_clean[:8]}..." if len(uuid_clean) > 8 else uuid_clean
+    uuid_clean = str(uuid).strip() if uuid and str(uuid).strip() else None
+    uuid_preview = f"{uuid_clean[:8]}..." if uuid_clean and len(uuid_clean) > 8 else (uuid_clean or "N/A")
 
-    logger.info(f"XRAY_UPDATE uuid={uuid_preview}")
-    try:
-        await update_vless_user(uuid=uuid_clean, subscription_end=subscription_end)
-        return  # 200 OK
-    except InvalidResponseError as e:
-        if "Client not found" not in str(e) and "client not found" not in str(e).lower():
-            raise
-        logger.warning(f"XRAY_MISS uuid={uuid_preview} → add_user (same uuid, no regeneration)")
+    if uuid_clean:
+        _validate_uuid_no_prefix(uuid_clean)
+        logger.info(f"XRAY_UPDATE uuid={uuid_preview}")
         try:
-            resp = await add_vless_user(
-                telegram_id=telegram_id,
-                subscription_end=subscription_end,
-                uuid=uuid_clean
-            )
-            returned_uuid = resp.get("uuid") if isinstance(resp, dict) else getattr(resp, "uuid", None)
-            if returned_uuid and str(returned_uuid).strip() != uuid_clean:
-                logger.critical(
-                    f"UUID_MISMATCH sent={uuid_clean} returned={returned_uuid}"
-                )
-            else:
-                logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
-        except Exception as add_e:
-            logger.critical(
-                f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}",
-                exc_info=True
-            )
-            # Best-effort: do NOT raise — payment must never fail because of Xray
+            await update_vless_user(uuid=uuid_clean, subscription_end=subscription_end)
+            logger.info("XRAY_UPDATE_SUCCESS")
+            return uuid_clean
+        except InvalidResponseError as e:
+            if "Client not found" not in str(e) and "client not found" not in str(e).lower():
+                raise
+            logger.warning(f"XRAY_UPDATE_404_RECOVERY uuid={uuid_preview} → add_user")
+
+    # No uuid in DB, or update 404 — add_user (Xray generates)
+    try:
+        resp = await add_vless_user(
+            telegram_id=telegram_id,
+            subscription_end=subscription_end,
+            uuid=None
+        )
+        returned_uuid = resp.get("uuid") if isinstance(resp, dict) else getattr(resp, "uuid", None)
+        if returned_uuid:
+            logger.info(f"XRAY_ADD_SUCCESS uuid={str(returned_uuid)[:8]}... XRAY_UUID_REPLACED")
+            return str(returned_uuid).strip()
+    except Exception as add_e:
+        logger.critical(f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}", exc_info=True)
+    return None
 
 
 async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
