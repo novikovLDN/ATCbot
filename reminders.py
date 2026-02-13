@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import database
@@ -84,7 +84,7 @@ async def send_smart_reminders(bot: Bot):
                 if last_reminder_at and isinstance(last_reminder_at, datetime):
                     try:
                         naive_at = last_reminder_at.replace(tzinfo=None) if last_reminder_at.tzinfo else last_reminder_at
-                        delta = datetime.utcnow() - naive_at
+                        delta = datetime.now(timezone.utc) - naive_at
                         if 0 <= delta.total_seconds() < REMINDER_IDEMPOTENCY_WINDOW.total_seconds():
                             logger.debug(f"Skipping reminder for user {telegram_id}: last_reminder_at within idempotency window")
                             continue

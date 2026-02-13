@@ -1,7 +1,7 @@
 """Модуль для health-check основных компонентов системы"""
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Tuple, List, Optional
 from aiogram import Bot
 import database
@@ -129,7 +129,7 @@ async def perform_health_check() -> Tuple[bool, list]:
         VPN API missing → all_ok = True (system is HEALTHY, VPN is non-critical)
     """
     messages = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     # Проверка PostgreSQL
     db_ok, db_msg = await check_database_connection()
@@ -331,7 +331,7 @@ async def send_health_alert(bot: Bot, messages: List[str]):
     global _health_alert_state
     
     # Check cooldown to prevent spam
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     alert_key = "health_check_failed"
     last_sent = _health_alert_state.get(alert_key)
     

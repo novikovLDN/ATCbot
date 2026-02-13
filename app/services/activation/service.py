@@ -13,7 +13,7 @@ All functions are pure business logic:
 
 import logging
 from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
 import database
@@ -86,7 +86,7 @@ def is_subscription_expired(expires_at: Optional[datetime], now: Optional[dateti
     
     Args:
         expires_at: Subscription expiration date
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         True if subscription has expired, False otherwise
@@ -95,7 +95,7 @@ def is_subscription_expired(expires_at: Optional[datetime], now: Optional[dateti
         return False
     
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     return expires_at < now
 
@@ -129,13 +129,13 @@ def is_activation_allowed(
     
     Args:
         subscription: Subscription dictionary from database
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         Tuple of (is_allowed, reason_if_not_allowed)
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     # STEP 3 — PART C: SIDE-EFFECT SAFETY
     # Check activation status - provides idempotency boundary
@@ -255,7 +255,7 @@ async def _fetch_pending_for_notification(
     threshold_minutes: int
 ) -> List[Dict[str, Any]]:
     """Internal helper to fetch subscriptions for notification"""
-    notification_threshold = datetime.now() - timedelta(minutes=threshold_minutes)
+    notification_threshold = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
     
     rows = await conn.fetch(
         """SELECT telegram_id, id, activation_attempts, last_activation_error, activated_at
@@ -276,9 +276,9 @@ async def _fetch_pending_for_notification(
                 activated_at = datetime.fromisoformat(activated_at.replace('Z', '+00:00'))
             except Exception as e:
                 logger.debug("Activated_at parse failed, using now: %s", e)
-                activated_at = datetime.now()
+                activated_at = datetime.now(timezone.utc)
         elif not activated_at:
-            activated_at = datetime.now()
+            activated_at = datetime.now(timezone.utc)
         
         result.append({
             "subscription_id": row["id"],

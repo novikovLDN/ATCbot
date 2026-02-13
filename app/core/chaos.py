@@ -14,7 +14,7 @@ IMPORTANT:
 import logging
 import asyncio
 from typing import Optional, Callable, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 import config
@@ -94,13 +94,13 @@ class ChaosEngine:
             logger.warning("Chaos engineering not enabled - failure injection ignored")
             return ""
         
-        failure_id = failure_id or f"db_unavailable_{datetime.utcnow().timestamp()}"
+        failure_id = failure_id or f"db_unavailable_{datetime.now(timezone.utc).timestamp()}"
         
         self._active_failures[failure_id] = {
             "type": FailureType.DB_UNAVAILABLE,
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
             "duration_seconds": duration_seconds,
-            "expires_at": datetime.utcnow() + timedelta(seconds=duration_seconds),
+            "expires_at": datetime.now(timezone.utc) + timedelta(seconds=duration_seconds),
         }
         
         logger.warning(
@@ -132,13 +132,13 @@ class ChaosEngine:
             logger.warning("Chaos engineering not enabled - failure injection ignored")
             return ""
         
-        failure_id = failure_id or f"vpn_api_timeout_{datetime.utcnow().timestamp()}"
+        failure_id = failure_id or f"vpn_api_timeout_{datetime.now(timezone.utc).timestamp()}"
         
         self._active_failures[failure_id] = {
             "type": FailureType.VPN_API_TIMEOUT,
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
             "duration_seconds": duration_seconds,
-            "expires_at": datetime.utcnow() + timedelta(seconds=duration_seconds),
+            "expires_at": datetime.now(timezone.utc) + timedelta(seconds=duration_seconds),
         }
         
         logger.warning(
@@ -170,13 +170,13 @@ class ChaosEngine:
             logger.warning("Chaos engineering not enabled - failure injection ignored")
             return ""
         
-        failure_id = failure_id or f"payment_failure_{datetime.utcnow().timestamp()}"
+        failure_id = failure_id or f"payment_failure_{datetime.now(timezone.utc).timestamp()}"
         
         self._active_failures[failure_id] = {
             "type": FailureType.PAYMENT_FAILURE,
-            "started_at": datetime.utcnow(),
+            "started_at": datetime.now(timezone.utc),
             "duration_seconds": duration_seconds,
-            "expires_at": datetime.utcnow() + timedelta(seconds=duration_seconds),
+            "expires_at": datetime.now(timezone.utc) + timedelta(seconds=duration_seconds),
         }
         
         logger.warning(
@@ -221,7 +221,7 @@ class ChaosEngine:
         if not self.is_enabled():
             return False
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for failure in self._active_failures.values():
             if failure["type"] == failure_type and failure["expires_at"] > now:
                 return True
@@ -232,7 +232,7 @@ class ChaosEngine:
         if not self.is_enabled():
             return {}
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Filter out expired failures
         active = {
             fid: failure

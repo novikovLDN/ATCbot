@@ -13,7 +13,7 @@ All functions are pure business logic:
 
 import logging
 from typing import Optional, Dict, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from enum import Enum
 
@@ -64,13 +64,13 @@ def calculate_time_until_expiry(expires_at: datetime, now: Optional[datetime] = 
     
     Args:
         expires_at: Subscription expiration date
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         timedelta until expiry
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     return expires_at - now
 
@@ -115,13 +115,13 @@ def should_send_reminder(
     
     Args:
         subscription: Subscription dictionary from database
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         ReminderDecision with should_send flag and reminder type
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     expires_at = subscription.get("expires_at")
     if not expires_at:

@@ -4,7 +4,7 @@ menu_profile, menu_vip_access, renewal_pay, subscription_history.
 """
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import config
 import database
@@ -78,7 +78,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     """Активация пробного периода на 3 дня"""
     # READ-ONLY system state awareness (informational only, does not affect flow)
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_ready = database.DB_READY
 
         # STEP 1.1 - RUNTIME GUARDRAILS: SystemState is READ-ONLY snapshot
@@ -141,7 +141,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
     try:
         duration = timedelta(days=3)
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         trial_expires_at = now + duration
 
         success = await database.mark_trial_used(telegram_id, trial_expires_at)

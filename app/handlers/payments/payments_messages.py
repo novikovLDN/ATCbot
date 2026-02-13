@@ -3,7 +3,7 @@ Payment message handlers: successful_payment, photo
 """
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery
@@ -130,7 +130,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         return
     # READ-ONLY system state awareness (informational only, does not affect flow)
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_ready = database.DB_READY
         
         # Build SystemState for awareness (read-only)

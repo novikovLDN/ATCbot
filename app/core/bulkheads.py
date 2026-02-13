@@ -13,7 +13,7 @@ IMPORTANT:
 from enum import Enum
 from typing import Dict, Optional
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import threading
 
@@ -79,7 +79,7 @@ class Bulkhead:
         """Record operation failure"""
         with self._lock:
             self._failed_operations += 1
-            self._last_failure_time = datetime.utcnow()
+            self._last_failure_time = datetime.now(timezone.utc)
     
     def record_success(self) -> None:
         """Record operation success"""

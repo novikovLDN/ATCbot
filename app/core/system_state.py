@@ -398,10 +398,10 @@ def recalculate_from_runtime() -> SystemState:
     Returns:
         SystemState reflecting current runtime health
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
     import config
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     # Database: healthy if DB_READY=True
     try:

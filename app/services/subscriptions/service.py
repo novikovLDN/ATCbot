@@ -10,7 +10,7 @@ All functions are pure business logic - no aiogram imports or Telegram-specific 
 
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import database
 import config
@@ -353,7 +353,7 @@ def is_subscription_active(
     
     Args:
         subscription: Subscription dictionary from database (or None, or legacy int)
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         True if subscription is active, False otherwise
@@ -371,7 +371,7 @@ def is_subscription_active(
         return False
     
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     status = subscription.get("status")
     if status != "active":
@@ -401,13 +401,13 @@ def get_subscription_status(
     
     Args:
         subscription: Subscription dictionary from database
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         SubscriptionStatus with all status information
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     if not subscription:
         return SubscriptionStatus(

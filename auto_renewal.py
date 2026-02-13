@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from app.utils.telegram_safe import safe_send_message
@@ -68,7 +68,7 @@ async def process_auto_renewals(bot: Bot):
         # Находим подписки, которые истекают в течение RENEWAL_WINDOW и имеют auto_renew = true
         # Исключаем подписки, которые уже были обработаны в этом цикле (защита от повторного списания)
         # КРИТИЧНО: Используем UTC для согласованности с БД (expires_at хранится в UTC)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         renewal_threshold = now + RENEWAL_WINDOW
         
         query_with_reachable = """
@@ -424,7 +424,7 @@ async def auto_renewal_task(bot: Bot):
             # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
             # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 db_ready = database.DB_READY
                 
                 # Build SystemState for awareness (read-only)

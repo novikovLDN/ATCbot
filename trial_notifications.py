@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -124,7 +124,7 @@ async def process_trial_notifications(bot: Bot):
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             
             # Получаем только пользователей с АКТИВНОЙ trial-подпиской
             # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
@@ -231,7 +231,7 @@ async def process_trial_notifications(bot: Bot):
                             )
                             logger.info(
                                 f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
-                                f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now().isoformat()}"
+                                f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
                             )
                         elif status == "failed_permanently":
                             await conn.execute(
@@ -241,7 +241,7 @@ async def process_trial_notifications(bot: Bot):
                             )
                             logger.warning(
                                 f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
-                                f"reason=forbidden_or_blocked, failed_at={datetime.now().isoformat()}, will_not_retry=True"
+                                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
                             )
                         else:
                             logger.warning(
@@ -314,7 +314,7 @@ async def process_trial_notifications(bot: Bot):
                             notification_flags[db_flag] = True
                             logger.info(
                                 f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
-                                f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now().isoformat()}"
+                                f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
                             )
                         elif status == "failed_permanently":
                             # Mark as permanently failed (idempotency)
@@ -326,7 +326,7 @@ async def process_trial_notifications(bot: Bot):
                             notification_flags[db_flag] = True
                             logger.warning(
                                 f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
-                                f"reason=forbidden_or_blocked, failed_at={datetime.now().isoformat()}, "
+                                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
                                 f"will_not_retry=True"
                             )
                         else:
@@ -366,7 +366,7 @@ async def expire_trial_subscriptions(bot: Bot):
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             
             # Получаем всех пользователей с истёкшим trial (trial_expires_at <= now)
             # и их trial-подписки для отзыва доступа
@@ -594,7 +594,7 @@ async def run_trial_scheduler(bot: Bot):
             # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
             # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 db_ready = database.DB_READY
                 
                 # Build SystemState for awareness (read-only)

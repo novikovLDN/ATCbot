@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from app.utils.telegram_safe import safe_send_message
 import asyncpg
@@ -369,7 +369,7 @@ async def crypto_payment_watcher_task(bot: Bot):
             
             # READ-ONLY system state awareness: Skip iteration if system is unavailable
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 db_ready = database.DB_READY
                 
                 # Build SystemState for awareness (read-only)

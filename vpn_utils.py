@@ -22,7 +22,7 @@ STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
 import httpx
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from urllib.parse import quote
 import config
@@ -275,6 +275,8 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime) -> Dict[s
         # This is logged by should_skip() (throttled)
         raise VPNAPIError("VPN API circuit breaker is OPEN")
     
+    assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
+    assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
     expiry_ms = int(subscription_end.timestamp() * 1000)
     url = f"{api_url}/add-user"
     headers = {
@@ -466,6 +468,9 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
         error_msg = f"Invalid UUID provided: {uuid}"
         logger.error(error_msg)
         raise ValueError(error_msg)
+    
+    assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
+    assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
     
     uuid_clean = uuid.strip()
     if config.IS_STAGE and uuid_clean.startswith("stage-"):

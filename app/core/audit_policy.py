@@ -13,7 +13,7 @@ IMPORTANT:
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 
@@ -196,7 +196,7 @@ class IncidentContext:
             Incident ID (UUID)
         """
         self._current_incident_id = str(uuid.uuid4())
-        self._incident_start_time = datetime.utcnow()
+        self._incident_start_time = datetime.now(timezone.utc)
         return self._current_incident_id
     
     def get_incident_id(self) -> Optional[str]:
