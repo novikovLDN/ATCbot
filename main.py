@@ -130,10 +130,14 @@ async def main():
             logger.error(f"Failed to send degraded mode notification: {e}")
         # Продолжаем запуск бота в деградированном режиме
     
+    # Centralized list for graceful shutdown
+    background_tasks = []
+    
     # Запуск фоновой задачи для напоминаний (только если БД готова)
     reminder_task = None
     if database.DB_READY:
         reminder_task = asyncio.create_task(reminders.reminders_task(bot))
+        background_tasks.append(reminder_task)
         logger.info("Reminders task started")
     else:
         logger.warning("Reminders task skipped (DB not ready)")
@@ -142,12 +146,14 @@ async def main():
     trial_notifications_task = None
     if database.DB_READY:
         trial_notifications_task = asyncio.create_task(trial_notifications.run_trial_scheduler(bot))
+        background_tasks.append(trial_notifications_task)
         logger.info("Trial notifications scheduler started")
     else:
         logger.warning("Trial notifications scheduler skipped (DB not ready)")
     
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
+    background_tasks.append(healthcheck_task)
     logger.info("Health check task started")
     
     # ====================================================================================
@@ -161,6 +167,7 @@ async def main():
     health_server_task = asyncio.create_task(
         health_server.health_server_task(host=health_server_host, port=health_server_port, bot=bot)
     )
+    background_tasks.append(health_server_task)
     logger.info(f"Health check HTTP server started on http://{health_server_host}:{health_server_port}/health")
     
     # ====================================================================================
@@ -190,7 +197,7 @@ async def main():
         - Никогда не падает (все исключения обрабатываются)
         - Не блокирует главный event loop
         """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, recovered_tasks
+        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, recovered_tasks, background_tasks
         retry_interval = 30  # секунд
         
         # Если БД уже готова, задача не запускается
@@ -229,19 +236,27 @@ async def main():
                         
                         # Запускаем задачи, которые были пропущены при старте
                         if reminder_task is None and recovered_tasks["reminder"] is None:
-                            recovered_tasks["reminder"] = asyncio.create_task(reminders.reminders_task(bot))
+                            t = asyncio.create_task(reminders.reminders_task(bot))
+                            recovered_tasks["reminder"] = t
+                            background_tasks.append(t)
                             logger.info("Reminders task started (recovered)")
                         
                         if fast_cleanup_task is None and recovered_tasks["fast_cleanup"] is None:
-                            recovered_tasks["fast_cleanup"] = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+                            t = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+                            recovered_tasks["fast_cleanup"] = t
+                            background_tasks.append(t)
                             logger.info("Fast expiry cleanup task started (recovered)")
                         
                         if auto_renewal_task is None and recovered_tasks["auto_renewal"] is None:
-                            recovered_tasks["auto_renewal"] = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
+                            t = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
+                            recovered_tasks["auto_renewal"] = t
+                            background_tasks.append(t)
                             logger.info("Auto-renewal task started (recovered)")
                         
                         if activation_worker_task is None and recovered_tasks["activation_worker"] is None:
-                            recovered_tasks["activation_worker"] = asyncio.create_task(activation_worker.activation_worker_task(bot))
+                            t = asyncio.create_task(activation_worker.activation_worker_task(bot))
+                            recovered_tasks["activation_worker"] = t
+                            background_tasks.append(t)
                             logger.info("Activation worker task started (recovered)")
                         
                         # Успешно инициализировали БД - выходим из цикла
@@ -275,6 +290,7 @@ async def main():
     db_retry_task_instance = None
     if not database.DB_READY:
         db_retry_task_instance = asyncio.create_task(retry_db_init())
+        background_tasks.append(db_retry_task_instance)
         logger.info("DB retry task started (will retry every 30 seconds until DB is ready)")
     else:
         logger.info("Database already ready, skipping retry task")
@@ -290,6 +306,7 @@ async def main():
     fast_cleanup_task = None
     if database.DB_READY:
         fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+        background_tasks.append(fast_cleanup_task)
         logger.info("Fast expiry cleanup task started")
     else:
         logger.warning("Fast expiry cleanup task skipped (DB not ready)")
@@ -298,6 +315,7 @@ async def main():
     auto_renewal_task = None
     if database.DB_READY:
         auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
+        background_tasks.append(auto_renewal_task)
         logger.info("Auto-renewal task started")
     else:
         logger.warning("Auto-renewal task skipped (DB not ready)")
@@ -306,6 +324,7 @@ async def main():
     activation_worker_task = None
     if database.DB_READY:
         activation_worker_task = asyncio.create_task(activation_worker.activation_worker_task(bot))
+        background_tasks.append(activation_worker_task)
         logger.info("Activation worker task started")
     else:
         logger.warning("Activation worker task skipped (DB not ready)")
@@ -316,6 +335,7 @@ async def main():
         try:
             import crypto_payment_watcher
             crypto_watcher_task = asyncio.create_task(crypto_payment_watcher.crypto_payment_watcher_task(bot))
+            background_tasks.append(crypto_watcher_task)
             logger.info("Crypto payment watcher task started")
         except Exception as e:
             logger.warning(f"Crypto payment watcher task skipped: {e}")
@@ -369,93 +389,39 @@ async def main():
         )
         raise SystemExit(1)
     finally:
-        # Отменяем все фоновые задачи
-        if db_retry_task_instance:
-            db_retry_task_instance.cancel()
-        if reminder_task:
-            reminder_task.cancel()
-        if recovered_tasks.get("reminder"):
-            recovered_tasks["reminder"].cancel()
-        healthcheck_task.cancel()
-        health_server_task.cancel()
-        if auto_renewal_task:
-            auto_renewal_task.cancel()
-        if recovered_tasks.get("auto_renewal"):
-            recovered_tasks["auto_renewal"].cancel()
-        if activation_worker_task:
-            activation_worker_task.cancel()
-        if recovered_tasks.get("activation_worker"):
-            recovered_tasks["activation_worker"].cancel()
-        if cleanup_task:
-            cleanup_task.cancel()
-        if fast_cleanup_task:
-            fast_cleanup_task.cancel()
-        if recovered_tasks.get("fast_cleanup"):
-            recovered_tasks["fast_cleanup"].cancel()
+        logger.info("SHUTDOWN_STARTED")
         
-        # Ожидаем завершения всех задач
-        if db_retry_task_instance:
-            try:
-                await db_retry_task_instance
-            except asyncio.CancelledError:
-                pass
-        if reminder_task:
-            try:
-                await reminder_task
-            except asyncio.CancelledError:
-                pass
-        if recovered_tasks.get("reminder"):
-            try:
-                await recovered_tasks["reminder"]
-            except asyncio.CancelledError:
-                pass
+        # Stop polling cleanly
         try:
-            await healthcheck_task
-        except asyncio.CancelledError:
-            pass
-        try:
-            await health_server_task
-        except asyncio.CancelledError:
-            pass
-        if auto_renewal_task:
-            try:
-                await auto_renewal_task
-            except asyncio.CancelledError:
-                pass
-        if recovered_tasks.get("auto_renewal"):
-            try:
-                await recovered_tasks["auto_renewal"]
-            except asyncio.CancelledError:
-                pass
-        if activation_worker_task:
-            try:
-                await activation_worker_task
-            except asyncio.CancelledError:
-                pass
-        if recovered_tasks.get("activation_worker"):
-            try:
-                await recovered_tasks["activation_worker"]
-            except asyncio.CancelledError:
-                pass
-        if cleanup_task:
-            try:
-                await cleanup_task
-            except asyncio.CancelledError:
-                pass
-        if fast_cleanup_task:
-            try:
-                await fast_cleanup_task
-            except asyncio.CancelledError:
-                pass
-        if recovered_tasks.get("fast_cleanup"):
-            try:
-                await recovered_tasks["fast_cleanup"]
-            except asyncio.CancelledError:
-                pass
+            if hasattr(dp, "stop_polling"):
+                await dp.stop_polling()
+        except Exception as e:
+            logger.debug("stop_polling: %s", e)
         
-        # Закрываем пул соединений к БД
+        # Cancel and await all background tasks
+        logger.info("SHUTDOWN: Cancelling background tasks (count=%d)", len(background_tasks))
+        for task in background_tasks:
+            if task and not task.done():
+                task.cancel()
+        
+        results = await asyncio.gather(*background_tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                logger.error("Task error during shutdown: %s", result)
+        
+        logger.info("SHUTDOWN_TASKS_CANCELLED")
+        
+        # Close DB pool
         await database.close_pool()
         logger.info("Database connection pool closed")
+        
+        # Close bot session
+        try:
+            await bot.session.close()
+        except Exception as e:
+            logger.debug("bot.session.close: %s", e)
+        
+        logger.info("SHUTDOWN_COMPLETED")
 
 
 if __name__ == "__main__":
