@@ -311,7 +311,8 @@ class SubscriptionStatus:
 def parse_expires_at(expires_at: Any) -> Optional[datetime]:
     """
     Parse expires_at from various formats (datetime, string, None).
-    DB returns naive UTC; ensures aware UTC for comparisons.
+    DB returns naive UTC; use database._from_db_utc for boundary normalization.
+    Domain layer must receive aware UTC only.
     
     Args:
         expires_at: Expiration date in various formats
@@ -324,7 +325,7 @@ def parse_expires_at(expires_at: Any) -> Optional[datetime]:
     
     if isinstance(expires_at, datetime):
         if expires_at.tzinfo is None:
-            return expires_at.replace(tzinfo=timezone.utc)
+            return database._from_db_utc(expires_at)
         if expires_at.tzinfo != timezone.utc:
             return expires_at.astimezone(timezone.utc)
         return expires_at
