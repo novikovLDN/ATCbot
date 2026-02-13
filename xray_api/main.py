@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 # Use shared logging config (INFO/WARNING→stdout, ERROR→stderr)
 from app.core.logging_config import setup_logging
@@ -159,11 +159,8 @@ async def _flusher_loop(queue: XrayMutationQueue) -> None:
 # ============================================================================
 
 class AddUserRequest(BaseModel):
-    """
-    Strict contract: uuid MUST be provided by caller. API NEVER generates UUID.
-    If uuid is missing → return HTTP 400.
-    """
-    uuid: str = Field(..., min_length=1, description="REQUIRED. Use exactly as received. No generation.")
+    """Strict contract: uuid MUST be provided by caller. API NEVER generates UUID. Missing uuid → 400."""
+    uuid: str
     telegram_id: int
     expiry_timestamp_ms: int
 
