@@ -3891,10 +3891,26 @@ async def grant_access(
                     "Extending subscription WITHOUT calling VPN API /add-user"
                 )
                 
-                # КРИТИЧЕСКИ ВАЖНО: Обновляем БД БЕЗ вызова VPN API
+                # TWO-PHASE SAFE RENEWAL: Xray FIRST, DB ONLY after Xray success.
+                # Guarantee: DB and Xray never diverge on expiryTime.
+                # If Xray fails → no DB change → raise RenewalSyncError.
+                expiry_ms = int(subscription_end.timestamp() * 1000)
+                try:
+                    await vpn_utils.update_vless_user(uuid=uuid, subscription_end=subscription_end)
+                except Exception as e:
+                    from app.core.exceptions import RenewalSyncError
+                    logger.critical(
+                        f"grant_access: RENEWAL_SYNC_FAILED [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
+                        f"old_expiry={old_expires_at.isoformat()}, attempted_new_expiry={subscription_end.isoformat()}, "
+                        f"expiry_timestamp_ms={expiry_ms}, error_type={type(e).__name__}, error={str(e)}] - "
+                        "Xray update failed, DB NOT modified. Renewal aborted."
+                    )
+                    raise RenewalSyncError(
+                        f"Renewal aborted: Xray expiry update failed for user {telegram_id}: {e}"
+                    ) from e
+                
+                # PHASE 2: DB update (only reached if Xray succeeded)
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
-                # activation_status остается 'active' при продлении
-                # WHY: При оплате во время trial подписка должна стать source='payment', иначе trial_notifications/cleanup могут её затронуть
                 try:
                     await conn.execute(
                         """UPDATE subscriptions 
@@ -3922,6 +3938,11 @@ async def grant_access(
                         raise Exception(error_msg)
                     
                     logger.info(
+                        f"grant_access: RENEWAL_SYNC_SUCCESS [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
+                        f"old_expiry={old_expires_at.isoformat()}, new_expiry={subscription_end.isoformat()}, "
+                        f"expiry_timestamp_ms={expiry_ms}]"
+                    )
+                    logger.info(
                         f"grant_access: RENEWAL_SAVED_SUCCESS [user={telegram_id}, "
                         f"subscription_end={updated_subscription['expires_at'].isoformat()}, "
                         f"status={updated_subscription['status']}, uuid={uuid[:8]}...]"
@@ -3929,20 +3950,6 @@ async def grant_access(
                 except Exception as e:
                     logger.error(f"grant_access: RENEWAL_SAVE_FAILED [user={telegram_id}, error={str(e)}]")
                     raise Exception(f"Failed to renew subscription in database: {e}") from e
-                
-                # Обновляем expiryTime в Xray (UUID остаётся, обновляется только срок)
-                try:
-                    await vpn_utils.update_vless_user(uuid=uuid, subscription_end=subscription_end)
-                    logger.info(
-                        f"grant_access: XRAY_EXPIRY_UPDATED [action=renewal, user={telegram_id}, uuid={uuid[:8]}..., "
-                        f"new_expiry={subscription_end.isoformat()}]"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"grant_access: XRAY_UPDATE_EXPIRY_FAILED [user={telegram_id}, uuid={uuid[:8]}..., error={e}]. "
-                        "DB renewed, but Xray expiry may be stale. User may need reconnect."
-                    )
-                    # Не прерываем — БД обновлена, Xray update — best-effort
                 
                 # WHY: При оплате во время trial явно завершаем trial и логируем — trial_notifications/cleanup не должны трогать paid
                 if source == "payment":
