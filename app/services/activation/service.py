@@ -390,17 +390,21 @@ async def _attempt_activation_with_idempotency(
     if not config.VPN_ENABLED:
         raise VPNActivationError("VPN API is not enabled")
     
-    subscription_end = subscription_row.get("expires_at")
-    if not subscription_end:
+    subscription_end_raw = subscription_row.get("expires_at")
+    if not subscription_end_raw:
         raise VPNActivationError("Subscription has no expires_at")
+    subscription_end = database._from_db_utc(subscription_end_raw)
     
-    # Call VPN API to create UUID with expiryTime
+    # Backend generates UUID; API uses it exactly
+    import uuid as uuid_module
+    new_uuid = str(uuid_module.uuid4())
     try:
         vless_result = await vpn_utils.add_vless_user(
             telegram_id=telegram_id,
-            subscription_end=subscription_end
+            subscription_end=subscription_end,
+            uuid=new_uuid
         )
-        new_uuid = vless_result.get("uuid")
+        assert vless_result.get("uuid") == new_uuid, "UUID mismatch after add_vless_user"
         vless_url = vless_result.get("vless_url")
     except Exception as e:
         raise VPNActivationError(f"VPN API call failed: {e}") from e

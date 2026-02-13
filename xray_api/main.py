@@ -432,25 +432,17 @@ async def add_user(request: AddUserRequest):
     """
     Добавить нового пользователя в Xray.
     
-    Генерирует UUID, добавляет клиента в config.json с expiryTime и перезапускает Xray.
-    expiryTime контролирует срок жизни ключа в Xray (мс, Unix timestamp).
+    UUID MUST be provided by backend. API uses it exactly. No server-side generation.
+    If client exists: update expiryTime only (idempotent). If not: create with provided UUID.
     """
     try:
-        # UUID_AUDIT_API_RECEIVED: Trace UUID received at add-user API
         logger.info(f"UUID_AUDIT_API_RECEIVED [request.uuid={repr(request.uuid)}]")
-        # Use explicit UUID if provided (recreate/idempotent). No transformation - exact match.
-        if request.uuid and request.uuid.strip():
-            new_uuid = request.uuid.strip()
-            logger.info(
-                f"Using provided UUID: {new_uuid[:8]}..., telegram_id={request.telegram_id}, "
-                f"expiry_timestamp_ms={request.expiry_timestamp_ms} (recreate mode)"
+        if not request.uuid or not request.uuid.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="uuid is required; backend must generate and provide it"
             )
-        else:
-            new_uuid = str(uuid.uuid4())
-            logger.info(
-                f"Generating new UUID: {new_uuid}, telegram_id={request.telegram_id}, "
-                f"expiry_timestamp_ms={request.expiry_timestamp_ms}"
-            )
+        new_uuid = request.uuid.strip()
         
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
@@ -480,23 +472,17 @@ async def add_user(request: AddUserRequest):
                 settings["clients"] = []
             clients = settings["clients"]
             
-            # Проверяем, что UUID ещё не существует (skip for explicit uuid - recreate is idempotent)
             existing_uuids = [client.get("id") for client in clients if client.get("id")]
             client_already_exists = new_uuid in existing_uuids
             if client_already_exists:
-                if request.uuid and request.uuid.strip():
-                    # Explicit uuid (recreate): client already exists, update expiryTime only
-                    logger.info(f"UUID {new_uuid[:8]}... already in config (recreate idempotent), updating expiry")
-                    for client in clients:
-                        if client.get("id") == new_uuid:
-                            client["expiryTime"] = request.expiry_timestamp_ms
-                            if "email" not in client:
-                                client["email"] = f"user_{request.telegram_id}"
-                            break
-                else:
-                    logger.warning(f"UUID {new_uuid} already exists, generating new one")
-                    new_uuid = str(uuid.uuid4())
-                    client_already_exists = False
+                # Idempotent: client exists, update expiryTime only
+                logger.info(f"UUID {new_uuid[:8]}... already in config, updating expiry")
+                for client in clients:
+                    if client.get("id") == new_uuid:
+                        client["expiryTime"] = request.expiry_timestamp_ms
+                        if "email" not in client:
+                            client["email"] = f"user_{request.telegram_id}"
+                        break
             
             if not client_already_exists:
                 # Добавляем нового клиента с expiryTime (БЕЗ flow - REALITY)
