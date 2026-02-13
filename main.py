@@ -28,6 +28,7 @@ import health_server
 import admin_notifications
 import trial_notifications
 import activation_worker
+import xray_sync
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -73,10 +74,24 @@ import activation_worker
 logger = logging.getLogger(__name__)
 
 
+INSTANCE_LOCK_FILE = "/tmp/atlas_bot.lock"
+
+
 async def main():
+    # Single instance guard: prevent multiple bot processes
+    if os.path.exists(INSTANCE_LOCK_FILE):
+        logger.critical("Another instance detected (lock file exists). Exiting.")
+        print("Another instance detected. Exiting.")
+        sys.exit(1)
+    try:
+        with open(INSTANCE_LOCK_FILE, "w") as f:
+            f.write(str(os.getpid()))
+    except OSError as e:
+        logger.warning("Could not create instance lock file: %s", e)
+
     # Конфигурация уже проверена в config.py
     # Если переменные окружения не заданы, программа завершится с ошибкой
-    
+
     instance_id = os.getenv("POLLING_INSTANCE_ID", str(uuid.uuid4()))
     from datetime import datetime, timezone
     process_start_dt = datetime.now(timezone.utc).isoformat()
@@ -206,7 +221,8 @@ async def main():
         "reminder": None,
         "fast_cleanup": None,
         "auto_renewal": None,
-        "activation_worker": None
+        "activation_worker": None,
+        "xray_sync": None,
     }
     
     async def retry_db_init():
@@ -223,7 +239,7 @@ async def main():
         - Никогда не падает (все исключения обрабатываются)
         - Не блокирует главный event loop
         """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, recovered_tasks, background_tasks
+        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, xray_sync_task, recovered_tasks, background_tasks
         retry_interval = 30  # секунд
         
         # Если БД уже готова, задача не запускается
@@ -284,6 +300,13 @@ async def main():
                             recovered_tasks["activation_worker"] = t
                             background_tasks.append(t)
                             logger.info("Activation worker task started (recovered)")
+                        
+                        if xray_sync_task is None and recovered_tasks["xray_sync"] is None:
+                            asyncio.create_task(xray_sync.trigger_startup_sync())
+                            t = asyncio.create_task(xray_sync.xray_sync_worker_task(bot))
+                            recovered_tasks["xray_sync"] = t
+                            background_tasks.append(t)
+                            logger.info("Xray sync worker started (recovered)")
                         
                         # Успешно инициализировали БД - выходим из цикла
                         logger.info("DB retry task completed successfully, stopping retry loop")
@@ -354,6 +377,16 @@ async def main():
         logger.info("Activation worker task started")
     else:
         logger.warning("Activation worker task skipped (DB not ready)")
+
+    # Xray sync: startup full sync + periodic health/sync worker
+    xray_sync_task = None
+    if database.DB_READY and config.VPN_ENABLED:
+        asyncio.create_task(xray_sync.trigger_startup_sync())
+        xray_sync_task = asyncio.create_task(xray_sync.xray_sync_worker_task(bot))
+        background_tasks.append(xray_sync_task)
+        logger.info("Xray sync worker started")
+    else:
+        logger.warning("Xray sync skipped (DB not ready or VPN disabled)")
     
     # Запуск фоновой задачи для автоматической проверки CryptoBot платежей (только если БД готова)
     crypto_watcher_task = None
@@ -575,6 +608,14 @@ async def main():
             logger.debug(f"Error closing bot session: {e}")
         
         log_event(logger, component="shutdown", operation="shutdown_completed", outcome="success")
+
+        # Remove instance lock file
+        try:
+            if os.path.exists(INSTANCE_LOCK_FILE):
+                os.remove(INSTANCE_LOCK_FILE)
+                logger.info("Instance lock file removed")
+        except OSError as e:
+            logger.warning("Could not remove instance lock file: %s", e)
 
 
 if __name__ == "__main__":

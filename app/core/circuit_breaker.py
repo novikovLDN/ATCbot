@@ -204,12 +204,21 @@ def get_circuit_breaker(component: str) -> CircuitBreakerLite:
     """
     with _registry_lock:
         if component not in _circuit_breakers:
-            config = CircuitBreakerConfig(
-                name=component,
-                failure_threshold=5,
-                cooldown_seconds=60.0,
-                half_open_success_threshold=2,
-            )
+            # P0 recovery: vpn_api uses relaxed thresholds during UUID mismatch recovery
+            if component == "vpn_api":
+                config = CircuitBreakerConfig(
+                    name=component,
+                    failure_threshold=10,
+                    cooldown_seconds=30.0,
+                    half_open_success_threshold=2,
+                )
+            else:
+                config = CircuitBreakerConfig(
+                    name=component,
+                    failure_threshold=5,
+                    cooldown_seconds=60.0,
+                    half_open_success_threshold=2,
+                )
             _circuit_breakers[component] = CircuitBreakerLite(config)
         
         return _circuit_breakers[component]
