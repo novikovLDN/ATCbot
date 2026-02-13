@@ -1,10 +1,14 @@
 """
 Withdraw FSM message handlers: WithdrawStates.withdraw_amount, WithdrawStates.withdraw_requisites
+
+FSM lifecycle: state is valid ONLY while user is on withdrawal screens.
+Navigation away MUST clear state. No state leakage.
 """
 import logging
 
 from aiogram import Router
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 
 import database
@@ -20,9 +24,18 @@ logger = logging.getLogger(__name__)
 MIN_WITHDRAW_RUBLES = 500
 
 
-@payments_router.message(WithdrawStates.withdraw_amount)
+@payments_router.message(StateFilter(WithdrawStates.withdraw_amount))
 async def process_withdraw_amount(message: Message, state: FSMContext):
-    """Обработка суммы вывода (мин 500 ₽, <= баланс)"""
+    """Обработка суммы вывода (мин 500 ₽, <= баланс). Только в контексте withdrawal screen."""
+    # Safety guard: exit if state changed (user navigated away)
+    current_state = await state.get_state()
+    if current_state != WithdrawStates.withdraw_amount.state:
+        return
+    # Commands: clear state and let other handlers process
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        await state.clear()
+        return
     if not await ensure_db_ready_message(message):
         await state.clear()
         return
@@ -48,9 +61,16 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         await message.answer(i18n_get_text(language, "errors.invalid_amount"))
 
 
-@payments_router.message(WithdrawStates.withdraw_requisites)
+@payments_router.message(StateFilter(WithdrawStates.withdraw_requisites))
 async def process_withdraw_requisites(message: Message, state: FSMContext):
-    """Обработка реквизитов → финальное подтверждение"""
+    """Обработка реквизитов → финальное подтверждение. Только в контексте withdrawal screen."""
+    current_state = await state.get_state()
+    if current_state != WithdrawStates.withdraw_requisites.state:
+        return
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        await state.clear()
+        return
     if not await ensure_db_ready_message(message):
         await state.clear()
         return
