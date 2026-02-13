@@ -1,8 +1,9 @@
 """
 Admin access management handlers: grant/revoke access, keys management, VIP, user search.
 """
-import logging
 import asyncio
+import logging
+import uuid
 from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
@@ -1566,7 +1567,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
     try:
         # STEP 1 — IMMEDIATE CALLBACK ACK (inside protected block to prevent lock leak)
         await callback.answer("Перевыпуск ключа запущен...", show_alert=False)
-        correlation_id = str(uuid_module.uuid4())
+        correlation_id = str(uuid.uuid4())
         update_id = getattr(getattr(callback, "update", None), "update_id", None)
         logger.info(
             "ADMIN_REISSUE_START",
