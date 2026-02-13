@@ -405,7 +405,11 @@ async def main():
         
         while True:
             try:
-                await bot.delete_webhook(drop_pending_updates=True)
+                try:
+                    await bot.delete_webhook(drop_pending_updates=True)
+                    logger.info("Webhook deleted before polling start")
+                except Exception as e:
+                    logger.warning("Webhook cleanup failed: %s", e)
                 log_event(logger, component="polling", operation="polling_start", outcome="success")
                 await dp.start_polling(
                     bot,
