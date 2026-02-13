@@ -407,9 +407,30 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
                 logger.critical(
                     f"UUID_MISMATCH [sent={repr(uuid_sent)}, returned={repr(returned_uuid)}]"
                 )
-                raise CriticalUUIDMismatchError(
-                    f"Xray API returned UUID {returned_uuid[:8]}... != sent {uuid_sent[:8]}..."
-                )
+                try:
+                    await remove_vless_user(returned_uuid)
+                    logger.info("UUID_MISMATCH: removed orphan uuid from Xray, retrying add_user")
+                except Exception as rm_e:
+                    logger.warning("UUID_MISMATCH: failed to remove orphan: %s", rm_e)
+                try:
+                    retry_response = await _make_request()
+                    retry_data = retry_response.json()
+                    retry_returned = retry_data.get("uuid") and str(retry_data.get("uuid")).strip()
+                    if retry_returned == uuid_sent:
+                        returned_uuid = retry_returned
+                        data = retry_data
+                        vless_link = retry_data.get("vless_link")
+                        logger.info("UUID_MISMATCH_RETRY_SUCCESS")
+                    else:
+                        raise CriticalUUIDMismatchError(
+                            f"Xray API returned UUID {retry_returned[:8] if retry_returned else '?'}... != sent {uuid_sent[:8]}... (retry failed)"
+                        )
+                except CriticalUUIDMismatchError:
+                    raise
+                except Exception as retry_e:
+                    raise CriticalUUIDMismatchError(
+                        f"Xray API UUID mismatch and retry failed: {retry_e}"
+                    ) from retry_e
 
             # Use vless_link from API response if available, otherwise generate locally
             if vless_link:
@@ -444,7 +465,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
                 "vless_url": vless_url
             }
             
-        except (AuthError, InvalidResponseError):
+        except (AuthError, InvalidResponseError, CriticalUUIDMismatchError):
             # Domain exceptions should NOT be retried - raise immediately
             # STEP 6 — F2: CIRCUIT BREAKER LITE
             # Don't record failure for domain errors (not transient)

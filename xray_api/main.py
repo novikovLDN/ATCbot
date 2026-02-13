@@ -397,8 +397,8 @@ async def shutdown_event():
 
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
-    """Проверка API-ключа для всех запросов кроме /health"""
-    if request.url.path == "/health":
+    """Проверка API-ключа для всех запросов кроме /health и /self-test"""
+    if request.url.path in ("/health", "/self-test"):
         return await call_next(request)
     
     api_key = request.headers.get("X-API-Key")
@@ -428,6 +428,48 @@ async def health_check():
         raise HTTPException(status_code=500, detail="internal_error")
 
 
+@app.get("/self-test")
+async def self_test(request: Request):
+    """
+    UUID contract verification: add test user, verify returned UUID matches sent, remove.
+    Returns 200 {"status":"ok"} or 500 {"status":"uuid_mismatch"}.
+    """
+    import httpx
+    test_uuid = str(uuid.uuid4())
+    base_url = str(request.base_url).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(
+                f"{base_url}/add-user",
+                headers={"X-API-Key": XRAY_API_KEY, "Content-Type": "application/json"},
+                json={
+                    "uuid": test_uuid,
+                    "telegram_id": 0,
+                    "expiry_timestamp_ms": 9999999999999,
+                },
+            )
+            if r.status_code != 200:
+                logger.error(f"SELF_TEST add-user failed: status={r.status_code} body={r.text[:200]}")
+                return JSONResponse(status_code=500, content={"status": "add_user_failed", "detail": r.text[:100]})
+            data = r.json()
+            returned = data.get("uuid", "")
+            if returned != test_uuid:
+                logger.critical(f"SELF_TEST uuid_mismatch sent={test_uuid} returned={returned}")
+                await client.post(
+                    f"{base_url}/remove-user/{returned}",
+                    headers={"X-API-Key": XRAY_API_KEY},
+                )
+                return JSONResponse(status_code=500, content={"status": "uuid_mismatch"})
+            await client.post(
+                f"{base_url}/remove-user/{test_uuid}",
+                headers={"X-API-Key": XRAY_API_KEY},
+            )
+        return JSONResponse(status_code=200, content={"status": "ok"})
+    except Exception as e:
+        logger.exception(f"SELF_TEST error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)[:100]})
+
+
 @app.post("/add-user", response_model=AddUserResponse)
 async def add_user(request: AddUserRequest):
     """
@@ -435,9 +477,9 @@ async def add_user(request: AddUserRequest):
     Contract: UUID from request MUST be used exactly. API NEVER generates UUID.
     """
     try:
-        uuid_from_request = str(request.uuid).strip()
-        if not uuid_from_request:
+        if not request.uuid or not str(request.uuid).strip():
             raise HTTPException(status_code=400, detail="uuid is required")
+        uuid_from_request = str(request.uuid).strip()
         if not validate_uuid(uuid_from_request):
             raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_from_request[:36]}")
         logger.info(f"UUID_AUDIT_API_RECEIVED [uuid={uuid_from_request[:8]}...]")
@@ -636,9 +678,9 @@ async def update_user(request: UpdateUserRequest):
                     break
             
             if not client_found:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=404,
-                    detail=f"Client not found: {target_uuid}"
+                    content={"error": "user_not_found"}
                 )
             
             logger.info(

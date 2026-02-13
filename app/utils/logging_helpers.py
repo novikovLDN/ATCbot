@@ -302,7 +302,7 @@ def classify_error(exception: Exception) -> str:
         # Fallback: define minimal exception class if import fails
         class VPNServiceError(Exception):
             pass
-    from app.services.subscriptions.service import SubscriptionServiceError
+    from app.services.subscriptions.exceptions import SubscriptionServiceError
     from app.services.trials.exceptions import TrialServiceError
     from app.services.admin.exceptions import AdminServiceError
     from app.services.notifications.exceptions import NotificationServiceError
