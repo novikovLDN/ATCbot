@@ -405,6 +405,7 @@ async def main():
         
         while True:
             try:
+                await bot.delete_webhook(drop_pending_updates=True)
                 log_event(logger, component="polling", operation="polling_start", outcome="success")
                 await dp.start_polling(
                     bot,
