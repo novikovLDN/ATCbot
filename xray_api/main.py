@@ -438,7 +438,7 @@ async def add_user(request: AddUserRequest):
     try:
         # UUID_AUDIT_API_RECEIVED: Trace UUID received at add-user API
         logger.info(f"UUID_AUDIT_API_RECEIVED [request.uuid={repr(request.uuid)}]")
-        # Use explicit UUID if provided (recreate missing client), else generate new
+        # Use explicit UUID if provided (recreate/idempotent). No transformation - exact match.
         if request.uuid and request.uuid.strip():
             new_uuid = request.uuid.strip()
             logger.info(
@@ -607,6 +607,7 @@ async def update_user(request: UpdateUserRequest):
     try:
         # UUID_AUDIT_API_RECEIVED: Trace UUID received at update-user API
         logger.info(f"UUID_AUDIT_API_RECEIVED [request.uuid={repr(request.uuid)}]")
+        # UUID used exactly as received. No transformation.
         target_uuid = request.uuid.strip()
         
         if not validate_uuid(target_uuid):
