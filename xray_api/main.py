@@ -159,8 +159,8 @@ async def _flusher_loop(queue: XrayMutationQueue) -> None:
 # ============================================================================
 
 class AddUserRequest(BaseModel):
-    """UUID optional: if provided, use it; else Xray generates. Returned UUID is canonical."""
-    uuid: Optional[str] = None
+    """UUID required. DB is source of truth. Xray never generates UUID."""
+    uuid: str
     telegram_id: int
     expiry_timestamp_ms: int
 
@@ -474,16 +474,15 @@ async def self_test(request: Request):
 async def add_user(request: AddUserRequest):
     """
     Добавить нового пользователя в Xray.
-    Xray is source of truth: use request.uuid if provided, else generate. Return same UUID used.
+    DB is source of truth: UUID required from request. Xray never generates UUID.
+    Idempotent: if client exists, update expiry and return success.
     """
     try:
-        if request.uuid and str(request.uuid).strip():
-            uuid_final = str(request.uuid).strip()
-            if not validate_uuid(uuid_final):
-                raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_final[:36]}")
-        else:
-            uuid_final = str(uuid.uuid4())
-            logger.info(f"XRAY_GENERATED_UUID [uuid={uuid_final[:8]}...]")
+        uuid_from_request = str(request.uuid).strip()
+        if not uuid_from_request:
+            raise HTTPException(status_code=400, detail="uuid is required")
+        if not validate_uuid(uuid_from_request):
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_from_request[:36]}")
         
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
@@ -514,36 +513,30 @@ async def add_user(request: AddUserRequest):
             clients = settings["clients"]
             
             existing_uuids = [client.get("id") for client in clients if client.get("id")]
-            client_already_exists = uuid_final in existing_uuids
+            client_already_exists = uuid_from_request in existing_uuids
             if client_already_exists:
-                logger.info(f"UUID {uuid_final[:8]}... already in config, updating expiry")
+                logger.info(f"XRAY_CLIENT_ALREADY_EXISTS uuid={uuid_from_request[:8]}...")
                 for client in clients:
-                    if client.get("id") == uuid_final:
+                    if client.get("id") == uuid_from_request:
                         client["expiryTime"] = request.expiry_timestamp_ms
                         if "email" not in client:
                             client["email"] = f"user_{request.telegram_id}"
                         break
             else:
                 new_client = {
-                    "id": uuid_final,
+                    "id": uuid_from_request,
                     "email": f"user_{request.telegram_id}",
                     "expiryTime": request.expiry_timestamp_ms
                 }
                 clients.append(new_client)
             
-            logger.info(f"Adding client to config: uuid={uuid_final[:8]}...")
+            logger.info(f"Adding client to config: uuid={uuid_from_request[:8]}...")
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
         _mark_restart_pending("add_user")
-        vless_link = generate_vless_link(uuid_final)
-        response = AddUserResponse(uuid=uuid_final, vless_link=vless_link)
-        # Hard safety: response MUST contain same UUID as request (no internal generation)
-        if response.uuid != uuid_final:
-            logger.critical(f"UUID_MISMATCH_INTERNAL request={repr(uuid_final)} response={repr(response.uuid)}")
-            raise HTTPException(status_code=500, detail="UUID mismatch inside API")
-        logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={uuid_final}")
-        logger.info(f"User added successfully: uuid={uuid_final[:8]}... (returning SAME uuid)")
-        return response
+        vless_link = generate_vless_link(uuid_from_request)
+        logger.info(f"XRAY_ADD uuid={uuid_from_request[:8]}... success")
+        return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
 
     except asyncio.CancelledError:
         raise
@@ -623,8 +616,7 @@ async def remove_user(uuid: str):
 async def update_user(request: UpdateUserRequest):
     """
     Обновить expiryTime существующего клиента в Xray.
-    
-    Используется при продлении подписки — UUID остаётся, обновляется только срок.
+    Если клиент не найден — воссоздать с тем же UUID (fallback add). Никогда не возвращать 404.
     """
     try:
         # UUID_AUDIT_API_RECEIVED: Trace UUID received at update-user API
@@ -680,15 +672,30 @@ async def update_user(request: UpdateUserRequest):
                     break
             
             if not client_found:
-                return JSONResponse(
-                    status_code=404,
-                    content={"error": "user_not_found"}
+                logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={target_uuid[:8]}... (client missing, recreating with SAME uuid)")
+                vless_inbound = None
+                for ib in inbounds:
+                    if ib.get("protocol") == "vless":
+                        vless_inbound = ib
+                        break
+                if vless_inbound:
+                    if "settings" not in vless_inbound:
+                        vless_inbound["settings"] = {}
+                    if "clients" not in vless_inbound["settings"]:
+                        vless_inbound["settings"]["clients"] = []
+                    vless_inbound["settings"]["clients"].append({
+                        "id": target_uuid,
+                        "email": f"user_recovered_{target_uuid[:8]}",
+                        "expiryTime": request.expiry_timestamp_ms
+                    })
+                    logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={target_uuid[:8]}... success")
+                else:
+                    raise HTTPException(status_code=500, detail="VLESS inbound not found")
+            else:
+                logger.info(
+                    f"XRAY_UPDATE uuid={target_uuid[:8]}... success "
+                    f"old_expiry={old_expiry} new_expiry={request.expiry_timestamp_ms}"
                 )
-            
-            logger.info(
-                f"User expiry updated: uuid={target_uuid}, "
-                f"old_expiry={old_expiry}, new_expiry={request.expiry_timestamp_ms}"
-            )
             
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         

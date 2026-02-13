@@ -3685,7 +3685,8 @@ async def reissue_vpn_key_atomic(
                             pass
                         # Продолжаем, даже если не удалось удалить старый UUID (идемпотентность)
                 
-                # 3. Xray generates UUID; returned UUID is canonical
+                # 3. DB generates new UUID; Xray uses it (DB is source of truth)
+                new_uuid = _generate_subscription_uuid()
                 try:
                     from app.core.system_state import recalculate_from_runtime, ComponentStatus
                     system_state = recalculate_from_runtime()
@@ -3698,9 +3699,8 @@ async def reissue_vpn_key_atomic(
                     vless_result = await vpn_utils.add_vless_user(
                         telegram_id=telegram_id,
                         subscription_end=expires_at,
-                        uuid=None
+                        uuid=new_uuid
                     )
-                    new_uuid = vless_result.get("uuid")
                     new_vpn_key = vless_result.get("vless_url")
                 except Exception as e:
                     if "VPN API is" in str(e):
@@ -3708,9 +3708,8 @@ async def reissue_vpn_key_atomic(
                     vless_result = await vpn_utils.add_vless_user(
                         telegram_id=telegram_id,
                         subscription_end=expires_at,
-                        uuid=None
+                        uuid=new_uuid
                     )
-                    new_uuid = vless_result.get("uuid")
                     new_vpn_key = vless_result.get("vless_url")
                     
                     # VPN AUDIT LOG: Логируем создание нового UUID
@@ -3977,9 +3976,9 @@ async def grant_access(
                         f"XRAY_SYNC_FAILED_BUT_PAYMENT_OK "
                         f"[telegram_id={telegram_id}, error={e}]"
                     )
-                if xray_uuid and xray_uuid != uuid:
+                # xray_uuid always equals uuid (DB is source of truth; update-user never returns new UUID)
+                if xray_uuid:
                     uuid = xray_uuid
-                    logger.info(f"XRAY_UUID_REPLACED [user={telegram_id}, new_uuid={uuid[:8]}...]")
 
                 # PHASE 2: DB update
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
@@ -4262,9 +4261,11 @@ async def grant_access(
             f"duration_days={duration_days}, expiry_timestamp_ms={expiry_ms}]"
         )
         
-        # Xray generates UUID; returned UUID is canonical (source of truth).
-        logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, operation=add] Xray will generate UUID")
-        logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, subscription_end={subscription_end.isoformat()}, source={source}]")
+        # DB generates UUID; Xray uses it (DB is source of truth).
+        new_uuid = _generate_subscription_uuid()
+        assert new_uuid is not None, "UUID generation failed"
+        logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, uuid={new_uuid[:8]}..., operation=add]")
+        logger.info(f"grant_access: CALLING_VPN_API [action=add_user, user={telegram_id}, uuid={new_uuid[:8]}..., subscription_end={subscription_end.isoformat()}, source={source}]")
 
         import asyncio
         MAX_VPN_RETRIES = 2
@@ -4304,18 +4305,16 @@ async def grant_access(
                         vless_result = await vpn_utils.add_vless_user(
                             telegram_id=telegram_id,
                             subscription_end=subscription_end,
-                            uuid=None
+                            uuid=new_uuid
                         )
-                        new_uuid = vless_result.get("uuid")
                         vless_url = vless_result.get("vless_url")
                 except Exception as e:
                     logger.warning(f"grant_access: VPN_API_CHECK_FAILED [user={telegram_id}]: {e}, proceeding with VPN call")
                     vless_result = await vpn_utils.add_vless_user(
                         telegram_id=telegram_id,
                         subscription_end=subscription_end,
-                        uuid=None
+                        uuid=new_uuid
                     )
-                    new_uuid = vless_result.get("uuid")
                     vless_url = vless_result.get("vless_url")
                 
                 # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены
