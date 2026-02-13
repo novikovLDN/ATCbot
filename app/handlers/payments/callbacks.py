@@ -14,7 +14,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.screens import _open_buy_screen
-from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.utils import safe_edit_text, get_promo_session
 from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
 
 payments_callbacks_router = Router()
