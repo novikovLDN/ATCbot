@@ -330,6 +330,7 @@ async def callback_admin_create_promocode(callback: CallbackQuery, state: FSMCon
     
     language = await resolve_user_language(callback.from_user.id)
     await state.set_state(AdminCreatePromocode.waiting_for_code_name)
+    logger.info("PROMO_STATE_SET waiting_for_code_name")
     text = i18n_get_text(language, "admin.promocode_code_prompt")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
@@ -357,7 +358,7 @@ async def callback_admin_promocode_unit(callback: CallbackQuery, state: FSMConte
     
     await state.update_data(promocode_duration_unit=unit)
     await state.set_state(AdminCreatePromocode.waiting_for_duration_value)
-    
+    logger.info("PROMO_STATE_SET waiting_for_duration_value unit=%s", unit)
     text = i18n_get_text(language, "admin.promocode_duration_value_prompt", unit=unit_names[unit])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
