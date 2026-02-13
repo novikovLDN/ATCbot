@@ -465,7 +465,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: str
                 "vless_url": vless_url
             }
             
-        except (AuthError, InvalidResponseError, CriticalUUIDMismatchError):
+        except (AuthError, InvalidResponseError, CriticalUUIDMismatchError) as e:
             # Domain exceptions should NOT be retried - raise immediately
             # STEP 6 — F2: CIRCUIT BREAKER LITE
             # Don't record failure for domain errors (not transient)
@@ -509,18 +509,24 @@ async def ensure_user_in_xray(telegram_id: int, uuid: str, subscription_end: dat
             raise
         logger.warning(f"XRAY_MISS uuid={uuid_preview} → add_user (same uuid, no regeneration)")
         try:
-            await add_vless_user(
+            resp = await add_vless_user(
                 telegram_id=telegram_id,
                 subscription_end=subscription_end,
                 uuid=uuid_clean
             )
-            logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
+            returned_uuid = resp.get("uuid") if isinstance(resp, dict) else getattr(resp, "uuid", None)
+            if returned_uuid and str(returned_uuid).strip() != uuid_clean:
+                logger.critical(
+                    f"UUID_MISMATCH sent={uuid_clean} returned={returned_uuid}"
+                )
+            else:
+                logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
         except Exception as add_e:
             logger.critical(
                 f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}",
                 exc_info=True
             )
-            raise VPNAPIError(f"ensure_user_in_xray: add_user failed after 404: {add_e}") from add_e
+            # Best-effort: do NOT raise — payment must never fail because of Xray
 
 
 async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
@@ -804,7 +810,7 @@ async def remove_vless_user(uuid: str) -> None:
             
             return
             
-        except (AuthError, ValueError):
+        except (AuthError, ValueError) as e:
             # Domain exceptions should NOT be retried - raise immediately
             logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=domain_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={str(e)[:100]}]")
             raise
