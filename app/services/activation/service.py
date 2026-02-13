@@ -395,15 +395,14 @@ async def _attempt_activation_with_idempotency(
         raise VPNActivationError("Subscription has no expires_at")
     subscription_end = database._from_db_utc(subscription_end_raw)
     
-    # DB is source of truth; use canonical generation
-    new_uuid = database._generate_subscription_uuid()
+    # Xray generates UUID; returned UUID is canonical (source of truth)
     try:
         vless_result = await vpn_utils.add_vless_user(
             telegram_id=telegram_id,
             subscription_end=subscription_end,
-            uuid=new_uuid
+            uuid=None
         )
-        assert vless_result.get("uuid") == new_uuid, "UUID mismatch after add_vless_user"
+        new_uuid = vless_result.get("uuid")
         vless_url = vless_result.get("vless_url")
     except Exception as e:
         raise VPNActivationError(f"VPN API call failed: {e}") from e
