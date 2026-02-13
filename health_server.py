@@ -7,7 +7,7 @@ Endpoint does NOT depend on database - always responds.
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from aiohttp import web
 from aiogram import Bot
@@ -48,7 +48,7 @@ async def health_handler(request: web.Request) -> web.Response:
     try:
         # Читаем глобальный флаг (не обращаемся к БД)
         db_ready = database.DB_READY
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # STEP 1.1 - RUNTIME GUARDRAILS: SystemState is constructed centrally in health_server
         # SystemState is a READ-ONLY snapshot of system health
@@ -85,7 +85,7 @@ async def health_handler(request: web.Request) -> web.Response:
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
         }
         # Note: recovery_in_progress is computed but not added to response
         # to preserve exact response format (B4.5 requirement)

@@ -10,7 +10,7 @@ All functions are pure business logic - no aiogram imports or Telegram-specific 
 
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import database
 import config
@@ -311,17 +311,23 @@ class SubscriptionStatus:
 def parse_expires_at(expires_at: Any) -> Optional[datetime]:
     """
     Parse expires_at from various formats (datetime, string, None).
+    DB returns naive UTC; use database._from_db_utc for boundary normalization.
+    Domain layer must receive aware UTC only.
     
     Args:
         expires_at: Expiration date in various formats
         
     Returns:
-        datetime object or None
+        datetime object (timezone-aware UTC) or None
     """
     if expires_at is None:
         return None
     
     if isinstance(expires_at, datetime):
+        if expires_at.tzinfo is None:
+            return database._from_db_utc(expires_at)
+        if expires_at.tzinfo != timezone.utc:
+            return expires_at.astimezone(timezone.utc)
         return expires_at
     
     if isinstance(expires_at, str):
@@ -353,7 +359,7 @@ def is_subscription_active(
     
     Args:
         subscription: Subscription dictionary from database (or None, or legacy int)
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         True if subscription is active, False otherwise
@@ -371,7 +377,7 @@ def is_subscription_active(
         return False
     
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     status = subscription.get("status")
     if status != "active":
@@ -401,13 +407,13 @@ def get_subscription_status(
     
     Args:
         subscription: Subscription dictionary from database
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         SubscriptionStatus with all status information
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     if not subscription:
         return SubscriptionStatus(

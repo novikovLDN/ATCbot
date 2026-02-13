@@ -13,7 +13,7 @@ All functions are pure business logic:
 
 import logging
 from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
 import database
@@ -86,7 +86,7 @@ def is_subscription_expired(expires_at: Optional[datetime], now: Optional[dateti
     
     Args:
         expires_at: Subscription expiration date
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         True if subscription has expired, False otherwise
@@ -95,7 +95,7 @@ def is_subscription_expired(expires_at: Optional[datetime], now: Optional[dateti
         return False
     
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     return expires_at < now
 
@@ -129,13 +129,13 @@ def is_activation_allowed(
     
     Args:
         subscription: Subscription dictionary from database
-        now: Current time (defaults to datetime.now())
+        now: Current time (defaults to datetime.now(timezone.utc))
         
     Returns:
         Tuple of (is_allowed, reason_if_not_allowed)
     """
     if now is None:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
     
     # STEP 3 — PART C: SIDE-EFFECT SAFETY
     # Check activation status - provides idempotency boundary
@@ -216,8 +216,8 @@ async def _fetch_pending_subscriptions(
             telegram_id=row["telegram_id"],
             activation_attempts=row["activation_attempts"],
             last_activation_error=row.get("last_activation_error"),
-            expires_at=row.get("expires_at"),
-            activated_at=row.get("activated_at")
+            expires_at=database._from_db_utc(row["expires_at"]) if row.get("expires_at") else None,
+            activated_at=database._from_db_utc(row["activated_at"]) if row.get("activated_at") else None
         ))
     
     return result
@@ -255,7 +255,7 @@ async def _fetch_pending_for_notification(
     threshold_minutes: int
 ) -> List[Dict[str, Any]]:
     """Internal helper to fetch subscriptions for notification"""
-    notification_threshold = datetime.now() - timedelta(minutes=threshold_minutes)
+    notification_threshold = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
     
     rows = await conn.fetch(
         """SELECT telegram_id, id, activation_attempts, last_activation_error, activated_at
@@ -265,7 +265,7 @@ async def _fetch_pending_for_notification(
                   OR (activated_at IS NOT NULL AND activated_at < $1))
            ORDER BY COALESCE(activated_at, '1970-01-01'::timestamp) ASC
            LIMIT 10""",
-        notification_threshold
+        database._to_db_utc(notification_threshold)
     )
     
     result = []
@@ -276,9 +276,9 @@ async def _fetch_pending_for_notification(
                 activated_at = datetime.fromisoformat(activated_at.replace('Z', '+00:00'))
             except Exception as e:
                 logger.debug("Activated_at parse failed, using now: %s", e)
-                activated_at = datetime.now()
+                activated_at = datetime.now(timezone.utc)
         elif not activated_at:
-            activated_at = datetime.now()
+            activated_at = datetime.now(timezone.utc)
         
         result.append({
             "subscription_id": row["id"],
@@ -358,7 +358,7 @@ async def _attempt_activation_with_idempotency(
     # IDEMPOTENCY CHECK: Verify subscription is still pending before proceeding
     # Use row-level locking to prevent race conditions
     subscription_row = await conn.fetchrow(
-        """SELECT activation_status, uuid, vpn_key, activation_attempts
+        """SELECT activation_status, uuid, vpn_key, activation_attempts, expires_at
            FROM subscriptions
            WHERE id = $1
            FOR UPDATE SKIP LOCKED""",
@@ -390,10 +390,20 @@ async def _attempt_activation_with_idempotency(
     if not config.VPN_ENABLED:
         raise VPNActivationError("VPN API is not enabled")
     
-    # Call VPN API to create UUID
+    subscription_end_raw = subscription_row.get("expires_at")
+    if not subscription_end_raw:
+        raise VPNActivationError("Subscription has no expires_at")
+    subscription_end = database._from_db_utc(subscription_end_raw)
+    
+    # DB is source of truth; use canonical generation
+    new_uuid = database._generate_subscription_uuid()
     try:
-        vless_result = await vpn_utils.add_vless_user()
-        new_uuid = vless_result.get("uuid")
+        vless_result = await vpn_utils.add_vless_user(
+            telegram_id=telegram_id,
+            subscription_end=subscription_end,
+            uuid=new_uuid
+        )
+        assert vless_result.get("uuid") == new_uuid, "UUID mismatch after add_vless_user"
         vless_url = vless_result.get("vless_url")
     except Exception as e:
         raise VPNActivationError(f"VPN API call failed: {e}") from e

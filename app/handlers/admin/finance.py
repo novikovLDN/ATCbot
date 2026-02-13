@@ -2,7 +2,7 @@
 Admin finance handlers: balance management, discount creation, incident management.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -159,7 +159,7 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
         # Рассчитываем expires_at
         expires_at = None
         if expires_days > 0:
-            expires_at = datetime.now() + timedelta(days=expires_days)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
         
         # Создаём скидку
         success = await database.create_user_discount(
@@ -237,7 +237,7 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
         # Рассчитываем expires_at
         expires_at = None
         if expires_days > 0:
-            expires_at = datetime.now() + timedelta(days=expires_days)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
         
         # Создаём скидку
         success = await database.create_user_discount(

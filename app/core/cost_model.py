@@ -14,7 +14,7 @@ IMPORTANT:
 from dataclasses import dataclass
 from typing import Dict, Optional
 from enum import Enum
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 
 from app.core.metrics import get_metrics
@@ -67,7 +67,7 @@ class CostModel:
             cost_units: Number of cost units (default: 1.0)
             metadata: Optional metadata about the cost event
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         event = CostEvent(
             cost_center=cost_center,
             cost_units=cost_units,
@@ -91,7 +91,7 @@ class CostModel:
         Returns:
             Dictionary mapping cost center to total cost units
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cutoff = now - timedelta(seconds=self._cost_window_seconds)
         
         recent_events = [
@@ -178,7 +178,7 @@ class CostModel:
                 title="Cost Anomaly Detected",
                 message=f"Cost centers exceeding thresholds: {', '.join(anomalies.keys())}",
                 component="cost_model",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 metadata={
                     "anomalies": anomalies,
                     "thresholds": {k.value: v for k, v in thresholds.items()},

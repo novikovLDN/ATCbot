@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -124,7 +124,8 @@ async def process_trial_notifications(bot: Bot):
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
+            now_db = database._to_db_utc(now)
             
             # Получаем только пользователей с АКТИВНОЙ trial-подпиской
             # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
@@ -169,16 +170,16 @@ async def process_trial_notifications(bot: Bot):
                   AND u.trial_expires_at > $1
             """
             try:
-                rows = await conn.fetch(query_with_reachable, now)
+                rows = await conn.fetch(query_with_reachable, now_db)
             except asyncpg.UndefinedColumnError:
                 logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, trial_notifications fallback to legacy query")
-                rows = await conn.fetch(fallback_query, now)
+                rows = await conn.fetch(fallback_query, now_db)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
-                trial_expires_at = row["trial_expires_at"]
-                subscription_expires_at = row["subscription_expires_at"]
-                paid_subscription_expires_at = row.get("paid_subscription_expires_at")
+                trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
+                subscription_expires_at = database._from_db_utc(row["subscription_expires_at"]) if row["subscription_expires_at"] else None
+                paid_subscription_expires_at = database._from_db_utc(row["paid_subscription_expires_at"]) if row.get("paid_subscription_expires_at") else None
                 
                 # Canonical guard: paid subscription ALWAYS overrides trial (same as database.get_active_paid_subscription).
                 if paid_subscription_expires_at:
@@ -231,7 +232,7 @@ async def process_trial_notifications(bot: Bot):
                             )
                             logger.info(
                                 f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
-                                f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now().isoformat()}"
+                                f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
                             )
                         elif status == "failed_permanently":
                             await conn.execute(
@@ -241,7 +242,7 @@ async def process_trial_notifications(bot: Bot):
                             )
                             logger.warning(
                                 f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
-                                f"reason=forbidden_or_blocked, failed_at={datetime.now().isoformat()}, will_not_retry=True"
+                                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
                             )
                         else:
                             logger.warning(
@@ -314,7 +315,7 @@ async def process_trial_notifications(bot: Bot):
                             notification_flags[db_flag] = True
                             logger.info(
                                 f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
-                                f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now().isoformat()}"
+                                f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
                             )
                         elif status == "failed_permanently":
                             # Mark as permanently failed (idempotency)
@@ -326,7 +327,7 @@ async def process_trial_notifications(bot: Bot):
                             notification_flags[db_flag] = True
                             logger.warning(
                                 f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
-                                f"reason=forbidden_or_blocked, failed_at={datetime.now().isoformat()}, "
+                                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
                                 f"will_not_retry=True"
                             )
                         else:
@@ -366,7 +367,8 @@ async def expire_trial_subscriptions(bot: Bot):
     try:
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
+            now_db = database._to_db_utc(now)
             
             # Получаем всех пользователей с истёкшим trial (trial_expires_at <= now)
             # и их trial-подписки для отзыва доступа
@@ -394,16 +396,16 @@ async def expire_trial_subscriptions(bot: Bot):
                   AND u.trial_expires_at > $1 - INTERVAL '24 hours'
             """
             try:
-                rows = await conn.fetch(query_with_reachable, now)
+                rows = await conn.fetch(query_with_reachable, now_db)
             except asyncpg.UndefinedColumnError:
                 logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, expire_trial fallback to legacy query")
-                rows = await conn.fetch(fallback_query, now)
+                rows = await conn.fetch(fallback_query, now_db)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
                 uuid = row["uuid"]
-                trial_used_at = row["trial_used_at"]
-                trial_expires_at = row["trial_expires_at"]
+                trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
+                trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
                 
                 try:
                     # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
@@ -594,7 +596,7 @@ async def run_trial_scheduler(bot: Bot):
             # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
             # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 db_ready = database.DB_READY
                 
                 # Build SystemState for awareness (read-only)

@@ -13,7 +13,7 @@ IMPORTANT:
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 
@@ -125,7 +125,7 @@ class EventBuilder:
         return Event(
             event_type=event_type,
             entity_id=entity_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             correlation_id=correlation_id,
             metadata=sanitized_metadata,
         )

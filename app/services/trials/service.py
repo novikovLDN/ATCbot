@@ -220,7 +220,7 @@ async def should_send_notification(
         AND status = 'active'
         AND expires_at > $2
         LIMIT 1
-    """, telegram_id, now)
+    """, telegram_id, database._to_db_utc(now))
     
     if paid_subscription:
         return (False, "has_active_paid_subscription")
@@ -293,7 +293,7 @@ async def should_send_final_reminder(
         AND status = 'active'
         AND expires_at > $2
         LIMIT 1
-    """, telegram_id, now)
+    """, telegram_id, database._to_db_utc(now))
     
     if paid_subscription:
         return (False, "has_active_paid_subscription")

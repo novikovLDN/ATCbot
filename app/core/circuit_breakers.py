@@ -13,7 +13,7 @@ IMPORTANT:
 from enum import Enum
 from typing import Optional, Callable, Any
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import threading
 import asyncio
 
@@ -143,7 +143,7 @@ class CircuitBreaker:
     
     def _update_state(self) -> None:
         """Update circuit breaker state based on thresholds"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Closed → Open: Too many failures
         if self._state == CircuitState.CLOSED:
@@ -187,7 +187,7 @@ class CircuitBreaker:
         """Record failed operation"""
         with self._lock:
             self._failure_count += 1
-            self._last_failure_time = datetime.utcnow()
+            self._last_failure_time = datetime.now(timezone.utc)
             if self._state == CircuitState.HALF_OPEN:
                 # Reset success count on failure in half-open
                 self._success_count = 0

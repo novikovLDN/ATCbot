@@ -891,8 +891,8 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
                 registration_date = user["created_at"].strftime("%d.%m.%Y")
         
         # Current date
-        from datetime import datetime
-        request_date = datetime.now().strftime("%d.%m.%Y")
+        from datetime import datetime, timezone
+        request_date = datetime.now(timezone.utc).strftime("%d.%m.%Y")
         
         # Send admin notification using unified service
         import admin_notifications

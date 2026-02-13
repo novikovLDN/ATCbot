@@ -196,8 +196,8 @@ async def callback_copy_key(callback: CallbackQuery):
     """Копировать VPN-ключ - отправляет ключ как отдельное сообщение"""
     # B3.1 - SOFT DEGRADATION: Read-only awareness (informational only, does not affect flow)
     try:
-        from datetime import datetime
-        now = datetime.utcnow()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
         db_ready = database.DB_READY
         import config
         
@@ -294,8 +294,8 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
     """Скопировать VPN-ключ - отправляет ключ как отдельное сообщение"""
     # B3.1 - SOFT DEGRADATION: Read-only awareness (informational only, does not affect flow)
     try:
-        from datetime import datetime
-        now = datetime.utcnow()
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
         db_ready = database.DB_READY
         import config
         

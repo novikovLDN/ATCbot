@@ -11,7 +11,7 @@ IMPORTANT:
 - Does NOT mutate SystemState
 - Pure observation and coordination
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 from enum import Enum
 
@@ -114,7 +114,7 @@ class RecoveryCooldown:
         Returns:
             Dictionary with component cooldown status
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         state = {}
         
         for component in ComponentName:

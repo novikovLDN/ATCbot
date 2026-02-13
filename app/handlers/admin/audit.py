@@ -2,7 +2,7 @@
 Admin audit handlers: /admin_audit, system inspection.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
@@ -46,7 +46,7 @@ async def cmd_admin_audit(message: Message):
             elif isinstance(created_at, datetime):
                 pass
             else:
-                created_at = datetime.now()
+                created_at = datetime.now(timezone.utc)
             
             created_str = created_at.strftime("%Y-%m-%d %H:%M")
             
@@ -88,7 +88,7 @@ async def cmd_admin_audit(message: Message):
                 elif isinstance(created_at, datetime):
                     pass
                 else:
-                    created_at = datetime.now()
+                    created_at = datetime.now(timezone.utc)
                 
                 created_str = created_at.strftime("%Y-%m-%d %H:%M")
                 
@@ -155,7 +155,7 @@ async def callback_admin_audit(callback: CallbackQuery):
             elif isinstance(created_at, datetime):
                 pass
             else:
-                created_at = datetime.now()
+                created_at = datetime.now(timezone.utc)
             
             created_str = created_at.strftime("%Y-%m-%d %H:%M")
             
@@ -197,7 +197,7 @@ async def callback_admin_audit(callback: CallbackQuery):
                 elif isinstance(created_at, datetime):
                     pass
                 else:
-                    created_at = datetime.now()
+                    created_at = datetime.now(timezone.utc)
                 
                 created_str = created_at.strftime("%Y-%m-%d %H:%M")
                 
