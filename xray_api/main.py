@@ -485,7 +485,8 @@ async def add_user(request: AddUserRequest):
         if not validate_uuid(uuid_from_request):
             raise HTTPException(status_code=400, detail=f"Invalid UUID format: {uuid_from_request[:36]}")
         
-        logger.info(f"ADD_USER_REQUEST uuid={uuid_from_request}")
+        client_uuid = uuid_from_request
+        logger.info(f"XRAY_ADD_CONTRACT uuid_request={uuid_from_request}")
         
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
@@ -516,32 +517,35 @@ async def add_user(request: AddUserRequest):
             clients = settings["clients"]
             
             existing_uuids = [client.get("id") for client in clients if client.get("id")]
-            client_already_exists = uuid_from_request in existing_uuids
+            client_already_exists = client_uuid in existing_uuids
             if client_already_exists:
-                logger.info(f"XRAY_CLIENT_ALREADY_EXISTS uuid={uuid_from_request[:8]}...")
+                logger.info(f"XRAY_CLIENT_ALREADY_EXISTS uuid={client_uuid[:8]}...")
                 for client in clients:
-                    if client.get("id") == uuid_from_request:
+                    if client.get("id") == client_uuid:
                         client["expiryTime"] = request.expiry_timestamp_ms
                         if "email" not in client:
                             client["email"] = f"user_{request.telegram_id}"
                         break
             else:
                 new_client = {
-                    "id": uuid_from_request,
+                    "id": client_uuid,
                     "email": f"user_{request.telegram_id}",
                     "expiryTime": request.expiry_timestamp_ms
                 }
                 clients.append(new_client)
             
-            logger.info(f"Adding client to config: uuid={uuid_from_request[:8]}...")
+            logger.info(f"Adding client to config: uuid={client_uuid[:8]}...")
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
         _mark_restart_pending("add_user")
-        vless_link = generate_vless_link(uuid_from_request)
-        logger.info(
-            f"XRAY_ADD_USER uuid_request={uuid_from_request} uuid_response={uuid_from_request}"
-        )
-        return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link, link=vless_link)
+        vless_link = generate_vless_link(client_uuid)
+        if client_uuid not in vless_link:
+            raise HTTPException(
+                status_code=500,
+                detail="UUID mismatch between request and generated link"
+            )
+        logger.info(f"XRAY_ADD_CONTRACT_OK uuid_response={client_uuid}")
+        return AddUserResponse(uuid=client_uuid, vless_link=vless_link, link=vless_link)
 
     except asyncio.CancelledError:
         raise
