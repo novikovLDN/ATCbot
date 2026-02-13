@@ -6165,7 +6165,7 @@ async def create_pending_balance_topup_purchase(
         await conn.execute(
             """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
                VALUES ($1, $2, 'balance_topup', $3, 'pending', $4)""",
-            purchase_id, telegram_id, amount_kopecks, expires_at
+            purchase_id, telegram_id, amount_kopecks, _to_db_utc(expires_at)
         )
         logger.info(
             f"BALANCE_TOPUP_PURCHASE_CREATED purchase_id={purchase_id} telegram_id={telegram_id} "
@@ -6212,7 +6212,7 @@ async def create_pending_purchase(
         await conn.execute(
             """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at)
                VALUES ($1, $2, 'subscription', $3, $4, $5, $6, $7, $8)""",
-            purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", expires_at
+            purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at)
         )
         
         logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks")
@@ -6301,7 +6301,7 @@ async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) 
         
         result = await conn.execute(
             "UPDATE pending_purchases SET provider_invoice_id = $1, expires_at = $3 WHERE purchase_id = $2 AND status = 'pending'",
-            invoice_id, purchase_id, expires_at_utc
+            invoice_id, purchase_id, _to_db_utc(expires_at_utc)
         )
         
         if result == "UPDATE 1":
@@ -7995,7 +7995,7 @@ async def get_user_discount(telegram_id: int) -> Optional[Dict[str, Any]]:
             """SELECT * FROM user_discounts 
                WHERE telegram_id = $1 
                AND (expires_at IS NULL OR expires_at > $2)""",
-            telegram_id, now
+            telegram_id, _to_db_utc(now)
         )
         return dict(row) if row else None
 
@@ -8020,7 +8020,7 @@ async def create_user_discount(telegram_id: int, discount_percent: int, expires_
                    VALUES ($1, $2, $3, $4)
                    ON CONFLICT (telegram_id) 
                    DO UPDATE SET discount_percent = $2, expires_at = $3, created_by = $4, created_at = CURRENT_TIMESTAMP""",
-                telegram_id, discount_percent, expires_at, created_by
+                telegram_id, discount_percent, _to_db_utc(expires_at) if expires_at else None, created_by
             )
             
             # Логируем создание/обновление скидки
