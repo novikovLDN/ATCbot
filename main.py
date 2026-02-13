@@ -77,6 +77,11 @@ async def main():
     
     instance_id = os.getenv("POLLING_INSTANCE_ID", str(uuid.uuid4()))
     logger.info("BOT_INSTANCE_STARTED pid=%s instance_id=%s", os.getpid(), instance_id)
+
+    from datetime import datetime, timezone
+    from app.core.runtime_context import set_bot_start_time
+    set_bot_start_time(datetime.now(timezone.utc))
+
     # Логируем информацию о конфигурации при старте
     logger.info(f"Starting bot in {config.APP_ENV.upper()} environment")
     logger.info(f"Using BOT_TOKEN from {config.APP_ENV.upper()}_BOT_TOKEN")
