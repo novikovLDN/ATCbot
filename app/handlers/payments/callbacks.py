@@ -2,6 +2,7 @@
 Payment-related callback handlers: buy, tariff selection, payment methods, admin payment approval.
 """
 import logging
+import time
 
 from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
