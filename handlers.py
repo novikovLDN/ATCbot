@@ -1625,9 +1625,8 @@ async def process_admin_promocode_code_name(message: Message, state: FSMContext)
             await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"))
             return
         
-        # Проверка существования
-        existing = await database.get_promo_code(code)
-        if existing:
+        # Проверка активного промокода (разрешаем пересоздание после удаления/истечения/исчерпания)
+        if await database.has_active_promo(code):
             await message.answer(i18n_get_text(language, "admin.promocode_code_exists"))
             return
     
