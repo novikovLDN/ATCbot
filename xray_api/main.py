@@ -537,8 +537,9 @@ async def add_user(request: AddUserRequest):
         
         _mark_restart_pending("add_user")
         vless_link = generate_vless_link(uuid_from_request)
-        logger.info(f"ADD_USER_RESPONSE uuid={uuid_from_request}")
-        logger.info(f"XRAY_ADD uuid={uuid_from_request[:8]}... success")
+        logger.info(
+            f"XRAY_ADD_USER uuid_request={uuid_from_request} uuid_response={uuid_from_request}"
+        )
         return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
 
     except asyncio.CancelledError:
