@@ -5,7 +5,7 @@ Runs as background task, batched, with race-condition re-check and defensive err
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Bot
 from app.utils.telegram_safe import safe_send_message
@@ -86,7 +86,7 @@ async def run_no_subscription_broadcast(
         telegram_id = user_row["telegram_id"]
         try:
             async with pool.acquire() as conn:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 if not await database.check_user_still_eligible_for_no_sub_broadcast(
                     conn, telegram_id, now
                 ):

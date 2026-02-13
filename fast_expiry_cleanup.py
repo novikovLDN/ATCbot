@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncpg
 import database
 import config
@@ -131,7 +131,7 @@ async def fast_expiry_cleanup_task():
             
             # READ-ONLY system state awareness: Skip iteration if system is unavailable
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 db_ready = database.DB_READY
                 
                 # Build SystemState for awareness (read-only)
@@ -222,7 +222,7 @@ async def fast_expiry_cleanup_task():
             
             # Получаем текущее UTC время для сравнения
             # PostgreSQL TIMESTAMP хранит без timezone, поэтому используем naive datetime
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(timezone.utc)
             
             # Получаем истёкшие подписки с активными UUID
             # Используем expires_at (в БД) - это и есть subscription_end
@@ -246,7 +246,7 @@ async def fast_expiry_cleanup_task():
                            AND expires_at < $1
                            AND uuid IS NOT NULL
                            ORDER BY expires_at ASC""",
-                        now_utc
+                        database._to_db_utc(now_utc)
                     )
                     
                     if not rows:
@@ -270,7 +270,8 @@ async def fast_expiry_cleanup_task():
                         source = row.get("source", "unknown")
                         
                         # ЗАЩИТА: Проверяем что подписка действительно истекла (используем UTC)
-                        if expires_at >= now_utc:
+                        expires_at_aware = database._from_db_utc(expires_at) if expires_at else None
+                        if expires_at_aware is not None and expires_at_aware >= now_utc:
                             logger.warning(
                                 f"cleanup: SKIP_NOT_EXPIRED [user={telegram_id}, expires_at={expires_at.isoformat()}, "
                                 f"now={now_utc.isoformat()}]"
@@ -380,8 +381,8 @@ async def fast_expiry_cleanup_task():
                             
                                         if check_row:
                                             # Дополнительная проверка: убеждаемся что подписка действительно истекла (UTC)
-                                            check_expires_at = check_row["expires_at"]
-                                            if check_expires_at >= now_utc:
+                                            check_expires_at = database._from_db_utc(check_row["expires_at"]) if check_row["expires_at"] else None
+                                            if check_expires_at is not None and check_expires_at >= now_utc:
                                                 logger.warning(
                                                     f"cleanup: SKIP_RENEWED [user={telegram_id}, uuid={uuid_preview}, "
                                                     f"expires_at={check_expires_at.isoformat()}] - subscription was renewed"

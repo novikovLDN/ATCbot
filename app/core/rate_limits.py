@@ -14,7 +14,7 @@ IMPORTANT:
 from enum import Enum
 from typing import Dict, Optional
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 import threading
 
@@ -55,7 +55,7 @@ class RateLimiter:
         # Track requests: (scope, identifier) -> list of timestamps
         self._requests: Dict[tuple, list] = defaultdict(list)
         # Cleanup old entries periodically
-        self._last_cleanup = datetime.utcnow()
+        self._last_cleanup = datetime.now(timezone.utc)
         self._cleanup_interval = timedelta(seconds=300)  # 5 minutes
     
     def check_rate_limit(
@@ -82,7 +82,7 @@ class RateLimiter:
             self._cleanup_old_entries()
             
             key = (scope, identifier)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             cutoff = now - timedelta(seconds=window_seconds)
             
             # Filter requests within window
@@ -101,7 +101,7 @@ class RateLimiter:
     
     def _cleanup_old_entries(self) -> None:
         """Cleanup old rate limit entries"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if (now - self._last_cleanup) < self._cleanup_interval:
             return
         
@@ -140,7 +140,7 @@ class RateLimiter:
         """
         with self._lock:
             key = (scope, identifier)
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             cutoff = now - timedelta(seconds=window_seconds)
             
             requests_in_window = [

@@ -219,14 +219,14 @@ class TestGetSubscriptionStatus:
         assert status.activation_status == "active"
     
     def test_uses_current_time_if_not_provided(self):
-        """Should use datetime.now() if now is not provided"""
+        """Should use datetime.now(timezone.utc) if now is not provided"""
         future = datetime(2099, 2, 15, 12, 0, 0)
         subscription = {
             "status": "active",
             "expires_at": future,
             "uuid": "test-uuid",
         }
-        # Don't pass now - should use datetime.now()
+        # Don't pass now - should use datetime.now(timezone.utc)
         status = get_subscription_status(subscription)
         
         # If subscription expires in 2099, it should be active now

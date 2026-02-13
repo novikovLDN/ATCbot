@@ -22,7 +22,7 @@ import logging
 import json
 import uuid
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from contextvars import ContextVar
 
 # Context variable for correlation ID (per-request/operation)
@@ -97,7 +97,7 @@ def log_handler_entry(
         "correlation_id": correlation_id,
         "component": "handler",
         "operation": operation or handler_name,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     
     if telegram_id:
@@ -144,7 +144,7 @@ def log_handler_exit(
         "component": "handler",
         "operation": operation or handler_name,
         "outcome": outcome,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     
     if telegram_id:
@@ -198,7 +198,7 @@ def log_worker_iteration_start(
         "correlation_id": correlation_id,
         "component": "worker",
         "operation": f"{worker_name}_iteration",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     
     if iteration_number is not None:
@@ -243,7 +243,7 @@ def log_worker_iteration_end(
         "component": "worker",
         "operation": f"{worker_name}_iteration",
         "outcome": outcome,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     
     if items_processed is not None:
@@ -367,7 +367,7 @@ def log_operation(
         "component": component,
         "operation": operation,
         "outcome": outcome,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     
     if error_type:

@@ -2,7 +2,7 @@
 Admin stats handlers: promo_stats, metrics, analytics, referral_stats.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -1631,7 +1631,7 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
 
     try:
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         current_month = await database.get_monthly_summary(now.year, now.month)
 

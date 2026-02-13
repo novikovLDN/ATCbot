@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from app.utils.telegram_safe import safe_send_message
@@ -416,7 +416,7 @@ async def activation_worker_task(bot: Bot):
             
             # READ-ONLY system state awareness: Skip iteration if system is unavailable
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 db_ready = database.DB_READY
                 
                 # Build SystemState for awareness (read-only)

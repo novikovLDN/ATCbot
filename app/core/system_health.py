@@ -12,7 +12,7 @@ Characteristics:
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from enum import Enum
 
@@ -64,7 +64,7 @@ async def evaluate_system_health() -> SystemHealthReport:
     Returns:
         SystemHealthReport with severity level and detailed status
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     # Get current system state
     system_state = recalculate_from_runtime()
