@@ -295,11 +295,18 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
         "telegram_id": telegram_id,
         "expiry_timestamp_ms": expiry_ms
     }
+    uuid_sent = None
     if uuid:
         uuid_clean = uuid.strip()
         if config.IS_STAGE and uuid_clean.startswith("stage-"):
             uuid_clean = uuid_clean[6:]
         json_body["uuid"] = uuid_clean
+        uuid_sent = uuid_clean
+    
+    # UUID_AUDIT_ADD_REQUEST: Trace UUID sent to add-user API
+    logger.info(
+        f"UUID_AUDIT_ADD_REQUEST [uuid_arg={repr(uuid)}, uuid_sent_to_api={repr(uuid_sent) if uuid_sent else 'generated_by_api'}]"
+    )
     
     # Логируем начало операции
     logger.info(
@@ -479,9 +486,16 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
     assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
     
-    uuid_clean = uuid.strip()
+    uuid_raw = uuid.strip()
+    uuid_clean = uuid_raw
     if config.IS_STAGE and uuid_clean.startswith("stage-"):
         uuid_clean = uuid_clean[6:]
+    
+    # UUID_AUDIT_UPDATE_REQUEST: raw vs sent (prefix stripping)
+    logger.info(
+        f"UUID_AUDIT_UPDATE_REQUEST [uuid_raw={repr(uuid_raw)}, uuid_sent={repr(uuid_clean)}, "
+        f"len_raw={len(uuid_raw)}, len_sent={len(uuid_clean)}, IS_STAGE={getattr(config, 'IS_STAGE', False)}]"
+    )
     
     expiry_ms = int(subscription_end.timestamp() * 1000)
     api_url = config.XRAY_API_URL.rstrip('/')

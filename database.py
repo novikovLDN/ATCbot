@@ -3918,6 +3918,11 @@ async def grant_access(
         # 3. expires_at > now() (не истекла)
         # 4. uuid IS NOT NULL (UUID существует)
         if subscription and status == "active" and uuid and expires_at and expires_at > now:
+            # UUID_AUDIT_DB_VALUE: Trace UUID from DB for renewal
+            logger.info(
+                f"UUID_AUDIT_DB_VALUE [telegram_id={telegram_id}, uuid_from_db={uuid[:8] if uuid else 'N/A'}..., "
+                f"repr={repr(uuid)}, len={len(uuid) if uuid else 0}]"
+            )
             # UUID СТАБИЛЕН - продлеваем подписку БЕЗ вызова VPN API
             logger.info(
                 f"grant_access: RENEWAL_DETECTED [user={telegram_id}, current_expires={expires_at.isoformat()}, "

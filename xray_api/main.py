@@ -436,6 +436,8 @@ async def add_user(request: AddUserRequest):
     expiryTime контролирует срок жизни ключа в Xray (мс, Unix timestamp).
     """
     try:
+        # UUID_AUDIT_API_RECEIVED: Trace UUID received at add-user API
+        logger.info(f"UUID_AUDIT_API_RECEIVED [request.uuid={repr(request.uuid)}]")
         # Use explicit UUID if provided (recreate missing client), else generate new
         if request.uuid and request.uuid.strip():
             new_uuid = request.uuid.strip()
@@ -603,6 +605,8 @@ async def update_user(request: UpdateUserRequest):
     Используется при продлении подписки — UUID остаётся, обновляется только срок.
     """
     try:
+        # UUID_AUDIT_API_RECEIVED: Trace UUID received at update-user API
+        logger.info(f"UUID_AUDIT_API_RECEIVED [request.uuid={repr(request.uuid)}]")
         target_uuid = request.uuid.strip()
         
         if not validate_uuid(target_uuid):
@@ -622,6 +626,19 @@ async def update_user(request: UpdateUserRequest):
             inbounds = config.get("inbounds", [])
             client_found = False
             old_expiry = None
+            # UUID_AUDIT_LOOKUP: Collect existing client UUIDs for comparison
+            existing_uuids = []
+            for inbound in inbounds:
+                if inbound.get("protocol") != "vless":
+                    continue
+                for client in inbound.get("settings", {}).get("clients", []):
+                    cid = client.get("id")
+                    if cid:
+                        existing_uuids.append(cid)
+            logger.info(
+                f"UUID_AUDIT_LOOKUP [uuid_sought={repr(target_uuid)}, existing_count={len(existing_uuids)}, "
+                f"first_5_full={[repr(u) for u in existing_uuids[:5]]}, match={target_uuid in existing_uuids}]"
+            )
             
             for inbound in inbounds:
                 if inbound.get("protocol") != "vless":

@@ -125,6 +125,7 @@ async def process_trial_notifications(bot: Bot):
         pool = await database.get_pool()
         async with pool.acquire() as conn:
             now = datetime.now(timezone.utc)
+            now_db = database._to_db_utc(now)
             
             # Получаем только пользователей с АКТИВНОЙ trial-подпиской
             # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
@@ -169,16 +170,16 @@ async def process_trial_notifications(bot: Bot):
                   AND u.trial_expires_at > $1
             """
             try:
-                rows = await conn.fetch(query_with_reachable, now)
+                rows = await conn.fetch(query_with_reachable, now_db)
             except asyncpg.UndefinedColumnError:
                 logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, trial_notifications fallback to legacy query")
-                rows = await conn.fetch(fallback_query, now)
+                rows = await conn.fetch(fallback_query, now_db)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
-                trial_expires_at = row["trial_expires_at"]
-                subscription_expires_at = row["subscription_expires_at"]
-                paid_subscription_expires_at = row.get("paid_subscription_expires_at")
+                trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
+                subscription_expires_at = database._from_db_utc(row["subscription_expires_at"]) if row["subscription_expires_at"] else None
+                paid_subscription_expires_at = database._from_db_utc(row["paid_subscription_expires_at"]) if row.get("paid_subscription_expires_at") else None
                 
                 # Canonical guard: paid subscription ALWAYS overrides trial (same as database.get_active_paid_subscription).
                 if paid_subscription_expires_at:
@@ -367,6 +368,7 @@ async def expire_trial_subscriptions(bot: Bot):
         pool = await database.get_pool()
         async with pool.acquire() as conn:
             now = datetime.now(timezone.utc)
+            now_db = database._to_db_utc(now)
             
             # Получаем всех пользователей с истёкшим trial (trial_expires_at <= now)
             # и их trial-подписки для отзыва доступа
@@ -394,16 +396,16 @@ async def expire_trial_subscriptions(bot: Bot):
                   AND u.trial_expires_at > $1 - INTERVAL '24 hours'
             """
             try:
-                rows = await conn.fetch(query_with_reachable, now)
+                rows = await conn.fetch(query_with_reachable, now_db)
             except asyncpg.UndefinedColumnError:
                 logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, expire_trial fallback to legacy query")
-                rows = await conn.fetch(fallback_query, now)
+                rows = await conn.fetch(fallback_query, now_db)
             
             for row in rows:
                 telegram_id = row["telegram_id"]
                 uuid = row["uuid"]
-                trial_used_at = row["trial_used_at"]
-                trial_expires_at = row["trial_expires_at"]
+                trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
+                trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
                 
                 try:
                     # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
