@@ -14,7 +14,7 @@ from aiogram.types import BotCommand
 import config
 import database
 from app.core.feature_flags import get_feature_flags
-import handlers
+from app.handlers import router as root_router
 import reminders
 import healthcheck
 # import outline_cleanup  # DISABLED - мигрировали на Xray Core
@@ -90,7 +90,7 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     
     # Регистрация handlers
-    dp.include_router(handlers.router)
+    dp.include_router(root_router)
     
     # ====================================================================================
     # SAFE STARTUP GUARD: Инициализация базы данных с защитой от краша
