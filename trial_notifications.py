@@ -658,6 +658,9 @@ async def run_trial_scheduler(bot: Bot):
                 duration_ms=duration_ms
             )
             
+        except asyncio.CancelledError:
+            logger.info("Trial notifications task cancelled")
+            break
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"trial_notifications: Database temporarily unavailable in scheduler loop: {type(e).__name__}: {str(e)[:100]}")

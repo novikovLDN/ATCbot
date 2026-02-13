@@ -160,6 +160,9 @@ async def reminders_task(bot: Bot):
         try:
             # Отправляем напоминания об окончании подписки
             await send_smart_reminders(bot)
+        except asyncio.CancelledError:
+            logger.info("Reminders task cancelled")
+            break
         except Exception as e:
             logger.exception(f"Error in reminders_task: {e}")
         

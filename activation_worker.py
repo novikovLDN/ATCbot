@@ -576,6 +576,9 @@ async def activation_worker_task(bot: Bot):
                 duration_ms=duration_ms
             )
             
+        except asyncio.CancelledError:
+            logger.info("Activation worker task cancelled")
+            break
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"activation_worker: Database temporarily unavailable in task loop: {type(e).__name__}: {str(e)[:100]}")
