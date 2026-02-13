@@ -173,6 +173,7 @@ class UpdateUserRequest(BaseModel):
 class AddUserResponse(BaseModel):
     uuid: str
     vless_link: str
+    link: str = ""  # Same as vless_link; both returned for API contract compatibility
 
 
 class RemoveUserResponse(BaseModel):
@@ -540,7 +541,7 @@ async def add_user(request: AddUserRequest):
         logger.info(
             f"XRAY_ADD_USER uuid_request={uuid_from_request} uuid_response={uuid_from_request}"
         )
-        return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link)
+        return AddUserResponse(uuid=uuid_from_request, vless_link=vless_link, link=vless_link)
 
     except asyncio.CancelledError:
         raise
