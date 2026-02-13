@@ -8,6 +8,7 @@ from aiogram import Router, F, Bot
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state
 
 import config
 import database
@@ -15,10 +16,11 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
 from app.handlers.common.guards import ensure_db_ready_callback
-from app.handlers.common.screens import _open_buy_screen
+from app.handlers.common.screens import _open_buy_screen, show_tariffs_main_screen
 from handlers import show_payment_method_selection
 from app.handlers.common.utils import safe_edit_text, get_promo_session
 from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
+from app.core.structured_logger import log_event
 
 payments_callbacks_router = Router()
 logger = logging.getLogger(__name__)
@@ -33,7 +35,10 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     await _open_buy_screen(callback, callback.bot, state)
 
 
-@payments_callbacks_router.callback_query(F.data.startswith("tariff:"))
+@payments_callbacks_router.callback_query(
+    F.data.startswith("tariff:"),
+    StateFilter(PurchaseState.choose_tariff, PurchaseState.choose_period, default_state),
+)
 async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     """ЭКРАН 1 — Выбор тарифа (Basic/Plus)
     
@@ -53,13 +58,22 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
         current_state = None
     
-    # КРИТИЧНО: Проверяем FSM state - должен быть choose_tariff или None (начало покупки)
-    if current_state not in [PurchaseState.choose_tariff, None]:
+    # КРИТИЧНО: Проверяем FSM state - должен быть choose_tariff, choose_period (назад) или None
+    valid_states = (PurchaseState.choose_tariff.state, PurchaseState.choose_period.state, None)
+    if current_state not in valid_states:
+        log_event(
+            logger,
+            component="payments",
+            operation="fsm_transition",
+            outcome="failed",
+            reason="invalid_state_for_tariff",
+            correlation_id=str(telegram_id),
+            level="warning",
+        )
+        await state.clear()
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid FSM state for tariff: user={telegram_id}, state={current_state}, expected=PurchaseState.choose_tariff or None")
-        # Сбрасываем состояние и возвращаем к выбору тарифа
-        await state.set_state(PurchaseState.choose_tariff)
+        await show_tariffs_main_screen(callback, state)
         return
     
     # Парсим callback_data безопасно (формат: "tariff:basic" или "tariff:plus")
@@ -86,6 +100,14 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
         return
     
+    log_event(
+        logger,
+        component="payments",
+        operation="fsm_transition",
+        outcome="success",
+        reason="tariff_selected",
+        correlation_id=str(telegram_id),
+    )
     # КРИТИЧНО: Сохраняем tariff_type в FSM state
     # Промо-сессия НЕ сбрасывается при выборе тарифа - она независима от покупки
     await state.update_data(tariff_type=tariff_type)
@@ -181,7 +203,10 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@payments_callbacks_router.callback_query(F.data.startswith("period:"))
+@payments_callbacks_router.callback_query(
+    F.data.startswith("period:"),
+    StateFilter(PurchaseState.choose_period),
+)
 async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     """ЭКРАН 2 — Выбор периода тарифа
     
@@ -220,11 +245,19 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_period
     current_state = await state.get_state()
-    if current_state != PurchaseState.choose_period:
+    if current_state != PurchaseState.choose_period.state:
+        log_event(
+            logger,
+            component="payments",
+            operation="fsm_transition",
+            outcome="failed",
+            reason="invalid_state_for_period",
+            correlation_id=str(telegram_id),
+            level="warning",
+        )
+        await state.clear()
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid FSM state for period: user={telegram_id}, state={current_state}, expected=PurchaseState.choose_period")
-        # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render
         await show_tariffs_main_screen(callback, state)
         return
     
@@ -287,6 +320,14 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         discount_percent=price_info["discount_percent"]
     )
     
+    log_event(
+        logger,
+        component="payments",
+        operation="fsm_transition",
+        outcome="success",
+        reason="period_selected",
+        correlation_id=str(telegram_id),
+    )
     logger.info(
         f"Period selected: user={telegram_id}, tariff={tariff_type}, period={period_days}, "
         f"base_price_kopecks={price_info['base_price_kopecks']}, final_price_kopecks={price_info['final_price_kopecks']}, "
