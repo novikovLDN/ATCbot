@@ -28,7 +28,13 @@ import health_server
 import admin_notifications
 import trial_notifications
 import activation_worker
-# import xray_sync  # DISABLED hotfix: module not in deployment
+try:
+    import xray_sync
+    XRAY_SYNC_AVAILABLE = True
+except Exception as e:
+    XRAY_SYNC_AVAILABLE = False
+    xray_sync = None
+    print(f"[XRAY_SYNC] disabled: {e}")
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -301,12 +307,15 @@ async def main():
                             background_tasks.append(t)
                             logger.info("Activation worker task started (recovered)")
                         
-                        # if xray_sync_task is None and recovered_tasks["xray_sync"] is None:
-                        #     asyncio.create_task(xray_sync.trigger_startup_sync())
-                        #     t = asyncio.create_task(xray_sync.xray_sync_worker_task(bot))
-                        #     recovered_tasks["xray_sync"] = t
-                        #     background_tasks.append(t)
-                        #     logger.info("Xray sync worker started (recovered)")
+                        if XRAY_SYNC_AVAILABLE and config.XRAY_SYNC_ENABLED and xray_sync_task is None and recovered_tasks["xray_sync"] is None:
+                            try:
+                                t = await start_xray_sync_safe(bot)
+                                if t:
+                                    recovered_tasks["xray_sync"] = t
+                                    background_tasks.append(t)
+                                    logger.info("Xray sync worker started (recovered)")
+                            except Exception as e:
+                                logger.warning("Xray sync recovery failed: %s", e)
                         
                         # Успешно инициализировали БД - выходим из цикла
                         logger.info("DB retry task completed successfully, stopping retry loop")
@@ -378,16 +387,29 @@ async def main():
     else:
         logger.warning("Activation worker task skipped (DB not ready)")
 
-    # Xray sync: DISABLED (hotfix - module not in deployment)
+    # Xray sync: safe optional background worker (fail-safe, never crashes bot)
+    async def start_xray_sync_safe(bot_obj):
+        if not XRAY_SYNC_AVAILABLE:
+            print("[XRAY_SYNC] module not available, skipping startup")
+            return None
+        if not config.XRAY_SYNC_ENABLED:
+            logger.info("[XRAY_SYNC] disabled by config (XRAY_SYNC_ENABLED=false), skipping")
+            return None
+        if not database.DB_READY or not config.VPN_ENABLED:
+            logger.info("[XRAY_SYNC] DB or VPN not ready, skipping (will start on recovery if enabled)")
+            return None
+        try:
+            task = asyncio.create_task(xray_sync.start(bot_obj))
+            print("[XRAY_SYNC] started successfully")
+            return task
+        except Exception as e:
+            logger.error("[XRAY_SYNC] failed to start: %s", e)
+            return None
+
     xray_sync_task = None
-    # if database.DB_READY and config.VPN_ENABLED:
-    #     asyncio.create_task(xray_sync.trigger_startup_sync())
-    #     xray_sync_task = asyncio.create_task(xray_sync.xray_sync_worker_task(bot))
-    #     background_tasks.append(xray_sync_task)
-    #     logger.info("Xray sync worker started")
-    # else:
-    #     logger.warning("Xray sync skipped (DB not ready or VPN disabled)")
-    logger.warning("Xray sync disabled (hotfix)")
+    xray_sync_task = await start_xray_sync_safe(bot)
+    if xray_sync_task:
+        background_tasks.append(xray_sync_task)
     
     # Запуск фоновой задачи для автоматической проверки CryptoBot платежей (только если БД готова)
     crypto_watcher_task = None
