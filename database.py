@@ -3339,9 +3339,7 @@ async def reissue_subscription_key(subscription_id: int) -> str:
         )
         raise
     
-    # Генерируем vless_url для нового UUID (STAGE-префикс уже в new_uuid, для URL нужен raw)
-    new_uuid_raw = new_uuid[6:] if new_uuid.startswith("stage-") else new_uuid
-    vless_url = vpn_utils.generate_vless_url(new_uuid_raw)
+    vless_url = vpn_utils.generate_vless_url(new_uuid)
     
     # 3. Обновляем UUID и vpn_key в БД
     try:
@@ -3918,10 +3916,9 @@ async def grant_access(
         # 3. expires_at > now() (не истекла)
         # 4. uuid IS NOT NULL (UUID существует)
         if subscription and status == "active" and uuid and expires_at and expires_at > now:
-            # UUID_AUDIT_DB_VALUE: Trace UUID from DB for renewal
+            # UUID_AUDIT_DB_VALUE: Trace UUID from DB for renewal (identical across DB/Xray, no transformation)
             logger.info(
-                f"UUID_AUDIT_DB_VALUE [telegram_id={telegram_id}, uuid_from_db={uuid[:8] if uuid else 'N/A'}..., "
-                f"repr={repr(uuid)}, len={len(uuid) if uuid else 0}]"
+                f"UUID_AUDIT_DB_VALUE [telegram_id={telegram_id}, uuid_from_db={uuid[:8] if uuid else 'N/A'}..., repr={repr(uuid)}]"
             )
             # UUID СТАБИЛЕН - продлеваем подписку БЕЗ вызова VPN API
             logger.info(

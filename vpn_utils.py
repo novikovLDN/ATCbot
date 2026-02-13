@@ -190,7 +190,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
     Передаёт telegram_id и expiry_timestamp_ms (subscription_end в мс).
     API возвращает uuid и vless_link.
     
-    В STAGE окружении UUID получает префикс "stage-" для изоляции.
+    UUID is stored and sent as-is (no prefix). Stage isolation uses X-Inbound-Tag header.
     
     Args:
         telegram_id: Telegram ID пользователя
@@ -200,7 +200,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
     
     Returns:
         Словарь с ключами:
-        - "uuid": UUID пользователя (str, с префиксом "stage-" в STAGE)
+        - "uuid": UUID пользователя (str, raw 36-char UUID)
         - "vless_url": VLESS URL для подключения (str, сгенерирован локально)
     
     Raises:
@@ -296,14 +296,11 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
         "expiry_timestamp_ms": expiry_ms
     }
     uuid_sent = None
+    # UUID sent exactly as provided (whitespace trim only). No prefix add/strip.
     if uuid:
-        uuid_clean = uuid.strip()
-        if config.IS_STAGE and uuid_clean.startswith("stage-"):
-            uuid_clean = uuid_clean[6:]
-        json_body["uuid"] = uuid_clean
-        uuid_sent = uuid_clean
-    
-    # UUID_AUDIT_ADD_REQUEST: Trace UUID sent to add-user API
+        uuid_sent = uuid.strip()
+        json_body["uuid"] = uuid_sent
+
     logger.info(
         f"UUID_AUDIT_ADD_REQUEST [uuid_arg={repr(uuid)}, uuid_sent_to_api={repr(uuid_sent) if uuid_sent else 'generated_by_api'}]"
     )
@@ -391,20 +388,13 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
                 logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
                 raise InvalidResponseError(error_msg)
             
-            # STAGE изоляция: добавляем префикс к UUID
-            original_uuid = str(uuid)
-            if config.IS_STAGE:
-                # В STAGE добавляем префикс для изоляции
-                uuid = f"stage-{original_uuid}"
-                logger.info(f"XRAY_CALL_STAGE_ISOLATION [original_uuid={original_uuid[:8]}..., prefixed_uuid={uuid[:14]}...]")
+            uuid = str(uuid)
             
             # Use vless_link from API response if available, otherwise generate locally
             if vless_link:
                 vless_url = vless_link
             else:
-                # Generate VLESS URL locally based on UUID + server constants (fallback)
-                # Используем оригинальный UUID для генерации URL (XRAY API работает с оригинальным UUID)
-                vless_url = generate_vless_url(original_uuid)
+                vless_url = generate_vless_url(uuid)
             
             # Safe UUID logging (first 8 characters only)
             uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
@@ -458,7 +448,7 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     Вызывает POST /update-user на Xray API сервере.
     Используется при продлении подписки — UUID остаётся, обновляется только срок.
     
-    В STAGE окружении UUID может иметь префикс "stage-", который удаляется перед отправкой.
+    UUID is sent exactly as stored (no transformation).
     
     Args:
         uuid: UUID пользователя для обновления
@@ -486,16 +476,9 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
     assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
     
-    uuid_raw = uuid.strip()
-    uuid_clean = uuid_raw
-    if config.IS_STAGE and uuid_clean.startswith("stage-"):
-        uuid_clean = uuid_clean[6:]
-    
-    # UUID_AUDIT_UPDATE_REQUEST: raw vs sent (prefix stripping)
-    logger.info(
-        f"UUID_AUDIT_UPDATE_REQUEST [uuid_raw={repr(uuid_raw)}, uuid_sent={repr(uuid_clean)}, "
-        f"len_raw={len(uuid_raw)}, len_sent={len(uuid_clean)}, IS_STAGE={getattr(config, 'IS_STAGE', False)}]"
-    )
+    # UUID sent exactly as stored. No prefix add/strip.
+    uuid_clean = uuid.strip()
+    logger.info(f"UUID_AUDIT_UPDATE_REQUEST [uuid={repr(uuid_clean)}]")
     
     expiry_ms = int(subscription_end.timestamp() * 1000)
     api_url = config.XRAY_API_URL.rstrip('/')
@@ -546,11 +529,10 @@ async def remove_vless_user(uuid: str) -> None:
     
     Вызывает POST /remove-user на Xray API сервере для удаления пользователя.
     
-    В STAGE окружении UUID должен иметь префикс "stage-" для изоляции.
-    При удалении префикс удаляется перед отправкой в XRAY API.
+    UUID is sent exactly as stored (no transformation).
     
     Args:
-        uuid: UUID пользователя для удаления (str, может быть с префиксом "stage-" в STAGE)
+        uuid: UUID пользователя для удаления (str, raw 36-char UUID)
     
     Raises:
         ValueError: Если XRAY_API_URL или XRAY_API_KEY не настроены, или uuid пустой
@@ -592,16 +574,9 @@ async def remove_vless_user(uuid: str) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    # STAGE изоляция: удаляем префикс перед отправкой в XRAY API
     uuid_clean = uuid.strip()
-    original_uuid = uuid_clean
-    if config.IS_STAGE and uuid_clean.startswith("stage-"):
-        uuid_clean = uuid_clean[6:]  # Удаляем "stage-" префикс
-        logger.info(f"XRAY_CALL_STAGE_ISOLATION [prefixed_uuid={original_uuid[:14]}..., original_uuid={uuid_clean[:8]}...]")
-    
-    # STAGE изоляция: логируем начало операции
     if config.IS_STAGE:
-        logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={original_uuid[:14]}..., environment=stage]")
+        logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=stage]")
     elif config.IS_PROD:
         logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=prod]")
     else:
@@ -627,8 +602,6 @@ async def remove_vless_user(uuid: str) -> None:
             logger.error(error_msg)
             raise RuntimeError(error_msg)
     
-    # Используем формат /remove-user/{uuid} (UUID в пути, не в body)
-    # uuid_clean уже обработан выше (префикс удален в STAGE)
     url = f"{api_url}/remove-user/{uuid_clean}"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
