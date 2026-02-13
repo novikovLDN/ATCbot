@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncpg
 import database
 import config
@@ -131,7 +131,7 @@ async def fast_expiry_cleanup_task():
             
             # READ-ONLY system state awareness: Skip iteration if system is unavailable
             try:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 db_ready = database.DB_READY
                 
                 # Build SystemState for awareness (read-only)
@@ -222,7 +222,7 @@ async def fast_expiry_cleanup_task():
             
             # Получаем текущее UTC время для сравнения
             # PostgreSQL TIMESTAMP хранит без timezone, поэтому используем naive datetime
-            now_utc = datetime.utcnow()
+            now_utc = datetime.now(timezone.utc)
             
             # Получаем истёкшие подписки с активными UUID
             # Используем expires_at (в БД) - это и есть subscription_end

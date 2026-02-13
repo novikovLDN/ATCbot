@@ -11,7 +11,7 @@ IMPORTANT:
 - False positives are suppressed (cooldown, recovery, admin actions)
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Callable
 from enum import Enum
 from dataclasses import dataclass
@@ -83,7 +83,7 @@ class AlertRules:
             return None
         
         # Check if we're in cooldown (suppress alert during recovery)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if self.recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
             self._suppressed_alerts.add("unavailable")
             return None
@@ -134,7 +134,7 @@ class AlertRules:
             return None
         
         # Check if we're in recovery (suppress alert during recovery)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         recovery_in_progress = self.metrics.get_gauge("recovery_in_progress") == 1.0
         if recovery_in_progress:
             self._suppressed_alerts.add("degraded")
@@ -182,7 +182,7 @@ class AlertRules:
         if recovery_attempts <= max_attempts:
             return None
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         alert_key = "recovery_failed"
         
         # Check if alert was recently fired (prevent spam)
@@ -228,7 +228,7 @@ class AlertRules:
         if not breached_slos:
             return None
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         alert_key = "slo_breach"
         
         # Check if alert was recently fired (prevent spam)

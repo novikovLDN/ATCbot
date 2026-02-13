@@ -18,7 +18,7 @@ import logging
 import threading
 from enum import Enum
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ class CircuitBreakerLite:
             
             if self._state == CircuitState.OPEN:
                 # Throttle logging (once per minute)
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 if not self._last_log_time or (now - self._last_log_time).total_seconds() >= 60:
                     logger.warning(
                         f"[CIRCUIT_BREAKER] {self.config.name} is OPEN, skipping operation "
@@ -133,13 +133,13 @@ class CircuitBreakerLite:
             if self._state == CircuitState.HALF_OPEN:
                 # Failure in half-open → back to open
                 self._state = CircuitState.OPEN
-                self._opened_at = datetime.utcnow()
+                self._opened_at = datetime.now(timezone.utc)
                 self._success_count = 0
                 logger.warning(f"[CIRCUIT_BREAKER] {self.config.name} transitioned back to OPEN")
     
     def _update_state(self) -> None:
         """Update circuit breaker state based on thresholds"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Closed → Open: Too many failures
         if self._state == CircuitState.CLOSED:

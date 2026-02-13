@@ -16,7 +16,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.filters import StateFilter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import database
 import config
@@ -1794,7 +1794,7 @@ async def cmd_admin_audit(message: Message):
             elif isinstance(created_at, datetime):
                 pass
             else:
-                created_at = datetime.now()
+                created_at = datetime.now(timezone.utc)
             
             created_str = created_at.strftime("%Y-%m-%d %H:%M")
             
@@ -1836,7 +1836,7 @@ async def cmd_admin_audit(message: Message):
                 elif isinstance(created_at, datetime):
                     pass
                 else:
-                    created_at = datetime.now()
+                    created_at = datetime.now(timezone.utc)
                 
                 created_str = created_at.strftime("%Y-%m-%d %H:%M")
                 

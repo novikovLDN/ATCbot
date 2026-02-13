@@ -7,7 +7,7 @@ import base64
 import uuid
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
 import config
@@ -34,6 +34,24 @@ logger = logging.getLogger(__name__)
 # Если False, бот работает в деградированном режиме (degraded mode).
 # ====================================================================================
 DB_READY: bool = False
+
+
+# ====================================================================================
+# UTC HELPERS: Ensure timezone-aware UTC for subscription/expiry logic
+# ====================================================================================
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Ensure datetime is timezone-aware UTC. Naive assumed UTC. Other TZ converted."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None and dt.tzinfo == timezone.utc:
+        return dt
+    if dt.tzinfo is None:
+        return datetime(
+            dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, dt.microsecond,
+            tzinfo=timezone.utc
+        )
+    return dt.astimezone(timezone.utc)
 
 
 # ====================================================================================
@@ -228,9 +246,9 @@ async def get_pool() -> asyncpg.Pool:
         raise RuntimeError(f"{config.APP_ENV.upper()}_DATABASE_URL is not configured")
     if _pool is None:
         # B4.3 - SAFE RETRY RE-ENABLE: Check cooldown before retrying pool creation
-        from datetime import datetime
+        from datetime import datetime, timezone
         recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # If database is in cooldown, use minimal retries
         if recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
@@ -2838,7 +2856,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 
                 # Получаем подписку, которая истекла, но ещё не очищена
                 row = await conn.fetchrow(
@@ -2943,7 +2961,7 @@ async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
         logger.warning("Pool is None, get_subscription skipped")
         return None
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         row = await conn.fetchrow(
             "SELECT * FROM subscriptions WHERE telegram_id = $1 AND status = 'active' AND expires_at > $2",
             telegram_id, now
@@ -3110,7 +3128,7 @@ async def is_trial_available(telegram_id: int) -> bool:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         
         # Проверка 1: trial_used_at IS NULL
         user_row = await conn.fetchrow(
@@ -3162,7 +3180,7 @@ async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, An
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         row = await conn.fetchrow(
             """SELECT * FROM subscriptions 
                WHERE id = $1 
@@ -3208,7 +3226,7 @@ async def get_all_active_subscriptions() -> List[Dict[str, Any]]:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         rows = await conn.fetch(
             """SELECT * FROM subscriptions 
                WHERE status = 'active' 
@@ -3262,7 +3280,8 @@ async def reissue_subscription_key(subscription_id: int) -> str:
     )
     
     # 2. Перевыпускаем VPN доступ
-    expires_at = subscription.get("expires_at")
+    expires_at_raw = subscription.get("expires_at")
+    expires_at = _ensure_utc(expires_at_raw) if expires_at_raw else None
     if not expires_at:
         error_msg = f"Subscription {subscription_id} has no expires_at"
         logger.error(f"reissue_subscription_key: {error_msg}")
@@ -3564,7 +3583,7 @@ async def reissue_vpn_key_atomic(
 
                 # 1. Проверяем, что у пользователя есть активная подписку
                 # КРИТИЧНО: Проверяем status='active', а не только expires_at
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 subscription_row = await conn.fetchrow(
                     """SELECT * FROM subscriptions 
                        WHERE telegram_id = $1 
@@ -3580,7 +3599,7 @@ async def reissue_vpn_key_atomic(
                 subscription = dict(subscription_row)
                 old_uuid = subscription.get("uuid")
                 old_vpn_key = subscription.get("vpn_key", "")
-                expires_at = subscription["expires_at"]
+                expires_at = _ensure_utc(subscription["expires_at"])
                 
                 # 2. Удаляем старый UUID из Xray API (POST /remove-user/{uuid})
                 if old_uuid:
@@ -3807,7 +3826,7 @@ async def grant_access(
         should_release_conn = False
     
     try:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         
         # Логируем начало операции с полными данными
         duration_str = f"{duration.days} days" if duration.days > 0 else f"{int(duration.total_seconds() / 60)} minutes"
@@ -3825,7 +3844,8 @@ async def grant_access(
         
         # Определяем статус подписки
         if subscription:
-            expires_at = subscription.get("expires_at")
+            expires_at_raw = subscription.get("expires_at")
+            expires_at = _ensure_utc(expires_at_raw) if expires_at_raw else None
             db_status = subscription.get("status")
             uuid = subscription.get("uuid")
             
@@ -3877,7 +3897,8 @@ async def grant_access(
                 old_expires_at = expires_at
                 subscription_end = max(expires_at, now) + duration
                 # subscription_start сохраняется (activated_at не меняется при продлении)
-                subscription_start = subscription.get("activated_at") or subscription.get("expires_at") or now
+                _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
+                subscription_start = _ensure_utc(_start_raw) if _start_raw else now
                 
                 # ВАЛИДАЦИЯ: Проверяем что subscription_end увеличен
                 if subscription_end <= old_expires_at:
@@ -3894,6 +3915,8 @@ async def grant_access(
                 # TWO-PHASE SAFE RENEWAL: Xray FIRST, DB ONLY after Xray success.
                 # Guarantee: DB and Xray never diverge on expiryTime.
                 # If Xray fails → no DB change → raise RenewalSyncError.
+                assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
+                assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
                 expiry_ms = int(subscription_end.timestamp() * 1000)
                 try:
                     await vpn_utils.update_vless_user(uuid=uuid, subscription_end=subscription_end)
@@ -4180,6 +4203,8 @@ async def grant_access(
         # Вычисляем subscription_end ДО вызова VPN API (передаётся в Xray как expiryTime)
         subscription_start = now
         subscription_end = now + duration
+        assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
+        assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
         duration_days = duration.days
         expiry_ms = int(subscription_end.timestamp() * 1000)
         logger.info(
@@ -4563,7 +4588,7 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 )
                 
                 # 3. Получаем подписку БЕЗ фильтра по активности (нужно проверить expires_at)
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 days = _calculate_subscription_days(months)
                 tariff_duration = timedelta(days=days)
                 
@@ -4683,7 +4708,7 @@ async def get_subscriptions_needing_reminder() -> list:
     if not DB_READY:
         logger.warning("DB not ready, get_subscriptions_needing_reminder skipped")
         return []
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     reminder_date = now + timedelta(days=3)
     
     pool = await get_pool()
@@ -4854,7 +4879,7 @@ async def increment_promo_code_use(code: str):
             
             # Проверяем срок действия
             expires_at = row.get("expires_at")
-            if expires_at and expires_at < datetime.utcnow():
+            if expires_at and expires_at < datetime.now(timezone.utc):
                 # Деактивируем промокод при истечении срока
                 await conn.execute(
                     "UPDATE promo_codes SET is_active = FALSE WHERE UPPER(code) = UPPER($1)",
@@ -4976,7 +5001,7 @@ async def create_promocode_atomic(
         logger.error(f"Invalid duration_seconds: {duration_seconds}")
         return None
 
-    expires_at = datetime.utcnow() + timedelta(seconds=duration_seconds)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -5334,7 +5359,7 @@ async def get_subscriptions_for_reminders() -> list:
         logger.warning("Pool is None, get_subscriptions_for_reminders skipped")
         return []
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         query_with_reachable = """
             SELECT s.*,
                    (SELECT action_type FROM subscription_history
@@ -5376,7 +5401,7 @@ async def get_admin_stats() -> Dict[str, int]:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         
         # Всего пользователей
         total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
@@ -6097,7 +6122,7 @@ async def create_pending_balance_topup_purchase(
             telegram_id
         )
         purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
-        expires_at = datetime.now() + timedelta(minutes=30)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
         await conn.execute(
             """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
                VALUES ($1, $2, 'balance_topup', $3, 'pending', $4)""",
@@ -6142,7 +6167,7 @@ async def create_pending_purchase(
         purchase_id = f"purchase_{uuid.uuid4().hex[:16]}"
         
         # Срок действия контекста покупки (30 минут)
-        expires_at = datetime.now() + timedelta(minutes=30)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
         
         # Создаем запись о покупке (subscription only)
         await conn.execute(
@@ -6232,7 +6257,7 @@ async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) 
     pool = await get_pool()
     async with pool.acquire() as conn:
         # Для crypto purchases устанавливаем TTL = 30 минут с момента создания invoice
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
         expires_at_utc = now_utc + timedelta(minutes=30)
         
         result = await conn.execute(
@@ -6702,7 +6727,7 @@ async def get_active_subscriptions_for_export() -> list:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         rows = await conn.fetch(
             "SELECT * FROM subscriptions WHERE expires_at > $1 ORDER BY expires_at DESC",
             now
@@ -6942,7 +6967,7 @@ async def get_eligible_no_subscription_broadcast_users() -> list:
     if pool is None:
         return []
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         query_with_reachable = """
             SELECT u.telegram_id
             FROM users u
@@ -7059,7 +7084,7 @@ async def get_users_by_segment(segment: str) -> list:
             rows = await conn.fetch("SELECT telegram_id FROM users")
             return [row["telegram_id"] for row in rows]
         elif segment == "active_subscriptions":
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             rows = await conn.fetch(
                 """SELECT DISTINCT u.telegram_id 
                    FROM users u
@@ -7857,7 +7882,7 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 
                 # 1. Проверяем, есть ли активная подписка
                 subscription_row = await conn.fetchrow(
@@ -7926,7 +7951,7 @@ async def get_user_discount(telegram_id: int) -> Optional[Dict[str, Any]]:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         row = await conn.fetchrow(
             """SELECT * FROM user_discounts 
                WHERE telegram_id = $1 
@@ -8337,7 +8362,7 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
         Словарь с ключами: revenue, payments_count, new_users, new_subscriptions
     """
     if date is None:
-        date = datetime.now()
+        date = datetime.now(timezone.utc)
     
     start_date = date.replace(hour=0, minute=0, second=0, microsecond=0)
     end_date = start_date + timedelta(days=1)

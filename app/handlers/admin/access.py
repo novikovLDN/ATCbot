@@ -4,7 +4,7 @@ Admin access management handlers: grant/revoke access, keys management, VIP, use
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -81,7 +81,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         # Получаем все активные подписки
         pool = await database.get_pool()
         async with pool.acquire() as conn:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             subscriptions = await conn.fetch(
                 """SELECT telegram_id, uuid, vpn_key, expires_at 
                    FROM subscriptions 

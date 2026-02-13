@@ -56,9 +56,102 @@ logger.info(f"Xray API initialized: config_path={XRAY_CONFIG_PATH}, server_ip={X
 # Lock for config file write operations (prevents concurrent write races)
 _config_file_lock = asyncio.Lock()
 
-# Debounced restart: max 1 restart per 5 seconds (prevents restart storm under load)
-_last_restart_time: float = 0.0
-_restart_lock = asyncio.Lock()
+
+# ============================================================================
+# XrayMutationQueue — Deterministic batching, max 1 restart per 3 seconds
+# ============================================================================
+
+class XrayMutationQueue:
+    """
+    Queue-based mutation model. Config writes happen immediately (atomic).
+    Restart is batched: max 1 restart per FLUSHER_INTERVAL.
+    Survives burst traffic (100+ ops/min) without restart storm.
+    """
+    FLUSHER_INTERVAL = 3.0  # seconds
+    
+    def __init__(self):
+        self._restart_pending = False
+        self._lock = asyncio.Lock()
+        self._mutation_count = 0
+        self._flusher_task: Optional[asyncio.Task] = None
+        self._stopped = False
+    
+    def mark_restart_pending(self, op: str = "mutation") -> None:
+        """Mark that a restart is needed after config mutation."""
+        self._restart_pending = True
+        self._mutation_count += 1
+        logger.debug(f"MutationQueue: restart_pending=True, op={op}, total_mutations={self._mutation_count}")
+    
+    def has_pending(self) -> bool:
+        return self._restart_pending and not self._stopped
+    
+    async def flush(self) -> bool:
+        """
+        If restart pending: do single restart, clear pending.
+        Returns True if restart was performed, False otherwise.
+        """
+        async with self._lock:
+            if not self._restart_pending or self._stopped:
+                return False
+            self._restart_pending = False
+            count = self._mutation_count
+            self._mutation_count = 0
+        
+        # Restart outside lock to avoid blocking
+        try:
+            await _restart_xray_async()
+            logger.info(f"MutationQueue: flush OK, restarted after {count} mutation(s)")
+            return True
+        except Exception as e:
+            logger.warning(f"MutationQueue: restart failed, will retry: {e}")
+            # Retry once
+            try:
+                await asyncio.sleep(1.0)
+                await _restart_xray_async()
+                logger.info(f"MutationQueue: flush OK on retry, restarted after {count} mutation(s)")
+                return True
+            except Exception as retry_e:
+                logger.critical(
+                    f"MutationQueue: RESTART_FAILED_AFTER_RETRY [mutations={count}, error={retry_e}] - "
+                    "Config on disk is correct but Xray has not reloaded. Admin intervention required."
+                )
+                self._stopped = True
+                # Re-mark pending so we keep trying on next cycle
+                self._restart_pending = True
+                self._mutation_count = count
+                return False
+    
+    def start_flusher(self) -> None:
+        """Start background flusher task."""
+        if self._flusher_task and not self._flusher_task.done():
+            return
+        self._stopped = False
+        self._flusher_task = asyncio.create_task(_flusher_loop(self))
+        logger.info(f"MutationQueue: flusher started, interval={self.FLUSHER_INTERVAL}s")
+    
+    def stop_flusher(self) -> None:
+        """Stop background flusher task."""
+        if self._flusher_task:
+            self._flusher_task.cancel()
+            self._flusher_task = None
+        logger.info("MutationQueue: flusher stopped")
+
+
+_mutation_queue = XrayMutationQueue()
+
+
+async def _flusher_loop(queue: XrayMutationQueue) -> None:
+    """Background task: every FLUSHER_INTERVAL, flush pending restart."""
+    while True:
+        try:
+            await asyncio.sleep(queue.FLUSHER_INTERVAL)
+            if queue.has_pending():
+                await queue.flush()
+        except asyncio.CancelledError:
+            logger.info("MutationQueue: flusher cancelled")
+            break
+        except Exception as e:
+            logger.exception(f"MutationQueue: flusher error: {e}")
 
 
 # ============================================================================
@@ -198,6 +291,9 @@ def _save_xray_config_file(config: dict, config_path: str) -> None:
         )
 
 
+_last_restart_time: float = 0.0  # Last successful restart timestamp (for metrics)
+
+
 async def _restart_xray_async() -> None:
     """Перезапустить Xray через systemctl (non-blocking via asyncio subprocess)"""
     global _last_restart_time
@@ -244,15 +340,9 @@ async def _restart_xray_async() -> None:
         )
 
 
-async def _debounced_restart() -> None:
-    """Debounced Xray restart: max 1 restart per 5 seconds (prevents restart storm under load)"""
-    global _last_restart_time
-    async with _restart_lock:
-        now = time.time()
-        if now - _last_restart_time < 5:
-            logger.debug("Xray restart debounced (within 5s cooldown)")
-            return
-        await _restart_xray_async()
+def _mark_restart_pending(op: str = "mutation") -> None:
+    """Mark restart pending; flusher will apply batched restart every 3s."""
+    _mutation_queue.mark_restart_pending(op=op)
 
 
 def find_client_in_config(config: dict, target_uuid: str) -> Optional[int]:
@@ -281,6 +371,22 @@ def find_client_in_config(config: dict, target_uuid: str) -> Optional[int]:
     except Exception as e:
         logger.error(f"Error finding client in config: {e}")
         return None
+
+
+# ============================================================================
+# Lifecycle: start/stop flusher
+# ============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Start mutation queue flusher (max 1 restart per 3s)."""
+    _mutation_queue.start_flusher()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop mutation queue flusher."""
+    _mutation_queue.stop_flusher()
 
 
 # ============================================================================
@@ -382,8 +488,7 @@ async def add_user(request: AddUserRequest):
             
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
-        # Перезапускаем Xray (debounced, non-blocking)
-        await _debounced_restart()
+        _mark_restart_pending("add_user")
         
         # Генерируем VLESS ссылку
         vless_link = generate_vless_link(new_uuid)
@@ -454,8 +559,7 @@ async def remove_user(uuid: str):
             
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
-        # Перезапускаем Xray (debounced, non-blocking)
-        await _debounced_restart()
+        _mark_restart_pending("remove_user")
         
         logger.info(f"User removed successfully: uuid={target_uuid}")
         
@@ -527,7 +631,7 @@ async def update_user(request: UpdateUserRequest):
             
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
-        await _debounced_restart()
+        _mark_restart_pending("update_user")
         
         return UpdateUserResponse(status="ok")
         

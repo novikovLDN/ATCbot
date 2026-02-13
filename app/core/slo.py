@@ -10,7 +10,7 @@ IMPORTANT:
 - SLOs do NOT affect business logic
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -83,7 +83,7 @@ class SLO:
             current_value=current_availability,
             target_value=target_availability,
             description=f"System availability SLO (target: {target_availability*100:.1f}%)",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
     
     def evaluate_degradation_budget(
@@ -119,7 +119,7 @@ class SLO:
             current_value=current_degraded_percent,
             target_value=max_degraded_percent,
             description=f"Degradation budget SLO (max: {max_degraded_percent}%)",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
     
     def evaluate_background_reliability(
@@ -163,7 +163,7 @@ class SLO:
             current_value=current_reliability,
             target_value=target_reliability,
             description=f"Background task reliability SLO (max skip: {max_skip_percent}%)",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
     
     def evaluate_all_slos(

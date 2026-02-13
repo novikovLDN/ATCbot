@@ -2,7 +2,7 @@
 User command: /start
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import database
 import config
@@ -89,7 +89,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 first_payment_msg = i18n_get_text(referrer_language, "referral.first_payment_notification")
                 title = i18n_get_text(referrer_language, "referral.registered_title")
                 user_line = i18n_get_text(referrer_language, "referral.registered_user", user=referred_display)
-                date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now().strftime('%d.%m.%Y %H:%M'))
+                date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M'))
                 notification_text = f"{title}\n\n{user_line}\n{date_line}\n\n{first_payment_msg}"
                 
                 await message.bot.send_message(
