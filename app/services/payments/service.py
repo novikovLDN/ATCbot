@@ -64,6 +64,116 @@ class PaymentPayloadInfo:
 
 
 # ====================================================================================
+# Invoice Creation (Crypto)
+# ====================================================================================
+
+async def create_invoice(
+    telegram_id: int,
+    tariff: str,
+    period_days: int,
+    amount_rubles: float,
+    purchase_id: str,
+    asset: str = "USDT",
+    description: str = ""
+) -> Dict[str, Any]:
+    """
+    Create crypto invoice via CryptoBot API.
+
+    Caller must create pending_purchase first and pass purchase_id.
+    Returns pay_url and invoice_id for the payment button.
+
+    Args:
+        telegram_id: User Telegram ID
+        tariff: Tariff (basic/plus)
+        period_days: Subscription period
+        amount_rubles: Amount in rubles
+        purchase_id: Pending purchase ID (correlation for webhook)
+        asset: Crypto asset (USDT/TON/BTC)
+        description: Invoice description
+
+    Returns:
+        {"invoice_id": int, "pay_url": str, "asset": str, "amount": float}
+
+    Raises:
+        PaymentFinalizationError: If CryptoBot not configured or API fails
+    """
+    try:
+        import cryptobot_service
+        if not cryptobot_service.is_enabled():
+            raise PaymentFinalizationError("CryptoBot not configured")
+        result = await cryptobot_service.create_invoice(
+            telegram_id=telegram_id,
+            tariff=tariff,
+            period_days=period_days,
+            amount_rubles=amount_rubles,
+            purchase_id=purchase_id,
+            asset=asset,
+            description=description
+        )
+        return {
+            "invoice_id": result.get("invoice_id"),
+            "pay_url": result.get("pay_url"),
+            "asset": result.get("asset", asset),
+            "amount": amount_rubles,
+        }
+    except Exception as e:
+        raise PaymentFinalizationError(f"Failed to create invoice: {e}") from e
+
+
+async def mark_payment_paid(
+    purchase_id: str,
+    telegram_id: int,
+    amount_rubles: float,
+    provider: str = "cryptobot",
+    invoice_id: Optional[str] = None
+) -> PaymentResult:
+    """
+    Mark payment as paid and activate subscription (idempotent).
+
+    Called from webhook handler after signature verification.
+    Uses finalize_subscription_payment internally.
+
+    Args:
+        purchase_id: Purchase ID from payload
+        telegram_id: User Telegram ID
+        amount_rubles: Actual payment amount
+        provider: Payment provider name
+        invoice_id: Provider invoice ID (for audit)
+
+    Returns:
+        PaymentResult with subscription details
+    """
+    return await finalize_subscription_payment(
+        purchase_id=purchase_id,
+        telegram_id=telegram_id,
+        payment_provider=provider,
+        amount_rubles=amount_rubles,
+        invoice_id=invoice_id
+    )
+
+
+async def mark_payment_failed(purchase_id: str) -> bool:
+    """
+    Mark pending purchase as expired (e.g. invoice expired).
+
+    Args:
+        purchase_id: Purchase ID to expire
+
+    Returns:
+        True if updated, False if not found or already processed
+    """
+    pool = await database.get_pool()
+    if not pool:
+        return False
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE pending_purchases SET status = 'expired' WHERE purchase_id = $1 AND status = 'pending'",
+            purchase_id
+        )
+        return result == "UPDATE 1"
+
+
+# ====================================================================================
 # Payment Payload Verification
 # ====================================================================================
 
