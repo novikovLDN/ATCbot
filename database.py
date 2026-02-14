@@ -651,6 +651,7 @@ async def init_db() -> bool:
         # Миграция: добавляем поле notification_sent в payments для идемпотентности уведомлений
         try:
             await conn.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS notification_sent BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
         except Exception:
             pass
         
@@ -6520,11 +6521,14 @@ async def finalize_purchase(
                     raise Exception(error_msg)
                 
                 # Создаем payment record для баланса
+                now_utc = datetime.now(timezone.utc)
                 payment_id = await conn.fetchval(
-                    "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
+                    """INSERT INTO payments (telegram_id, tariff, amount, status, paid_at)
+                       VALUES ($1, $2, $3, 'approved', $4) RETURNING id""",
                     telegram_id,
                     "balance_topup",
-                    int(amount_rubles * 100)  # Сохраняем в копейках
+                    int(amount_rubles * 100),  # Сохраняем в копейках
+                    _to_db_utc(now_utc)
                 )
                 
                 if not payment_id:
@@ -6586,12 +6590,17 @@ async def finalize_purchase(
                 logger.error(f"finalize_purchase: {error_msg}")
                 raise ValueError(error_msg)
 
-            # Создаем payment record
+            # Создаем payment record (purchase_id, cryptobot_payment_id for idempotency/audit)
+            now_utc = datetime.now(timezone.utc)
             payment_id = await conn.fetchval(
-                "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'pending') RETURNING id",
+                """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, cryptobot_payment_id, paid_at)
+                   VALUES ($1, $2, $3, 'pending', $4, $5, $6) RETURNING id""",
                 telegram_id,
                 f"{tariff_type}_{period_days}",
-                int(amount_rubles * 100)  # Сохраняем в копейках
+                int(amount_rubles * 100),  # Сохраняем в копейках
+                purchase_id,
+                str(invoice_id) if invoice_id else None,
+                _to_db_utc(now_utc)
             )
             
             if not payment_id:

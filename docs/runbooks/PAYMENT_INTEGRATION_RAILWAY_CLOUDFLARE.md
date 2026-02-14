@@ -103,3 +103,30 @@ https://api.yourdomain.com/webhooks/cryptobot
 | GET | /health | Health check |
 | POST | /webhook/payment | Unified payment webhook (Crypto Bot) |
 | POST | /webhooks/cryptobot | Crypto Bot webhook (alias) |
+
+---
+
+## Payment Service Layer
+
+`app/services/payments/service.py`:
+
+| Function | Purpose |
+|----------|---------|
+| `create_invoice(telegram_id, tariff, period_days, amount_rubles, purchase_id)` | Create CryptoBot invoice, returns pay_url |
+| `mark_payment_paid(purchase_id, telegram_id, amount_rubles, provider, invoice_id)` | Finalize payment, activate subscription (idempotent) |
+| `mark_payment_failed(purchase_id)` | Mark pending purchase as expired |
+| `finalize_subscription_payment(...)` | Internal: full subscription finalization |
+
+---
+
+## Optional Env Aliases
+
+For multi-provider support (future):
+
+| Variable | Maps to | Description |
+|----------|---------|-------------|
+| `PAYMENT_PROVIDER` | — | `cryptobot` (current) |
+| `PAYMENT_API_KEY` | `CRYPTOBOT_TOKEN` | Provider API token |
+| `PAYMENT_WEBHOOK_SECRET` | `CRYPTOBOT_WEBHOOK_SECRET` | Webhook signature verification |
+
+Current implementation uses `PROD_CRYPTOBOT_TOKEN` and `PROD_CRYPTOBOT_WEBHOOK_SECRET` directly.
