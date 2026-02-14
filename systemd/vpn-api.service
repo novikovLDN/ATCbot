@@ -1,0 +1,16 @@
+[Unit]
+Description=VPN API (Xray Management) - listens on localhost only
+After=network.target xray.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/local/lib/xray_api
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=-/usr/local/etc/xray_api.env
+ExecStart=/usr/local/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
