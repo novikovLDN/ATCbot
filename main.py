@@ -110,6 +110,10 @@ async def main():
     from app.core.runtime_context import set_bot_start_time
     set_bot_start_time(datetime.now(timezone.utc))
 
+    # Architecture assertion: Bot must NOT use XRAY_* for link generation
+    if hasattr(config, "XRAY_SERVER_IP"):
+        logger.warning("XRAY_* link constants detected in config. Ensure not used for link generation (API-only).")
+
     # Логируем информацию о конфигурации при старте
     logger.info(f"Starting bot in {config.APP_ENV.upper()} environment")
     logger.info(f"Using BOT_TOKEN from {config.APP_ENV.upper()}_BOT_TOKEN")

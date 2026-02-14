@@ -155,17 +155,9 @@ else:
 # Xray sync worker: background reconciliation (default false for production safety)
 XRAY_SYNC_ENABLED = os.getenv("XRAY_SYNC_ENABLED", "false").lower() == "true"
 
-# Xray VLESS REALITY Server Constants (ENV ISOLATED)
-# Bot MUST NOT generate VLESS links — API is single source of truth.
-# These are used only for validation/documentation when API is unavailable.
-XRAY_SERVER_IP = env("XRAY_SERVER_IP", default="vpn.mynewllcw.com")
-XRAY_PORT = int(env("XRAY_PORT", default="443"))
-XRAY_SNI = env("XRAY_SNI", default="vpn.mynewllcw.com")
-XRAY_PUBLIC_KEY = env("XRAY_PUBLIC_KEY", default="Aar4hQAtl1QEtaz3_euuXNuQpWpr_d3Yko4n4CXpI7Y")
-XRAY_SHORT_ID = env("XRAY_SHORT_ID", default="12345678")
-# XRAY_* constants: Bot does NOT use these for link generation.
-# API/Xray server generates VLESS links with flow=xtls-rprx-vision (REALITY + XTLS Vision).
-XRAY_FP = env("XRAY_FP", default="chrome")
+# Bot uses ONLY XRAY_API_URL and XRAY_API_KEY.
+# Port, SNI, public key, short id, fingerprint belong to API server only.
+# Bot receives vless_link from API — never generates links locally.
 
 # Crypto Bot (Telegram Crypto Pay) Configuration
 # All CryptoBot vars use env() prefix: STAGE_CRYPTOBOT_* or PROD_CRYPTOBOT_*
