@@ -2885,15 +2885,14 @@ async def update_payment_status(payment_id: int, status: str, admin_telegram_id:
 
 async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     """
-    Проверить и немедленно отключить истёкшую подписку
+    Проверить и немедленно отключить истёкшую подписку.
     
-    Вызывается при каждом обращении пользователя для мгновенного отключения доступа.
-    Это критично для предотвращения "ghost access" без ожидания scheduler.
+    Two-phase pattern: Phase 1 DB read, Phase 2 remove from Xray (outside tx), Phase 3 DB update.
+    External API call NEVER inside DB transaction.
     
     Returns:
         True если подписка была отключена, False если подписка активна или отсутствует
     """
-    # Защита от работы с неинициализированной БД
     if not DB_READY:
         logger.warning("DB not ready, check_and_disable_expired_subscription skipped")
         return False
@@ -2901,89 +2900,78 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     if pool is None:
         logger.warning("Pool is None, check_and_disable_expired_subscription skipped")
         return False
+    now = datetime.now(timezone.utc)
+    uuid_to_remove = None
+    subscription = None
+    subscription_id = None
+    # PHASE 1 — DB read (inside tx)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            try:
-                now = datetime.now(timezone.utc)
-                
-                # Получаем подписку, которая истекла, но ещё не очищена
-                row = await conn.fetchrow(
-                    """SELECT * FROM subscriptions 
-                       WHERE telegram_id = $1 
-                       AND expires_at <= $2 
-                       AND status = 'active'
-                       AND uuid IS NOT NULL""",
-                    telegram_id, _to_db_utc(now)
-                )
-                
-                if not row:
-                    return False  # Подписка активна или отсутствует
-                
-                subscription = dict(row)
-                uuid = subscription.get("uuid")
-                
-                if uuid:
-                    # Удаляем UUID из Xray API
-                    try:
-                        await vpn_utils.remove_vless_user(uuid)
-                        # Безопасное логирование UUID
-                        uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
-                        logger.info(
-                            f"check_and_disable: REMOVED_UUID [action=expire_realtime, user={telegram_id}, "
-                            f"uuid={uuid_preview}]"
-                        )
-                        
-                        # VPN AUDIT LOG: Логируем успешное удаление UUID при real-time проверке
-                        try:
-                            # Явно определяем expires_at из subscription
-                            subscription_expires_at = subscription.get("expires_at")
-                            expires_at_str = subscription_expires_at.isoformat() if subscription_expires_at else "N/A"
-                            await _log_vpn_lifecycle_audit_async(
-                                action="vpn_expire",
-                                telegram_id=telegram_id,
-                                uuid=uuid,
-                                source="auto-expiry",
-                                result="success",
-                                details=f"Real-time expiration check, expires_at={expires_at_str}"
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
-                    except ValueError as e:
-                        # VPN API не настроен - логируем и помечаем как expired в БД (UUID уже неактивен)
-                        if "VPN API is not configured" in str(e):
-                            logger.warning(
-                                f"check_and_disable: VPN_API_DISABLED [action=expire_realtime_skip_remove, "
-                                f"user={telegram_id}, uuid={uuid}] - marking as expired in DB only"
-                            )
-                            # Помечаем как expired в БД, даже если не удалось удалить из VPN API
-                        else:
-                            logger.error(
-                                f"check_and_disable: ERROR_REMOVING_UUID [action=expire_realtime_failed, "
-                                f"user={telegram_id}, uuid={uuid}, error={str(e)}]"
-                            )
-                            # Не помечаем как expired если не удалось удалить - повторим в cleanup
-                            return False
-                    except Exception as e:
-                        logger.error(
-                            f"check_and_disable: ERROR_REMOVING_UUID [action=expire_realtime_failed, "
-                            f"user={telegram_id}, uuid={uuid}, error={str(e)}]"
-                        )
-                        # Не помечаем как expired если не удалось удалить - повторим в cleanup
-                        return False
-                
-                # Очищаем данные в БД - помечаем как expired
-                await conn.execute(
-                    """UPDATE subscriptions 
-                       SET status = 'expired', uuid = NULL, vpn_key = NULL 
-                       WHERE telegram_id = $1 AND expires_at <= $2 AND status = 'active'""",
-                    telegram_id, _to_db_utc(now)
-                )
-                
-                return True
-                
-            except Exception as e:
-                logger.exception(f"Error in check_and_disable_expired_subscription for user {telegram_id}")
+            row = await conn.fetchrow(
+                """SELECT * FROM subscriptions
+                   WHERE telegram_id = $1
+                     AND expires_at <= $2
+                     AND status = 'active'
+                     AND uuid IS NOT NULL""",
+                telegram_id, _to_db_utc(now)
+            )
+            if not row:
                 return False
+            subscription = dict(row)
+            subscription_id = subscription.get("id")
+            uuid_to_remove = subscription.get("uuid")
+            logger.info(
+                "EXPIRY_PHASE1",
+                extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove and len(uuid_to_remove) > 8 else "N/A"}
+            )
+    # PHASE 2 — External call (outside tx)
+    removal_success = True
+    if uuid_to_remove:
+        try:
+            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
+            logger.info(
+                "EXPIRY_REMOVE_SUCCESS",
+                extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
+            )
+            try:
+                expires_at_str = (subscription.get("expires_at") or "").isoformat() if subscription else "N/A"
+                await _log_vpn_lifecycle_audit_async(
+                    action="vpn_expire",
+                    telegram_id=telegram_id,
+                    uuid=uuid_to_remove,
+                    source="auto-expiry",
+                    result="success",
+                    details=f"Real-time expiration check, expires_at={expires_at_str}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to log VPN expire audit (non-blocking): {e}")
+        except Exception as e:
+            removal_success = False
+            logger.critical(
+                "EXPIRY_REMOVE_FAILED",
+                extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "...", "error": str(e)[:200]}
+            )
+            return False
+    if not removal_success:
+        return False
+    # PHASE 3 — DB update (new transaction)
+    if not uuid_to_remove:
+        return False
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            result = await conn.execute(
+                """UPDATE subscriptions
+                   SET status = 'expired', uuid = NULL, vpn_key = NULL
+                   WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'""",
+                subscription_id, telegram_id, uuid_to_remove
+            )
+            rows = int(result.split()[-1]) if result else 0
+            if rows > 0:
+                logger.info(
+                    "EXPIRY_DB_UPDATE_SUCCESS",
+                    extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
+                )
+            return rows > 0
 
 
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
