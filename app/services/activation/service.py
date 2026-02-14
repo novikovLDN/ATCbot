@@ -395,7 +395,7 @@ async def _attempt_activation_with_idempotency(
         raise VPNActivationError("Subscription has no expires_at")
     subscription_end = database._from_db_utc(subscription_end_raw)
     
-    # DB generates UUID; Xray uses it (DB is source of truth)
+    # Generate UUID for API request; Xray response overrides (Xray is source of truth)
     new_uuid = database._generate_subscription_uuid()
     try:
         vless_result = await vpn_utils.add_vless_user(
@@ -404,10 +404,15 @@ async def _attempt_activation_with_idempotency(
             uuid=new_uuid
         )
         vless_url = vless_result.get("vless_url")
+        # Xray API is single source of truth — MUST use returned UUID
+        uuid_from_api = vless_result.get("uuid")
+        if not uuid_from_api:
+            raise VPNActivationError("Xray API returned empty UUID")
+        new_uuid = uuid_from_api  # HARD OVERRIDE
     except Exception as e:
         raise VPNActivationError(f"VPN API call failed: {e}") from e
     
-    # Validate UUID
+    # Validate UUID (new_uuid now from API)
     if not new_uuid:
         raise VPNActivationError("VPN API returned empty UUID")
     
@@ -415,10 +420,7 @@ async def _attempt_activation_with_idempotency(
     if not vless_url:
         raise VPNActivationError("VPN API returned empty vless_url")
     
-    # Validate vless link format
-    if not vpn_utils.validate_vless_link(vless_url):
-        raise VPNActivationError("VPN API returned invalid vless_url (contains flow=)")
-    
+    # API is source of truth — vless_url from API, no local validation
     # Update subscription in database (with idempotency check in WHERE clause)
     result = await conn.execute(
         """UPDATE subscriptions

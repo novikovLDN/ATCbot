@@ -263,20 +263,8 @@ async def callback_copy_key(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
         return
     
-    # Получаем VPN-ключ
+    # Получаем VPN-ключ (from API only — no local validation)
     vpn_key = subscription["vpn_key"]
-    
-    # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
-    import vpn_utils
-    if not vpn_utils.validate_vless_link(vpn_key):
-        error_msg = (
-            f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
-            "Key will NOT be sent to user."
-        )
-        logging.error(f"copy_key: {error_msg}")
-        error_text = i18n_get_text(language, "errors.subscription_activation")
-        await callback.answer(error_text, show_alert=True)
-        return
     
     # Отправляем VPN-ключ как отдельное сообщение (позволяет одно нажатие для копирования в Telegram)
     await callback.message.answer(
@@ -352,20 +340,8 @@ async def callback_copy_vpn_key(callback: CallbackQuery):
         await callback.answer(error_text, show_alert=True)
         return
     
-    # Получаем VPN-ключ
+    # Получаем VPN-ключ (from API only — no local validation)
     vpn_key = subscription["vpn_key"]
-    
-    # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
-    import vpn_utils
-    if not vpn_utils.validate_vless_link(vpn_key):
-        error_msg = (
-            f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
-            "Key will NOT be sent to user."
-        )
-        logging.error(f"copy_vpn_key: {error_msg}")
-        error_text = i18n_get_text(language, "errors.subscription_activation")
-        await callback.answer(error_text, show_alert=True)
-        return
     
     # Отправляем VPN-ключ как отдельное сообщение (позволяет одно нажатие для копирования в Telegram)
     await callback.message.answer(

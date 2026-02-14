@@ -3285,23 +3285,23 @@ async def get_all_active_subscriptions() -> List[Dict[str, Any]]:
         return [_normalize_subscription_row(row) for row in rows]
 
 
-async def reissue_subscription_key(subscription_id: int) -> str:
+async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
     """Перевыпустить VPN ключ для подписки (сервисная функция)
     
     Алгоритм:
     1) Получить подписку через get_active_subscription
     2) Если None → выбросить бизнес-ошибку
     3) Сохранить old_uuid
-    4) Вызвать reissue_vpn_access(old_uuid)
-    5) Получить new_uuid
-    6) Обновить uuid в БД через update_subscription_uuid
-    7) Вернуть new_uuid
+    4) Вызвать reissue_vpn_access(old_uuid) — API returns vless_link (single source of truth)
+    5) Получить new_uuid, vless_url
+    6) Обновить uuid, vpn_key в БД через update_subscription_uuid
+    7) Вернуть (new_uuid, vless_url)
     
     Args:
         subscription_id: ID подписки
     
     Returns:
-        Новый UUID (str)
+        (new_uuid, vless_url) — оба из API
     
     Raises:
         ValueError: Если подписка не найдена или не активна
@@ -3336,7 +3336,7 @@ async def reissue_subscription_key(subscription_id: int) -> str:
         raise ValueError(error_msg)
     
     try:
-        new_uuid = await vpn_utils.reissue_vpn_access(
+        new_uuid, vless_url = await vpn_utils.reissue_vpn_access(
             old_uuid=old_uuid,
             telegram_id=telegram_id,
             subscription_end=expires_at
@@ -3347,10 +3347,8 @@ async def reissue_subscription_key(subscription_id: int) -> str:
             f"telegram_id={telegram_id}, error={str(e)}]"
         )
         raise
-    
-    vless_url = vpn_utils.generate_vless_url(new_uuid)
-    
-    # 3. Обновляем UUID и vpn_key в БД
+
+    # 3. Обновляем UUID и vpn_key в БД (vless_url from API — single source of truth)
     try:
         await update_subscription_uuid(subscription_id, new_uuid, vpn_key=vless_url)
     except Exception as e:
@@ -3367,8 +3365,8 @@ async def reissue_subscription_key(subscription_id: int) -> str:
         f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "
         f"telegram_id={telegram_id}, old_uuid={uuid_preview}, new_uuid={new_uuid_preview}]"
     )
-    
-    return new_uuid
+
+    return new_uuid, vless_url
 
 
 async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tuple[datetime, bool]:
@@ -4102,7 +4100,8 @@ async def grant_access(
                 
                 return {
                     "uuid": uuid,
-                    "vless_url": None,  # Не новый UUID, URL не нужен (продление без разрыва соединения)
+                    "vless_url": None,  # Не новый UUID
+                    "vpn_key": subscription.get("vpn_key"),  # Используем существующий из БД (от API при issuance)
                     "subscription_end": subscription_end,
                     "action": "renewal"  # Явно указываем тип операции
                 }
@@ -4360,15 +4359,7 @@ async def grant_access(
                         continue
                     raise last_exception
                 
-                # КРИТИЧНО: Валидация VLESS ссылки ПЕРЕД финализацией платежа
-                if not vpn_utils.validate_vless_link(vless_url):
-                    error_msg = f"VPN API returned invalid vless_url (contains flow=) for user {telegram_id}"
-                    logger.error(f"grant_access: ERROR_INVALID_VLESS_URL [user={telegram_id}, attempt={attempt + 1}, error={error_msg}]")
-                    last_exception = Exception(error_msg)
-                    if attempt < MAX_VPN_RETRIES:
-                        continue
-                    raise last_exception
-                
+                # API is source of truth — vless_url from API, no local validation
                 # Успешно получен валидный UUID и VLESS URL
                 uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
                 logger.info(
@@ -6695,49 +6686,37 @@ async def finalize_purchase(
             vpn_key = grant_result.get("vless_url")
             
             if not vpn_key:
-                # Если это продление, получаем ключ из существующей подписки
+                # Renewal: get vpn_key from subscription (API is source of truth, no local generation)
                 if is_renewal:
-                    subscription_row = await conn.fetchrow(
-                        "SELECT * FROM subscriptions WHERE telegram_id = $1",
-                        telegram_id
-                    )
-                    subscription = dict(subscription_row) if subscription_row else None
-                    if subscription and subscription.get("vpn_key"):
-                        vpn_key = subscription["vpn_key"]
-                    else:
-                        # Fallback: генерируем из UUID
-                        uuid = grant_result.get("uuid")
-                        if uuid:
-                            import vpn_utils
-                            vpn_key = vpn_utils.generate_vless_url(uuid)
-                        else:
-                            vpn_key = ""
-                else:
-                    # Новая подписка без vless_url - генерируем из UUID
-                    uuid = grant_result.get("uuid")
-                    if uuid:
-                        import vpn_utils
-                        vpn_key = vpn_utils.generate_vless_url(uuid)
-                    else:
-                        error_msg = f"No VPN key and no UUID: purchase_id={purchase_id}, user={telegram_id}"
+                    vpn_key = grant_result.get("vpn_key")
+                    if not vpn_key:
+                        subscription_row = await conn.fetchrow(
+                            "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                            telegram_id
+                        )
+                        vpn_key = subscription_row["vpn_key"] if subscription_row and subscription_row.get("vpn_key") else ""
+                    if not vpn_key:
+                        error_msg = (
+                            f"Renewal: no vpn_key in subscription or grant_result. "
+                            f"Bot MUST use vless_link from API only. purchase_id={purchase_id}, user={telegram_id}"
+                        )
                         logger.error(f"finalize_purchase: {error_msg}")
                         raise Exception(error_msg)
+                else:
+                    # New issuance: vless_url must come from grant_access (API response)
+                    error_msg = (
+                        f"No VPN key from API: purchase_id={purchase_id}, user={telegram_id}. "
+                        "API must return vless_link. Bot MUST NOT generate links."
+                    )
+                    logger.error(f"finalize_purchase: {error_msg}")
+                    raise Exception(error_msg)
             
             if not vpn_key:
                 error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
                 logger.error(f"finalize_purchase: {error_msg}")
                 raise Exception(error_msg)
             
-            # КРИТИЧНО: Валидация VPN ключа ПЕРЕД финализацией платежа
-            import vpn_utils
-            if not vpn_utils.validate_vless_link(vpn_key):
-                error_msg = (
-                    f"VPN key validation failed (contains forbidden flow= parameter): "
-                    f"purchase_id={purchase_id}, user={telegram_id}"
-                )
-                logger.error(f"finalize_purchase: VPN_KEY_VALIDATION_FAILED: {error_msg}")
-                raise Exception(error_msg)
-            
+            # API is source of truth — vpn_key from API, no local validation
             # STEP 6: Обновляем payment → approved
             await conn.execute(
                 "UPDATE payments SET status = 'approved' WHERE id = $1",

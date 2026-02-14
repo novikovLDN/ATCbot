@@ -30,7 +30,7 @@ curl -X POST https://api.mynewllcw.com/add-user \
 Expected response:
 - `uuid` equals request UUID
 - `vless_link` / `link` contain `vless://uuid@vpn.mynewllcw.com:443?...` and `#AtlasSecure`
-- No `flow=` parameter in link
+- `flow=xtls-rprx-vision` present (REALITY + XTLS Vision required)
 
 ## 4. Bot Activation Test
 
@@ -39,7 +39,7 @@ Expected response:
 - [ ] Confirm no fallback generation triggered (check logs for `XRAY_SOURCE_OF_TRUTH`)
 - [ ] Confirm no private IP usage
 - [ ] Confirm no legacy myvpncloud.net references
-- [ ] Confirm no `flow=` parameter in link
+- [ ] Confirm `flow=xtls-rprx-vision` in link (REALITY + XTLS Vision)
 
 ## 5. Architecture Verification
 

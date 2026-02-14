@@ -504,18 +504,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             await state.clear()
             return
         
-        import vpn_utils
-        if vpn_key and not vpn_utils.validate_vless_link(vpn_key):
-            error_msg = (
-                f"REGRESSION: VPN key contains forbidden 'flow=' parameter for user {telegram_id}. "
-                "Key will NOT be sent to user."
-            )
-            logger.error(f"callback_pay_balance: {error_msg}")
-            error_text = i18n_get_text(language, "errors.payment_processing")
-            await callback.message.answer(error_text)
-            await state.set_state(None)
-            return
-        
+        # API is source of truth — vpn_key from API, no local validation
         # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
         await clear_promo_session(state)
         

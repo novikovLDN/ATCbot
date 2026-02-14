@@ -106,36 +106,6 @@ async def check_xray_health() -> bool:
         return False
 
 
-def validate_vless_link(vless_link: str) -> bool:
-    """
-    Валидирует VLESS ссылку на наличие запрещённых параметров.
-    
-    Защита от регресса конфигурации:
-    - Проверяет что строка НЕ содержит "flow="
-    
-    Args:
-        vless_link: VLESS URL строка для проверки
-    
-    Returns:
-        True если ссылка валидна (не содержит flow=), False в противном случае
-    
-    Raises:
-        ValueError: Если vless_link пустая или None
-    """
-    if not vless_link or not isinstance(vless_link, str):
-        raise ValueError(f"Invalid vless_link: must be non-empty string, got: {vless_link}")
-    
-    # Проверяем наличие запрещённого параметра flow
-    if "flow=" in vless_link:
-        logger.error(
-            f"validate_vless_link: REGRESSION_DETECTED [vless_link_preview={vless_link[:100]}...] - "
-            "contains forbidden 'flow=' parameter"
-        )
-        return False
-    
-    return True
-
-
 async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
@@ -154,7 +124,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
     Returns:
         Словарь с ключами:
         - "uuid": UUID пользователя (str, raw 36-char UUID)
-        - "vless_url": VLESS URL для подключения (str, сгенерирован локально)
+        - "vless_url": VLESS URL для подключения (str, from API only — never generated locally)
     
     Raises:
         ValueError: Если XRAY_API_URL или XRAY_API_KEY не настроены
@@ -341,7 +311,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             if not vless_link:
                 raise InvalidResponseError(
                     "Xray API did not return vless_link. "
-                    "Server must be the single source of truth."
+                    "Server must generate link (REALITY + XTLS Vision required)."
                 )
 
             vless_url = vless_link

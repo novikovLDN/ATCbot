@@ -42,14 +42,13 @@ if not XRAY_API_KEY:
     raise ValueError("XRAY_API_KEY environment variable is required")
 
 XRAY_CONFIG_PATH = os.getenv("XRAY_CONFIG_PATH", "/usr/local/etc/xray/config.json")
-XRAY_SERVER_IP = os.getenv("XRAY_SERVER_IP", "172.86.67.9")
+XRAY_SERVER_IP = os.getenv("XRAY_SERVER_IP", "vpn.mynewllcw.com")
 XRAY_PORT = int(os.getenv("XRAY_PORT", "443"))
-XRAY_SNI = os.getenv("XRAY_SNI", "www.cloudflare.com")
-XRAY_PUBLIC_KEY = os.getenv("XRAY_PUBLIC_KEY", "fDixPEehAKSEsRGm5Q9HY-BNs9uMmN5NIzEDKngDOk8")
-XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "a1b2c3d4")
-# XRAY_FLOW удалён: параметр flow ЗАПРЕЩЁН для REALITY протокола
-# VLESS с REALITY не использует flow параметр, так как REALITY несовместим с XTLS flow
-XRAY_FP = os.getenv("XRAY_FP", "ios")  # По умолчанию ios согласно требованиям
+XRAY_SNI = os.getenv("XRAY_SNI", "vpn.mynewllcw.com")
+XRAY_PUBLIC_KEY = os.getenv("XRAY_PUBLIC_KEY", "Aar4hQAtl1QEtaz3_euuXNuQpWpr_d3Yko4n4CXpI7Y")
+XRAY_SHORT_ID = os.getenv("XRAY_SHORT_ID", "12345678")
+# XRAY_FLOW удалён: flow ЗАПРЕЩЁН для REALITY — only in Xray config, not in link
+XRAY_FP = os.getenv("XRAY_FP", "chrome")
 
 logger.info(f"Xray API initialized: config_path={XRAY_CONFIG_PATH}, server_ip={XRAY_SERVER_IP}")
 
@@ -205,28 +204,28 @@ def generate_vless_link(uuid_str: str) -> str:
     """
     Генерирует VLESS ссылку для подключения к Xray серверу.
     
-    КРИТИЧЕСКИ ВАЖНО: Параметр flow ЗАПРЕЩЁН для REALITY протокола.
-    REALITY несовместим с XTLS flow (xtls-rprx-vision).
-    Добавление flow приведёт к ошибкам подключения.
+    REALITY + XTLS Vision: flow=xtls-rprx-vision REQUIRED.
+    Без flow трафик подключается, но не проходит.
     
-    Формат (БЕЗ flow):
+    Формат:
     vless://UUID@SERVER_IP:PORT?
     encryption=none
     &security=reality
+    &flow=xtls-rprx-vision
     &type=tcp
     &sni={REALITY_SNI}
-    &fp=ios
+    &fp=...
     &pbk={REALITY_PBK}
     &sid={REALITY_SID}
-    #VPN
+    #AtlasSecure
     """
     server_address = f"{uuid_str}@{XRAY_SERVER_IP}:{XRAY_PORT}"
     
-    # Параметры БЕЗ flow (flow ЗАПРЕЩЁН для REALITY)
-    # REALITY протокол не использует flow, так как несовместим с XTLS
+    # REALITY + XTLS Vision: flow required for traffic to pass
     params = {
         "encryption": "none",
         "security": "reality",
+        "flow": "xtls-rprx-vision",
         "type": "tcp",
         "sni": XRAY_SNI,
         "fp": XRAY_FP,
@@ -237,7 +236,7 @@ def generate_vless_link(uuid_str: str) -> str:
     query_parts = [f"{key}={quote(str(value))}" for key, value in params.items()]
     query_string = "&".join(query_parts)
     
-    fragment = "VPN"
+    fragment = "AtlasSecure"
     vless_url = f"vless://{server_address}?{query_string}#{quote(fragment)}"
     
     return vless_url
