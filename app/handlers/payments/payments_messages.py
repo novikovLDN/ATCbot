@@ -1,6 +1,10 @@
 """
 Payment message handlers: successful_payment, photo
+
+VPN key: Primary path via grant_access → vpn_utils.add_vless_user (Xray API).
+Fallback: xray_manager.create_vless_user when vpn_key empty (legacy SSH path).
 """
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -576,11 +580,22 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )
             return
         
-        # КРИТИЧНО: Дополнительная проверка - VPN ключ должен быть валидным после finalize_purchase
+        # КРИТИЧНО: VPN ключ — primary из grant_access. Fallback: xray_manager при пустом ключе.
         if not vpn_key:
-            error_msg = f"VPN key is empty after finalize_purchase: purchase_id={purchase_id}, user={telegram_id}, payment_id={payment_id}"
-            logger.error(f"process_successful_payment: CRITICAL_VPN_KEY_MISSING: {error_msg}")
-            raise Exception(error_msg)
+            try:
+                from xray_manager import create_vless_user
+                vpn_key = await asyncio.to_thread(create_vless_user)
+                logger.warning(
+                    f"process_successful_payment: VPN_KEY_FALLBACK [user={telegram_id}, purchase_id={purchase_id}] "
+                    "used xray_manager.create_vless_user (Xray API unavailable)"
+                )
+            except Exception as fallback_e:
+                error_msg = (
+                    f"VPN key is empty after finalize_purchase and create_vless_user fallback failed: "
+                    f"purchase_id={purchase_id}, user={telegram_id}, payment_id={payment_id}"
+                )
+                logger.error(f"process_successful_payment: CRITICAL_VPN_KEY_MISSING: {error_msg}, fallback_error={fallback_e}")
+                raise Exception(error_msg) from fallback_e
         
         logger.info(
             f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
