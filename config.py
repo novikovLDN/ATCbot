@@ -173,3 +173,7 @@ CRYPTOBOT_WEBHOOK_SECRET = env("CRYPTOBOT_WEBHOOK_SECRET")
 CRYPTOBOT_ASSETS_STR = env("CRYPTOBOT_ASSETS", default="USDT,TON,BTC")
 CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.split(",") if a.strip()]
 
+# Public base URL for webhooks (Railway + Cloudflare). Required for Crypto Pay webhook.
+# Example: https://api.yourdomain.com
+PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
+
