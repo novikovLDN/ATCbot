@@ -6274,6 +6274,38 @@ async def get_pending_purchase(purchase_id: str, telegram_id: int, check_expiry:
             return None
 
 
+async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = False) -> Optional[Dict[str, Any]]:
+    """
+    Get pending purchase by purchase_id only (for webhook when payload is "purchase:{id}").
+    
+    Args:
+        purchase_id: ID покупки
+        check_expiry: Проверять ли срок действия (по умолчанию False для webhook)
+    
+    Returns:
+        Словарь с данными покупки или None
+    """
+    if not DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        if check_expiry:
+            row = await conn.fetchrow(
+                """SELECT * FROM pending_purchases 
+                   WHERE purchase_id = $1 AND status = 'pending' AND expires_at > NOW()""",
+                purchase_id
+            )
+        else:
+            row = await conn.fetchrow(
+                """SELECT * FROM pending_purchases 
+                   WHERE purchase_id = $1 AND status = 'pending'""",
+                purchase_id
+            )
+        return dict(row) if row else None
+
+
 async def cancel_pending_purchases(telegram_id: int, reason: str = "user_action") -> None:
     """
     Отменить все pending покупки пользователя
