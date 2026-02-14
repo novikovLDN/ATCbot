@@ -295,7 +295,13 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
                 logger.error(f"vpn_api add_user: INVALID_RESPONSE_TYPE [{error_msg}]")
                 raise InvalidResponseError(error_msg)
             
-            # Validate response structure
+            # Strict schema: API must return uuid and vless_link (no local fallback)
+            required_fields = {"uuid", "vless_link"}
+            if not required_fields.issubset(data.keys()):
+                raise InvalidResponseError(
+                    f"Invalid API response. Expected fields: {required_fields}, got: {set(data.keys())}"
+                )
+
             returned_uuid = data.get("uuid")
             vless_link = data.get("vless_link")
 
@@ -311,7 +317,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             if not vless_link:
                 raise InvalidResponseError(
                     "Xray API did not return vless_link. "
-                    "Server must generate link (REALITY + XTLS Vision required)."
+                    "Local fallback generation is forbidden by architecture."
                 )
 
             vless_url = vless_link
