@@ -109,6 +109,10 @@ async def check_xray_health() -> bool:
 async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
+
+    INVARIANT: Must NEVER be called inside an active DB transaction (orphan UUID risk).
+    Callers that hold a DB transaction MUST use two-phase: call add_vless_user OUTSIDE the tx,
+    then pass the returned {uuid, vless_url} as pre_provisioned_uuid to grant_access.
     
     Вызывает POST /add-user на локальном FastAPI VPN API сервере.
     Передаёт telegram_id и expiry_timestamp_ms (subscription_end в мс).
@@ -363,6 +367,37 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             error_msg = f"Failed to create VLESS user: {e}"
             logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
             raise VPNAPIError(error_msg) from e
+
+
+async def list_vless_users() -> list[str]:
+    """
+    Fetch UUID list of all VLESS clients from Xray API.
+    Used by reconciliation worker to detect orphan UUIDs.
+    
+    Returns:
+        List of UUID strings. Empty list on API error or disabled VPN.
+    """
+    if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        return []
+    
+    api_url = config.XRAY_API_URL.rstrip('/')
+    url = f"{api_url}/list-users"
+    headers = {"X-API-Key": config.XRAY_API_KEY}
+    
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code != 200:
+                logger.warning(f"list_vless_users: API returned status={response.status_code}")
+                return []
+            data = response.json()
+            uuids = data.get("uuids", [])
+            if not isinstance(uuids, list):
+                return []
+            return [str(u).strip() for u in uuids if u and str(u).strip()]
+    except Exception as e:
+        logger.warning(f"list_vless_users: failed: {e}")
+        return []
 
 
 async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
@@ -709,6 +744,52 @@ async def remove_vless_user(uuid: str) -> None:
             error_msg = f"Failed to remove VLESS user: {e}"
             logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=transient_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={error_msg[:100]}]")
             raise VPNAPIError(error_msg) from e
+
+
+async def safe_remove_vless_user_with_retry(uuid: str, *, max_retries: int = 3) -> None:
+    """
+    Remove UUID from Xray with retry for orphan cleanup.
+    Used when Phase 2 (DB tx) fails after Phase 1 (add_vless_user) succeeded.
+
+    Retries on: httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError.
+    Exponential backoff: 1s → 2s → 4s.
+    If all retries fail → raises (caller must not suppress).
+    """
+    uuid_clean = str(uuid).strip() if uuid else ""
+    if not uuid_clean:
+        raise ValueError("safe_remove_vless_user_with_retry: uuid required")
+    uuid_preview = uuid_clean[:8] if len(uuid_clean) > 8 else "***"
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            if attempt == 0:
+                logger.info(
+                    "ORPHAN_CLEANUP_ATTEMPT",
+                    extra={"uuid": uuid_preview, "attempt": attempt + 1}
+                )
+            else:
+                delay = 2 ** (attempt - 1)  # 1s, 2s, 4s exponential backoff
+                logger.warning(
+                    "ORPHAN_CLEANUP_RETRY",
+                    extra={"uuid": uuid_preview, "attempt": attempt + 1, "retries": max_retries, "delay_s": delay}
+                )
+                await asyncio.sleep(delay)
+            await remove_vless_user(uuid_clean)
+            logger.info("ORPHAN_CLEANUP_SUCCESS", extra={"uuid": uuid_preview})
+            return
+        except (httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError) as e:
+            last_error = e
+            if attempt == max_retries - 1:
+                break
+            continue
+        except Exception as e:
+            last_error = e
+            break
+    logger.critical(
+        "ORPHAN_CLEANUP_FAILED",
+        extra={"uuid": uuid_preview, "retries": max_retries, "error": str(last_error)[:200] if last_error else "unknown"}
+    )
+    raise VPNAPIError(f"Orphan cleanup failed after {max_retries} retries: {last_error}") from last_error
 
 
 async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: datetime) -> str:
