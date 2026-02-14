@@ -187,6 +187,11 @@ class HealthResponse(BaseModel):
     status: str
 
 
+class ListUsersResponse(BaseModel):
+    """UUIDs of all VLESS clients in Xray config."""
+    uuids: list[str]
+
+
 # ============================================================================
 # Вспомогательные функции
 # ============================================================================
@@ -401,8 +406,9 @@ async def verify_api_key(request: Request, call_next):
     if request.url.path in ("/health", "/self-test"):
         return await call_next(request)
     
+    import hmac
     api_key = request.headers.get("X-API-Key")
-    if not api_key or api_key != XRAY_API_KEY:
+    if not api_key or not hmac.compare_digest(api_key, XRAY_API_KEY):
         logger.warning(f"Unauthorized request from {request.client.host}: invalid API key")
         return JSONResponse(
             status_code=401,
@@ -718,6 +724,28 @@ async def update_user(request: UpdateUserRequest):
         raise
     except Exception as e:
         logger.exception("XRAY_API_ERROR")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
+@app.get("/list-users", response_model=ListUsersResponse)
+async def list_users():
+    """
+    Return UUIDs of all VLESS clients in Xray config.
+    Used by reconciliation worker to detect orphans (in Xray but not in DB).
+    """
+    try:
+        config_data = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
+        uuids: list[str] = []
+        for inbound in config_data.get("inbounds", []):
+            if inbound.get("protocol") != "vless":
+                continue
+            for client in inbound.get("settings", {}).get("clients", []):
+                cid = client.get("id")
+                if cid and validate_uuid(cid):
+                    uuids.append(cid)
+        return ListUsersResponse(uuids=uuids)
+    except Exception as e:
+        logger.exception("XRAY_API_ERROR list-users")
         raise HTTPException(status_code=500, detail="internal_error")
 
 
