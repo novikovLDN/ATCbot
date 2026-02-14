@@ -3686,7 +3686,7 @@ async def reissue_vpn_key_atomic(
                             pass
                         # Продолжаем, даже если не удалось удалить старый UUID (идемпотентность)
                 
-                # 3. DB generates new UUID; Xray uses it (DB is source of truth)
+                # 3. Generate UUID for API request; Xray response overrides (Xray is source of truth)
                 new_uuid = _generate_subscription_uuid()
                 try:
                     from app.core.system_state import recalculate_from_runtime, ComponentStatus
@@ -3703,6 +3703,11 @@ async def reissue_vpn_key_atomic(
                         uuid=new_uuid
                     )
                     new_vpn_key = vless_result.get("vless_url")
+                    # Xray API is single source of truth — MUST use returned UUID
+                    uuid_from_api = vless_result.get("uuid")
+                    if not uuid_from_api:
+                        raise RuntimeError("Xray API returned empty UUID")
+                    new_uuid = uuid_from_api  # HARD OVERRIDE
                 except Exception as e:
                     if "VPN API is" in str(e):
                         raise
@@ -3712,8 +3717,13 @@ async def reissue_vpn_key_atomic(
                         uuid=new_uuid
                     )
                     new_vpn_key = vless_result.get("vless_url")
+                    # Xray API is single source of truth — MUST use returned UUID
+                    uuid_from_api = vless_result.get("uuid")
+                    if not uuid_from_api:
+                        raise RuntimeError("Xray API returned empty UUID")
+                    new_uuid = uuid_from_api  # HARD OVERRIDE
                     
-                    # VPN AUDIT LOG: Логируем создание нового UUID
+                    # VPN AUDIT LOG: Логируем создание нового UUID (используем uuid_from_api)
                     try:
                         await _log_vpn_lifecycle_audit_async(
                             action="vpn_add_user",
@@ -3740,6 +3750,10 @@ async def reissue_vpn_key_atomic(
                     except Exception:
                         pass
                     return None, None
+                
+                # Defensive: Xray is source of truth — final UUID must be set
+                if not new_uuid:
+                    raise RuntimeError("Reissue UUID resolution failed")
                 
                 # 4. Обновляем подписку (expires_at НЕ меняется - подписка не продлевается)
                 await conn.execute(
@@ -4262,7 +4276,7 @@ async def grant_access(
             f"duration_days={duration_days}, expiry_timestamp_ms={expiry_ms}]"
         )
         
-        # DB generates UUID; Xray uses it (DB is source of truth).
+        # Generate UUID for API request; Xray response overrides (Xray is source of truth).
         new_uuid = _generate_subscription_uuid()
         assert new_uuid is not None, "UUID generation failed"
         logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, uuid={new_uuid[:8]}..., operation=add]")
@@ -4275,6 +4289,7 @@ async def grant_access(
         last_exception = None
         vless_result = None
         vless_url = None
+        uuid_from_api = None  # Xray API is canonical; override any pre-generated UUID
 
         for attempt in range(MAX_VPN_RETRIES + 1):
             if attempt > 0:
@@ -4297,9 +4312,9 @@ async def grant_access(
                             f"VPN API is {system_state.vpn_api.status.value}, skipping VPN call, marking as pending"
                         )
                         # PART D.7: Mark cleanup as pending (activation_status = 'pending')
-                        # UUID will be created later when VPN API is healthy
+                        # UUID will be created later when VPN API is healthy.
+                        # Do NOT set new_uuid=None — same UUID must be passed on retry (no regeneration).
                         vless_result = None
-                        new_uuid = None
                         vless_url = None
                         # Skip VPN API call, will be handled in activation worker
                     else:
@@ -4309,6 +4324,11 @@ async def grant_access(
                             uuid=new_uuid
                         )
                         vless_url = vless_result.get("vless_url")
+                        # Xray API is single source of truth — MUST use returned UUID
+                        uuid_from_api = vless_result.get("uuid")
+                        if not uuid_from_api:
+                            raise RuntimeError("Xray API returned empty UUID")
+                        new_uuid = uuid_from_api  # HARD OVERRIDE
                 except Exception as e:
                     logger.warning(f"grant_access: VPN_API_CHECK_FAILED [user={telegram_id}]: {e}, proceeding with VPN call")
                     vless_result = await vpn_utils.add_vless_user(
@@ -4317,8 +4337,13 @@ async def grant_access(
                         uuid=new_uuid
                     )
                     vless_url = vless_result.get("vless_url")
+                    # Xray API is single source of truth — MUST use returned UUID
+                    uuid_from_api = vless_result.get("uuid")
+                    if not uuid_from_api:
+                        raise RuntimeError("Xray API returned empty UUID")
+                    new_uuid = uuid_from_api  # HARD OVERRIDE
                 
-                # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены
+                # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены (new_uuid now from API)
                 if not new_uuid:
                     error_msg = f"VPN API returned empty UUID for user {telegram_id}"
                     logger.error(f"grant_access: ERROR_VPN_API_RESPONSE [user={telegram_id}, attempt={attempt + 1}, error={error_msg}]")
@@ -4383,7 +4408,11 @@ async def grant_access(
                         pass  # Не блокируем при ошибке логирования
                     raise Exception(error_msg) from e
         
-        # PART D.7: Handle case where VPN API is disabled (new_uuid is None)
+        # Defensive: UUID must be resolved after successful provisioning
+        if not new_uuid:
+            raise RuntimeError("UUID resolution failed after VPN provisioning")
+        
+        # PART D.7: Handle case where VPN API is disabled (no vless_url)
         # If VPN API is disabled, set activation_status to 'pending' instead of raising error
         if not new_uuid or not vless_url:
             # Check if VPN API is disabled (not just failed)
@@ -4434,6 +4463,11 @@ async def grant_access(
             history_action_type = source
         
         # ВАЛИДАЦИЯ: Запрещено выдавать ключ без записи в БД
+        # Defensive: ensure UUID override was applied (Xray is canonical)
+        if not pending_activation and uuid_from_api is not None:
+            if new_uuid != uuid_from_api:
+                raise RuntimeError("UUID override failed – inconsistent state")
+        uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
         logger.info(
             f"grant_access: SAVING_TO_DB [user={telegram_id}, uuid={uuid_preview}, "
             f"subscription_start={subscription_start.isoformat()}, subscription_end={subscription_end.isoformat()}, "
