@@ -24,7 +24,6 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Optional
-from urllib.parse import quote
 import config
 from app.utils.retry import retry_async
 from app.core.metrics import get_metrics, timer
@@ -137,66 +136,6 @@ def validate_vless_link(vless_link: str) -> bool:
     return True
 
 
-def generate_vless_url(uuid: str) -> str:
-    """
-    Генерирует VLESS URL для подключения к Xray Core серверу.
-    
-    КРИТИЧЕСКИ ВАЖНО: Параметр flow ЗАПРЕЩЁН для REALITY протокола.
-    REALITY несовместим с XTLS flow (xtls-rprx-vision).
-    Добавление flow приведёт к ошибкам подключения.
-    
-    Формат (БЕЗ flow параметра):
-    vless://UUID@SERVER_IP:PORT
-    ?encryption=none
-    &security=reality
-    &type=tcp
-    &sni={REALITY_SNI}
-    &fp=ios
-    &pbk={REALITY_PBK}
-    &sid={REALITY_SID}
-    #AtlasSecure
-    
-    Args:
-        uuid: UUID пользователя
-    
-    Returns:
-        VLESS URL строка (БЕЗ flow параметра)
-    """
-    # Кодируем параметры для URL
-    server_address = f"{uuid}@{config.XRAY_SERVER_IP}:{config.XRAY_PORT}"
-    
-    # Параметры запроса (БЕЗ flow - flow ЗАПРЕЩЁН для REALITY)
-    # REALITY протокол не использует flow, так как несовместим с XTLS
-    params = {
-        "encryption": "none",
-        "security": "reality",
-        "type": "tcp",
-        "sni": config.XRAY_SNI,
-        "fp": config.XRAY_FP,
-        "pbk": config.XRAY_PUBLIC_KEY,
-        "sid": config.XRAY_SHORT_ID
-    }
-    
-    # Формируем query string
-    query_parts = [f"{key}={quote(str(value))}" for key, value in params.items()]
-    query_string = "&".join(query_parts)
-    
-    # Формируем полный URL
-    fragment = "🇪🇺 Atlas Secure ⚡️"
-    vless_url = f"vless://{server_address}?{query_string}#{quote(fragment)}"
-    
-    # ЗАЩИТА ОТ РЕГРЕССА: Валидируем сгенерированную ссылку
-    if not validate_vless_link(vless_url):
-        error_msg = (
-            f"REGRESSION: Generated VLESS URL contains forbidden 'flow=' parameter. "
-            f"This should never happen. UUID: {uuid[:8]}..."
-        )
-        logger.error(f"generate_vless_url: {error_msg}")
-        raise ValueError(error_msg)
-    
-    return vless_url
-
-
 async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
@@ -262,13 +201,12 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
     
     # Проверяем что URL правильный и не является private IP
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('http://') and not api_url.startswith('https://'):
-        error_msg = f"Invalid XRAY_API_URL format: {api_url}. Must start with http:// or https://"
+    if not api_url.startswith('https://'):
+        error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
     
     # КРИТИЧЕСКАЯ ПРОВЕРКА: Запрещаем использование private IP адресов
-    # FastAPI работает только на 127.0.0.1:8000, доступ через Cloudflare Tunnel
     forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
     api_url_lower = api_url.lower()
     for pattern in forbidden_patterns:
@@ -276,15 +214,11 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             error_msg = (
                 f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
                 f"not private IP. Got: {api_url}. "
-                f"Expected format: https://api.myvpncloud.net"
+                f"Expected format: https://api.mynewllcw.com"
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
-    
-    # Должен быть HTTPS для безопасности
-    if not api_url.startswith('https://'):
-        logger.warning(f"XRAY_API_URL uses HTTP instead of HTTPS: {api_url}. Consider using HTTPS for security.")
-    
+
     # STEP 6 — F2: CIRCUIT BREAKER LITE
     # Check circuit breaker before making VPN API call
     from app.core.circuit_breaker import get_circuit_breaker
@@ -404,10 +338,13 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             # Xray is source of truth: always trust returned UUID (no mismatch assertion)
             logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={returned_uuid}")
 
-            if vless_link:
-                vless_url = vless_link
-            else:
-                vless_url = generate_vless_url(returned_uuid)
+            if not vless_link:
+                raise InvalidResponseError(
+                    "Xray API did not return vless_link. "
+                    "Server must be the single source of truth."
+                )
+
+            vless_url = vless_link
 
             uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
             logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
@@ -528,8 +465,24 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     uuid_clean = str(uuid).strip()
     logger.info(f"UUID_AUDIT_UPDATE_REQUEST [uuid={repr(uuid_clean)}]")
     
-    expiry_ms = int(subscription_end.timestamp() * 1000)
+    # SECURITY: XRAY_API_URL must be HTTPS, no private IP
     api_url = config.XRAY_API_URL.rstrip('/')
+    if not api_url.startswith('https://'):
+        error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+    api_url_lower = api_url.lower()
+    for pattern in forbidden_patterns:
+        if pattern in api_url_lower:
+            error_msg = (
+                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                f"not private IP. Got: {api_url}. Expected format: https://api.mynewllcw.com"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+    
+    expiry_ms = int(subscription_end.timestamp() * 1000)
     url = f"{api_url}/update-user"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
@@ -630,14 +583,13 @@ async def remove_vless_user(uuid: str) -> None:
     else:
         logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=local]")
     
-    # Проверяем что URL правильный и не является private IP
+    # SECURITY: XRAY_API_URL must be HTTPS, no private IP
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('http://') and not api_url.startswith('https://'):
-        error_msg = f"Invalid XRAY_API_URL format: {api_url}. Must start with http:// or https://"
+    if not api_url.startswith('https://'):
+        error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    # КРИТИЧЕСКАЯ ПРОВЕРКА: Запрещаем использование private IP адресов
     forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
     api_url_lower = api_url.lower()
     for pattern in forbidden_patterns:
@@ -645,7 +597,7 @@ async def remove_vless_user(uuid: str) -> None:
             error_msg = (
                 f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
                 f"not private IP. Got: {api_url}. "
-                f"Expected format: https://api.myvpncloud.net"
+                f"Expected format: https://api.mynewllcw.com"
             )
             logger.error(error_msg)
             raise RuntimeError(error_msg)
@@ -824,7 +776,7 @@ async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: 
         # КРИТИЧНО: Если не удалось удалить старый UUID - прерываем операцию
         raise VPNAPIError(error_msg) from e
     
-    # ШАГ 2: DB generates new UUID (canonical, single source of truth)
+    # ШАГ 2: Generate UUID for API; Xray response overrides (Xray is source of truth)
     import database
     new_uuid = database._generate_subscription_uuid()
     try:
@@ -833,17 +785,22 @@ async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: 
             subscription_end=subscription_end,
             uuid=new_uuid
         )
-        assert vless_result.get("uuid") == new_uuid, "UUID mismatch after add_vless_user"
-        
-        if not new_uuid:
+        uuid_from_api = vless_result.get("uuid")
+        vless_url = vless_result.get("vless_url")
+        if not uuid_from_api:
             error_msg = "VPN API returned empty UUID during reissue"
             logger.error(f"VPN key reissue: ADD_FAILED [error={error_msg}]")
             raise VPNAPIError(error_msg)
-        
+        if not vless_url:
+            error_msg = "VPN API did not return vless_link during reissue"
+            logger.error(f"VPN key reissue: ADD_FAILED [error={error_msg}]")
+            raise VPNAPIError(error_msg)
+        new_uuid = uuid_from_api  # HARD OVERRIDE — Xray is source of truth
+
         new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
         logger.info(f"VPN key reissue: SUCCESS [old_uuid={uuid_preview}, new_uuid={new_uuid_preview}]")
-        
-        return new_uuid
+
+        return new_uuid, vless_url
         
     except Exception as e:
         error_msg = f"Failed to create new UUID during reissue: {str(e)}"
