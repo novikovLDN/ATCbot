@@ -56,6 +56,39 @@ logger.info(f"Xray API initialized: config_path={XRAY_CONFIG_PATH}, server_ip={X
 _config_file_lock = asyncio.Lock()
 
 
+# Production safety invariant:
+# XRAY_PORT must match inbound port in config.json to prevent generation of invalid VLESS links.
+def _validate_xray_port_consistency() -> None:
+    """Fail fast at startup if XRAY_PORT does not match config.json inbound port."""
+    path = Path(XRAY_CONFIG_PATH)
+    if not path.exists():
+        logger.warning(f"Xray config not found at {XRAY_CONFIG_PATH}, skipping port validation")
+        return
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Could not load Xray config for port validation: {e}")
+        return
+    inbounds = cfg.get("inbounds", [])
+    inbound_port = None
+    for inbound in inbounds:
+        if inbound.get("protocol") == "vless":
+            inbound_port = inbound.get("port")
+            break
+    if inbound_port is None:
+        logger.warning("No VLESS inbound found in config, skipping port validation")
+        return
+    if int(inbound_port) != XRAY_PORT:
+        logger.critical(
+            "XRAY_PORT_MISMATCH",
+            extra={"env_port": XRAY_PORT, "config_port": inbound_port}
+        )
+        raise RuntimeError(
+            f"XRAY_PORT ({XRAY_PORT}) does not match inbound port in config.json ({inbound_port})"
+        )
+
+
 # ============================================================================
 # XrayMutationQueue — Deterministic batching, max 1 restart per 3 seconds
 # ============================================================================
@@ -386,7 +419,8 @@ def find_client_in_config(config: dict, target_uuid: str) -> Optional[int]:
 
 @app.on_event("startup")
 async def startup_event():
-    """Start mutation queue flusher (max 1 restart per 3s)."""
+    """Validate XRAY_PORT vs config, then start mutation queue flusher."""
+    _validate_xray_port_consistency()
     _mutation_queue.start_flusher()
 
 

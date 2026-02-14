@@ -2,7 +2,7 @@
 Payment message handlers: successful_payment, photo
 
 VPN key: Primary path via grant_access → vpn_utils.add_vless_user (Xray API).
-Fallback: xray_manager.create_vless_user when vpn_key empty (legacy SSH path).
+Architecture invariant: Bot never generates VLESS locally. vpn_key must come from API only.
 """
 import asyncio
 import logging
@@ -580,22 +580,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )
             return
         
-        # КРИТИЧНО: VPN ключ — primary из grant_access. Fallback: xray_manager при пустом ключе.
+        # Architecture invariant: Bot never generates VLESS locally.
+        # vpn_key must come from XRAY API only.
         if not vpn_key:
-            try:
-                from xray_manager import create_vless_user
-                vpn_key = await asyncio.to_thread(create_vless_user)
-                logger.warning(
-                    f"process_successful_payment: VPN_KEY_FALLBACK [user={telegram_id}, purchase_id={purchase_id}] "
-                    "used xray_manager.create_vless_user (Xray API unavailable)"
-                )
-            except Exception as fallback_e:
-                error_msg = (
-                    f"VPN key is empty after finalize_purchase and create_vless_user fallback failed: "
-                    f"purchase_id={purchase_id}, user={telegram_id}, payment_id={payment_id}"
-                )
-                logger.error(f"process_successful_payment: CRITICAL_VPN_KEY_MISSING: {error_msg}, fallback_error={fallback_e}")
-                raise Exception(error_msg) from fallback_e
+            logger.critical(
+                "ACTIVATION_FAILED_NO_VPN_KEY",
+                extra={"telegram_id": telegram_id}
+            )
+            raise RuntimeError(
+                "VPN activation failed: no vpn_key returned from API."
+            )
         
         logger.info(
             f"process_successful_payment: SUBSCRIPTION_ACTIVATED [user={telegram_id}, payment_id={payment_id}, "
