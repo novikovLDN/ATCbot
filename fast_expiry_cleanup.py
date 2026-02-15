@@ -25,10 +25,6 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
-from app.core.recovery_cooldown import (
-    get_recovery_cooldown,
-    ComponentName,
-)
 from app.core.metrics import get_metrics
 from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
@@ -51,10 +47,6 @@ _worker_lock = asyncio.Lock()
 CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "60"))
 # Ограничиваем интервал от 60 секунд (1 минута) до 300 секунд (5 минут)
 CLEANUP_INTERVAL_SECONDS = max(60, min(300, CLEANUP_INTERVAL_SECONDS))
-
-# B4.4 - GRACEFUL BACKGROUND RECOVERY: Track recovery state for warm-up iterations
-_recovery_warmup_iterations: int = 0
-_recovery_warmup_threshold: int = 3  # Number of successful iterations before normal operation
 
 # STEP 3 — PART B: WORKER LOOP SAFETY
 # Minimum safe sleep on failure to prevent tight retry storms
@@ -179,42 +171,11 @@ async def fast_expiry_cleanup_task():
                     continue
                 
                 # PART D.4: Workers continue normally if DEGRADED
-                # PART D.4: Workers skip only if system_state == UNAVAILABLE
-                # DEGRADED state allows continuation (optional components degraded, critical healthy)
                 if system_state.is_degraded:
                     logger.info(
                         f"[DEGRADED] system_state detected in fast_expiry_cleanup "
                         f"(continuing with reduced functionality - optional components degraded)"
                     )
-                
-                # B4.2 - COOLDOWN & BACKOFF: Check cooldown before starting operations
-                recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
-                if recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
-                    remaining = recovery_cooldown.get_cooldown_remaining(ComponentName.DATABASE, now)
-                    logger.info(
-                        f"[COOLDOWN] skipping fast_expiry_cleanup task due to recent recovery "
-                        f"(database cooldown: {remaining}s remaining)"
-                    )
-                    continue
-                
-                # B4.4 - GRACEFUL BACKGROUND RECOVERY: Warm-up iteration after recovery
-                global _recovery_warmup_iterations
-                if system_state.database.status.value == "healthy" and _recovery_warmup_iterations < _recovery_warmup_threshold:
-                    if _recovery_warmup_iterations == 0:
-                        logger.info(
-                            "[RECOVERY] warm-up iteration started in fast_expiry_cleanup "
-                            "(minimal batch, no parallelism)"
-                        )
-                    _recovery_warmup_iterations += 1
-                elif system_state.database.status.value == "healthy" and _recovery_warmup_iterations == _recovery_warmup_threshold:
-                    logger.info(
-                        "[RECOVERY] normal operation resumed in fast_expiry_cleanup "
-                        f"(completed {_recovery_warmup_iterations} warm-up iterations)"
-                    )
-                    _recovery_warmup_iterations += 1  # Prevent repeated logging
-                elif system_state.database.status.value != "healthy":
-                    # Reset warmup counter if component becomes unhealthy again
-                    _recovery_warmup_iterations = 0
             except Exception:
                 # Ignore system state errors - continue with normal flow
                 pass

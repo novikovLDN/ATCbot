@@ -5,7 +5,6 @@ Tests:
 1. DB failure after UUID creation → UUID removed from Xray (ORPHAN_PREVENTED)
 2. Duplicate webhook → no duplicate subscription
 3. Expired subscription removed
-4. Reconciliation removes orphan
 """
 import pytest
 from datetime import datetime, timezone, timedelta
@@ -147,39 +146,4 @@ class TestExpiredSubscriptionRemoved:
         assert True
 
 
-class TestReconciliationRemovesOrphan:
-    """Test 4: Reconciliation removes orphan UUID (in Xray, not in DB)."""
-
-    @pytest.mark.asyncio
-    async def test_reconcile_removes_orphan_uuid(self):
-        """Orphan in Xray → reconcile_xray_state calls remove_vless_user."""
-        removed = []
-
-        async def fake_list_vless_users():
-            return ["orphan-uuid-1", "valid-uuid-2"]
-
-        async def fake_remove_vless_user(uuid):
-            removed.append(uuid)
-
-        with patch("reconcile_xray_state.config.XRAY_RECONCILIATION_ENABLED", True):
-            with patch("reconcile_xray_state.config.VPN_ENABLED", True):
-                with patch("reconcile_xray_state.vpn_utils.list_vless_users", side_effect=fake_list_vless_users):
-                    with patch("reconcile_xray_state.vpn_utils.remove_vless_user", side_effect=fake_remove_vless_user):
-                        with patch("reconcile_xray_state.database.get_pool") as mock_pool:
-                            conn = MagicMock()
-                            conn.fetch = AsyncMock(return_value=[
-                                {"uuid": "valid-uuid-2"}
-                            ])
-                            pool = MagicMock()
-                            acq = MagicMock()
-                            acq.__aenter__ = AsyncMock(return_value=conn)
-                            acq.__aexit__ = AsyncMock(return_value=None)
-                            pool.acquire.return_value = acq
-                            mock_pool.return_value = pool
-
-                            with patch("reconcile_xray_state.get_metrics", return_value=MagicMock(increment_counter=MagicMock())):
-                                import reconcile_xray_state
-                                result = await reconcile_xray_state.reconcile_xray_state()
-                                assert result["orphans_found"] == 1
-                                assert result["orphans_removed"] == 1
-                                assert "orphan-uuid-1" in removed
+# Reconciliation worker removed: DB is source of truth; no background Xray state diffing.

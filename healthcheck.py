@@ -14,10 +14,6 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
-from app.core.recovery_cooldown import (
-    get_recovery_cooldown,
-    ComponentName,
-)
 from app.core.metrics import get_metrics
 from app.core.slo import get_slo
 from app.core.alerts import get_alert_rules, send_alert
@@ -180,14 +176,12 @@ async def perform_health_check() -> Tuple[bool, list]:
     if _previous_system_state is not None:
         # Check for transitions in each component
         components = [
-            ("database", _previous_system_state.database, system_state.database, ComponentName.DATABASE),
-            ("vpn_api", _previous_system_state.vpn_api, system_state.vpn_api, ComponentName.VPN_API),
-            ("payments", _previous_system_state.payments, system_state.payments, ComponentName.PAYMENTS),
+            ("database", _previous_system_state.database, system_state.database),
+            ("vpn_api", _previous_system_state.vpn_api, system_state.vpn_api),
+            ("payments", _previous_system_state.payments, system_state.payments),
         ]
         
-        recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
-        
-        for comp_name, prev_comp, curr_comp, comp_enum in components:
+        for comp_name, prev_comp, curr_comp in components:
             prev_status = prev_comp.status
             curr_status = curr_comp.status
             
@@ -224,12 +218,7 @@ async def perform_health_check() -> Tuple[bool, list]:
                         f"[AUDIT] SYSTEM_DEGRADATION: {sanitized_data}"
                     )
                 
-                # B4.2 - COOLDOWN & BACKOFF: Mark unavailable and start cooldown
-                if curr_status == ComponentStatus.UNAVAILABLE:
-                    recovery_cooldown.mark_unavailable(comp_enum, now)
-                elif prev_status == ComponentStatus.UNAVAILABLE and curr_status != ComponentStatus.UNAVAILABLE:
-                    # Component recovered from unavailable - clear cooldown after a delay
-                    # Cooldown will naturally expire, but we log recovery
+                if prev_status == ComponentStatus.UNAVAILABLE and curr_status != ComponentStatus.UNAVAILABLE:
                     logger.info(
                         f"[RECOVERY] component={comp_name} recovered from UNAVAILABLE to {curr_status.value} "
                         f"[INCIDENT {correlation_id}]"
@@ -246,15 +235,6 @@ async def perform_health_check() -> Tuple[bool, list]:
     metrics = get_metrics()
     system_state_status = 2.0 if system_state.is_unavailable else (1.0 if system_state.is_degraded else 0.0)
     metrics.set_gauge("system_state_status", system_state_status)
-    
-    # Update recovery and cooldown gauges
-    recovery_cooldown = get_recovery_cooldown()
-    recovery_in_progress = any(
-        recovery_cooldown.is_in_cooldown(comp, now)
-        for comp in [ComponentName.DATABASE, ComponentName.VPN_API, ComponentName.PAYMENTS]
-    )
-    metrics.set_gauge("recovery_in_progress", 1.0 if recovery_in_progress else 0.0)
-    metrics.set_gauge("cooldown_active", 1.0 if recovery_in_progress else 0.0)
     
     # C2.2 - ALERT RULES: Evaluate alert rules (does not affect return value)
     try:

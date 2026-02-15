@@ -25,10 +25,6 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
-from app.core.recovery_cooldown import (
-    get_recovery_cooldown,
-    ComponentName,
-)
 from app.core.metrics import get_metrics
 from app.services.language_service import resolve_user_language
 from app import i18n
@@ -57,11 +53,6 @@ if ACTIVATION_INTERVAL_SECONDS > 1800:  # Максимум 30 минут
 
 # Максимальное количество попыток активации (используется для логирования)
 MAX_ACTIVATION_ATTEMPTS = activation_service.get_max_activation_attempts()
-
-# B4.4 - GRACEFUL BACKGROUND RECOVERY: Track recovery state for warm-up iterations
-_recovery_warmup_iterations: int = 0
-_recovery_warmup_threshold: int = 3  # Number of successful iterations before normal operation
-
 
 async def process_pending_activations(bot: Bot) -> tuple[int, str]:
     """
@@ -476,42 +467,11 @@ async def activation_worker_task(bot: Bot):
                     continue
                 
                 # PART D.4: Workers continue normally if DEGRADED
-                # PART D.4: Workers skip only if system_state == UNAVAILABLE
-                # DEGRADED state allows continuation (optional components degraded, critical healthy)
                 if system_state.is_degraded:
                     logger.info(
                         f"[DEGRADED] system_state detected in activation_worker "
                         f"(continuing with reduced functionality - optional components degraded)"
                     )
-                
-                # B4.2 - COOLDOWN & BACKOFF: Check cooldown before starting operations
-                recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
-                if recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
-                    remaining = recovery_cooldown.get_cooldown_remaining(ComponentName.DATABASE, now)
-                    logger.info(
-                        f"[COOLDOWN] skipping activation_worker task due to recent recovery "
-                        f"(database cooldown: {remaining}s remaining)"
-                    )
-                    continue
-                
-                # B4.4 - GRACEFUL BACKGROUND RECOVERY: Warm-up iteration after recovery
-                global _recovery_warmup_iterations
-                if system_state.database.status.value == "healthy" and _recovery_warmup_iterations < _recovery_warmup_threshold:
-                    if _recovery_warmup_iterations == 0:
-                        logger.info(
-                            "[RECOVERY] warm-up iteration started in activation_worker "
-                            "(minimal batch, no parallelism)"
-                        )
-                    _recovery_warmup_iterations += 1
-                elif system_state.database.status.value == "healthy" and _recovery_warmup_iterations == _recovery_warmup_threshold:
-                    logger.info(
-                        "[RECOVERY] normal operation resumed in activation_worker "
-                        f"(completed {_recovery_warmup_iterations} warm-up iterations)"
-                    )
-                    _recovery_warmup_iterations += 1  # Prevent repeated logging
-                elif system_state.database.status.value != "healthy":
-                    # Reset warmup counter if component becomes unhealthy again
-                    _recovery_warmup_iterations = 0
             except Exception:
                 # Ignore system state errors - continue with normal flow
                 pass

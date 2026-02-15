@@ -17,10 +17,6 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
-from app.core.recovery_cooldown import (
-    get_recovery_cooldown,
-    ComponentName,
-)
 from app.core.metrics import get_metrics
 from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
@@ -39,11 +35,6 @@ _worker_lock = asyncio.Lock()
 
 # Интервал проверки: 30 секунд
 CHECK_INTERVAL_SECONDS = 30
-
-# B4.4 - GRACEFUL BACKGROUND RECOVERY: Track recovery state for warm-up iterations
-_recovery_warmup_iterations_db: int = 0
-_recovery_warmup_iterations_vpn: int = 0
-_recovery_warmup_threshold: int = 3  # Number of successful iterations before normal operation
 
 # STEP 3 — PART B: WORKER LOOP SAFETY
 # Minimum safe sleep on failure to prevent tight retry storms
@@ -432,53 +423,11 @@ async def crypto_payment_watcher_task(bot: Bot):
                     continue
                 
                 # PART D.4: Workers continue normally if DEGRADED
-                # PART D.4: Workers skip only if system_state == UNAVAILABLE
-                # DEGRADED state allows continuation (optional components degraded, critical healthy)
                 if system_state.is_degraded:
                     logger.info(
                         f"[DEGRADED] system_state detected in crypto_payment_watcher "
                         f"(continuing with reduced functionality - optional components degraded)"
                     )
-                
-                # B4.2 - COOLDOWN & BACKOFF: Check cooldown before starting operations
-                recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
-                if recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
-                    remaining = recovery_cooldown.get_cooldown_remaining(ComponentName.DATABASE, now)
-                    logger.info(
-                        f"[COOLDOWN] skipping crypto_payment_watcher task due to recent recovery "
-                        f"(database cooldown: {remaining}s remaining)"
-                    )
-                    outcome = "skipped"
-                    reason = f"database_cooldown (remaining={remaining}s)"
-                    log_worker_iteration_end(
-                        worker_name="crypto_payment_watcher",
-                        outcome=outcome,
-                        items_processed=0,
-                        duration_ms=(time.time() - iteration_start_time) * 1000,
-                        reason=reason,
-                    )
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-                
-                # B4.4 - GRACEFUL BACKGROUND RECOVERY: Warm-up iteration after recovery
-                # FIX: Corrected variable name to prevent NameError during recovery warmup
-                global _recovery_warmup_iterations_db
-                if system_state.database.status.value == "healthy" and _recovery_warmup_iterations_db < _recovery_warmup_threshold:
-                    if _recovery_warmup_iterations_db == 0:
-                        logger.info(
-                            "[RECOVERY] warm-up iteration started in crypto_payment_watcher "
-                            "(minimal batch, no parallelism)"
-                        )
-                    _recovery_warmup_iterations_db += 1
-                elif system_state.database.status.value == "healthy" and _recovery_warmup_iterations_db == _recovery_warmup_threshold:
-                    logger.info(
-                        "[RECOVERY] normal operation resumed in crypto_payment_watcher "
-                        f"(completed {_recovery_warmup_iterations_db} warm-up iterations)"
-                    )
-                    _recovery_warmup_iterations_db += 1  # Prevent repeated logging
-                elif system_state.database.status.value != "healthy":
-                    # Reset warmup counter if component becomes unhealthy again
-                    _recovery_warmup_iterations_db = 0
             except Exception:
                 # Ignore system state errors - continue with normal flow
                 pass
