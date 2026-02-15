@@ -97,6 +97,9 @@ POLLING_BACKOFF_MAX = 60
 # Lock is automatically released when process dies (connection closed).
 ADVISORY_LOCK_KEY = 987654321
 
+# Advisory lock connection (held for process lifetime); released in finally via pool.release().
+instance_lock_conn = None
+
 # Kept for middleware (no longer used by watchdog); watchdog uses event_loop_heartbeat only.
 last_update_timestamp = time.monotonic()
 
@@ -200,22 +203,20 @@ async def main():
         # Продолжаем запуск бота в деградированном режиме
 
     # ADVISORY_LOCK_FIX: single-instance guard via PostgreSQL (no file lock).
-    instance_lock_conn = None
+    global instance_lock_conn
     if database.DB_READY:
         pool = await database.get_pool()
-        if pool:
-            instance_lock_conn = await pool.acquire()
-            lock_acquired = await instance_lock_conn.fetchval(
-                "SELECT pg_try_advisory_lock($1)", ADVISORY_LOCK_KEY
-            )
-            if not lock_acquired:
-                await instance_lock_conn.release()
-                instance_lock_conn = None
-                logger.critical("Another instance detected (advisory lock held). Exiting.")
-                sys.exit(1)
-        else:
+        if not pool:
             logger.critical("DB pool missing; cannot acquire advisory lock. Exiting.")
             sys.exit(1)
+        instance_lock_conn = await pool.acquire()
+        try:
+            await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
+            logger.info("Advisory lock acquired")
+        except Exception:
+            await pool.release(instance_lock_conn)
+            instance_lock_conn = None
+            raise
     else:
         logger.warning("DB not ready; skipping advisory lock (single-instance guard disabled)")
     
@@ -733,17 +734,21 @@ async def main():
         log_event(logger, component="shutdown", operation="shutdown_tasks_cancelled", outcome="success")
 
         # ADVISORY_LOCK_FIX: release lock and dedicated connection before closing pool.
-        if instance_lock_conn is not None:
+        if instance_lock_conn:
             try:
                 await instance_lock_conn.execute("SELECT pg_advisory_unlock($1)", ADVISORY_LOCK_KEY)
+                logger.info("Advisory lock released")
             except Exception as e:
-                logger.debug("advisory unlock failed: %s", e)
+                logger.warning("advisory unlock failed: %s", e)
             try:
                 pool = await database.get_pool()
                 if pool is not None:
                     await pool.release(instance_lock_conn)
+                    logger.info("Advisory connection returned to pool")
             except Exception as e:
-                logger.debug("advisory connection release failed: %s", e)
+                logger.warning("advisory connection release failed: %s", e)
+            finally:
+                instance_lock_conn = None
         
         # Close DB pool
         try:
