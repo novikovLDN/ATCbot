@@ -40,6 +40,10 @@ TRIAL_NOTIFICATION_SCHEDULE = trial_service.get_notification_schedule()
 # Minimum safe sleep on failure to prevent tight retry storms
 MINIMUM_SAFE_SLEEP_ON_FAILURE = 60  # seconds (1 minute, less than normal 5-minute interval)
 
+# Production-safe batching: prevent unbounded fetch, long-held connections, event loop starvation
+BATCH_SIZE = 100
+BATCH_YIELD_SLEEP = 0  # asyncio.sleep(0) for cooperative yield
+
 
 def get_trial_buy_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для покупки доступа (в уведомлениях trial)"""
@@ -105,6 +109,157 @@ async def send_trial_notification(
         return (False, "failed_temporary")
 
 
+async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: datetime):
+    """Process trial notifications for a single user. Acquires and releases DB connection internally."""
+    telegram_id = row["telegram_id"]
+    trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
+    subscription_expires_at = database._from_db_utc(row["subscription_expires_at"]) if row["subscription_expires_at"] else None
+    paid_subscription_expires_at = database._from_db_utc(row["paid_subscription_expires_at"]) if row.get("paid_subscription_expires_at") else None
+
+    if paid_subscription_expires_at:
+        logger.info(
+            f"trial_expired_skipped_due_to_active_paid_subscription: "
+            f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+            f"paid_subscription_expires_at={paid_subscription_expires_at.isoformat() if paid_subscription_expires_at else None}, "
+            "reason=active_paid_subscription_exists"
+        )
+        return
+
+    if not trial_expires_at or not subscription_expires_at:
+        return
+
+    async with pool.acquire() as conn:
+        try:
+            # TOCTOU: Re-check active paid subscription (may have been bought after batch fetch)
+            active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
+            if active_paid:
+                logger.debug("trial_notification skipped due to active paid subscription")
+                return
+
+            final_reminder_config = trial_service.get_final_reminder_config()
+            final_reminder_sent = row.get(final_reminder_config["db_flag"], False)
+            should_send, reason = await trial_service.should_send_final_reminder(
+                telegram_id=telegram_id,
+                trial_expires_at=trial_expires_at,
+                subscription_expires_at=subscription_expires_at,
+                final_reminder_sent=final_reminder_sent,
+                now=now,
+                conn=conn
+            )
+            if should_send:
+                payload = trial_service.prepare_notification_payload(
+                    notification_key=final_reminder_config["notification_key"],
+                    has_button=final_reminder_config["has_button"]
+                )
+                success, status = await send_trial_notification(
+                    bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
+                )
+                timing = trial_service.calculate_trial_timing(trial_expires_at, now)
+                if success:
+                    await conn.execute(
+                        f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
+                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                        telegram_id
+                    )
+                    logger.info(
+                        f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
+                        f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
+                    )
+                elif status == "failed_permanently":
+                    await conn.execute(
+                        f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
+                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                        telegram_id
+                    )
+                    logger.warning(
+                        f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
+                        f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
+                    )
+                else:
+                    logger.warning(
+                        f"trial_reminder_failed_temporary: user={telegram_id}, notification=final_6h_before_expiry, "
+                        f"reason=temporary_error, will_retry=True"
+                    )
+                return
+            elif reason:
+                logger.debug(
+                    f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
+                    f"reason={reason}"
+                )
+        except trial_service.TrialServiceError as e:
+            logger.warning(
+                f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
+                f"service_error={type(e).__name__}: {str(e)}"
+            )
+            return
+
+        notification_flags = {
+            "trial_notif_6h_sent": row.get("trial_notif_6h_sent", False),
+            "trial_notif_60h_sent": row.get("trial_notif_60h_sent", False),
+        }
+        for notification in TRIAL_NOTIFICATION_SCHEDULE:
+            try:
+                should_send, reason = await trial_service.should_send_notification(
+                    telegram_id=telegram_id,
+                    trial_expires_at=trial_expires_at,
+                    subscription_expires_at=subscription_expires_at,
+                    notification_schedule=notification,
+                    notification_flags=notification_flags,
+                    now=now,
+                    conn=conn
+                )
+                if not should_send:
+                    if reason:
+                        logger.debug(
+                            f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
+                            f"reason={reason}"
+                        )
+                    continue
+                payload = trial_service.prepare_notification_payload(
+                    notification_key=notification["key"],
+                    has_button=notification["has_button"]
+                )
+                success, status = await send_trial_notification(
+                    bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
+                )
+                db_flag = notification.get("db_flag", f"trial_notif_{notification['hours']}h_sent")
+                timing = trial_service.calculate_trial_timing(trial_expires_at, now)
+                if success:
+                    await conn.execute(
+                        f"UPDATE subscriptions SET {db_flag} = TRUE "
+                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                        telegram_id
+                    )
+                    notification_flags[db_flag] = True
+                    logger.info(
+                        f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
+                        f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
+                    )
+                elif status == "failed_permanently":
+                    await conn.execute(
+                        f"UPDATE subscriptions SET {db_flag} = TRUE "
+                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                        telegram_id
+                    )
+                    notification_flags[db_flag] = True
+                    logger.warning(
+                        f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
+                        f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
+                        f"will_not_retry=True"
+                    )
+                else:
+                    logger.warning(
+                        f"trial_reminder_failed_temporary: user={telegram_id}, notification={notification['key']}, "
+                        f"reason=temporary_error, will_retry=True"
+                    )
+            except trial_service.TrialServiceError as e:
+                logger.warning(
+                    f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
+                    f"service_error={type(e).__name__}: {str(e)}"
+                )
+                continue
+
+
 async def process_trial_notifications(bot: Bot):
     """Обработать все уведомления о trial
     
@@ -123,15 +278,14 @@ async def process_trial_notifications(bot: Bot):
     
     try:
         pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            now = datetime.now(timezone.utc)
-            now_db = database._to_db_utc(now)
-            
-            # Получаем только пользователей с АКТИВНОЙ trial-подпиской
-            # ВАЖНО: INNER JOIN гарантирует наличие trial-подписки
-            # Canonical guard: paid overrides trial — LEFT JOIN matches database.get_active_paid_subscription logic.
-            query_with_reachable = """
-                SELECT u.telegram_id, u.trial_expires_at,
+        now = datetime.now(timezone.utc)
+        now_db = database._to_db_utc(now)
+        last_subscription_id = 0
+        total_fetched = 0
+
+        # Query strings (same every batch)
+        query_with_reachable = """
+            SELECT u.telegram_id, u.trial_expires_at,
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
@@ -149,9 +303,12 @@ async def process_trial_notifications(bot: Bot):
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at > $1
                   AND COALESCE(u.is_reachable, TRUE) = TRUE
+                  AND s.id > $2
+            ORDER BY s.id ASC
+            LIMIT $3
             """
-            fallback_query = """
-                SELECT u.telegram_id, u.trial_expires_at,
+        fallback_query = """
+            SELECT u.telegram_id, u.trial_expires_at,
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
@@ -168,186 +325,145 @@ async def process_trial_notifications(bot: Bot):
                 WHERE u.trial_used_at IS NOT NULL
                   AND u.trial_expires_at IS NOT NULL
                   AND u.trial_expires_at > $1
+                  AND s.id > $2
+            ORDER BY s.id ASC
+            LIMIT $3
             """
-            try:
-                rows = await conn.fetch(query_with_reachable, now_db)
-            except asyncpg.UndefinedColumnError:
-                logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, trial_notifications fallback to legacy query")
-                rows = await conn.fetch(fallback_query, now_db)
-            
-            for row in rows:
-                telegram_id = row["telegram_id"]
-                trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
-                subscription_expires_at = database._from_db_utc(row["subscription_expires_at"]) if row["subscription_expires_at"] else None
-                paid_subscription_expires_at = database._from_db_utc(row["paid_subscription_expires_at"]) if row.get("paid_subscription_expires_at") else None
-                
-                # Canonical guard: paid subscription ALWAYS overrides trial (same as database.get_active_paid_subscription).
-                if paid_subscription_expires_at:
-                    logger.info(
-                        f"trial_expired_skipped_due_to_active_paid_subscription: "
-                        f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                        f"paid_subscription_expires_at={paid_subscription_expires_at.isoformat() if paid_subscription_expires_at else None}, "
-                        "reason=active_paid_subscription_exists"
-                    )
-                    continue
-                
-                # Basic validation - service layer handles business logic
-                if not trial_expires_at or not subscription_expires_at:
-                    continue
-                
-                # ФИНАЛЬНОЕ НАПОМИНАНИЕ: за 6 часов до окончания trial
-                # Service layer handles all business logic checks
+
+        while True:
+            async with pool.acquire() as conn:
                 try:
-                    final_reminder_config = trial_service.get_final_reminder_config()
-                    final_reminder_sent = row.get(final_reminder_config["db_flag"], False)
-                    
-                    should_send, reason = await trial_service.should_send_final_reminder(
-                        telegram_id=telegram_id,
-                        trial_expires_at=trial_expires_at,
-                        subscription_expires_at=subscription_expires_at,
-                        final_reminder_sent=final_reminder_sent,
-                        now=now,
-                        conn=conn
-                    )
-                    
-                    if should_send:
-                        # Prepare payload via service
-                        payload = trial_service.prepare_notification_payload(
-                            notification_key=final_reminder_config["notification_key"],
-                            has_button=final_reminder_config["has_button"]
-                        )
-                        
-                        # Send notification (I/O operation)
-                        success, status = await send_trial_notification(
-                            bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
-                        )
-                        
-                        timing = trial_service.calculate_trial_timing(trial_expires_at, now)
-                        
-                        if success:
-                            await conn.execute(
-                                f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
-                                "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                                telegram_id
-                            )
-                            logger.info(
-                                f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
-                                f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
-                            )
-                        elif status == "failed_permanently":
-                            await conn.execute(
-                                f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
-                                "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                                telegram_id
-                            )
-                            logger.warning(
-                                f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
-                                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
-                            )
-                        else:
-                            logger.warning(
-                                f"trial_reminder_failed_temporary: user={telegram_id}, notification=final_6h_before_expiry, "
-                                f"reason=temporary_error, will_retry=True"
-                            )
-                        # Skip other notifications for this user in this cycle
-                        continue
-                    elif reason:
-                        logger.debug(
-                            f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
-                            f"reason={reason}"
-                        )
-                except trial_service.TrialServiceError as e:
-                    logger.warning(
-                        f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
-                        f"service_error={type(e).__name__}: {str(e)}"
-                    )
-                    continue
-                
-                # Проверяем каждое уведомление в расписании (6h и 48h)
-                # Service layer handles all business logic
-                notification_flags = {
-                    "trial_notif_6h_sent": row.get("trial_notif_6h_sent", False),
-                    "trial_notif_60h_sent": row.get("trial_notif_60h_sent", False),
-                }
-                
-                for notification in TRIAL_NOTIFICATION_SCHEDULE:
-                    try:
-                        # Service layer determines if notification should be sent
-                        should_send, reason = await trial_service.should_send_notification(
-                            telegram_id=telegram_id,
-                            trial_expires_at=trial_expires_at,
-                            subscription_expires_at=subscription_expires_at,
-                            notification_schedule=notification,
-                            notification_flags=notification_flags,
-                            now=now,
-                            conn=conn
-                        )
-                        
-                        if not should_send:
-                            if reason:
-                                logger.debug(
-                                    f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
-                                    f"reason={reason}"
-                                )
-                            continue
-                        
-                        # Prepare payload via service
-                        payload = trial_service.prepare_notification_payload(
-                            notification_key=notification["key"],
-                            has_button=notification["has_button"]
-                        )
-                        
-                        # Send notification (I/O operation)
-                        success, status = await send_trial_notification(
-                            bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
-                        )
-                        
-                        db_flag = notification.get("db_flag", f"trial_notif_{notification['hours']}h_sent")
-                        timing = trial_service.calculate_trial_timing(trial_expires_at, now)
-                        
-                        if success:
-                            # Mark as sent (idempotency)
-                            await conn.execute(
-                                f"UPDATE subscriptions SET {db_flag} = TRUE "
-                                "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                                telegram_id
-                            )
-                            notification_flags[db_flag] = True
-                            logger.info(
-                                f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
-                                f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
-                            )
-                        elif status == "failed_permanently":
-                            # Mark as permanently failed (idempotency)
-                            await conn.execute(
-                                f"UPDATE subscriptions SET {db_flag} = TRUE "
-                                "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                                telegram_id
-                            )
-                            notification_flags[db_flag] = True
-                            logger.warning(
-                                f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
-                                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
-                                f"will_not_retry=True"
-                            )
-                        else:
-                            # Temporary error - don't mark as sent, will retry later
-                            logger.warning(
-                                f"trial_reminder_failed_temporary: user={telegram_id}, notification={notification['key']}, "
-                                f"reason=temporary_error, will_retry=True"
-                            )
-                    except trial_service.TrialServiceError as e:
-                        logger.warning(
-                            f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
-                            f"service_error={type(e).__name__}: {str(e)}"
-                        )
-                        continue
+                    rows = await conn.fetch(query_with_reachable, now_db, last_subscription_id, BATCH_SIZE)
+                except asyncpg.UndefinedColumnError:
+                    logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, trial_notifications fallback to legacy query")
+                    rows = await conn.fetch(fallback_query, now_db, last_subscription_id, BATCH_SIZE)
+
+            if not rows:
+                break
+
+            total_fetched += len(rows)
+            logger.info("[WORKER_ITEMS] worker=trial_notifications fetched=%d (last_id=%d)", len(rows), last_subscription_id)
+            if total_fetched > 1000:
+                logger.warning("[WORKER_ITEMS] worker=trial_notifications total_fetched=%d > 1000", total_fetched)
+
+            for row in rows:
+                await _process_single_trial_notification(bot, pool, dict(row), now)
+
+            last_subscription_id = rows[-1]["subscription_id"]
+            await asyncio.sleep(BATCH_YIELD_SLEEP)
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
         logger.warning(f"trial_notifications: Database temporarily unavailable in process_trial_notifications: {type(e).__name__}: {str(e)[:100]}")
     except Exception as e:
         logger.error(f"trial_notifications: Unexpected error in process_trial_notifications: {type(e).__name__}: {str(e)[:100]}")
         logger.debug("trial_notifications: Full traceback in process_trial_notifications", exc_info=True)
+
+
+async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datetime):
+    """Process expiration for a single trial user. Acquires and releases DB connection internally."""
+    telegram_id = row["telegram_id"]
+    uuid_val = row["uuid"]
+    trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
+    trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
+
+    async with pool.acquire() as conn:
+        try:
+            # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
+            active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
+            if active_paid:
+                paid_expires_at = active_paid["expires_at"]
+                logger.info(
+                    "Trial cleanup skipped: user has active paid subscription; "
+                    f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                    f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
+                )
+                return
+
+            should_expire, reason = await trial_service.should_expire_trial(
+                telegram_id=telegram_id,
+                trial_expires_at=trial_expires_at,
+                now=now,
+                conn=conn
+            )
+            if not should_expire:
+                logger.debug(f"trial_expiry_skipped: user={telegram_id}, reason={reason}")
+                return
+
+            logger.info(
+                f"TRIAL_EXPIRATION_EXECUTED: "
+                f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                f"decision=EXECUTED"
+            )
+
+            active_paid_recheck = await database.get_active_paid_subscription(conn, telegram_id, now)
+            if active_paid_recheck:
+                paid_expires_at = active_paid_recheck["expires_at"]
+                logger.info(
+                    "Trial cleanup skipped: user has active paid subscription; "
+                    f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                    f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
+                )
+                return
+
+            if uuid_val:
+                import vpn_utils
+                try:
+                    await vpn_utils.remove_vless_user(uuid_val)
+                    logger.info(f"trial_expired: VPN access revoked: user={telegram_id}, uuid={uuid_val[:8]}...")
+                except Exception as e:
+                    logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
+
+            await conn.execute("""
+                UPDATE subscriptions 
+                SET status = 'expired', uuid = NULL, vpn_key = NULL
+                WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
+            """, telegram_id)
+
+            should_send, send_reason = await trial_service.should_send_completion_notification(
+                telegram_id=telegram_id,
+                conn=conn
+            )
+            if should_send:
+                trial_completed_sent = await trial_service.mark_trial_completed(
+                    telegram_id=telegram_id,
+                    conn=conn
+                )
+                if trial_completed_sent:
+                    language = await resolve_user_language(telegram_id)
+                    expired_text = i18n.get_text(language, "trial.expired")
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text=i18n.get_text(language, "main.buy"),
+                            callback_data="menu_buy_vpn"
+                        )]
+                    ])
+                    sent = await safe_send_message(
+                        bot, telegram_id, expired_text,
+                        parse_mode="HTML", reply_markup=keyboard
+                    )
+                    if sent:
+                        await asyncio.sleep(0.05)
+                        logger.info(
+                            f"trial_expired: notification sent: user={telegram_id}, "
+                            f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
+                            f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}"
+                        )
+                        logger.info(
+                            f"trial_completed: user={telegram_id}, "
+                            f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
+                            f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
+                            f"completed_at={now.isoformat()}"
+                        )
+                    else:
+                        logger.warning(f"TRIAL_EXPIRED_SKIP_CHAT_NOT_FOUND user={telegram_id}")
+                else:
+                    logger.info(f"trial_expired_skipped: user={telegram_id}, reason=already_sent")
+            else:
+                logger.debug(f"trial_completion_notification_skipped: user={telegram_id}, reason={send_reason}")
+        except trial_service.TrialServiceError as e:
+            logger.warning(f"trial_expiry_skipped: user={telegram_id}, service_error={type(e).__name__}: {str(e)}")
+        except Exception as e:
+            logger.exception(f"Error expiring trial subscription for user {telegram_id}: {e}")
 
 
 async def expire_trial_subscriptions(bot: Bot):
@@ -363,175 +479,57 @@ async def expire_trial_subscriptions(bot: Bot):
     """
     if not database.DB_READY:
         return
-    
+
     try:
         pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            now = datetime.now(timezone.utc)
-            now_db = database._to_db_utc(now)
-            
-            # Получаем всех пользователей с истёкшим trial (trial_expires_at <= now)
-            # и их trial-подписки для отзыва доступа
-            # ВАЖНО: Выбираем только тех, у кого trial_expires_at в пределах последних 24 часов
-            # Это предотвращает повторную обработку и отправку умного предложения
-            query_with_reachable = """
-                SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
-                       s.uuid, s.expires_at as subscription_expires_at
-                FROM users u
-                LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
-                WHERE u.trial_used_at IS NOT NULL
-                  AND u.trial_expires_at IS NOT NULL
-                  AND u.trial_expires_at <= $1
-                  AND u.trial_expires_at > $1 - INTERVAL '24 hours'
-                  AND COALESCE(u.is_reachable, TRUE) = TRUE
-            """
-            fallback_query = """
-                SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
-                       s.uuid, s.expires_at as subscription_expires_at
-                FROM users u
-                LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
-                WHERE u.trial_used_at IS NOT NULL
-                  AND u.trial_expires_at IS NOT NULL
-                  AND u.trial_expires_at <= $1
-                  AND u.trial_expires_at > $1 - INTERVAL '24 hours'
-            """
-            try:
-                rows = await conn.fetch(query_with_reachable, now_db)
-            except asyncpg.UndefinedColumnError:
-                logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, expire_trial fallback to legacy query")
-                rows = await conn.fetch(fallback_query, now_db)
-            
-            for row in rows:
-                telegram_id = row["telegram_id"]
-                uuid = row["uuid"]
-                trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
-                trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
-                
+        now = datetime.now(timezone.utc)
+        now_db = database._to_db_utc(now)
+        last_telegram_id = 0
+
+        query_with_reachable = """
+            SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
+                   s.uuid, s.expires_at as subscription_expires_at
+            FROM users u
+            LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
+            WHERE u.trial_used_at IS NOT NULL
+              AND u.trial_expires_at IS NOT NULL
+              AND u.trial_expires_at <= $1
+              AND u.trial_expires_at > $1 - INTERVAL '24 hours'
+              AND COALESCE(u.is_reachable, TRUE) = TRUE
+              AND u.telegram_id > $2
+            ORDER BY u.telegram_id ASC
+            LIMIT $3
+        """
+        fallback_query = """
+            SELECT u.telegram_id, u.trial_used_at, u.trial_expires_at,
+                   s.uuid, s.expires_at as subscription_expires_at
+            FROM users u
+            LEFT JOIN subscriptions s ON u.telegram_id = s.telegram_id AND s.source = 'trial' AND s.status = 'active'
+            WHERE u.trial_used_at IS NOT NULL
+              AND u.trial_expires_at IS NOT NULL
+              AND u.trial_expires_at <= $1
+              AND u.trial_expires_at > $1 - INTERVAL '24 hours'
+              AND u.telegram_id > $2
+            ORDER BY u.telegram_id ASC
+            LIMIT $3
+        """
+
+        while True:
+            async with pool.acquire() as conn:
                 try:
-                    # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
-                    # Guard: status='active', expires_at > now(), source != 'trial'. Single source of truth.
-                    active_paid = await database.get_active_paid_subscription(conn, telegram_id, now)
-                    if active_paid:
-                        paid_expires_at = active_paid["expires_at"]
-                        logger.info(
-                            "Trial cleanup skipped: user has active paid subscription; "
-                            f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                            f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
-                        )
-                        continue
-                    
-                    # Service layer determines if trial should be expired
-                    should_expire, reason = await trial_service.should_expire_trial(
-                        telegram_id=telegram_id,
-                        trial_expires_at=trial_expires_at,
-                        now=now,
-                        conn=conn
-                    )
-                    
-                    if not should_expire:
-                        logger.debug(
-                            f"trial_expiry_skipped: user={telegram_id}, reason={reason}"
-                        )
-                        continue
-                    
-                    # Log that trial expiration is proceeding (no active paid subscription)
-                    logger.info(
-                        f"TRIAL_EXPIRATION_EXECUTED: "
-                        f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                        f"decision=EXECUTED"
-                    )
-                    
-                    # VPN safety invariant: never revoke if active paid exists (re-check immediately before destructive action).
-                    active_paid_recheck = await database.get_active_paid_subscription(conn, telegram_id, now)
-                    if active_paid_recheck:
-                        paid_expires_at = active_paid_recheck["expires_at"]
-                        logger.info(
-                            "Trial cleanup skipped: user has active paid subscription; "
-                            f"telegram_id={telegram_id}, trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                            f"paid_expires_at={paid_expires_at.isoformat() if paid_expires_at else None}"
-                        )
-                        continue
-                    
-                    # I/O: Remove UUID from VPN API (if subscription exists).
-                    # Only reached when no active paid subscription (guard above prevents trial-overriding-paid bug).
-                    if uuid:
-                        import vpn_utils
-                        try:
-                            await vpn_utils.remove_vless_user(uuid)
-                            logger.info(
-                                f"trial_expired: VPN access revoked: user={telegram_id}, uuid={uuid[:8]}..."
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}"
-                            )
-                    
-                    # I/O: Mark subscription as expired
-                    await conn.execute("""
-                        UPDATE subscriptions 
-                        SET status = 'expired', uuid = NULL, vpn_key = NULL
-                        WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
-                    """, telegram_id)
-                    
-                    # Service layer determines if completion notification should be sent
-                    should_send, send_reason = await trial_service.should_send_completion_notification(
-                        telegram_id=telegram_id,
-                        conn=conn
-                    )
-                    
-                    if should_send:
-                        # Service layer marks trial as completed (idempotent)
-                        trial_completed_sent = await trial_service.mark_trial_completed(
-                            telegram_id=telegram_id,
-                            conn=conn
-                        )
-                        
-                        if trial_completed_sent:
-                            language = await resolve_user_language(telegram_id)
-                            
-                            expired_text = i18n.get_text(language, "trial.expired")
-                            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(
-                                    text=i18n.get_text(language, "main.buy"),
-                                    callback_data="menu_buy_vpn"
-                                )]
-                            ])
-                            sent = await safe_send_message(
-                                bot, telegram_id, expired_text,
-                                parse_mode="HTML", reply_markup=keyboard
-                            )
-                            if sent:
-                                await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
-                                logger.info(
-                                    f"trial_expired: notification sent: user={telegram_id}, "
-                                    f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
-                                    f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}"
-                                )
-                                logger.info(
-                                    f"trial_completed: user={telegram_id}, "
-                                    f"trial_used_at={trial_used_at.isoformat() if trial_used_at else None}, "
-                                    f"trial_expires_at={trial_expires_at.isoformat() if trial_expires_at else None}, "
-                                    f"completed_at={now.isoformat()}"
-                                )
-                            else:
-                                # safe_send_message failed (chat not found, blocked, etc.) - do NOT retry
-                                logger.warning(f"TRIAL_EXPIRED_SKIP_CHAT_NOT_FOUND user={telegram_id}")
-                        else:
-                            logger.info(
-                                f"trial_expired_skipped: user={telegram_id}, reason=already_sent"
-                            )
-                    else:
-                        logger.debug(
-                            f"trial_completion_notification_skipped: user={telegram_id}, reason={send_reason}"
-                        )
-                    
-                except trial_service.TrialServiceError as e:
-                    logger.warning(
-                        f"trial_expiry_skipped: user={telegram_id}, service_error={type(e).__name__}: {str(e)}"
-                    )
-                    continue
-                except Exception as e:
-                    logger.exception(f"Error expiring trial subscription for user {telegram_id}: {e}")
+                    rows = await conn.fetch(query_with_reachable, now_db, last_telegram_id, BATCH_SIZE)
+                except asyncpg.UndefinedColumnError:
+                    logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, expire_trial fallback to legacy query")
+                    rows = await conn.fetch(fallback_query, now_db, last_telegram_id, BATCH_SIZE)
+
+            if not rows:
+                break
+
+            for row in rows:
+                await _process_single_trial_expiration(bot, pool, dict(row), now)
+
+            last_telegram_id = rows[-1]["telegram_id"]
+            await asyncio.sleep(BATCH_YIELD_SLEEP)
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
         logger.warning(f"trial_notifications: Database temporarily unavailable in expire_trial_subscriptions: {type(e).__name__}: {str(e)[:100]}")
@@ -660,6 +658,7 @@ async def run_trial_scheduler(bot: Bot):
                 items_processed=0,  # Trial notifications don't track items per iteration
                 duration_ms=duration_ms
             )
+            logger.info("[WORKER_DURATION] worker=trial_notifications duration=%.3fs", duration_ms / 1000.0)
             
         except asyncio.CancelledError:
             log_event(
