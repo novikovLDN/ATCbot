@@ -2901,6 +2901,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
         logger.warning("Pool is None, check_and_disable_expired_subscription skipped")
         return False
     now = datetime.now(timezone.utc)
+    now_db = _to_db_utc(now)
     uuid_to_remove = None
     subscription = None
     subscription_id = None
@@ -2913,7 +2914,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                      AND expires_at <= $2
                      AND status = 'active'
                      AND uuid IS NOT NULL""",
-                telegram_id, _to_db_utc(now)
+                telegram_id, now_db
             )
             if not row:
                 return False
@@ -2924,6 +2925,20 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                 "EXPIRY_PHASE1",
                 extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove and len(uuid_to_remove) > 8 else "N/A"}
             )
+    # E1: Re-verify row still expired before Phase 2 (avoids removing UUID if renewal won race)
+    if uuid_to_remove and subscription_id:
+        async with pool.acquire() as conn:
+            recheck = await conn.fetchrow(
+                """SELECT 1 FROM subscriptions
+                   WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active' AND expires_at <= $4""",
+                subscription_id, telegram_id, uuid_to_remove, now_db
+            )
+            if not recheck:
+                logger.debug(
+                    "EXPIRY_SKIPPED_RENEWED",
+                    extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
+                )
+                return False
     # PHASE 2 — External call (outside tx)
     removal_success = True
     if uuid_to_remove:
@@ -2955,6 +2970,8 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     if not removal_success:
         return False
     # PHASE 3 — DB update (new transaction)
+    # E1 FIX: Re-check expires_at to avoid race with renewal. If renewal extended expires_at
+    # between Phase 1 and Phase 3, this UPDATE must match 0 rows — subscription stays active.
     if not uuid_to_remove:
         return False
     async with pool.acquire() as conn:
@@ -2962,14 +2979,20 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
             result = await conn.execute(
                 """UPDATE subscriptions
                    SET status = 'expired', uuid = NULL, vpn_key = NULL
-                   WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'""",
-                subscription_id, telegram_id, uuid_to_remove
+                   WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
+                     AND expires_at <= $4""",
+                subscription_id, telegram_id, uuid_to_remove, now_db
             )
             rows = int(result.split()[-1]) if result else 0
             if rows > 0:
                 logger.info(
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
+                )
+            elif rows == 0 and subscription_id and uuid_to_remove:
+                logger.debug(
+                    "EXPIRY_SKIPPED_RENEWED",
+                    extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
                 )
             return rows > 0
 
@@ -3898,29 +3921,16 @@ async def grant_access(
                     "Extending subscription WITHOUT calling VPN API /add-user"
                 )
                 
-                # TWO-PHASE SAFE RENEWAL: Xray FIRST, DB ONLY after Xray success.
-                # ensure_user_in_xray: update → 200 OK; 404 → add with SAME uuid.
+                # B1 FIX: TWO-PHASE RENEWAL — DB first (source of truth), Xray sync OUTSIDE transaction.
+                # ensure_user_in_xray must NEVER run inside active DB transaction (pool exhaustion).
+                # When caller holds tx: return renewal_xray_sync_after_commit; callers run sync post-commit.
+                # When standalone: run ensure_user_in_xray after DB update (no tx held).
                 assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
                 assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
                 expiry_ms = int(subscription_end.timestamp() * 1000)
-                logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, uuid={uuid[:8]}..., operation=update]")
-                xray_uuid = None
-                try:
-                    xray_uuid = await vpn_utils.ensure_user_in_xray(
-                        telegram_id=telegram_id,
-                        uuid=uuid,
-                        subscription_end=subscription_end
-                    )
-                except Exception as e:
-                    logger.critical(
-                        f"XRAY_SYNC_FAILED_BUT_PAYMENT_OK "
-                        f"[telegram_id={telegram_id}, error={e}]"
-                    )
-                # xray_uuid always equals uuid (DB is source of truth; update-user never returns new UUID)
-                if xray_uuid:
-                    uuid = xray_uuid
+                logger.info(f"XRAY_UUID_FLOW [user={telegram_id}, uuid={uuid[:8]}..., operation=renewal_db_first]")
 
-                # PHASE 2: DB update
+                # PHASE 1: DB update (inside caller's tx if any)
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
                 try:
                     await conn.execute(
@@ -4025,13 +4035,34 @@ async def grant_access(
                 except Exception as e:
                     logger.warning(f"Failed to log VPN renew audit (non-blocking): {e}")
                 
-                return {
+                result_dict = {
                     "uuid": uuid,
                     "vless_url": None,  # Не новый UUID
                     "vpn_key": subscription.get("vpn_key"),  # Используем существующий из БД (от API при issuance)
                     "subscription_end": subscription_end,
                     "action": "renewal"  # Явно указываем тип операции
                 }
+                if _caller_holds_transaction:
+                    # B1: Caller holds tx — ensure_user_in_xray MUST run post-commit. Defer to caller.
+                    result_dict["renewal_xray_sync_after_commit"] = {
+                        "telegram_id": telegram_id,
+                        "uuid": uuid,
+                        "subscription_end": subscription_end
+                    }
+                    return result_dict
+                # Standalone: no transaction held — safe to call ensure_user_in_xray here.
+                try:
+                    await vpn_utils.ensure_user_in_xray(
+                        telegram_id=telegram_id,
+                        uuid=uuid,
+                        subscription_end=subscription_end
+                    )
+                except Exception as e:
+                    logger.critical(
+                        "RENEWAL_XRAY_SYNC_FAILED",
+                        extra={"telegram_id": telegram_id, "uuid": uuid[:8] + "...", "error": str(e)[:200]}
+                    )
+                return result_dict
         
         # =====================================================================
         # STEP 3: Новая выдача доступа - создаём новый UUID
@@ -4747,6 +4778,19 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 logger.critical(
                     "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                     extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
+                )
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
+            sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+            try:
+                await vpn_utils.ensure_user_in_xray(
+                    telegram_id=sync_info["telegram_id"],
+                    uuid=sync_info["uuid"],
+                    subscription_end=sync_info["subscription_end"]
+                )
+            except Exception as e:
+                logger.critical(
+                    "RENEWAL_XRAY_SYNC_FAILED",
+                    extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         return ret_val
 
@@ -6807,6 +6851,19 @@ async def finalize_purchase(
                     "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                     extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
                 )
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
+            sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+            try:
+                await vpn_utils.ensure_user_in_xray(
+                    telegram_id=sync_info["telegram_id"],
+                    uuid=sync_info["uuid"],
+                    subscription_end=sync_info["subscription_end"]
+                )
+            except Exception as e:
+                logger.critical(
+                    "RENEWAL_XRAY_SYNC_FAILED",
+                    extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
+                )
         if ret_val is not None:
             return ret_val
 
@@ -7613,6 +7670,19 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                 extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
             )
+    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
+        sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+        try:
+            await vpn_utils.ensure_user_in_xray(
+                telegram_id=sync_info["telegram_id"],
+                uuid=sync_info["uuid"],
+                subscription_end=sync_info["subscription_end"]
+            )
+        except Exception as e:
+            logger.critical(
+                "RENEWAL_XRAY_SYNC_FAILED",
+                extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
+            )
     return ret_val
 
 
@@ -7857,6 +7927,19 @@ async def finalize_balance_purchase(
                 logger.critical(
                     "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                     extra={"uuid": old_uuid[:8] + "...", "error": str(rem_err)[:200]}
+                )
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
+            sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+            try:
+                await vpn_utils.ensure_user_in_xray(
+                    telegram_id=sync_info["telegram_id"],
+                    uuid=sync_info["uuid"],
+                    subscription_end=sync_info["subscription_end"]
+                )
+            except Exception as e:
+                logger.critical(
+                    "RENEWAL_XRAY_SYNC_FAILED",
+                    extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         return ret_val
 
@@ -8188,6 +8271,19 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
             logger.critical(
                 "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
                 extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
+            )
+    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
+        sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
+        try:
+            await vpn_utils.ensure_user_in_xray(
+                telegram_id=sync_info["telegram_id"],
+                uuid=sync_info["uuid"],
+                subscription_end=sync_info["subscription_end"]
+            )
+        except Exception as e:
+            logger.critical(
+                "RENEWAL_XRAY_SYNC_FAILED",
+                extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
             )
     return ret_val
 
