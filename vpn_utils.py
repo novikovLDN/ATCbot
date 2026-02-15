@@ -31,11 +31,12 @@ from app.core.cost_model import get_cost_model, CostCenter
 
 logger = logging.getLogger(__name__)
 
-# HTTP клиент с таймаутами для API запросов
-# Используем XRAY_API_TIMEOUT из config (default 5s), но не менее 3s для надежности
-HTTP_TIMEOUT = max(float(config.XRAY_API_TIMEOUT) if hasattr(config, 'XRAY_API_TIMEOUT') else 5.0, 3.0)
-MAX_RETRIES = 2  # Количество повторных попыток при ошибке (2 retry = 3 попытки всего)
-RETRY_DELAY = 1.0  # Задержка между попытками в секундах (backoff будет: 1s, 2s)
+# Explicit timeout for all VPN API calls (connect, read, write, pool)
+VPN_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+# Legacy float for code that expects a single number (e.g. health check)
+HTTP_TIMEOUT = 10.0
+MAX_RETRIES = 2
+RETRY_DELAY = 1.0
 
 
 class VPNAPIError(Exception):
@@ -93,7 +94,7 @@ async def check_xray_health() -> bool:
     health_url = f"{api_url}/health"
     
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             response = await client.get(health_url)
             if response.status_code == 200:
                 logger.debug("XRAY health check: SUCCESS")
@@ -233,7 +234,7 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
     async def _make_request():
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             logger.debug("vpn_api add_user: HTTP_REQUEST")
             response = await client.post(url, headers=headers, json=json_body)
             
@@ -373,19 +374,23 @@ async def list_vless_users() -> list[str]:
     """
     Fetch UUID list of all VLESS clients from Xray API.
     Used by reconciliation worker to detect orphan UUIDs.
-    
-    Returns:
-        List of UUID strings. Empty list on API error or disabled VPN.
+    Uses circuit breaker and retry (max 2) like add/remove.
     """
     if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
         return []
-    
+
+    from app.core.circuit_breaker import get_circuit_breaker
+    vpn_breaker = get_circuit_breaker("vpn_api")
+    if vpn_breaker.should_skip():
+        logger.warning("list_vless_users: circuit breaker OPEN, skipping")
+        return []
+
     api_url = config.XRAY_API_URL.rstrip('/')
     url = f"{api_url}/list-users"
     headers = {"X-API-Key": config.XRAY_API_KEY}
-    
-    try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+
+    async def _get():
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
             if response.status_code != 200:
                 logger.warning(f"list_vless_users: API returned status={response.status_code}")
@@ -395,7 +400,19 @@ async def list_vless_users() -> list[str]:
             if not isinstance(uuids, list):
                 return []
             return [str(u).strip() for u in uuids if u and str(u).strip()]
+
+    try:
+        result = await retry_async(
+            _get,
+            retries=MAX_RETRIES,
+            base_delay=RETRY_DELAY,
+            max_delay=5.0,
+            retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
+        )
+        vpn_breaker.record_success()
+        return result or []
     except Exception as e:
+        vpn_breaker.record_failure()
         logger.warning(f"list_vless_users: failed: {e}")
         return []
 
@@ -519,7 +536,7 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
         raise VPNAPIError("VPN API circuit breaker is OPEN")
     
     try:
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=headers, json=json_body)
             if response.status_code == 404:
                 error_msg = f"Client not found in Xray: {uuid_clean[:8]}..."
@@ -630,7 +647,7 @@ async def remove_vless_user(uuid: str) -> None:
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
     async def _make_request():
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             logger.debug("vpn_api remove_user: HTTP_REQUEST")
             response = await client.post(url, headers=headers)
             

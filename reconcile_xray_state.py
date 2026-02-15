@@ -47,10 +47,10 @@ BATCH_SIZE_LIMIT = int(os.getenv("XRAY_RECONCILIATION_BATCH_LIMIT", "100"))
 BREAKER_OPEN_SECONDS = int(os.getenv("XRAY_RECONCILIATION_BREAKER_OPEN_SECONDS", "600"))  # 10 min
 BREAKER_FAILURE_THRESHOLD = 3
 
-# Circuit breaker state
+# Simple circuit breaker: after BREAKER_FAILURE_THRESHOLD failures, skip for BREAKER_OPEN_SECONDS
 _failure_count = 0
-_last_failure_ts: float = 0.0
 _breaker_open_until: float = 0.0
+_breaker_open_logged: bool = False
 
 
 async def reconcile_xray_state() -> dict:
@@ -198,20 +198,15 @@ async def reconcile_xray_state() -> dict:
 
 
 async def reconcile_xray_state_task():
-    """Background task: run reconciliation every 10 minutes. Circuit breaker on repeated failure."""
-    global _failure_count, _last_failure_ts, _breaker_open_until
+    """Background task: run reconciliation every RECONCILIATION_INTERVAL_SECONDS. Simple breaker on repeated failure."""
+    global _failure_count, _breaker_open_until, _breaker_open_logged
 
     logger.info(
-        f"Xray reconciliation task started "
-        f"(interval={RECONCILIATION_INTERVAL_SECONDS}s, batch_limit={BATCH_SIZE_LIMIT}, "
-        f"breaker_threshold={BREAKER_FAILURE_THRESHOLD}, breaker_open_s={BREAKER_OPEN_SECONDS}, "
-        f"enabled={config.XRAY_RECONCILIATION_ENABLED})"
+        "Xray reconciliation task started (interval=%ss, batch_limit=%s, enabled=%s)",
+        RECONCILIATION_INTERVAL_SECONDS, BATCH_SIZE_LIMIT, config.XRAY_RECONCILIATION_ENABLED,
     )
-
-    # POOL STABILITY: One-time startup jitter to avoid 600s worker alignment burst.
     jitter_s = random.uniform(5, 60)
     await asyncio.sleep(jitter_s)
-    logger.debug(f"reconcile_xray_state_task: startup jitter done ({jitter_s:.1f}s)")
 
     while True:
         try:
@@ -222,67 +217,41 @@ async def reconcile_xray_state_task():
 
             now = time.time()
             if now < _breaker_open_until:
-                logger.warning(
-                    "RECONCILIATION_BREAKER_OPEN",
-                    extra={
-                        "remaining_s": int(_breaker_open_until - now),
-                        "failure_count": _failure_count
-                    }
-                )
+                if not _breaker_open_logged:
+                    _breaker_open_logged = True
+                    logger.warning("RECONCILIATION_BREAKER_OPEN remaining_s=%s", int(_breaker_open_until - now))
                 continue
+            _breaker_open_logged = False
 
             start = time.time()
             try:
                 async with _worker_lock:
                     r = await asyncio.wait_for(reconcile_xray_state(), timeout=RECONCILIATION_TIMEOUT_SECONDS)
                 _failure_count = 0
-                if _breaker_open_until > 0:
-                    logger.info(
-                        "RECONCILIATION_BREAKER_RESET",
-                        extra={"reason": "half_open_trial_success"}
-                    )
-                    _breaker_open_until = 0.0
-
+                _breaker_open_until = 0.0
                 duration_ms = (time.time() - start) * 1000
                 if r["orphans_found"] or r["orphans_removed"] or r["missing_in_xray"]:
                     logger.info(
-                        f"reconciliation_complete orphans_found={r['orphans_found']} "
-                        f"orphans_removed={r['orphans_removed']} missing_in_xray={r['missing_in_xray']} "
-                        f"duration_ms={duration_ms:.0f}"
+                        "reconciliation_complete orphans_found=%s orphans_removed=%s missing_in_xray=%s duration_ms=%.0f",
+                        r["orphans_found"], r["orphans_removed"], r["missing_in_xray"], duration_ms,
                     )
             except asyncio.TimeoutError:
                 _failure_count += 1
-                _last_failure_ts = time.time()
-                logger.error("Reconciliation timeout — iteration aborted safely")
+                logger.error("Reconciliation timeout — iteration aborted")
                 if _failure_count >= BREAKER_FAILURE_THRESHOLD:
                     _breaker_open_until = time.time() + BREAKER_OPEN_SECONDS
-                    logger.warning("RECONCILIATION_BREAKER_OPEN", extra={"failure_count": _failure_count})
+                    logger.warning("RECONCILIATION_BREAKER_OPEN failure_count=%s", _failure_count)
                 await asyncio.sleep(min(60, 2 ** _failure_count))
                 continue
             except Exception as run_err:
                 _failure_count += 1
-                _last_failure_ts = time.time()
-                logger.error(
-                    "RECONCILIATION_FAILURE",
-                    extra={
-                        "failure_count": _failure_count,
-                        "error": str(run_err)[:200]
-                    },
-                    exc_info=True
-                )
+                logger.exception("RECONCILIATION_FAILURE: %s", str(run_err)[:200])
                 if _failure_count >= BREAKER_FAILURE_THRESHOLD:
                     _breaker_open_until = time.time() + BREAKER_OPEN_SECONDS
-                    logger.warning(
-                        "RECONCILIATION_BREAKER_OPEN",
-                        extra={
-                            "failure_count": _failure_count,
-                            "open_until_s": BREAKER_OPEN_SECONDS
-                        }
-                    )
+                    logger.warning("RECONCILIATION_BREAKER_OPEN failure_count=%s", _failure_count)
                 await asyncio.sleep(min(60, 2 ** _failure_count))
         except asyncio.CancelledError:
-            logger.info("Xray reconciliation task cancelled")
             raise
         except Exception as e:
-            logger.error(f"reconcile_xray_state_task: {e}", exc_info=True)
+            logger.exception("reconcile_xray_state_task: %s", e)
             await asyncio.sleep(60)
