@@ -101,6 +101,12 @@ async def health_handler(request: web.Request) -> web.Response:
             outcome="success",
             duration_ms=duration_ms,
         )
+        # WATCHDOG_FIX: healthcheck heartbeat for multi-signal freeze detection
+        try:
+            from app.core.watchdog_heartbeats import mark_healthcheck_success
+            mark_healthcheck_success()
+        except Exception:
+            pass
         return web.json_response(response_data, status=200)
 
     except asyncio.CancelledError:
