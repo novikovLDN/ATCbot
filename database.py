@@ -6564,6 +6564,7 @@ async def finalize_purchase(
 
         try:
             async with conn.transaction():
+                assert conn is not None, "finalize_purchase requires an active DB connection"
                 logger.info(
                     f"finalize_purchase: START [purchase_id={purchase_id}, user={telegram_id}, "
                     f"provider={payment_provider}, amount={amount_rubles:.2f} RUB (expected={expected_amount_rubles:.2f} RUB), "
@@ -6590,6 +6591,9 @@ async def finalize_purchase(
                     raise Exception(error_msg)
 
                 if is_balance_topup:
+                    # CRITICAL: Balance top-up MUST run inside the same transaction as finalize_purchase.
+                    # increase_balance is called with conn=conn to ensure atomicity.
+                    # Do NOT remove conn parameter — this prevents free balance on partial rollback.
                     # ОБРАБОТКА ПОПОЛНЕНИЯ БАЛАНСА
                     logger.info(
                         f"finalize_purchase: BALANCE_TOPUP [purchase_id={purchase_id}, user={telegram_id}, "
@@ -6599,7 +6603,8 @@ async def finalize_purchase(
                         telegram_id=telegram_id,
                         amount=amount_rubles,
                         source="cryptobot" if payment_provider == "cryptobot" else "telegram_payment",
-                        description=f"Balance top-up via {payment_provider}"
+                        description=f"Balance top-up via {payment_provider}",
+                        conn=conn
                     )
                     if not balance_increased:
                         error_msg = f"Failed to increase balance: purchase_id={purchase_id}, user={telegram_id}"
