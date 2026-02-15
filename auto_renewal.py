@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from aiogram import Bot
@@ -25,6 +26,7 @@ from app.utils.logging_helpers import (
     classify_error,
 )
 from app.core.cooperative_yield import cooperative_yield
+from app.core.pool_monitor import acquire_connection
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +104,7 @@ async def process_auto_renewals(bot: Bot):
         FOR UPDATE SKIP LOCKED"""
 
     while True:
-        async with pool.acquire() as conn:
+        async with acquire_connection(pool, "auto_renewal_main") as conn:
             notifications_to_send = []
             async with conn.transaction():
                 try:
@@ -347,7 +349,7 @@ async def process_auto_renewals(bot: Bot):
                     if sent is None:
                         continue
                     await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
-                    async with pool.acquire() as notify_conn:
+                    async with acquire_connection(pool, "auto_renewal_notify") as notify_conn:
                         marked = await notification_service.mark_notification_sent(item["payment_id"], conn=notify_conn)
                         if marked:
                             logger.info(
@@ -394,6 +396,11 @@ async def auto_renewal_task(bot: Bot):
     except Exception as e:
         logger.error(f"auto_renewal: Unexpected error in initial check: {type(e).__name__}: {str(e)[:100]}")
         logger.debug("auto_renewal: Full traceback for initial check", exc_info=True)
+
+    # POOL STABILITY: One-time startup jitter to avoid 600s worker alignment burst.
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug(f"auto_renewal: startup jitter done ({jitter_s:.1f}s)")
     
     iteration_number = 0
     

@@ -1,6 +1,7 @@
 """Модуль для health-check основных компонентов системы"""
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
 from typing import Tuple, List, Optional
 from aiogram import Bot
@@ -385,7 +386,12 @@ async def health_check_task(bot: Bot):
     """Фоновая задача для health-check (выполняется каждые 10 минут)"""
     global _health_alert_state
     previous_all_ok = None
-    
+
+    # POOL STABILITY: One-time startup jitter to avoid 600s worker alignment burst.
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug(f"health_check_task: startup jitter done ({jitter_s:.1f}s)")
+
     while True:
         try:
             all_ok, messages = await perform_health_check()
