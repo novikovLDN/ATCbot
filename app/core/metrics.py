@@ -325,8 +325,6 @@ def _register_default_metrics(metrics: Metrics) -> None:
     
     # Gauges
     metrics.set_gauge("system_state_status", 0.0, "System state (0=healthy,1=degraded,2=unavailable)")
-    metrics.set_gauge("recovery_in_progress", 0.0, "Recovery in progress (0/1)")
-    metrics.set_gauge("cooldown_active", 0.0, "Cooldown active (0/1)")
     
     # Timers (registered but not set until first measurement)
     metrics._metadata["db_latency_ms"] = {

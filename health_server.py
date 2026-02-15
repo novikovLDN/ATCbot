@@ -77,19 +77,12 @@ async def health_handler(request: web.Request) -> web.Response:
         # Status: "ok" if DB_READY == True, "degraded" if False (preserve existing logic)
         status = "ok" if db_ready else "degraded"
 
-        # B4.5 - OBSERVABILITY: Add recovery state to summary (internal, not exposed in response)
-        # Note: recovery_cooldown import removed to avoid dependency (not needed for health_server)
-        # Recovery state is computed in healthcheck.py, not in health_server.py
-
         # Формируем ответ (preserve exact format)
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
             "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
         }
-        # Note: recovery_in_progress is computed but not added to response
-        # to preserve exact response format (B4.5 requirement)
-
         # HTTP статус код: 200 для обоих случаев (ok и degraded)
         # Мониторинг может различать по полю "status"
         duration_ms = int((time.time() - start_time) * 1000)
