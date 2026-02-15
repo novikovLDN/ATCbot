@@ -4174,21 +4174,8 @@ async def grant_access(
                 "action": "pending_activation"
             }
         
-        # Если был старый UUID и он ещё существует - удаляем его из VPN API
-        if uuid:
-            try:
-                await vpn_utils.remove_vless_user(uuid)
-                # Безопасное логирование UUID
-                uuid_preview = f"{uuid[:8]}..." if uuid and len(uuid) > 8 else (uuid or "N/A")
-                logger.info(
-                    f"grant_access: REMOVED_OLD_UUID [action=remove_old, user={telegram_id}, "
-                    f"old_uuid={uuid_preview}, reason=creating_new_subscription]"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"grant_access: Failed to remove old UUID {uuid} for user {telegram_id}: {e}. "
-                    "Continuing with new UUID creation."
-                )
+        # Capture old UUID for removal AFTER transaction commits (no external call inside tx).
+        old_uuid_to_remove_after_commit = uuid if uuid else None
         
         # Вычисляем subscription_end ДО вызова VPN API (передаётся в Xray как expiryTime)
         subscription_start = now
@@ -4513,7 +4500,8 @@ async def grant_access(
             "uuid": new_uuid,
             "vless_url": vless_url,  # VLESS ссылка готова к выдаче пользователю (новый UUID)
             "subscription_end": subscription_end,
-            "action": "new_issuance"  # Явно указываем тип операции
+            "action": "new_issuance",
+            "old_uuid_to_remove_after_commit": old_uuid_to_remove_after_commit
         }
         
     except Exception as e:
@@ -4651,7 +4639,7 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 tariff_duration = timedelta(days=days)
                 
                 # 4. Используем grant_access с pre_provisioned_uuid
-                result = await grant_access(
+                grant_result_for_removal = result = await grant_access(
                     telegram_id=telegram_id,
                     duration=tariff_duration,
                     source="payment",
@@ -4661,7 +4649,6 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                     pre_provisioned_uuid=pre_provisioned_uuid,
                     _caller_holds_transaction=True
                 )
-                
                 expires_at = result["subscription_end"]
                 # Если vless_url есть - это новый UUID, используем его
                 # Если vless_url нет - это продление, получаем vpn_key из подписки
@@ -4733,8 +4720,7 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                         logger.exception(f"Error processing referral reward for payment {payment_id}: {e}")
                 
                 logger.info(f"Payment {payment_id} approved atomically for user {telegram_id}, is_renewal={is_renewal}")
-                return expires_at, is_renewal, final_vpn_key
-                
+                ret_val = (expires_at, is_renewal, final_vpn_key)
             except Exception as e:
                 if uuid_to_cleanup_on_failure:
                     try:
@@ -4752,6 +4738,17 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                         )
                 logger.exception(f"Error in atomic approve for payment {payment_id}, transaction rolled back")
                 raise
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
+            old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
+            try:
+                await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
+                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
+            except Exception as e:
+                logger.critical(
+                    "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
+                    extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
+                )
+        return ret_val
 
 
 async def get_pending_payments() -> list:
@@ -6640,7 +6637,7 @@ async def finalize_purchase(
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
                 duration = timedelta(days=period_days)
-                grant_result = await grant_access(
+                grant_result_for_removal = grant_result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
                     source="payment",
@@ -6677,8 +6674,7 @@ async def finalize_purchase(
                     payment_id
                 )
                 
-                # Возвращаем успешный результат без vpn_key
-                return {
+                ret_val = {
                     "success": True,
                     "payment_id": payment_id,
                     "expires_at": expires_at,
@@ -6686,104 +6682,104 @@ async def finalize_purchase(
                     "activation_status": "pending",
                     "is_renewal": False
                 }
-            
-            # Получаем VPN ключ для нормальной активации
-            vpn_key = grant_result.get("vless_url")
-            
-            if not vpn_key:
-                # Renewal: get vpn_key from subscription (API is source of truth, no local generation)
-                if is_renewal:
-                    vpn_key = grant_result.get("vpn_key")
-                    if not vpn_key:
-                        subscription_row = await conn.fetchrow(
-                            "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
-                            telegram_id
-                        )
-                        vpn_key = subscription_row["vpn_key"] if subscription_row and subscription_row.get("vpn_key") else ""
-                    if not vpn_key:
+            else:
+                # Получаем VPN ключ для нормальной активации
+                vpn_key = grant_result.get("vless_url")
+                
+                if not vpn_key:
+                    # Renewal: get vpn_key from subscription (API is source of truth, no local generation)
+                    if is_renewal:
+                        vpn_key = grant_result.get("vpn_key")
+                        if not vpn_key:
+                            subscription_row = await conn.fetchrow(
+                                "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                                telegram_id
+                            )
+                            vpn_key = subscription_row["vpn_key"] if subscription_row and subscription_row.get("vpn_key") else ""
+                        if not vpn_key:
+                            error_msg = (
+                                f"Renewal: no vpn_key in subscription or grant_result. "
+                                f"Bot MUST use vless_link from API only. purchase_id={purchase_id}, user={telegram_id}"
+                            )
+                            logger.error(f"finalize_purchase: {error_msg}")
+                            raise Exception(error_msg)
+                    else:
+                        # New issuance: vless_url must come from grant_access (API response)
                         error_msg = (
-                            f"Renewal: no vpn_key in subscription or grant_result. "
-                            f"Bot MUST use vless_link from API only. purchase_id={purchase_id}, user={telegram_id}"
+                            f"No VPN key from API: purchase_id={purchase_id}, user={telegram_id}. "
+                            "API must return vless_link. Bot MUST NOT generate links."
                         )
                         logger.error(f"finalize_purchase: {error_msg}")
                         raise Exception(error_msg)
-                else:
-                    # New issuance: vless_url must come from grant_access (API response)
-                    error_msg = (
-                        f"No VPN key from API: purchase_id={purchase_id}, user={telegram_id}. "
-                        "API must return vless_link. Bot MUST NOT generate links."
-                    )
+                
+                if not vpn_key:
+                    error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
-            
-            if not vpn_key:
-                error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
-                logger.error(f"finalize_purchase: {error_msg}")
-                raise Exception(error_msg)
-            
-            # API is source of truth — vpn_key from API, no local validation
-            # STEP 6: Обновляем payment → approved
-            await conn.execute(
-                "UPDATE payments SET status = 'approved' WHERE id = $1",
-                payment_id
-            )
-            
-            # STEP 7: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
-            if promo_code:
-                await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
-            
-            # STEP 8: Обрабатываем реферальный кешбэк
-            # Обработка реферального кешбэка внутри той же транзакции
-            # FINANCIAL errors будут проброшены и откатят всю транзакцию
-            # BUSINESS errors вернут success=False и покупка продолжится без награды
-            referral_reward_result = await process_referral_reward(
-                buyer_id=telegram_id,
-                purchase_id=purchase_id,
-                amount_rubles=amount_rubles,
-                conn=conn
-            )
-            
-            if referral_reward_result.get("success"):
-                logger.info(
-                    f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, "
-                    f"user={telegram_id}, referrer={referral_reward_result.get('referrer_id')}, "
-                    f"amount={referral_reward_result.get('reward_amount')} RUB"
+                
+                # API is source of truth — vpn_key from API, no local validation
+                # STEP 6: Обновляем payment → approved
+                await conn.execute(
+                    "UPDATE payments SET status = 'approved' WHERE id = $1",
+                    payment_id
                 )
-            else:
-                # BUSINESS LOGIC ERROR: Reward skipped but purchase continues
-                reason = referral_reward_result.get("reason", "unknown")
-                logger.info(
-                    f"finalize_purchase: Purchase finalized without referral reward: "
-                    f"purchase_id={purchase_id}, user={telegram_id}, reason={reason}"
+                
+                # STEP 7: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
+                if promo_code:
+                    await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
+                
+                # STEP 8: Обрабатываем реферальный кешбэк
+                # Обработка реферального кешбэка внутри той же транзакции
+                # FINANCIAL errors будут проброшены и откатят всю транзакцию
+                # BUSINESS errors вернут success=False и покупка продолжится без награды
+                referral_reward_result = await process_referral_reward(
+                    buyer_id=telegram_id,
+                    purchase_id=purchase_id,
+                    amount_rubles=amount_rubles,
+                    conn=conn
                 )
-            
-            # КРИТИЧНО: Логируем активацию подписки и выдачу ключа для аудита
-            logger.info(
-                f"subscription_activated: purchase_id={purchase_id}, user={telegram_id}, "
-                f"provider={payment_provider}, payment_id={payment_id}, "
-                f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}"
-            )
-            
-            logger.info(
-                f"vpn_key_issued: purchase_id={purchase_id}, user={telegram_id}, "
-                f"provider={payment_provider}, payment_id={payment_id}, "
-                f"vpn_key_length={len(vpn_key)}, is_renewal={is_renewal}"
-            )
-            
-            logger.info(
-                f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, provider={payment_provider}, "
-                f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
-                f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}, subscription_activated=True, vpn_key_issued=True]"
-            )
-            
-            return {
-                "success": True,
-                "payment_id": payment_id,
-                "expires_at": expires_at,
-                "vpn_key": vpn_key,
-                "is_renewal": is_renewal,
-                "referral_reward": referral_reward_result  # Добавляем результат реферального кешбэка
-            }
+                
+                if referral_reward_result.get("success"):
+                    logger.info(
+                        f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, "
+                        f"user={telegram_id}, referrer={referral_reward_result.get('referrer_id')}, "
+                        f"amount={referral_reward_result.get('reward_amount')} RUB"
+                    )
+                else:
+                    # BUSINESS LOGIC ERROR: Reward skipped but purchase continues
+                    reason = referral_reward_result.get("reason", "unknown")
+                    logger.info(
+                        f"finalize_purchase: Purchase finalized without referral reward: "
+                        f"purchase_id={purchase_id}, user={telegram_id}, reason={reason}"
+                    )
+                
+                # КРИТИЧНО: Логируем активацию подписки и выдачу ключа для аудита
+                logger.info(
+                    f"subscription_activated: purchase_id={purchase_id}, user={telegram_id}, "
+                    f"provider={payment_provider}, payment_id={payment_id}, "
+                    f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}"
+                )
+                
+                logger.info(
+                    f"vpn_key_issued: purchase_id={purchase_id}, user={telegram_id}, "
+                    f"provider={payment_provider}, payment_id={payment_id}, "
+                    f"vpn_key_length={len(vpn_key)}, is_renewal={is_renewal}"
+                )
+                
+                logger.info(
+                    f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, provider={payment_provider}, "
+                    f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
+                    f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}, subscription_activated=True, vpn_key_issued=True]"
+                )
+                
+                ret_val = {
+                    "success": True,
+                    "payment_id": payment_id,
+                    "expires_at": expires_at,
+                    "vpn_key": vpn_key,
+                    "is_renewal": is_renewal,
+                    "referral_reward": referral_reward_result  # Добавляем результат реферального кешбэка
+                }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
             if uuid_to_cleanup_on_failure:
@@ -6801,6 +6797,18 @@ async def finalize_purchase(
                         f"purchase_id={purchase_id} user={telegram_id}"
                     )
             raise
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
+            old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
+            try:
+                await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
+                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
+            except Exception as e:
+                logger.critical(
+                    "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
+                    extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
+                )
+        if ret_val is not None:
+            return ret_val
 
 
 async def expire_old_pending_purchases() -> int:
@@ -7549,10 +7557,12 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 pre_provisioned_uuid = None
                 uuid_to_cleanup_on_failure = None
 
+    ret_val = None
+    grant_result_for_removal = None
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                result = await grant_access(
+                grant_result_for_removal = result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
                     source="admin",
@@ -7562,14 +7572,10 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                     pre_provisioned_uuid=pre_provisioned_uuid,
                     _caller_holds_transaction=True
                 )
-                
                 expires_at = result["subscription_end"]
-                # Если vless_url есть - это новый UUID, используем его
-                # Если vless_url нет - это продление, получаем vpn_key из подписки
                 if result.get("vless_url"):
                     final_vpn_key = result["vless_url"]
                 else:
-                    # Продление - получаем vpn_key из существующей подписки
                     subscription_row = await conn.fetchrow(
                         "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
                         telegram_id
@@ -7577,13 +7583,10 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                     if subscription_row and subscription_row.get("vpn_key"):
                         final_vpn_key = subscription_row["vpn_key"]
                     else:
-                        # Fallback: используем UUID
                         final_vpn_key = result.get("uuid", "")
-                
                 uuid_preview = f"{result['uuid'][:8]}..." if result.get('uuid') and len(result['uuid']) > 8 else (result.get('uuid') or "N/A")
                 logger.info(f"admin_grant_access_atomic: SUCCESS [admin={admin_telegram_id}, user={telegram_id}, days={days}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]")
-                return expires_at, final_vpn_key
-                
+                ret_val = (expires_at, final_vpn_key)
             except Exception as e:
                 if uuid_to_cleanup_on_failure:
                     try:
@@ -7600,6 +7603,17 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                         )
                 logger.exception(f"Error in admin_grant_access_atomic for user {telegram_id}, transaction rolled back")
                 raise
+    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
+        old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
+        try:
+            await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
+            logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
+        except Exception as e:
+            logger.critical(
+                "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
+                extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
+            )
+    return ret_val
 
 
 async def finalize_balance_purchase(
@@ -7741,7 +7755,7 @@ async def finalize_balance_purchase(
                     await _consume_promo_in_transaction(conn, promo_code, telegram_id, None)
                 
                 # STEP 2: Активируем подписку
-                grant_result = await grant_access(
+                grant_result_for_removal = grant_result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
                     source="payment",
@@ -7810,7 +7824,7 @@ async def finalize_balance_purchase(
                     f"new_balance={new_balance:.2f} RUB, referral_reward_success={referral_reward_result.get('success') if referral_reward_result else False}]"
                 )
                 
-                return {
+                ret_val = {
                     "success": True,
                     "payment_id": payment_id,
                     "expires_at": expires_at,
@@ -7834,6 +7848,17 @@ async def finalize_balance_purchase(
                         f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
                     )
             raise
+        if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
+            old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
+            try:
+                await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
+                logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
+            except Exception as rem_err:
+                logger.critical(
+                    "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
+                    extra={"uuid": old_uuid[:8] + "...", "error": str(rem_err)[:200]}
+                )
+        return ret_val
 
 
 async def finalize_balance_topup(
@@ -8105,10 +8130,12 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                 pre_provisioned_uuid = None
                 uuid_to_cleanup_on_failure = None
 
+    ret_val = None
+    grant_result_for_removal = None
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
-                result = await grant_access(
+                grant_result_for_removal = result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
                     source="admin",
@@ -8118,14 +8145,10 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                     pre_provisioned_uuid=pre_provisioned_uuid,
                     _caller_holds_transaction=True
                 )
-                
                 expires_at = result["subscription_end"]
-                # Если vless_url есть - это новый UUID, используем его
-                # Если vless_url нет - это продление, получаем vpn_key из подписки
                 if result.get("vless_url"):
                     final_vpn_key = result["vless_url"]
                 else:
-                    # Продление - получаем vpn_key из существующей подписки
                     subscription_row = await conn.fetchrow(
                         "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
                         telegram_id
@@ -8133,17 +8156,13 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                     if subscription_row and subscription_row.get("vpn_key"):
                         final_vpn_key = subscription_row["vpn_key"]
                     else:
-                        # Fallback: используем UUID
                         final_vpn_key = result.get("uuid", "")
-                
-                # Безопасное логирование UUID
                 uuid_preview = f"{result['uuid'][:8]}..." if result.get('uuid') and len(result['uuid']) > 8 else (result.get('uuid') or "N/A")
                 logger.info(
                     f"admin_grant_access_minutes_atomic: SUCCESS [admin={admin_telegram_id}, user={telegram_id}, "
                     f"minutes={minutes}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]"
                 )
-                return expires_at, final_vpn_key
-                
+                ret_val = (expires_at, final_vpn_key)
             except Exception as e:
                 if uuid_to_cleanup_on_failure:
                     try:
@@ -8160,6 +8179,17 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                         )
                 logger.exception(f"Error in admin_grant_access_minutes_atomic for user {telegram_id}, transaction rolled back")
                 raise
+    if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
+        old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
+        try:
+            await vpn_utils.safe_remove_vless_user_with_retry(old_uuid)
+            logger.info("OLD_UUID_REMOVED_AFTER_COMMIT", extra={"uuid": old_uuid[:8] + "..."})
+        except Exception as e:
+            logger.critical(
+                "OLD_UUID_REMOVAL_FAILED_POST_COMMIT",
+                extra={"uuid": old_uuid[:8] + "...", "error": str(e)[:200]}
+            )
+    return ret_val
 
 
 async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -> bool:
@@ -8180,15 +8210,17 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
         True если доступ был отозван, False если активной подписки не было
     """
     pool = await get_pool()
+    uuid_to_remove = None
+    ret = False
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
                 now = datetime.now(timezone.utc)
                 now_db = _to_db_utc(now)
 
-                # 1. Проверяем, есть ли активная подписка
+                # 1. Проверяем, есть ли активная подписка (FOR UPDATE для блокировки)
                 subscription_row = await conn.fetchrow(
-                    "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2",
+                    "SELECT * FROM subscriptions WHERE telegram_id = $1 AND expires_at > $2 FOR UPDATE",
                     telegram_id, now_db
                 )
                 
@@ -8198,30 +8230,11 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                 
                 subscription = dict(subscription_row)
                 old_expires_at = subscription["expires_at"]
-                uuid = subscription.get("uuid")
                 vpn_key = subscription.get("vpn_key", "")
+                # PHASE 1: Capture UUID for removal OUTSIDE transaction (no VPN API call inside tx)
+                uuid_to_remove = subscription.get("uuid") if subscription.get("uuid") else None
                 
-                # 2. Удаляем UUID из Xray API (если есть)
-                # PART D.7: If vpn_api != healthy, NEVER call VPN API
-                if uuid:
-                    try:
-                        from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                        system_state = recalculate_from_runtime()
-                        if system_state.vpn_api.status != ComponentStatus.HEALTHY:
-                            logger.warning(
-                                f"admin_revoke_access_atomic: VPN_API_DISABLED [user={telegram_id}] - "
-                                f"VPN API is {system_state.vpn_api.status.value}, skipping UUID removal"
-                            )
-                            # PART D.7: Mark cleanup as pending, log SKIPPED
-                            # UUID will be removed later when VPN API is healthy
-                        else:
-                            await vpn_utils.remove_vless_user(uuid)
-                            logger.info(f"Deleted UUID {uuid} for user {telegram_id} during admin revoke")
-                    except Exception as e:
-                        # Не падаем, если UUID уже удален или произошла ошибка
-                        logger.error(f"Error deleting UUID {uuid} for user {telegram_id}: {e}", exc_info=True)
-                
-                # 3. Очищаем подписку: устанавливаем expires_at = NOW(), очищаем outline_key_id и vpn_key
+                # 2. Очищаем подписку: устанавливаем expires_at = NOW(), очищаем uuid и vpn_key
                 await conn.execute(
                     "UPDATE subscriptions SET expires_at = $1, status = 'expired', uuid = NULL, vpn_key = NULL WHERE telegram_id = $2",
                     now_db, telegram_id
@@ -8236,11 +8249,22 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                 await _log_audit_event_atomic(conn, "admin_revoke", admin_telegram_id, telegram_id, details)
                 
                 logger.info(f"Admin {admin_telegram_id} revoked access for user {telegram_id}")
-                return True
+                ret = True
                 
             except Exception as e:
                 logger.exception(f"Error in admin_revoke_access_atomic for user {telegram_id}, transaction rolled back")
                 raise
+        # PHASE 2 (outside transaction): Remove UUID from Xray API
+        if uuid_to_remove:
+            try:
+                await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
+                logger.info("ADMIN_REVOKE_UUID_REMOVED", extra={"uuid": uuid_to_remove[:8] + "..."})
+            except Exception as e:
+                logger.critical(
+                    "ADMIN_REVOKE_UUID_REMOVAL_FAILED",
+                    extra={"uuid": uuid_to_remove[:8] + "...", "error": str(e)[:200]}
+                )
+    return ret
 
 
 # ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С ПЕРСОНАЛЬНЫМИ СКИДКАМИ ====================
