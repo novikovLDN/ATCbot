@@ -88,31 +88,20 @@ except Exception as e:
 
 logger = logging.getLogger(__name__)
 
-
-INSTANCE_LOCK_FILE = "/tmp/atlas_bot.lock"
-
 # Polling self-healing constants (Railway long-poll freeze immunity)
 POLLING_REQUEST_TIMEOUT = 30
 POLLING_RESTART_DELAY = 5
-POLLING_MAX_SILENCE_SECONDS = 120
 POLLING_BACKOFF_MAX = 60
 
-# Global timestamp for watchdog: last update received (monotonic)
+# ADVISORY_LOCK_FIX: App-wide key for PostgreSQL advisory lock (replaces file lock).
+# Lock is automatically released when process dies (connection closed).
+ADVISORY_LOCK_KEY = 987654321
+
+# Kept for middleware (no longer used by watchdog); watchdog uses event_loop_heartbeat only.
 last_update_timestamp = time.monotonic()
 
 
 async def main():
-    # Single instance guard: prevent multiple bot processes
-    if os.path.exists(INSTANCE_LOCK_FILE):
-        logger.critical("Another instance detected (lock file exists). Exiting.")
-        print("Another instance detected. Exiting.")
-        sys.exit(1)
-    try:
-        with open(INSTANCE_LOCK_FILE, "w") as f:
-            f.write(str(os.getpid()))
-    except OSError as e:
-        logger.warning("Could not create instance lock file: %s", e)
-
     # Конфигурация уже проверена в config.py
     # Если переменные окружения не заданы, программа завершится с ошибкой
 
@@ -204,6 +193,26 @@ async def main():
         except Exception as e:
             logger.error(f"Failed to send degraded mode notification: {e}")
         # Продолжаем запуск бота в деградированном режиме
+
+    # ADVISORY_LOCK_FIX: single-instance guard via PostgreSQL (no file lock).
+    instance_lock_conn = None
+    if database.DB_READY:
+        pool = await database.get_pool()
+        if pool:
+            instance_lock_conn = await pool.acquire()
+            lock_acquired = await instance_lock_conn.fetchval(
+                "SELECT pg_try_advisory_lock($1)", ADVISORY_LOCK_KEY
+            )
+            if not lock_acquired:
+                await instance_lock_conn.release()
+                instance_lock_conn = None
+                logger.critical("Another instance detected (advisory lock held). Exiting.")
+                sys.exit(1)
+        else:
+            logger.critical("DB pool missing; cannot acquire advisory lock. Exiting.")
+            sys.exit(1)
+    else:
+        logger.warning("DB not ready; skipping advisory lock (single-instance guard disabled)")
     
     # Centralized list for graceful shutdown
     background_tasks = []
@@ -552,18 +561,22 @@ async def main():
         logger.exception("Webhook audit failed: %s", e)
         sys.exit(1)
 
-    # Self-healing polling: watchdog + auto-restart with backoff
+    # WATCHDOG_FIX: event-loop heartbeat + multi-signal freeze detection (no Telegram silence kill).
+    from app.core import watchdog_heartbeats
+
+    async def event_loop_heartbeat():
+        while True:
+            watchdog_heartbeats.mark_event_loop_heartbeat()
+            await asyncio.sleep(5)
+
     async def polling_watchdog():
-        global last_update_timestamp
         while True:
             await asyncio.sleep(30)
-            silence = time.monotonic() - last_update_timestamp
-            if silence > POLLING_MAX_SILENCE_SECONDS:
-                logger.error(
-                    "POLLING_STUCK detected (silence=%.1fs). Forcing restart.",
-                    silence
+            if watchdog_heartbeats.are_all_stale():
+                logger.critical(
+                    "WATCHDOG: all heartbeats stale (event loop + worker + healthcheck). Forcing exit."
                 )
-                os._exit(1)  # Railway restarts container
+                raise SystemExit(1)
 
     async def start_polling_with_auto_restart():
         backoff = 1
@@ -592,6 +605,7 @@ async def main():
                 log_event(logger, component="polling", operation="polling_cancelled", outcome="cancelled")
                 break
             except TelegramConflictError as e:
+                # POLLING_STABILITY_FIX: retry polling instead of exiting.
                 try:
                     webhook_info = await bot.get_webhook_info()
                     webhook_snapshot = {
@@ -600,8 +614,8 @@ async def main():
                     }
                 except Exception as we:
                     webhook_snapshot = {"error": str(we)}
-                logger.critical(
-                    "TELEGRAM_CONFLICT_DETECTED timestamp=%s instance_id=%s pid=%s webhook_state=%s",
+                logger.warning(
+                    "TELEGRAM_CONFLICT_DETECTED timestamp=%s instance_id=%s pid=%s webhook_state=%s; retrying in 3s",
                     datetime.now(timezone.utc).isoformat(),
                     instance_id,
                     os.getpid(),
@@ -611,12 +625,11 @@ async def main():
                     logger,
                     component="polling",
                     operation="conflict",
-                    outcome="failed",
-                    reason="another bot instance is running",
-                    level="critical",
+                    outcome="retry",
+                    reason="conflict; will retry polling",
+                    level="warning",
                 )
-                logger.critical("polling conflict traceback", exc_info=True)
-                raise SystemExit(1)
+                await asyncio.sleep(3)
             except Exception as e:
                 logger.error("POLLING_CRASH: %s", e, exc_info=True)
                 log_event(
@@ -634,6 +647,8 @@ async def main():
     try:
         from aiogram.exceptions import TelegramConflictError
 
+        heartbeat_task = asyncio.create_task(event_loop_heartbeat())
+        background_tasks.append(heartbeat_task)
         watchdog_task = asyncio.create_task(polling_watchdog())
         background_tasks.append(watchdog_task)
 
@@ -676,6 +691,17 @@ async def main():
                     logger.error(f"Error during shutdown of task {task.get_name() if hasattr(task, 'get_name') else 'unknown'}: {e}")
         
         log_event(logger, component="shutdown", operation="shutdown_tasks_cancelled", outcome="success")
+
+        # ADVISORY_LOCK_FIX: release lock and dedicated connection before closing pool.
+        if instance_lock_conn is not None:
+            try:
+                await instance_lock_conn.execute("SELECT pg_advisory_unlock($1)", ADVISORY_LOCK_KEY)
+            except Exception as e:
+                logger.debug("advisory unlock: %s", e)
+            try:
+                await instance_lock_conn.release()
+            except Exception as e:
+                logger.debug("advisory lock conn release: %s", e)
         
         # Close DB pool
         try:
@@ -691,14 +717,6 @@ async def main():
             logger.debug(f"Error closing bot session: {e}")
         
         log_event(logger, component="shutdown", operation="shutdown_completed", outcome="success")
-
-        # Remove instance lock file
-        try:
-            if os.path.exists(INSTANCE_LOCK_FILE):
-                os.remove(INSTANCE_LOCK_FILE)
-                logger.info("Instance lock file removed")
-        except OSError as e:
-            logger.warning("Could not remove instance lock file: %s", e)
 
 
 if __name__ == "__main__":
