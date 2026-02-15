@@ -737,11 +737,13 @@ async def main():
             try:
                 await instance_lock_conn.execute("SELECT pg_advisory_unlock($1)", ADVISORY_LOCK_KEY)
             except Exception as e:
-                logger.debug("advisory unlock: %s", e)
+                logger.debug("advisory unlock failed: %s", e)
             try:
-                await instance_lock_conn.release()
+                pool = await database.get_pool()
+                if pool is not None:
+                    await pool.release(instance_lock_conn)
             except Exception as e:
-                logger.debug("advisory lock conn release: %s", e)
+                logger.debug("advisory connection release failed: %s", e)
         
         # Close DB pool
         try:
