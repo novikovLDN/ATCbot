@@ -189,12 +189,6 @@ def log_worker_iteration_start(
     Returns:
         Correlation ID for this iteration
     """
-    # WATCHDOG_FIX: worker heartbeat for multi-signal freeze detection
-    try:
-        from app.core.watchdog_heartbeats import mark_worker_iteration
-        mark_worker_iteration()
-    except Exception:
-        pass
     correlation_id = generate_correlation_id()
     set_correlation_id(correlation_id)
     

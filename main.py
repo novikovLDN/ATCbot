@@ -88,13 +88,7 @@ except Exception as e:
 
 logger = logging.getLogger(__name__)
 
-# Polling self-healing constants (Railway long-poll freeze immunity)
 POLLING_REQUEST_TIMEOUT = 30
-POLLING_RESTART_DELAY = 5
-POLLING_BACKOFF_MAX = 60
-
-# FREEZE AUDIT: temporary instrumentation (FREEZE_AUDIT_INSTRUMENTATION=1). See docs/FULL_PRODUCTION_FREEZE_INVESTIGATION_AUDIT.md
-FREEZE_AUDIT_INSTRUMENTATION = os.getenv("FREEZE_AUDIT_INSTRUMENTATION", "").strip().lower() in ("1", "true", "yes")
 
 # ADVISORY_LOCK_FIX: App-wide key for PostgreSQL advisory lock (replaces file lock).
 # Lock is automatically released when process dies (connection closed).
@@ -103,7 +97,6 @@ ADVISORY_LOCK_KEY = 987654321
 # Advisory lock connection (held for process lifetime); released in finally via pool.release().
 instance_lock_conn = None
 
-# Kept for middleware (no longer used by watchdog); watchdog uses event_loop_heartbeat only.
 last_update_timestamp = time.monotonic()
 
 # TELEGRAM_NETWORK_LIVENESS: alive only when a successful Telegram API HTTP response is received (monotonic).
@@ -146,69 +139,17 @@ async def main():
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
-    # FREEZE_AUDIT: session introspection on start (diagnosis only)
-    if FREEZE_AUDIT_INSTRUMENTATION:
-        logger.critical("[FREEZE_AUDIT] SESSION_TYPE=%s", type(bot.session))
-        try:
-            logger.critical("[FREEZE_AUDIT] SESSION_TIMEOUT_ATTR=%s", getattr(bot.session, "timeout", None))
-            if hasattr(bot.session, "_session") and bot.session._session is not None:
-                logger.critical("[FREEZE_AUDIT] AIOHTTP_TIMEOUT=%s", getattr(bot.session._session, "timeout", None))
-        except Exception as e:
-            logger.critical("[FREEZE_AUDIT] SESSION_INTROSPECTION_ERROR=%s", e)
-
     # TELEGRAM_NETWORK_LIVENESS: wrap session so we only mark alive on successful HTTP response (no event-loop tick).
     _original_make_request = bot.session.make_request
 
     async def _wrapped_make_request(*args, **kwargs):
-        # FREEZE_AUDIT: optional detailed logging (Section 5 + 1 + 4)
-        method_name = ""
-        is_get_updates = False
-        offset_in = None
-        if FREEZE_AUDIT_INSTRUMENTATION:
-            method_obj = args[2] if len(args) >= 3 else kwargs.get("method")
-            if method_obj is not None:
-                method_name = getattr(method_obj, "__api_method__", None) or getattr(type(method_obj), "__name__", "?")
-            is_get_updates = (method_name == "getUpdates")
-            if is_get_updates and hasattr(method_obj, "offset"):
-                offset_in = getattr(method_obj, "offset", None)
-        t0 = time.monotonic()
-        if FREEZE_AUDIT_INSTRUMENTATION and method_name:
-            logger.critical(
-                "[FREEZE_AUDIT] make_request_start method=%s offset=%s t0=%.2f",
-                method_name, offset_in, t0,
-                extra={"freeze_audit": True},
-            )
         try:
             response = await _original_make_request(*args, **kwargs)
             if response is not None:
                 global telegram_last_success_monotonic
                 telegram_last_success_monotonic = time.monotonic()
-            elapsed = time.monotonic() - t0
-            if FREEZE_AUDIT_INSTRUMENTATION and method_name:
-                count = None
-                max_update_id = None
-                if is_get_updates and response is not None:
-                    try:
-                        count = len(response) if hasattr(response, "__len__") else None
-                        ids = [getattr(u, "update_id", None) for u in (response or []) if hasattr(u, "update_id")]
-                        max_update_id = max(ids) if ids else None
-                    except Exception:
-                        count = None
-                        max_update_id = None
-                logger.critical(
-                    "[FREEZE_AUDIT] make_request_end method=%s elapsed_s=%.2f count=%s max_update_id=%s",
-                    method_name, elapsed, count, max_update_id,
-                    extra={"freeze_audit": True},
-                )
             return response
-        except Exception as e:
-            elapsed = time.monotonic() - t0
-            if FREEZE_AUDIT_INSTRUMENTATION and method_name:
-                logger.critical(
-                    "[FREEZE_AUDIT] make_request_exception method=%s elapsed_s=%.2f exc=%s",
-                    method_name, elapsed, type(e).__name__,
-                    extra={"freeze_audit": True},
-                )
+        except Exception:
             raise
 
     bot.session.make_request = _wrapped_make_request
@@ -636,41 +577,6 @@ async def main():
         logger.exception("Webhook audit failed: %s", e)
         sys.exit(1)
 
-    # WATCHDOG_FIX: event-loop heartbeat + multi-signal freeze detection (no Telegram silence kill).
-    from app.core import watchdog_heartbeats
-
-    async def event_loop_heartbeat():
-        while True:
-            watchdog_heartbeats.mark_event_loop_heartbeat()
-            await asyncio.sleep(5)
-
-    async def polling_watchdog():
-        while True:
-            await asyncio.sleep(30)
-            now = time.monotonic()
-            worker_stale_s = now - watchdog_heartbeats.last_worker_iteration_timestamp
-            # Diagnostic: when worker stale > 120s and pool wait spikes were seen recently, log snapshot.
-            if worker_stale_s > 120:
-                try:
-                    from app.core.pool_monitor import get_last_pool_wait_spike_monotonic
-                    spike_at = get_last_pool_wait_spike_monotonic()
-                    if spike_at > 0 and (now - spike_at) < 300:
-                        logger.critical(
-                            "WATCHDOG_DIAGNOSTIC: worker heartbeat stale %.1fs and pool wait spike detected (spike %.1fs ago). "
-                            "event_loop_stale_s=%.1f healthcheck_stale_s=%.1f",
-                            worker_stale_s,
-                            now - spike_at,
-                            now - watchdog_heartbeats.last_event_loop_heartbeat,
-                            now - watchdog_heartbeats.last_successful_healthcheck_timestamp,
-                        )
-                except Exception:
-                    pass
-            if watchdog_heartbeats.are_all_stale():
-                logger.critical(
-                    "WATCHDOG: all heartbeats stale (event loop + worker + healthcheck). Forcing exit."
-                )
-                raise SystemExit(1)
-
     async def telegram_network_watchdog():
         """Liveness only via successful Telegram HTTP response. No event-loop tick, no silence-based logic."""
         while True:
@@ -702,12 +608,7 @@ async def main():
             close_bot_session=True,
         )
 
-    audit_tasks = []
     try:
-        heartbeat_task = asyncio.create_task(event_loop_heartbeat())
-        background_tasks.append(heartbeat_task)
-        watchdog_task = asyncio.create_task(polling_watchdog())
-        background_tasks.append(watchdog_task)
         network_watchdog_task = asyncio.create_task(
             telegram_network_watchdog(),
             name="telegram_network_watchdog",
@@ -720,66 +621,11 @@ async def main():
         )
         background_tasks.append(polling_task)
 
-        # FREEZE_AUDIT: event loop monitor (Section 2) and pool/task monitor (Sections 3, 6)
-        if FREEZE_AUDIT_INSTRUMENTATION:
-            _audit_last_tick = time.monotonic()
-
-            async def _event_loop_monitor():
-                nonlocal _audit_last_tick
-                while True:
-                    await asyncio.sleep(2)
-                    now = time.monotonic()
-                    delta = now - _audit_last_tick
-                    logger.critical("[FREEZE_AUDIT] event_loop_tick delta_s=%.3f", delta, extra={"freeze_audit": True})
-                    if delta > 5.0:
-                        logger.critical(
-                            "[FREEZE_AUDIT] event_loop_stall_detected delta_s=%.3f",
-                            delta,
-                            extra={"freeze_audit": True},
-                        )
-                    _audit_last_tick = now
-
-            async def _pool_and_tasks_monitor():
-                while True:
-                    await asyncio.sleep(30)
-                    try:
-                        n_tasks = len(asyncio.all_tasks())
-                        poll_done = polling_task.done() if polling_task else None
-                        poll_cancelled = polling_task.cancelled() if polling_task else None
-                        logger.critical(
-                            "[FREEZE_AUDIT] tasks count=%s polling_done=%s polling_cancelled=%s",
-                            n_tasks, poll_done, poll_cancelled,
-                            extra={"freeze_audit": True},
-                        )
-                        if database.DB_READY:
-                            pool = await database.get_pool()
-                            if pool is not None:
-                                size = getattr(pool, "get_size", lambda: None)()
-                                idle = getattr(pool, "get_idle_size", lambda: None)()
-                                if size is not None and idle is not None:
-                                    logger.critical(
-                                        "[FREEZE_AUDIT] pool size=%s idle=%s active=%s",
-                                        size, idle, size - idle,
-                                        extra={"freeze_audit": True},
-                                    )
-                    except Exception as e:
-                        logger.debug("FREEZE_AUDIT monitor error: %s", e)
-
-            t1 = asyncio.create_task(_event_loop_monitor(), name="freeze_audit_loop_monitor")
-            t2 = asyncio.create_task(_pool_and_tasks_monitor(), name="freeze_audit_pool_tasks")
-            audit_tasks.extend([t1, t2])
-            background_tasks.append(t1)
-            background_tasks.append(t2)
-
         await polling_task
     except SystemExit:
         raise
     finally:
         log_event(logger, component="shutdown", operation="shutdown_start", outcome="success")
-        # FREEZE_AUDIT: cancel audit tasks first for clean shutdown
-        for t in audit_tasks:
-            if t and not t.done():
-                t.cancel()
         # Stop polling cleanly
         try:
             if hasattr(dp, "stop_polling"):
