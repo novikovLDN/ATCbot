@@ -13,10 +13,6 @@ import logging
 import config
 import vpn_utils
 from app.utils.retry import retry_async
-from app.core.recovery_cooldown import (
-    get_recovery_cooldown,
-    ComponentName,
-)
 from app.core.system_state import ComponentStatus
 from app.core.metrics import get_metrics, timer
 from app.core.cost_model import get_cost_model, CostCenter
@@ -292,33 +288,18 @@ async def get_pool() -> asyncpg.Pool:
     if not DATABASE_URL:
         raise RuntimeError(f"{config.APP_ENV.upper()}_DATABASE_URL is not configured")
     if _pool is None:
-        # B4.3 - SAFE RETRY RE-ENABLE: Check cooldown before retrying pool creation
-        from datetime import datetime, timezone
-        recovery_cooldown = get_recovery_cooldown(cooldown_seconds=60)
-        now = datetime.now(timezone.utc)
-        
-        # If database is in cooldown, use minimal retries
-        if recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
-            retries = 0  # No retries during cooldown
-        else:
-            retries = 1  # Normal retry behavior
-        
         # C1.1 - METRICS: Measure pool creation latency
         pool_config = _get_pool_config()
         with timer("db_latency_ms"):
-            # Retry pool creation on transient errors only
             _pool = await retry_async(
                 lambda: asyncpg.create_pool(DATABASE_URL, **pool_config),
-                retries=retries,
+                retries=1,
                 base_delay=0.5,
                 max_delay=5.0,
                 retry_on=(asyncpg.PostgresError,)
             )
-        
-        # C1.1 - METRICS: Track retries
-        if retries > 0:
-            metrics = get_metrics()
-            metrics.increment_counter("retries_total", value=retries)
+        metrics = get_metrics()
+        metrics.increment_counter("retries_total", value=1)
         
         # D2.1 - COST CENTERS: Track DB connection cost
         cost_model = get_cost_model()

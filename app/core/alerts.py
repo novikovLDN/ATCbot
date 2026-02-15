@@ -19,7 +19,6 @@ import logging
 
 from app.core.metrics import get_metrics
 from app.core.slo import get_slo, SLOStatus
-from app.core.recovery_cooldown import get_recovery_cooldown, ComponentName
 from app.core.system_state import SystemState, ComponentStatus
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,6 @@ class AlertRules:
         """Initialize alert rules"""
         self.metrics = get_metrics()
         self.slo = get_slo()
-        self.recovery_cooldown = get_recovery_cooldown()
         # Track alert state to prevent spam
         self._alert_state: Dict[str, datetime] = {}  # alert_key -> last_fired_at
         self._suppressed_alerts: set[str] = set()  # Currently suppressed alert keys
@@ -82,13 +80,8 @@ class AlertRules:
             self._suppressed_alerts.discard("unavailable")
             return None
         
-        # Check if we're in cooldown (suppress alert during recovery)
-        now = datetime.now(timezone.utc)
-        if self.recovery_cooldown.is_in_cooldown(ComponentName.DATABASE, now):
-            self._suppressed_alerts.add("unavailable")
-            return None
-        
         # Check if alert was recently fired (prevent spam)
+        now = datetime.now(timezone.utc)
         alert_key = "unavailable"
         last_fired = self._alert_state.get(alert_key)
         if last_fired and (now - last_fired).total_seconds() < unavailable_duration_seconds:

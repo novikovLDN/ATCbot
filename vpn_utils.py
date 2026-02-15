@@ -370,53 +370,6 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             raise VPNAPIError(error_msg) from e
 
 
-async def list_vless_users() -> list[str]:
-    """
-    Fetch UUID list of all VLESS clients from Xray API.
-    Used by reconciliation worker to detect orphan UUIDs.
-    Uses circuit breaker and retry (max 2) like add/remove.
-    """
-    if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
-        return []
-
-    from app.core.circuit_breaker import get_circuit_breaker
-    vpn_breaker = get_circuit_breaker("vpn_api")
-    if vpn_breaker.should_skip():
-        logger.warning("list_vless_users: circuit breaker OPEN, skipping")
-        return []
-
-    api_url = config.XRAY_API_URL.rstrip('/')
-    url = f"{api_url}/list-users"
-    headers = {"X-API-Key": config.XRAY_API_KEY}
-
-    async def _get():
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
-            response = await client.get(url, headers=headers)
-            if response.status_code != 200:
-                logger.warning(f"list_vless_users: API returned status={response.status_code}")
-                return []
-            data = response.json()
-            uuids = data.get("uuids", [])
-            if not isinstance(uuids, list):
-                return []
-            return [str(u).strip() for u in uuids if u and str(u).strip()]
-
-    try:
-        result = await retry_async(
-            _get,
-            retries=MAX_RETRIES,
-            base_delay=RETRY_DELAY,
-            max_delay=5.0,
-            retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
-        )
-        vpn_breaker.record_success()
-        return result or []
-    except Exception as e:
-        vpn_breaker.record_failure()
-        logger.warning(f"list_vless_users: failed: {e}")
-        return []
-
-
 async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
     """
     Sync user to Xray. DB is source of truth for UUID.
