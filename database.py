@@ -2829,18 +2829,28 @@ async def get_payment(payment_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
-async def get_last_approved_payment(telegram_id: int) -> Optional[Dict[str, Any]]:
+async def get_last_approved_payment(telegram_id: int, conn: Optional[asyncpg.Connection] = None) -> Optional[Dict[str, Any]]:
     """Получить последний утверждённый платёж пользователя
     
     Args:
         telegram_id: Telegram ID пользователя
+        conn: Опциональное соединение (если передано — используется оно, без pool.acquire)
     
     Returns:
         Словарь с данными платежа или None, если платёж не найден
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    if conn is not None:
         row = await conn.fetchrow(
+            """SELECT * FROM payments 
+               WHERE telegram_id = $1 AND status = 'approved'
+               ORDER BY created_at DESC
+               LIMIT 1""",
+            telegram_id
+        )
+        return dict(row) if row else None
+    pool = await get_pool()
+    async with pool.acquire() as acquired:
+        row = await acquired.fetchrow(
             """SELECT * FROM payments 
                WHERE telegram_id = $1 AND status = 'approved'
                ORDER BY created_at DESC
@@ -8368,16 +8378,28 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
 
 # ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С ПЕРСОНАЛЬНЫМИ СКИДКАМИ ====================
 
-async def get_user_discount(telegram_id: int) -> Optional[Dict[str, Any]]:
+async def get_user_discount(telegram_id: int, conn: Optional[asyncpg.Connection] = None) -> Optional[Dict[str, Any]]:
     """Получить активную персональную скидку пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        conn: Опциональное соединение (если передано — используется оно, без pool.acquire)
     
     Returns:
         Словарь с данными скидки или None, если скидки нет или она истекла
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if conn is not None:
         row = await conn.fetchrow(
+            """SELECT * FROM user_discounts 
+               WHERE telegram_id = $1 
+               AND (expires_at IS NULL OR expires_at > $2)""",
+            telegram_id, _to_db_utc(now)
+        )
+        return dict(row) if row else None
+    pool = await get_pool()
+    async with pool.acquire() as acquired:
+        row = await acquired.fetchrow(
             """SELECT * FROM user_discounts 
                WHERE telegram_id = $1 
                AND (expires_at IS NULL OR expires_at > $2)""",
@@ -8461,15 +8483,25 @@ async def delete_user_discount(telegram_id: int, deleted_by: int) -> bool:
 
 # ==================== ФУНКЦИИ ДЛЯ РАБОТЫ С VIP-СТАТУСОМ ====================
 
-async def is_vip_user(telegram_id: int) -> bool:
+async def is_vip_user(telegram_id: int, conn: Optional[asyncpg.Connection] = None) -> bool:
     """Проверить, является ли пользователь VIP
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        conn: Опциональное соединение (если передано — используется оно, без pool.acquire)
     
     Returns:
         True если пользователь VIP, False иначе
     """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
+    if conn is not None:
         row = await conn.fetchrow(
+            "SELECT telegram_id FROM vip_users WHERE telegram_id = $1",
+            telegram_id
+        )
+        return row is not None
+    pool = await get_pool()
+    async with pool.acquire() as acquired:
+        row = await acquired.fetchrow(
             "SELECT telegram_id FROM vip_users WHERE telegram_id = $1",
             telegram_id
         )

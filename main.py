@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 
 # Configure logging FIRST (before any other imports that may log)
@@ -90,6 +91,15 @@ logger = logging.getLogger(__name__)
 
 INSTANCE_LOCK_FILE = "/tmp/atlas_bot.lock"
 
+# Polling self-healing constants (Railway long-poll freeze immunity)
+POLLING_REQUEST_TIMEOUT = 30
+POLLING_RESTART_DELAY = 5
+POLLING_MAX_SILENCE_SECONDS = 120
+POLLING_BACKOFF_MAX = 60
+
+# Global timestamp for watchdog: last update received (monotonic)
+last_update_timestamp = time.monotonic()
+
 
 async def main():
     # Single instance guard: prevent multiple bot processes
@@ -142,9 +152,15 @@ async def main():
     update_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPDATES)
     logger.info("CONCURRENCY_LIMIT=%s", MAX_CONCURRENT_UPDATES)
     
-    # Register middlewares (order: 1 ConcurrencyLimiter, 2 TelegramErrorBoundary, 3 Routers)
+    # Register middlewares (order: 1 UpdateTimestamp, 2 ConcurrencyLimiter, 3 TelegramErrorBoundary, 4 Routers)
+    async def update_timestamp_middleware(handler, event, data):
+        global last_update_timestamp
+        last_update_timestamp = time.monotonic()
+        return await handler(event, data)
+
     from app.core.concurrency_middleware import ConcurrencyLimiterMiddleware
     from app.core.telegram_error_middleware import TelegramErrorBoundaryMiddleware
+    dp.update.middleware(update_timestamp_middleware)
     dp.update.middleware(ConcurrencyLimiterMiddleware(update_semaphore))
     dp.update.middleware(TelegramErrorBoundaryMiddleware())
     
@@ -536,22 +552,27 @@ async def main():
         logger.exception("Webhook audit failed: %s", e)
         sys.exit(1)
 
-    try:
-        # 2️⃣ Wrap dispatcher.start_polling() so it is called ONLY from the primary process
-        # Polling is started ONCE and ONLY AFTER DB init attempt finishes
-        # Restart guard: dispatcher crash does not kill process
-        from aiogram.exceptions import TelegramConflictError
-
+    # Self-healing polling: watchdog + auto-restart with backoff
+    async def polling_watchdog():
+        global last_update_timestamp
         while True:
-            try:
-                # PHASE 2: delete_webhook BEFORE dp.start_polling (no conditional skip)
-                await bot.delete_webhook(drop_pending_updates=True)
-                logger.info("Webhook deleted before polling start")
-
-                logger.info(
-                    "POLLING_START pid=%s instance_id=%s",
-                    os.getpid(), instance_id
+            await asyncio.sleep(30)
+            silence = time.monotonic() - last_update_timestamp
+            if silence > POLLING_MAX_SILENCE_SECONDS:
+                logger.error(
+                    "POLLING_STUCK detected (silence=%.1fs). Forcing restart.",
+                    silence
                 )
+                os._exit(1)  # Railway restarts container
+
+    async def start_polling_with_auto_restart():
+        backoff = 1
+        while True:
+            polling_bot = Bot(token=config.BOT_TOKEN)
+            try:
+                logger.warning("POLLING_LOOP_START")
+                await polling_bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Webhook deleted before polling start")
                 log_event(
                     logger,
                     component="polling",
@@ -560,10 +581,11 @@ async def main():
                     correlation_id=instance_id,
                 )
                 await dp.start_polling(
-                    bot,
+                    polling_bot,
                     allowed_updates=used_updates if used_updates else None,
-                    polling_timeout=30,
-                    handle_signals=False
+                    polling_timeout=POLLING_REQUEST_TIMEOUT,
+                    handle_signals=False,
+                    close_bot_session=True,
                 )
             except asyncio.CancelledError:
                 logger.info("POLLING_STOP reason=cancelled")
@@ -596,11 +618,7 @@ async def main():
                 logger.critical("polling conflict traceback", exc_info=True)
                 raise SystemExit(1)
             except Exception as e:
-                logger.error(
-                    "POLLING_EXCEPTION type=%s reason=%s instance_id=%s pid=%s",
-                    type(e).__name__, str(e)[:200], instance_id, os.getpid(),
-                    exc_info=True
-                )
+                logger.error("POLLING_CRASH: %s", e, exc_info=True)
                 log_event(
                     logger,
                     component="polling",
@@ -609,8 +627,17 @@ async def main():
                     reason=str(e)[:200],
                     level="error",
                 )
-                logger.info("Restarting polling in 5 seconds...")
-                await asyncio.sleep(5)
+            logger.warning("POLLING_RESTARTING in %ss", backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, POLLING_BACKOFF_MAX)
+
+    try:
+        from aiogram.exceptions import TelegramConflictError
+
+        watchdog_task = asyncio.create_task(polling_watchdog())
+        background_tasks.append(watchdog_task)
+
+        await start_polling_with_auto_restart()
     except SystemExit:
         raise
     finally:
