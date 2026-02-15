@@ -22,7 +22,6 @@ from app.core.structured_logger import log_event
 from app.handlers import router as root_router
 import reminders
 import healthcheck
-# import outline_cleanup  # DISABLED - мигрировали на Xray Core
 import fast_expiry_cleanup
 import auto_renewal
 import health_server
@@ -89,8 +88,6 @@ ADVISORY_LOCK_KEY = 987654321
 # Advisory lock connection (held for process lifetime); released in finally via pool.release().
 instance_lock_conn = None
 
-last_update_timestamp = time.monotonic()
-
 # TELEGRAM_NETWORK_LIVENESS: alive only when a successful Telegram API HTTP response is received (monotonic).
 telegram_last_success_monotonic = time.monotonic()
 TELEGRAM_LIVENESS_TIMEOUT = int(os.getenv("TELEGRAM_LIVENESS_TIMEOUT", "180"))  # 3 min; do not use 60 or 120
@@ -151,15 +148,8 @@ async def main():
     update_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPDATES)
     logger.info("CONCURRENCY_LIMIT=%s", MAX_CONCURRENT_UPDATES)
     
-    # Register middlewares (order: 1 UpdateTimestamp, 2 ConcurrencyLimiter, 3 TelegramErrorBoundary, 4 Routers)
-    async def update_timestamp_middleware(handler, event, data):
-        global last_update_timestamp
-        last_update_timestamp = time.monotonic()
-        return await handler(event, data)
-
     from app.core.concurrency_middleware import ConcurrencyLimiterMiddleware
     from app.core.telegram_error_middleware import TelegramErrorBoundaryMiddleware
-    dp.update.middleware(update_timestamp_middleware)
     dp.update.middleware(ConcurrencyLimiterMiddleware(update_semaphore))
     dp.update.middleware(TelegramErrorBoundaryMiddleware())
     
@@ -397,13 +387,6 @@ async def main():
         logger.info("DB retry task started (will retry every 30 seconds until DB is ready)")
     else:
         logger.info("Database already ready, skipping retry task")
-    
-    # Outline cleanup task DISABLED - мигрировали на Xray Core (VLESS)
-    # Старая задача outline_cleanup больше не используется
-    # cleanup_task = asyncio.create_task(outline_cleanup.outline_cleanup_task())
-    # logger.info("Outline cleanup task started")
-    cleanup_task = None
-    logger.info("Outline cleanup task disabled (using Xray Core now)")
     
     # Запуск фоновой задачи для быстрой очистки истёкших подписок (только если БД готова)
     fast_cleanup_task = None

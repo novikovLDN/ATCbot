@@ -8,7 +8,7 @@ IMPORTANT:
 - Alerts do NOT block handlers
 - Alerts do NOT affect business logic
 - Alerts are generated from metrics/SLOs, not from handlers/services
-- False positives are suppressed (cooldown, recovery, admin actions)
+- False positives are suppressed (spam cooldown, admin actions)
 """
 
 from datetime import datetime, timedelta, timezone
@@ -126,13 +126,7 @@ class AlertRules:
             self._suppressed_alerts.discard("degraded")
             return None
         
-        # Check if we're in recovery (suppress alert during recovery)
         now = datetime.now(timezone.utc)
-        recovery_in_progress = self.metrics.get_gauge("recovery_in_progress") == 1.0
-        if recovery_in_progress:
-            self._suppressed_alerts.add("degraded")
-            return None
-        
         # Check if alert was recently fired (prevent spam)
         alert_key = "degraded"
         last_fired = self._alert_state.get(alert_key)

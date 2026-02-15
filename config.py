@@ -152,7 +152,7 @@ else:
     print("INFO: VPN API configured successfully (VLESS + REALITY)", file=sys.stderr)
     print("INFO: ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)", flush=True)
 
-# Xray sync worker: background reconciliation (default false for production safety)
+# Xray sync worker: sync DB subscriptions to Xray (default false for production safety)
 XRAY_SYNC_ENABLED = os.getenv("XRAY_SYNC_ENABLED", "false").lower() == "true"
 
 # Bot uses ONLY XRAY_API_URL and XRAY_API_KEY.
