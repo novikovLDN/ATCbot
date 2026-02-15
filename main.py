@@ -606,96 +606,33 @@ async def main():
         global last_polling_activity
         while True:
             await asyncio.sleep(15)
-            silence = time.monotonic() - last_polling_activity
-            if silence > POLLING_STUCK_TIMEOUT:
-                logger.error(
-                    "POLLING_STUCK_DETECTED silence=%.1fs — restarting polling coroutine only",
-                    silence,
+            silence_seconds = time.monotonic() - last_polling_activity
+            if silence_seconds > POLLING_STUCK_TIMEOUT:
+                logger.critical(
+                    "POLLING_STUCK_DETECTED silence=%.1fs — forcing full process restart",
+                    silence_seconds,
                 )
-                for t in asyncio.all_tasks():
-                    if t.get_name() == "polling_task":
-                        t.cancel()
-                last_polling_activity = time.monotonic()
+                os._exit(1)
 
-    shutdown_requested = [False]
-
-    async def start_polling_with_auto_restart():
-        backoff = 1
-        while True:
-            if shutdown_requested[0]:
-                break
-            polling_bot = Bot(token=config.BOT_TOKEN)
-            try:
-                logger.warning("POLLING_LOOP_START")
-                await polling_bot.delete_webhook(drop_pending_updates=True)
-                logger.info("Webhook deleted before polling start")
-                log_event(
-                    logger,
-                    component="polling",
-                    operation="polling_start",
-                    outcome="success",
-                    correlation_id=instance_id,
-                )
-                await dp.start_polling(
-                    polling_bot,
-                    allowed_updates=used_updates if used_updates else None,
-                    polling_timeout=POLLING_REQUEST_TIMEOUT,
-                    handle_signals=False,
-                    close_bot_session=True,
-                )
-            except asyncio.CancelledError:
-                if shutdown_requested[0]:
-                    logger.info("POLLING_STOP reason=shutdown")
-                    log_event(logger, component="polling", operation="polling_cancelled", outcome="cancelled")
-                    break
-                logger.warning("Polling task cancelled — restarting")
-                await asyncio.sleep(2)
-                continue
-            except TelegramConflictError as e:
-                # POLLING_STABILITY_FIX: retry polling instead of exiting.
-                try:
-                    webhook_info = await bot.get_webhook_info()
-                    webhook_snapshot = {
-                        "url": webhook_info.url or "",
-                        "pending_update_count": getattr(webhook_info, "pending_update_count", None),
-                    }
-                except Exception as we:
-                    webhook_snapshot = {"error": str(we)}
-                logger.warning(
-                    "TELEGRAM_CONFLICT_DETECTED timestamp=%s instance_id=%s pid=%s webhook_state=%s; retrying in 3s",
-                    datetime.now(timezone.utc).isoformat(),
-                    instance_id,
-                    os.getpid(),
-                    json.dumps(webhook_snapshot, default=str),
-                )
-                log_event(
-                    logger,
-                    component="polling",
-                    operation="conflict",
-                    outcome="retry",
-                    reason="conflict; will retry polling",
-                    level="warning",
-                )
-                await asyncio.sleep(3)
-            except Exception as e:
-                logger.error("POLLING_CRASH: %s", e, exc_info=True)
-                log_event(
-                    logger,
-                    component="polling",
-                    operation="polling_crash",
-                    outcome="failed",
-                    reason=str(e)[:200],
-                    level="error",
-                )
-            if shutdown_requested[0]:
-                break
-            logger.warning("POLLING_RESTARTING in %ss", backoff)
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, POLLING_BACKOFF_MAX)
+    async def start_polling():
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook deleted before polling start")
+        log_event(
+            logger,
+            component="polling",
+            operation="polling_start",
+            outcome="success",
+            correlation_id=instance_id,
+        )
+        await dp.start_polling(
+            bot,
+            allowed_updates=used_updates if used_updates else None,
+            polling_timeout=POLLING_REQUEST_TIMEOUT,
+            handle_signals=False,
+            close_bot_session=True,
+        )
 
     try:
-        from aiogram.exceptions import TelegramConflictError
-
         heartbeat_task = asyncio.create_task(event_loop_heartbeat())
         background_tasks.append(heartbeat_task)
         watchdog_task = asyncio.create_task(polling_watchdog())
@@ -707,7 +644,7 @@ async def main():
         background_tasks.append(polling_watchdog_task)
 
         polling_task = asyncio.create_task(
-            start_polling_with_auto_restart(),
+            start_polling(),
             name="polling_task",
         )
         background_tasks.append(polling_task)
@@ -716,7 +653,6 @@ async def main():
         raise
     finally:
         log_event(logger, component="shutdown", operation="shutdown_start", outcome="success")
-        shutdown_requested[0] = True
         # Stop polling cleanly
         try:
             if hasattr(dp, "stop_polling"):
