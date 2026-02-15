@@ -6,6 +6,7 @@ import asyncio
 import random
 
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -28,6 +29,26 @@ from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready
 
 admin_broadcast_router = Router()
 logger = logging.getLogger(__name__)
+
+# Production broadcast: controlled concurrency, rate limiting, event-loop safe
+BROADCAST_CONCURRENCY = 15          # Safe under Telegram 30 msg/sec
+BROADCAST_BATCH_SIZE = 200          # Soft batch limit
+BROADCAST_BATCH_PAUSE = 2           # Seconds between batches
+BROADCAST_RETRY_LIMIT = 3           # Retry per user
+
+
+async def _safe_send(bot: Bot, user_id: int, text: str, semaphore: asyncio.Semaphore) -> bool:
+    """Send message with concurrency limit and TelegramRetryAfter respect."""
+    async with semaphore:
+        for attempt in range(BROADCAST_RETRY_LIMIT):
+            try:
+                await bot.send_message(user_id, text)
+                return True
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after + 1)
+            except Exception:
+                await asyncio.sleep(1)
+        return False
 
 
 
@@ -436,28 +457,29 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         
         # Получаем список пользователей по сегменту
         user_ids = await database.get_users_by_segment(segment)
-        total_users = len(user_ids)
+        total = len(user_ids)
         
         logger.info(
-            f"BROADCAST_START broadcast_id={broadcast_id} segment={segment} total_users={total_users}"
+            f"BROADCAST_START broadcast_id={broadcast_id} segment={segment} total_users={total}"
         )
         
         await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._sending", total=total_users),
+            i18n_get_text(language, "broadcast._sending", total=total),
             reply_markup=None
         )
         
-        # Telegram limit: 20 msg/sec. Batch 20 users, then sleep 1 sec.
-        BROADCAST_BATCH_SIZE = 20
+        semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
         sent_count = 0
         failed_list = []  # [{"telegram_id": int, "error": str}, ...]
+        processed = 0
         
-        def _chunks(lst, n):
-            for i in range(0, len(lst), n):
-                yield lst[i:i + n]
+        async def _send_one(user_id: int, msg: str, variant):
+            ok = await _safe_send(bot, user_id, msg, semaphore)
+            return (user_id, variant, ok)
         
-        for batch in _chunks(user_ids, BROADCAST_BATCH_SIZE):
-            tasks = []
+        for i in range(0, total, BROADCAST_BATCH_SIZE):
+            batch = user_ids[i:i + BROADCAST_BATCH_SIZE]
+            batch_items = []
             for user_id in batch:
                 if is_ab_test:
                     variant = "A" if random.random() < 0.5 else "B"
@@ -465,27 +487,30 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                 else:
                     variant = None
                     msg = final_message
-                tasks.append((user_id, variant, msg))
+                batch_items.append((user_id, msg, variant))
             
-            for user_id, variant, message_to_send in tasks:
-                try:
-                    await bot.send_message(user_id, message_to_send)
+            tasks = [_send_one(uid, msg, variant) for uid, msg, variant in batch_items]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning(f"BROADCAST_TASK_ERROR broadcast_id={broadcast_id} error={r}")
+                    continue
+                user_id, variant, ok = r
+                if ok:
                     await database.log_broadcast_send(broadcast_id, user_id, "sent", variant)
                     sent_count += 1
-                    logger.debug(f"BROADCAST_BATCH_SENT user_id={user_id} broadcast_id={broadcast_id}")
-                except Exception as e:
-                    err_str = str(e).strip()[:80]
-                    failed_list.append({"telegram_id": user_id, "error": err_str})
+                else:
+                    failed_list.append({"telegram_id": user_id, "error": "Send failed"})
                     await database.log_broadcast_send(broadcast_id, user_id, "failed", variant)
-                    logger.warning(f"BROADCAST_FAILED_USER user_id={user_id} error={err_str}")
             
-            if len(batch) == BROADCAST_BATCH_SIZE:
-                await asyncio.sleep(1)
+            processed += len(batch)
+            logger.info(f"BROADCAST_PROGRESS processed={processed}/{total}")
+            await asyncio.sleep(BROADCAST_BATCH_PAUSE)
         
         failed_count = len(failed_list)
-        logger.info(
-            f"BROADCAST_COMPLETED broadcast_id={broadcast_id} sent={sent_count} failed={failed_count}"
-        )
+        total_users = total
+        logger.info(f"BROADCAST_COMPLETED total={total}")
         
         await database._log_audit_event_atomic_standalone(
             "broadcast_sent",
