@@ -1154,7 +1154,7 @@ async def get_user_balance(telegram_id: int) -> float:
         return float(balance) if balance else 0.0
 
 
-async def increase_balance(telegram_id: int, amount: float, source: str = "telegram_payment", description: Optional[str] = None) -> bool:
+async def increase_balance(telegram_id: int, amount: float, source: str = "telegram_payment", description: Optional[str] = None, conn=None) -> bool:
     """
     Увеличить баланс пользователя (атомарно)
     
@@ -1163,6 +1163,7 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
         amount: Сумма в рублях (положительное число)
         source: Источник пополнения ('telegram_payment', 'admin', 'referral')
         description: Описание транзакции
+        conn: Опциональное соединение (caller holds transaction). Если задано — используем его без pool.acquire.
     
     Returns:
         True если успешно, False при ошибке
@@ -1178,51 +1179,53 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
     if not DB_READY:
         logger.warning("DB not ready, increase_balance skipped")
         return False
+
+    async def _do_increase(c):
+        # CRITICAL: advisory lock per user для защиты от race conditions
+        await c.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+        await c.execute(
+            "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
+            amount_kopecks, telegram_id
+        )
+        transaction_type = "topup"
+        if source == "referral" or source == "referral_reward":
+            transaction_type = "cashback"
+        elif source == "admin" or source == "admin_adjustment":
+            transaction_type = "admin_adjustment"
+        await c.execute(
+            """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+               VALUES ($1, $2, $3, $4, $5)""",
+            telegram_id, amount_kopecks, transaction_type, source, description
+        )
+        logger.info(
+            f"BALANCE_INCREASED user={telegram_id} amount={amount:.2f} RUB "
+            f"({amount_kopecks} kopecks) source={source}"
+        )
+        return True
+
+    if conn is not None:
+        try:
+            await _do_increase(conn)
+            return True
+        except Exception as e:
+            logger.exception(f"Error increasing balance for user {telegram_id}")
+            return False
+
     pool = await get_pool()
     if pool is None:
         logger.warning("Pool is None, increase_balance skipped")
         return False
-    async with pool.acquire() as conn:
-        async with conn.transaction():
+    async with pool.acquire() as conn_acquired:
+        async with conn_acquired.transaction():
             try:
-                # CRITICAL: advisory lock per user для защиты от race conditions
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock($1)",
-                    telegram_id
-                )
-                
-                # Обновляем баланс
-                await conn.execute(
-                    "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
-                    amount_kopecks, telegram_id
-                )
-                
-                # Определяем тип транзакции на основе source
-                transaction_type = "topup"
-                if source == "referral" or source == "referral_reward":
-                    transaction_type = "cashback"
-                elif source == "admin" or source == "admin_adjustment":
-                    transaction_type = "admin_adjustment"
-                
-                # Записываем транзакцию
-                await conn.execute(
-                    """INSERT INTO balance_transactions (user_id, amount, type, source, description)
-                       VALUES ($1, $2, $3, $4, $5)""",
-                    telegram_id, amount_kopecks, transaction_type, source, description
-                )
-                
-                # Structured logging
-                logger.info(
-                    f"BALANCE_INCREASED user={telegram_id} amount={amount:.2f} RUB "
-                    f"({amount_kopecks} kopecks) source={source}"
-                )
+                await _do_increase(conn_acquired)
                 return True
             except Exception as e:
                 logger.exception(f"Error increasing balance for user {telegram_id}")
                 return False
 
 
-async def decrease_balance(telegram_id: int, amount: float, source: str = "subscription_payment", description: Optional[str] = None) -> bool:
+async def decrease_balance(telegram_id: int, amount: float, source: str = "subscription_payment", description: Optional[str] = None, conn=None) -> bool:
     """
     Уменьшить баланс пользователя (атомарно)
     
@@ -1231,6 +1234,7 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
         amount: Сумма в рублях (положительное число)
         source: Источник списания ('subscription_payment', 'admin', 'refund')
         description: Описание транзакции
+        conn: Опциональное соединение (caller holds transaction). Если задано — используем его без pool.acquire.
     
     Returns:
         True если успешно, False при ошибке или недостатке средств
@@ -1246,64 +1250,58 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
     if not DB_READY:
         logger.warning("DB not ready, decrease_balance skipped")
         return False
+
+    async def _do_decrease(c):
+        await c.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+        row = await c.fetchrow(
+            "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+            telegram_id
+        )
+        if not row:
+            logger.error(f"User {telegram_id} not found")
+            return False
+        current_balance = row["balance"]
+        if current_balance < amount_kopecks:
+            logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount_kopecks}")
+            return False
+        new_balance = current_balance - amount_kopecks
+        await c.execute(
+            "UPDATE users SET balance = $1 WHERE telegram_id = $2",
+            new_balance, telegram_id
+        )
+        transaction_type = "subscription_payment"
+        if source == "admin" or source == "admin_adjustment":
+            transaction_type = "admin_adjustment"
+        elif source == "auto_renew":
+            transaction_type = "subscription_payment"
+        elif source == "refund":
+            transaction_type = "topup"
+        await c.execute(
+            """INSERT INTO balance_transactions (user_id, amount, type, source, description)
+               VALUES ($1, $2, $3, $4, $5)""",
+            telegram_id, -amount_kopecks, transaction_type, source, description
+        )
+        logger.info(
+            f"BALANCE_DECREASED user={telegram_id} amount={amount:.2f} RUB "
+            f"({amount_kopecks} kopecks) source={source}"
+        )
+        return True
+
+    if conn is not None:
+        try:
+            return await _do_decrease(conn)
+        except Exception as e:
+            logger.exception(f"Error decreasing balance for user {telegram_id}")
+            return False
+
     pool = await get_pool()
     if pool is None:
         logger.warning("Pool is None, decrease_balance skipped")
         return False
-    async with pool.acquire() as conn:
-        async with conn.transaction():
+    async with pool.acquire() as conn_acquired:
+        async with conn_acquired.transaction():
             try:
-                # CRITICAL: advisory lock per user для защиты от race conditions
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock($1)",
-                    telegram_id
-                )
-                
-                # SELECT FOR UPDATE для блокировки строки до конца транзакции
-                row = await conn.fetchrow(
-                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
-                    telegram_id
-                )
-                
-                if not row:
-                    logger.error(f"User {telegram_id} not found")
-                    return False
-                
-                current_balance = row["balance"]
-                
-                if current_balance < amount_kopecks:
-                    logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount_kopecks}")
-                    return False
-                
-                # Обновляем баланс
-                new_balance = current_balance - amount_kopecks
-                await conn.execute(
-                    "UPDATE users SET balance = $1 WHERE telegram_id = $2",
-                    new_balance, telegram_id
-                )
-                
-                # Определяем тип транзакции на основе source
-                transaction_type = "subscription_payment"
-                if source == "admin" or source == "admin_adjustment":
-                    transaction_type = "admin_adjustment"
-                elif source == "auto_renew":
-                    transaction_type = "subscription_payment"  # Автопродление - это тоже оплата подписки
-                elif source == "refund":
-                    transaction_type = "topup"  # Возврат средств
-                
-                # Записываем транзакцию (amount отрицательный для списания)
-                await conn.execute(
-                    """INSERT INTO balance_transactions (user_id, amount, type, source, description)
-                       VALUES ($1, $2, $3, $4, $5)""",
-                    telegram_id, -amount_kopecks, transaction_type, source, description
-                )
-                
-                # Structured logging
-                logger.info(
-                    f"BALANCE_DECREASED user={telegram_id} amount={amount:.2f} RUB "
-                    f"({amount_kopecks} kopecks) source={source}"
-                )
-                return True
+                return await _do_decrease(conn_acquired)
             except Exception as e:
                 logger.exception(f"Error decreasing balance for user {telegram_id}")
                 return False
