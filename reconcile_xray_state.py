@@ -15,14 +15,28 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 
 import database
 import config
 import vpn_utils
 from app.core.metrics import get_metrics
+from app.core.cooperative_yield import cooperative_yield
 
 logger = logging.getLogger(__name__)
+
+RECONCILIATION_TIMEOUT_SECONDS = int(os.getenv("XRAY_RECONCILIATION_TIMEOUT_SECONDS", "20"))
+_worker_lock = asyncio.Lock()
+
+
+def _is_valid_uuid(val: str) -> bool:
+    """Validate UUID format; skip non-UUID entries to prevent retry storms."""
+    try:
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 RECONCILIATION_INTERVAL_SECONDS = int(os.getenv("XRAY_RECONCILIATION_INTERVAL_SECONDS", "600"))
 BATCH_SIZE_LIMIT = int(os.getenv("XRAY_RECONCILIATION_BATCH_LIMIT", "100"))
@@ -90,7 +104,12 @@ async def reconcile_xray_state() -> dict:
         
         # 4. Remove orphans (batch limited)
         orphans_list = list(orphans)[:BATCH_SIZE_LIMIT]
-        for uuid_val in orphans_list:
+        for i, uuid_val in enumerate(orphans_list):
+            if i > 0 and i % 50 == 0:
+                await cooperative_yield()
+            if not _is_valid_uuid(uuid_val):
+                logger.info("Skipping non-UUID entry in Xray config", extra={"uuid": str(uuid_val)[:64]})
+                continue
             try:
                 await vpn_utils.remove_vless_user(uuid_val)
                 result["orphans_removed"] += 1
@@ -143,7 +162,8 @@ async def reconcile_xray_state_task():
 
             start = time.time()
             try:
-                r = await reconcile_xray_state()
+                async with _worker_lock:
+                    r = await asyncio.wait_for(reconcile_xray_state(), timeout=RECONCILIATION_TIMEOUT_SECONDS)
                 _failure_count = 0
                 if _breaker_open_until > 0:
                     logger.info(
@@ -159,6 +179,15 @@ async def reconcile_xray_state_task():
                         f"orphans_removed={r['orphans_removed']} missing_in_xray={r['missing_in_xray']} "
                         f"duration_ms={duration_ms:.0f}"
                     )
+            except asyncio.TimeoutError:
+                _failure_count += 1
+                _last_failure_ts = time.time()
+                logger.error("Reconciliation timeout — iteration aborted safely")
+                if _failure_count >= BREAKER_FAILURE_THRESHOLD:
+                    _breaker_open_until = time.time() + BREAKER_OPEN_SECONDS
+                    logger.warning("RECONCILIATION_BREAKER_OPEN", extra={"failure_count": _failure_count})
+                await asyncio.sleep(min(60, 2 ** _failure_count))
+                continue
             except Exception as run_err:
                 _failure_count += 1
                 _last_failure_ts = time.time()

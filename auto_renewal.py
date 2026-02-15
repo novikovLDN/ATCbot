@@ -24,8 +24,13 @@ from app.utils.logging_helpers import (
     log_worker_iteration_end,
     classify_error,
 )
+from app.core.cooperative_yield import cooperative_yield
 
 logger = logging.getLogger(__name__)
+
+# Event loop protection: max iteration time (prevents 300s blocking)
+MAX_ITERATION_SECONDS = int(os.getenv("AUTO_RENEWAL_MAX_ITERATION_SECONDS", "15"))
+_worker_lock = asyncio.Lock()
 
 # Конфигурация интервала проверки автопродления (5-15 минут, по умолчанию 10 минут)
 AUTO_RENEWAL_INTERVAL_SECONDS = int(os.getenv("AUTO_RENEWAL_INTERVAL_SECONDS", "600"))  # 10 минут
@@ -104,7 +109,13 @@ async def process_auto_renewals(bot: Bot):
             f"Auto-renewal check: Found {len(subscriptions)} subscriptions expiring within {RENEWAL_WINDOW_HOURS} hours"
         )
         
-        for sub_row in subscriptions:
+        iteration_start = time.monotonic()
+        for i, sub_row in enumerate(subscriptions):
+            if i > 0 and i % 50 == 0:
+                await cooperative_yield()
+            if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
+                logger.warning("Auto-renewal iteration time limit reached, breaking early")
+                break
             subscription = dict(sub_row)
             telegram_id = subscription["telegram_id"]
             language = await resolve_user_language(telegram_id)
@@ -375,7 +386,8 @@ async def auto_renewal_task(bot: Bot):
     
     # Первая проверка сразу при запуске
     try:
-        await process_auto_renewals(bot)
+        async with _worker_lock:
+            await process_auto_renewals(bot)
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         # RESILIENCE FIX: Temporary DB failures don't crash the task
         logger.warning(f"auto_renewal: Initial check failed (DB temporarily unavailable): {type(e).__name__}: {str(e)[:100]}")
@@ -475,7 +487,8 @@ async def auto_renewal_task(bot: Bot):
                 # Ignore system state errors - continue with normal flow
                 pass
             
-            await process_auto_renewals(bot)
+            async with _worker_lock:
+                await process_auto_renewals(bot)
             
             # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end (success)
             duration_ms = (time.time() - iteration_start_time) * 1000

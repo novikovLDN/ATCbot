@@ -29,8 +29,13 @@ from app.utils.logging_helpers import (
     classify_error,
 )
 from app.core.structured_logger import log_event
+from app.core.cooperative_yield import cooperative_yield
 
 logger = logging.getLogger(__name__)
+
+# Event loop protection: max iteration time (prevents 300s blocking)
+MAX_ITERATION_SECONDS = 15
+_worker_lock = asyncio.Lock()
 
 # Интервал проверки: 30 секунд
 CHECK_INTERVAL_SECONDS = 30
@@ -121,7 +126,13 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
             
             logger.info(f"Crypto payment watcher: checking {len(pending_purchases)} pending purchases")
             
-            for row in pending_purchases:
+            iteration_start = time.monotonic()
+            for i, row in enumerate(pending_purchases):
+                if i > 0 and i % 50 == 0:
+                    await cooperative_yield()
+                if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
+                    logger.warning("Crypto payment watcher iteration time limit reached, breaking early")
+                    break
                 items_processed += 1
                 purchase = dict(row)
                 purchase_id = purchase["purchase_id"]
@@ -319,7 +330,8 @@ async def crypto_payment_watcher_task(bot: Bot):
     
     # Первая проверка сразу при запуске
     try:
-        await check_crypto_payments(bot)
+        async with _worker_lock:
+            await check_crypto_payments(bot)
         await cleanup_expired_purchases()
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         # RESILIENCE FIX: Temporary DB failures don't crash the task
@@ -472,7 +484,8 @@ async def crypto_payment_watcher_task(bot: Bot):
                 pass
             
             # Process crypto payments
-            items_processed, outcome = await check_crypto_payments(bot)
+            async with _worker_lock:
+                items_processed, outcome = await check_crypto_payments(bot)
             await cleanup_expired_purchases()
             
             # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end
