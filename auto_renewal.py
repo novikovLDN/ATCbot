@@ -103,6 +103,7 @@ async def process_auto_renewals(bot: Bot):
 
     while True:
         async with pool.acquire() as conn:
+            notifications_to_send = []
             async with conn.transaction():
                 try:
                     subscriptions = await conn.fetch(
@@ -174,18 +175,16 @@ async def process_auto_renewals(bot: Bot):
                             # Откатываем транзакцию (last_auto_renewal_at будет откачен)
                             continue
                         
-                        # Получаем последний утвержденный платеж для определения тарифа
-                        last_payment = await database.get_last_approved_payment(telegram_id)
+                        # PHASE A: Только DB по conn — без вложенного pool.acquire и без сетевых вызовов
+                        last_payment = await database.get_last_approved_payment(telegram_id, conn=conn)
                         
                         # Парсим тариф из последнего платежа
                         # Формат может быть: "basic_30", "plus_90" или legacy "1", "3", "6", "12"
                         if not last_payment:
-                            # Если нет платежа, используем дефолтный тариф Basic на 30 дней (1 месяц)
                             tariff_type = "basic"
                             period_days = 30
                         else:
                             tariff_str = last_payment.get("tariff", "basic_30")
-                            # Парсим формат "basic_30" или "plus_90"
                             if "_" in tariff_str:
                                 parts = tariff_str.split("_")
                                 tariff_type = parts[0] if len(parts) > 0 else "basic"
@@ -194,8 +193,6 @@ async def process_auto_renewals(bot: Bot):
                                 except (ValueError, IndexError):
                                     period_days = 30
                             else:
-                                # Legacy формат: "1", "3", "6", "12" -> конвертируем в новый формат
-                                # По умолчанию используем Basic
                                 tariff_type = "basic"
                                 try:
                                     months = int(tariff_str)
@@ -203,35 +200,28 @@ async def process_auto_renewals(bot: Bot):
                                 except ValueError:
                                     period_days = 30
                         
-                        # Получаем базовую цену из новой структуры тарифов
                         if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
-                            # Если тариф не найден, используем Basic 30 дней
                             tariff_type = "basic"
                             period_days = 30
                         
                         base_price = config.TARIFFS[tariff_type][period_days]["price"]
                         
-                        # Применяем скидки (VIP, персональная) - та же логика, что при покупке
-                        is_vip = await database.is_vip_user(telegram_id)
+                        is_vip = await database.is_vip_user(telegram_id, conn=conn)
                         if is_vip:
                             amount_rubles = float(int(base_price * 0.70))  # 30% скидка
                         else:
-                            personal_discount = await database.get_user_discount(telegram_id)
+                            personal_discount = await database.get_user_discount(telegram_id, conn=conn)
                             if personal_discount:
                                 discount_percent = personal_discount["discount_percent"]
                                 amount_rubles = float(int(base_price * (1 - discount_percent / 100)))
                             else:
                                 amount_rubles = float(base_price)
                         
-                        # Получаем баланс пользователя (в копейках из БД, конвертируем в рубли)
                         user_balance_kopecks = subscription.get("balance", 0) or 0
                         balance_rubles = user_balance_kopecks / 100.0
                         
                         if balance_rubles >= amount_rubles:
-                            # Баланса хватает - продлеваем подписку
                             duration = timedelta(days=period_days)
-                            
-                            # Списываем баланс (source = auto_renew для идентификации)
                             months = period_days // 30
                             tariff_name = "Basic" if tariff_type == "basic" else "Plus"
                             success = await database.decrease_balance(
@@ -246,30 +236,23 @@ async def process_auto_renewals(bot: Bot):
                                 logger.error(f"Failed to decrease balance for auto-renewal: user={telegram_id}")
                                 continue
                             
-                            # Продлеваем подписку через единую функцию grant_access
-                            # source="auto_renew" для корректного аудита и аналитики
-                            # grant_access() автоматически определит, что это продление (UUID не будет пересоздан)
                             result = await database.grant_access(
                                 telegram_id=telegram_id,
                                 duration=duration,
-                                source="auto_renew",  # Используем source="auto_renew" для аудита
+                                source="auto_renew",
                                 admin_telegram_id=None,
                                 admin_grant_days=None,
-                                conn=conn  # Используем существующее соединение для атомарности
+                                conn=conn
                             )
                             
                             expires_at = result["subscription_end"]
                             action_type = result.get("action", "unknown")
                             
-                            # ВАЛИДАЦИЯ: При автопродлении UUID НЕ должен пересоздаваться
-                            # grant_access() должен вернуть action="renewal" и vless_url=None
                             if action_type != "renewal" or result.get("vless_url") is not None:
                                 logger.error(
                                     f"Auto-renewal ERROR: UUID was regenerated instead of renewal! "
                                     f"user={telegram_id}, action={action_type}, has_vless_url={result.get('vless_url') is not None}"
                                 )
-                                # Это критическая ошибка - UUID не должен был пересоздаться
-                                # Возвращаем деньги на баланс
                                 await database.increase_balance(
                                     telegram_id=telegram_id,
                                     amount=amount_rubles,
@@ -279,7 +262,6 @@ async def process_auto_renewals(bot: Bot):
                                 )
                                 continue
                             
-                            # Получаем vpn_key из существующей подписки (UUID не менялся)
                             subscription_row = await conn.fetchrow(
                                 "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
                                 telegram_id
@@ -288,12 +270,10 @@ async def process_auto_renewals(bot: Bot):
                             if subscription_row and subscription_row.get("vpn_key"):
                                 vpn_key = subscription_row["vpn_key"]
                             else:
-                                # Fallback: используем UUID (не должно быть, но на всякий случай)
                                 vpn_key = result.get("uuid", "")
                             
                             if expires_at is None:
                                 logger.error(f"Failed to renew subscription for auto-renewal: user={telegram_id}, expires_at=None")
-                                # Возвращаем деньги на баланс
                                 await database.increase_balance(
                                     telegram_id=telegram_id,
                                     amount=amount_rubles,
@@ -301,25 +281,18 @@ async def process_auto_renewals(bot: Bot):
                                     description=f"Возврат средств за неудачное автопродление",
                                     conn=conn
                                 )
-                                # last_auto_renewal_at уже установлен в начале транзакции
-                                # При ошибке транзакция откатится, и last_auto_renewal_at вернется к предыдущему значению
                                 continue
                             
-                            # last_auto_renewal_at уже установлен в начале транзакции
-                            # НЕ обновляем его здесь - это предотвращает race conditions
-                            
-                            # Создаем запись о платеже для аналитики
                             tariff_str = f"{tariff_type}_{period_days}"
                             payment_id = await conn.fetchval(
                                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
-                                telegram_id, tariff_str, int(amount_rubles * 100)  # Сохраняем в копейках
+                                telegram_id, tariff_str, int(amount_rubles * 100)
                             )
                             
                             if not payment_id:
                                 logger.error(f"Failed to create payment record for auto-renewal: user={telegram_id}")
                                 continue
                             
-                            # ИДЕМПОТЕНТНОСТЬ: Проверяем, было ли уже отправлено уведомление
                             notification_already_sent = await notification_service.check_notification_idempotency(
                                 payment_id, conn=conn
                             )
@@ -329,61 +302,65 @@ async def process_auto_renewals(bot: Bot):
                                 )
                                 continue
 
-                            # Отправляем уведомление пользователю (language from resolve_user_language)
                             expires_str = expires_at.strftime("%d.%m.%Y")
                             duration_days = duration.days
-                            text = i18n.get_text(
-                                language,
-                                "subscription.auto_renew_success",
-                                days=duration_days,
-                                expires_date=expires_str,
-                                amount=amount_rubles
-                            )
-
-                            # Создаем inline клавиатуру для UX
-                            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(
-                                    text=i18n.get_text(language, "main.profile"),
-                                    callback_data="menu_profile"
-                                )],
-                                [InlineKeyboardButton(
-                                    text=i18n.get_text(language, "main.buy"),
-                                    callback_data="menu_buy_vpn"
-                                )]
-                            ])
-
-                            sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
-                            if sent is None:
-                                continue
-                            await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
-
-                            # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
-                            try:
-                                sent = await notification_service.mark_notification_sent(payment_id, conn=conn)
-                                if sent:
-                                    logger.info(
-                                        f"NOTIFICATION_SENT [type=auto_renewal, payment_id={payment_id}, user={telegram_id}]"
-                                    )
-                                else:
-                                    logger.warning(
-                                        f"NOTIFICATION_FLAG_ALREADY_SET [type=auto_renewal, payment_id={payment_id}, user={telegram_id}]"
-                                    )
-                            except Exception as e:
-                                logger.error(
-                                    f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
-                                )
-
+                            # Собираем payload для Phase B (после commit) — без Telegram и без вложенного acquire
+                            notifications_to_send.append({
+                                "telegram_id": telegram_id,
+                                "payment_id": payment_id,
+                                "language": language,
+                                "expires_str": expires_str,
+                                "duration_days": duration_days,
+                                "amount_rubles": amount_rubles,
+                                "tariff_type": tariff_type,
+                                "period_days": period_days,
+                            })
                             logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
 
                         else:
-                            # Баланса не хватает - ничего не делаем (как указано в требованиях)
                             logger.debug(f"Insufficient balance for auto-renewal: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={amount_rubles:.2f} RUB")
-                            # НЕ отключаем auto_renew автоматически (пользователь может пополнить баланс)
-                            # НЕ отправляем уведомление (как указано в требованиях)
                     
                     except Exception as e:
                         logger.exception(f"Error processing auto-renewal for user {telegram_id}: {e}")
-                        # При ошибке транзакция откатывается автоматически
+
+            # PHASE B: после commit — только отправка уведомлений и пометка (без финансовых мутаций)
+            for item in notifications_to_send:
+                try:
+                    text = i18n.get_text(
+                        item["language"],
+                        "subscription.auto_renew_success",
+                        days=item["duration_days"],
+                        expires_date=item["expires_str"],
+                        amount=item["amount_rubles"]
+                    )
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text=i18n.get_text(item["language"], "main.profile"),
+                            callback_data="menu_profile"
+                        )],
+                        [InlineKeyboardButton(
+                            text=i18n.get_text(item["language"], "main.buy"),
+                            callback_data="menu_buy_vpn"
+                        )]
+                    ])
+                    sent = await safe_send_message(bot, item["telegram_id"], text, reply_markup=keyboard)
+                    if sent is None:
+                        continue
+                    await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
+                    async with pool.acquire() as notify_conn:
+                        marked = await notification_service.mark_notification_sent(item["payment_id"], conn=notify_conn)
+                        if marked:
+                            logger.info(
+                                f"NOTIFICATION_SENT [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
+                            )
+                        else:
+                            logger.warning(
+                                f"NOTIFICATION_FLAG_ALREADY_SET [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
+                            )
+                except Exception as e:
+                    logger.error(
+                        f"CRITICAL: Failed to send/mark auto-renewal notification: payment_id={item.get('payment_id')}, user={item.get('telegram_id')}, error={e}"
+                    )
 
         await asyncio.sleep(0)
 

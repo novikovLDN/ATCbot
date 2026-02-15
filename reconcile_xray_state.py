@@ -71,13 +71,27 @@ async def reconcile_xray_state() -> dict:
         return result
     
     try:
-        # 1. Fetch UUID list from DB
+        # 1. Fetch UUID list from DB (keyset pagination)
         pool = await database.get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT uuid FROM subscriptions WHERE uuid IS NOT NULL"
-            )
-        db_uuids = {r["uuid"].strip() for r in rows if r.get("uuid")}
+        db_uuids = set()
+        last_seen_id = 0
+        while True:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """SELECT id, uuid FROM subscriptions
+                       WHERE uuid IS NOT NULL AND id > $1
+                       ORDER BY id ASC
+                       LIMIT $2""",
+                    last_seen_id,
+                    BATCH_SIZE_LIMIT
+                )
+            if not rows:
+                break
+            for r in rows:
+                if r.get("uuid"):
+                    db_uuids.add(r["uuid"].strip())
+            last_seen_id = rows[-1]["id"]
+            await asyncio.sleep(0)
         
         # 2. Fetch UUID list from Xray API
         xray_uuids = set(await vpn_utils.list_vless_users())

@@ -117,59 +117,55 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
     outcome = "success"
     
     try:
+        # Fetch pending list with one short-lived connection (no sleep while holding conn)
         async with pool.acquire() as conn:
-            # Get pending subscriptions using activation service
             pending_subscriptions = await activation_service.get_pending_subscriptions(
                 max_attempts=MAX_ACTIVATION_ATTEMPTS,
                 limit=50,
                 conn=conn
             )
-            
-            # Get subscriptions for admin notification using activation service
             pending_for_notification = await activation_service.get_pending_for_notification(
                 threshold_minutes=activation_service.get_notification_threshold_minutes(),
                 conn=conn
             )
-            
-            # Send admin notification if needed
             if pending_for_notification:
                 total_pending_count = await conn.fetchval(
                     "SELECT COUNT(*) FROM subscriptions WHERE activation_status = 'pending'"
                 ) or 0
-                
                 if total_pending_count > 0:
                     await admin_notifications.notify_admin_pending_activations(
-                        bot, 
+                        bot,
                         total_pending_count,
                         pending_for_notification
                     )
-            
-            if not pending_subscriptions:
-                logger.debug("No pending activations found")
-                return (0, "success")
-            
-            logger.info(f"Found {len(pending_subscriptions)} pending activations to process")
-            
-            iteration_start = time.monotonic()
-            for i, pending_sub in enumerate(pending_subscriptions):
-                if i > 0 and i % 50 == 0:
-                    await cooperative_yield()
-                if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
-                    logger.warning("Activation worker iteration time limit reached, breaking early")
-                    break
-                items_processed += 1
-                telegram_id = pending_sub.telegram_id
-                subscription_id = pending_sub.subscription_id
-                current_attempts = pending_sub.activation_attempts
-                expires_at = pending_sub.expires_at
-                
-                # Check if subscription expired using activation service
+        # conn released here
+
+        if not pending_subscriptions:
+            logger.debug("No pending activations found")
+            return (0, "success")
+
+        logger.info(f"Found {len(pending_subscriptions)} pending activations to process")
+        iteration_start = time.monotonic()
+
+        for i, pending_sub in enumerate(pending_subscriptions):
+            if i > 0 and i % 50 == 0:
+                await cooperative_yield()
+            if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
+                logger.warning("Activation worker iteration time limit reached, breaking early")
+                break
+            items_processed += 1
+            telegram_id = pending_sub.telegram_id
+            subscription_id = pending_sub.subscription_id
+            current_attempts = pending_sub.activation_attempts
+            expires_at = pending_sub.expires_at
+
+            # One connection per subscription — released before sleep
+            async with pool.acquire() as conn:
                 if activation_service.is_subscription_expired(expires_at):
                     logger.warning(
                         f"ACTIVATION_SKIP_EXPIRED [subscription_id={subscription_id}, "
                         f"user={telegram_id}, expires_at={expires_at.isoformat() if expires_at else 'N/A'}]"
                     )
-                    # Mark as failed using activation service
                     try:
                         await activation_service.mark_expired_subscription_failed(
                             subscription_id,
@@ -177,215 +173,172 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                         )
                     except Exception as e:
                         logger.error(f"Failed to mark expired subscription as failed: {e}")
-                    continue
-                
-                # Attempt activation using activation service
-                logger.info(
-                    f"ACTIVATION_RETRY_ATTEMPT [subscription_id={subscription_id}, "
-                    f"user={telegram_id}, attempt={current_attempts + 1}/{MAX_ACTIVATION_ATTEMPTS}]"
-                )
-                
-                try:
-                    # PART E — SLO SIGNAL IDENTIFICATION: Subscription activation latency
-                    # This activation attempt is an SLO signal for subscription activation latency.
-                    # Track: duration from subscription creation to successful activation.
-                    activation_start_time = time.time()
-                    result = await activation_service.attempt_activation(
-                        subscription_id=subscription_id,
-                        telegram_id=telegram_id,
-                        current_attempts=current_attempts,
-                        conn=conn
-                    )
-                    activation_duration_ms = (time.time() - activation_start_time) * 1000
-                    
-                    uuid_preview = f"{result.uuid[:8]}..." if result.uuid and len(result.uuid) > 8 else (result.uuid or "N/A")
+                    # conn released at end of block
+                else:
                     logger.info(
-                        f"ACTIVATION_SUCCESS [subscription_id={subscription_id}, "
-                        f"user={telegram_id}, uuid={uuid_preview}, attempt={result.attempts}, "
-                        f"latency_ms={activation_duration_ms:.2f}]"
+                        f"ACTIVATION_RETRY_ATTEMPT [subscription_id={subscription_id}, "
+                        f"user={telegram_id}, attempt={current_attempts + 1}/{MAX_ACTIVATION_ATTEMPTS}]"
                     )
-                    
-                    # Send notification to user (with idempotency check to prevent duplicates)
                     try:
-                        # IDEMPOTENCY: Verify subscription is still active and this is the first activation
-                        # (prevents duplicate notifications if two workers process same subscription)
-                        subscription_check = await conn.fetchrow(
-                            "SELECT activation_status, uuid FROM subscriptions WHERE id = $1",
-                            subscription_id
+                        activation_start_time = time.time()
+                        result = await activation_service.attempt_activation(
+                            subscription_id=subscription_id,
+                            telegram_id=telegram_id,
+                            current_attempts=current_attempts,
+                            conn=conn
                         )
-                        
-                        if not subscription_check or subscription_check["activation_status"] != "active":
-                            logger.warning(
-                                f"ACTIVATION_NOTIFICATION_SKIP [subscription_id={subscription_id}, "
-                                f"user={telegram_id}, reason=subscription_not_active]"
+                        activation_duration_ms = (time.time() - activation_start_time) * 1000
+                        uuid_preview = f"{result.uuid[:8]}..." if result.uuid and len(result.uuid) > 8 else (result.uuid or "N/A")
+                        logger.info(
+                            f"ACTIVATION_SUCCESS [subscription_id={subscription_id}, "
+                            f"user={telegram_id}, uuid={uuid_preview}, attempt={result.attempts}, "
+                            f"latency_ms={activation_duration_ms:.2f}]"
+                        )
+                        try:
+                            subscription_check = await conn.fetchrow(
+                                "SELECT activation_status, uuid FROM subscriptions WHERE id = $1",
+                                subscription_id
                             )
-                        elif subscription_check.get("uuid") != result.uuid:
-                            # UUID mismatch - another worker already activated and notified
+                            if not subscription_check or subscription_check["activation_status"] != "active":
+                                logger.warning(
+                                    f"ACTIVATION_NOTIFICATION_SKIP [subscription_id={subscription_id}, "
+                                    f"user={telegram_id}, reason=subscription_not_active]"
+                                )
+                            elif subscription_check.get("uuid") != result.uuid:
+                                logger.info(
+                                    f"ACTIVATION_NOTIFICATION_SKIP_IDEMPOTENT [subscription_id={subscription_id}, "
+                                    f"user={telegram_id}, reason=already_notified]"
+                                )
+                            else:
+                                language = await resolve_user_language(telegram_id)
+                                expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
+                                text = i18n.get_text(
+                                    language,
+                                    "payment.approved",
+                                    date=expires_str
+                                )
+                                import handlers
+                                keyboard = handlers.get_vpn_key_keyboard(language)
+                                sent1 = await safe_send_message(
+                                    bot, telegram_id, text,
+                                    reply_markup=keyboard, parse_mode="HTML"
+                                )
+                                if sent1 is None:
+                                    pass  # continue to next sub after block
+                                elif result.vpn_key:
+                                    await safe_send_message(
+                                        bot, telegram_id,
+                                        f"<code>{result.vpn_key}</code>",
+                                        parse_mode="HTML"
+                                    )
+                                logger.info(
+                                    f"ACTIVATION_NOTIFICATION_SENT [subscription_id={subscription_id}, user={telegram_id}]"
+                                )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to send activation notification to user {telegram_id}: {e}"
+                            )
+                    except VPNActivationError as e:
+                        error_msg = str(e)
+                        new_attempts = current_attempts + 1
+                        try:
+                            from app.core.system_state import recalculate_from_runtime, ComponentStatus
+                            system_state = recalculate_from_runtime()
+                            vpn_api_permanently_disabled = not config.VPN_ENABLED
+                            vpn_api_temporarily_unavailable = (
+                                system_state.vpn_api.status == ComponentStatus.DEGRADED and
+                                config.VPN_ENABLED
+                            )
+                        except Exception:
+                            vpn_api_permanently_disabled = not config.VPN_ENABLED
+                            vpn_api_temporarily_unavailable = config.VPN_ENABLED
+                        if vpn_api_permanently_disabled:
+                            logger.warning(
+                                f"ACTIVATION_FAILED_VPN_DISABLED [subscription_id={subscription_id}, "
+                                f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
+                                f"error={error_msg}]"
+                            )
+                        elif vpn_api_temporarily_unavailable:
                             logger.info(
-                                f"ACTIVATION_NOTIFICATION_SKIP_IDEMPOTENT [subscription_id={subscription_id}, "
-                                f"user={telegram_id}, reason=already_notified]"
+                                f"ACTIVATION_SKIP_VPN_UNAVAILABLE [subscription_id={subscription_id}, "
+                                f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
+                                f"reason=VPN_API_temporarily_unavailable, will_retry=True]"
                             )
                         else:
-                            # This is the first activation - send notification
-                            language = await resolve_user_language(telegram_id)
-                            
-                            expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-                            
-                            # Use localized text for successful activation
-                            text = i18n.get_text(
-                                language,
-                                "payment.approved",
-                                date=expires_str
+                            logger.warning(
+                                f"ACTIVATION_FAILED [subscription_id={subscription_id}, "
+                                f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
+                                f"error={error_msg}]"
                             )
-                            
-                            # Use standard keyboard for VPN key
-                            import handlers
-                            keyboard = handlers.get_vpn_key_keyboard(language)
-                            
-                            sent1 = await safe_send_message(
-                                bot, telegram_id, text,
-                                reply_markup=keyboard, parse_mode="HTML"
+                        try:
+                            should_mark_failed = (
+                                vpn_api_permanently_disabled and
+                                new_attempts >= MAX_ACTIVATION_ATTEMPTS
                             )
-                            if sent1 is None:
-                                continue
-                            if result.vpn_key:
-                                await safe_send_message(
-                                    bot, telegram_id,
-                                    f"<code>{result.vpn_key}</code>",
-                                    parse_mode="HTML"
+                            await activation_service.mark_activation_failed(
+                                subscription_id=subscription_id,
+                                new_attempts=new_attempts,
+                                error_msg=error_msg,
+                                max_attempts=MAX_ACTIVATION_ATTEMPTS,
+                                conn=conn,
+                                mark_as_failed=should_mark_failed
+                            )
+                            if should_mark_failed:
+                                logger.error(
+                                    f"ACTIVATION_FAILED_FINAL [subscription_id={subscription_id}, "
+                                    f"user={telegram_id}, attempts={new_attempts}, error={error_msg}]"
                                 )
-                            
-                            logger.info(
-                                f"ACTIVATION_NOTIFICATION_SENT [subscription_id={subscription_id}, user={telegram_id}]"
+                                try:
+                                    admin_lang = "ru"
+                                    admin_message = (
+                                        f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
+                                        f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
+                                        f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}\n"
+                                        f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
+                                        f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=error_msg)}\n\n"
+                                        f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
+                                        f"{i18n.get_text(admin_lang, 'admin.activation_error_action')}"
+                                    )
+                                    if await safe_send_message(
+                                        bot, config.ADMIN_TELEGRAM_ID,
+                                        admin_message, parse_mode="Markdown"
+                                    ):
+                                        logger.info(
+                                            f"Admin notification sent: Activation failed for subscription {subscription_id}"
+                                        )
+                                except Exception as admin_error:
+                                    logger.error(
+                                        f"Failed to send admin notification: {admin_error}"
+                                    )
+                        except Exception as db_error:
+                            logger.error(
+                                f"Failed to update activation attempts in DB: {db_error}"
                             )
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to send activation notification to user {telegram_id}: {e}"
-                        )
-                        # Not critical - subscription is already activated
-                    
-                except VPNActivationError as e:
-                    # VPN API error - check if VPN_API is permanently disabled or temporarily unavailable
-                    error_msg = str(e)
-                    new_attempts = current_attempts + 1
-                    
-                    # Check VPN_API status to determine if we should mark as failed or keep pending
-                    try:
-                        from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                        system_state = recalculate_from_runtime()
-                        vpn_api_permanently_disabled = not config.VPN_ENABLED
-                        vpn_api_temporarily_unavailable = (
-                            system_state.vpn_api.status == ComponentStatus.DEGRADED and
-                            config.VPN_ENABLED
-                        )
-                    except Exception:
-                        # If system_state check fails, assume temporarily unavailable
-                        vpn_api_permanently_disabled = not config.VPN_ENABLED
-                        vpn_api_temporarily_unavailable = config.VPN_ENABLED
-                    
-                    if vpn_api_permanently_disabled:
-                        # VPN_API is permanently disabled - mark as failed if max attempts reached
-                        logger.warning(
-                            f"ACTIVATION_FAILED_VPN_DISABLED [subscription_id={subscription_id}, "
-                            f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
-                            f"error={error_msg}]"
-                        )
-                    elif vpn_api_temporarily_unavailable:
-                        # VPN_API is temporarily unavailable - keep as pending, will retry
-                        logger.info(
-                            f"ACTIVATION_SKIP_VPN_UNAVAILABLE [subscription_id={subscription_id}, "
-                            f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
-                            f"reason=VPN_API_temporarily_unavailable, will_retry=True]"
-                        )
-                    else:
-                        # VPN_API error (network, timeout, etc.) - increment attempts
+                    except ActivationFailedError as e:
+                        error_msg = str(e)
+                        new_attempts = current_attempts + 1
                         logger.warning(
                             f"ACTIVATION_FAILED [subscription_id={subscription_id}, "
                             f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
                             f"error={error_msg}]"
                         )
-                    
-                    try:
-                        # Only mark as failed if VPN_API is permanently disabled AND max attempts reached
-                        # Otherwise, keep as pending for retry
-                        should_mark_failed = (
-                            vpn_api_permanently_disabled and
-                            new_attempts >= MAX_ACTIVATION_ATTEMPTS
-                        )
-                        
-                        await activation_service.mark_activation_failed(
-                            subscription_id=subscription_id,
-                            new_attempts=new_attempts,
-                            error_msg=error_msg,
-                            max_attempts=MAX_ACTIVATION_ATTEMPTS,
-                            conn=conn,
-                            mark_as_failed=should_mark_failed
-                        )
-                        
-                        # If max attempts reached and VPN_API is permanently disabled, send admin notification
-                        if should_mark_failed:
-                            logger.error(
-                                f"ACTIVATION_FAILED_FINAL [subscription_id={subscription_id}, "
-                                f"user={telegram_id}, attempts={new_attempts}, error={error_msg}]"
+                        try:
+                            await activation_service.mark_activation_failed(
+                                subscription_id=subscription_id,
+                                new_attempts=new_attempts,
+                                error_msg=error_msg,
+                                max_attempts=MAX_ACTIVATION_ATTEMPTS,
+                                conn=conn
                             )
-                            
-                            # Send admin notification (admin always sees Russian)
-                            try:
-                                admin_lang = "ru"
-                                admin_message = (
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=error_msg)}\n\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_action')}"
-                                )
-                                
-                                if await safe_send_message(
-                                    bot, config.ADMIN_TELEGRAM_ID,
-                                    admin_message, parse_mode="Markdown"
-                                ):
-                                    logger.info(
-                                        f"Admin notification sent: Activation failed for subscription {subscription_id}"
-                                    )
-                            except Exception as admin_error:
-                                logger.error(
-                                    f"Failed to send admin notification: {admin_error}"
-                                )
-                    except Exception as db_error:
-                        logger.error(
-                            f"Failed to update activation attempts in DB: {db_error}"
-                        )
-                
-                except ActivationFailedError as e:
-                    # Other activation error
-                    error_msg = str(e)
-                    new_attempts = current_attempts + 1
-                    
-                    logger.warning(
-                        f"ACTIVATION_FAILED [subscription_id={subscription_id}, "
-                        f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
-                        f"error={error_msg}]"
-                    )
-                    
-                    try:
-                        await activation_service.mark_activation_failed(
-                            subscription_id=subscription_id,
-                            new_attempts=new_attempts,
-                            error_msg=error_msg,
-                            max_attempts=MAX_ACTIVATION_ATTEMPTS,
-                            conn=conn
-                        )
-                    except Exception as db_error:
-                        logger.error(
-                            f"Failed to update activation attempts in DB: {db_error}"
-                        )
-                
-                # Small delay between processing subscriptions
-                await asyncio.sleep(0.5)
-            
-            return (items_processed, outcome)
+                        except Exception as db_error:
+                            logger.error(
+                                f"Failed to update activation attempts in DB: {db_error}"
+                            )
+
+            # Connection released before sleep — no conn held during asyncio.sleep
+            await asyncio.sleep(0.5)
+
+        return (items_processed, outcome)
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
         logger.warning(f"activation_worker: Database temporarily unavailable in process_pending_activations: {type(e).__name__}: {str(e)[:100]}")
