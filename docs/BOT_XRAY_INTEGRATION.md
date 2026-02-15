@@ -81,7 +81,7 @@ Path parameter: uuid
 ## Environment Config
 
 ```
-XRAY_API_URL=https://api.myvpncloud.net  # or http://127.0.0.1:8000
+XRAY_API_URL=https://api.mynewllcw.com
 XRAY_API_KEY=<secret>
 XRAY_API_TIMEOUT=5
 VPN_PROVISIONING_ENABLED=true

@@ -36,6 +36,14 @@ except Exception as e:
     xray_sync = None
     print(f"[XRAY_SYNC] disabled: {e}")
 
+try:
+    import reconcile_xray_state
+    RECONCILIATION_AVAILABLE = True
+except Exception as e:
+    RECONCILIATION_AVAILABLE = False
+    reconcile_xray_state = None
+    print(f"[RECONCILIATION] disabled: {e}")
+
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
 # ====================================================================================
@@ -233,6 +241,7 @@ async def main():
         "auto_renewal": None,
         "activation_worker": None,
         "xray_sync": None,
+        "reconciliation": None,
     }
     
     async def retry_db_init():
@@ -249,7 +258,7 @@ async def main():
         - Никогда не падает (все исключения обрабатываются)
         - Не блокирует главный event loop
         """
-        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, xray_sync_task, recovered_tasks, background_tasks
+        nonlocal reminder_task, fast_cleanup_task, auto_renewal_task, activation_worker_task, xray_sync_task, reconciliation_task, recovered_tasks, background_tasks
         retry_interval = 30  # секунд
         
         # Если БД уже готова, задача не запускается
@@ -320,6 +329,16 @@ async def main():
                                     logger.info("Xray sync worker started (recovered)")
                             except Exception as e:
                                 logger.warning("Xray sync recovery failed: %s", e)
+                        
+                        if RECONCILIATION_AVAILABLE and config.XRAY_RECONCILIATION_ENABLED and reconciliation_task is None and recovered_tasks["reconciliation"] is None:
+                            try:
+                                t = asyncio.create_task(reconcile_xray_state.reconcile_xray_state_task())
+                                reconciliation_task = t
+                                recovered_tasks["reconciliation"] = t
+                                background_tasks.append(t)
+                                logger.info("Xray reconciliation task started (recovered)")
+                            except Exception as e:
+                                logger.warning("Xray reconciliation recovery failed: %s", e)
                         
                         # Успешно инициализировали БД - выходим из цикла
                         logger.info("DB retry task completed successfully, stopping retry loop")
@@ -414,6 +433,16 @@ async def main():
     xray_sync_task = await start_xray_sync_safe(bot)
     if xray_sync_task:
         background_tasks.append(xray_sync_task)
+    
+    # Xray reconciliation: orphan UUID cleanup (DB vs Xray comparison)
+    reconciliation_task = None
+    if RECONCILIATION_AVAILABLE and config.XRAY_RECONCILIATION_ENABLED and database.DB_READY and config.VPN_ENABLED:
+        try:
+            reconciliation_task = asyncio.create_task(reconcile_xray_state.reconcile_xray_state_task())
+            background_tasks.append(reconciliation_task)
+            logger.info("Xray reconciliation task started")
+        except Exception as e:
+            logger.warning(f"Xray reconciliation task skipped: {e}")
     
     # Запуск фоновой задачи для автоматической проверки CryptoBot платежей (только если БД готова)
     crypto_watcher_task = None

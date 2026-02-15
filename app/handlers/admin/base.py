@@ -148,7 +148,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
         await callback.answer("Перевыпускаю ключ...")
         
         try:
-            new_uuid = await database.reissue_subscription_key(subscription_id)
+            new_uuid, vless_url = await database.reissue_subscription_key(subscription_id)
         except ValueError as e:
             await callback.answer(f"Ошибка: {str(e)}", show_alert=True)
             return
@@ -156,17 +156,6 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
             logging.exception(f"Failed to reissue key for subscription {subscription_id}: {e}")
             await callback.answer(f"Ошибка при перевыпуске ключа: {str(e)}", show_alert=True)
             return
-        
-        # Генерируем новый VLESS URL для отображения
-        try:
-            vless_url = vpn_utils.generate_vless_url(new_uuid)
-        except Exception as e:
-            logging.warning(f"Failed to generate VLESS URL for new UUID: {e}")
-            # Fallback: формируем простой VLESS URL
-            try:
-                vless_url = f"vless://{new_uuid}@{config.XRAY_SERVER_IP}:{config.XRAY_PORT}?encryption=none&security=reality&type=tcp#AtlasSecure"
-            except Exception:
-                vless_url = f"vless://{new_uuid}@SERVER:443..."
         
         # Показываем админу результат
         user = await database.get_user(telegram_id)
@@ -248,8 +237,8 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
                 continue
             
             try:
-                # Перевыпускаем ключ
-                new_uuid = await database.reissue_subscription_key(subscription_id)
+                # Перевыпускаем ключ (returns new_uuid, vless_url — API is source of truth)
+                await database.reissue_subscription_key(subscription_id)
                 success_count += 1
                 
                 # Обновляем статус каждые 10 подписок или в конце

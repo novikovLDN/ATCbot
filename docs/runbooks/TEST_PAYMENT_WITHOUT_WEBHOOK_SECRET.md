@@ -9,7 +9,7 @@
 ## Step 1 — Verify Health Endpoint
 
 ```bash
-curl https://api.myvpncloud.net/health
+curl https://api.mynewllcw.com/health
 ```
 
 Expected:

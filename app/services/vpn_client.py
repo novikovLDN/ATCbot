@@ -108,9 +108,8 @@ async def create_user(
         vless_url = result.get("vless_url")
         subscription_end = result.get("subscription_end")
         if not vless_url and result.get("action") == "renewal":
-            # Renewal returns vless_url=None; generate from uuid
-            if uuid:
-                vless_url = vpn_utils.generate_vless_url(uuid)
+            # Renewal: use vpn_key from result (stored from API at issuance)
+            vless_url = result.get("vpn_key") or ""
         return {
             "uuid": uuid,
             "config_link": vless_url or "",
