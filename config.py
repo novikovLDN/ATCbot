@@ -155,6 +155,10 @@ else:
 # Xray sync worker: background reconciliation (default false for production safety)
 XRAY_SYNC_ENABLED = os.getenv("XRAY_SYNC_ENABLED", "false").lower() == "true"
 
+# Xray reconciliation worker: orphan UUID cleanup (compares DB vs Xray, removes orphans)
+# Runs every 10 minutes. Batch limit 100 per run.
+XRAY_RECONCILIATION_ENABLED = os.getenv("XRAY_RECONCILIATION_ENABLED", "false").lower() == "true"
+
 # Bot uses ONLY XRAY_API_URL and XRAY_API_KEY.
 # Port, SNI, public key, short id, fingerprint belong to API server only.
 # Bot receives vless_link from API — never generates links locally.

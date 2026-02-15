@@ -561,13 +561,13 @@ async def finalize_subscription_payment(
             expires_at = existing_subscription.get("expires_at")
             vpn_key = existing_subscription.get("vpn_key")
             
-            # Generate key from UUID if missing
+            # API is source of truth: never generate. vpn_key must exist in subscription.
             if not vpn_key:
-                uuid = existing_subscription.get("uuid")
-                if uuid:
-                    import vpn_utils
-                    vpn_key = vpn_utils.generate_vless_url(uuid)
-            
+                raise PaymentFinalizationError(
+                    f"Subscription has no vpn_key (API must provide vless_link). "
+                    f"purchase_id={purchase_id}, user={telegram_id}"
+                )
+
             if expires_at and vpn_key:
                 # Get payment_id from existing payment
                 pool = await database.get_pool()
