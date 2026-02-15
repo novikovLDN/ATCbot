@@ -39,8 +39,13 @@ from app.utils.logging_helpers import (
     classify_error,
 )
 from app.core.structured_logger import log_event
+from app.core.cooperative_yield import cooperative_yield
 
 logger = logging.getLogger(__name__)
+
+# Event loop protection: max iteration time (prevents 300s blocking)
+MAX_ITERATION_SECONDS = int(os.getenv("ACTIVATION_WORKER_MAX_ITERATION_SECONDS", "15"))
+_worker_lock = asyncio.Lock()
 
 # Конфигурация интервала проверки активации (по умолчанию 5 минут)
 ACTIVATION_INTERVAL_SECONDS = int(os.getenv("ACTIVATION_INTERVAL_SECONDS", "300"))  # 5 минут
@@ -145,7 +150,13 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
             
             logger.info(f"Found {len(pending_subscriptions)} pending activations to process")
             
-            for pending_sub in pending_subscriptions:
+            iteration_start = time.monotonic()
+            for i, pending_sub in enumerate(pending_subscriptions):
+                if i > 0 and i % 50 == 0:
+                    await cooperative_yield()
+                if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
+                    logger.warning("Activation worker iteration time limit reached, breaking early")
+                    break
                 items_processed += 1
                 telegram_id = pending_sub.telegram_id
                 subscription_id = pending_sub.subscription_id
@@ -557,8 +568,9 @@ async def activation_worker_task(bot: Bot):
             cost_model = get_cost_model()
             cost_model.record_cost(CostCenter.BACKGROUND_ITERATIONS, cost_units=1.0)
             
-            # Process pending activations
-            items_processed, outcome = await process_pending_activations(bot)
+            # Process pending activations (lock prevents overlapping iterations)
+            async with _worker_lock:
+                items_processed, outcome = await process_pending_activations(bot)
             
             # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end
             # PART E — SLO SIGNAL IDENTIFICATION: Worker iteration success rate
