@@ -100,6 +100,10 @@ ADVISORY_LOCK_KEY = 987654321
 # Kept for middleware (no longer used by watchdog); watchdog uses event_loop_heartbeat only.
 last_update_timestamp = time.monotonic()
 
+# POLLING_HEARTBEAT_FIX: detect stuck getUpdates and restart polling coroutine only (no process kill).
+last_polling_activity = time.monotonic()
+POLLING_STUCK_TIMEOUT = 90  # seconds without polling activity
+
 
 async def main():
     # Конфигурация уже проверена в config.py
@@ -143,8 +147,9 @@ async def main():
     
     # Register middlewares (order: 1 UpdateTimestamp, 2 ConcurrencyLimiter, 3 TelegramErrorBoundary, 4 Routers)
     async def update_timestamp_middleware(handler, event, data):
-        global last_update_timestamp
+        global last_update_timestamp, last_polling_activity
         last_update_timestamp = time.monotonic()
+        last_polling_activity = time.monotonic()
         return await handler(event, data)
 
     from app.core.concurrency_middleware import ConcurrencyLimiterMiddleware
@@ -578,9 +583,28 @@ async def main():
                 )
                 raise SystemExit(1)
 
+    async def polling_heartbeat_watchdog():
+        global last_polling_activity
+        while True:
+            await asyncio.sleep(15)
+            silence = time.monotonic() - last_polling_activity
+            if silence > POLLING_STUCK_TIMEOUT:
+                logger.error(
+                    "POLLING_STUCK_DETECTED silence=%.1fs — restarting polling coroutine only",
+                    silence,
+                )
+                for t in asyncio.all_tasks():
+                    if t.get_name() == "polling_task":
+                        t.cancel()
+                last_polling_activity = time.monotonic()
+
+    shutdown_requested = [False]
+
     async def start_polling_with_auto_restart():
         backoff = 1
         while True:
+            if shutdown_requested[0]:
+                break
             polling_bot = Bot(token=config.BOT_TOKEN)
             try:
                 logger.warning("POLLING_LOOP_START")
@@ -601,9 +625,13 @@ async def main():
                     close_bot_session=True,
                 )
             except asyncio.CancelledError:
-                logger.info("POLLING_STOP reason=cancelled")
-                log_event(logger, component="polling", operation="polling_cancelled", outcome="cancelled")
-                break
+                if shutdown_requested[0]:
+                    logger.info("POLLING_STOP reason=shutdown")
+                    log_event(logger, component="polling", operation="polling_cancelled", outcome="cancelled")
+                    break
+                logger.warning("Polling task cancelled — restarting")
+                await asyncio.sleep(2)
+                continue
             except TelegramConflictError as e:
                 # POLLING_STABILITY_FIX: retry polling instead of exiting.
                 try:
@@ -640,6 +668,8 @@ async def main():
                     reason=str(e)[:200],
                     level="error",
                 )
+            if shutdown_requested[0]:
+                break
             logger.warning("POLLING_RESTARTING in %ss", backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, POLLING_BACKOFF_MAX)
@@ -651,13 +681,23 @@ async def main():
         background_tasks.append(heartbeat_task)
         watchdog_task = asyncio.create_task(polling_watchdog())
         background_tasks.append(watchdog_task)
+        polling_watchdog_task = asyncio.create_task(
+            polling_heartbeat_watchdog(),
+            name="polling_heartbeat_watchdog",
+        )
+        background_tasks.append(polling_watchdog_task)
 
-        await start_polling_with_auto_restart()
+        polling_task = asyncio.create_task(
+            start_polling_with_auto_restart(),
+            name="polling_task",
+        )
+        background_tasks.append(polling_task)
+        await polling_task
     except SystemExit:
         raise
     finally:
         log_event(logger, component="shutdown", operation="shutdown_start", outcome="success")
-        
+        shutdown_requested[0] = True
         # Stop polling cleanly
         try:
             if hasattr(dp, "stop_polling"):
