@@ -103,9 +103,9 @@ instance_lock_conn = None
 # Kept for middleware (no longer used by watchdog); watchdog uses event_loop_heartbeat only.
 last_update_timestamp = time.monotonic()
 
-# POLLING_HEARTBEAT_FIX: detect stuck getUpdates and restart polling coroutine only (no process kill).
-last_polling_activity = time.monotonic()
-POLLING_STUCK_TIMEOUT = 90  # seconds without polling activity
+# POLLING_LIVENESS: true coroutine liveness (tick updated by heartbeat updater while polling runs).
+last_polling_loop_tick_monotonic = time.monotonic()
+POLLING_DEAD_TIMEOUT = 3 * POLLING_REQUEST_TIMEOUT + 30  # ~120s if POLLING_REQUEST_TIMEOUT=30
 
 
 async def main():
@@ -150,9 +150,8 @@ async def main():
     
     # Register middlewares (order: 1 UpdateTimestamp, 2 ConcurrencyLimiter, 3 TelegramErrorBoundary, 4 Routers)
     async def update_timestamp_middleware(handler, event, data):
-        global last_update_timestamp, last_polling_activity
+        global last_update_timestamp
         last_update_timestamp = time.monotonic()
-        last_polling_activity = time.monotonic()
         return await handler(event, data)
 
     from app.core.concurrency_middleware import ConcurrencyLimiterMiddleware
@@ -603,18 +602,26 @@ async def main():
                 raise SystemExit(1)
 
     async def polling_heartbeat_watchdog():
-        global last_polling_activity
+        global last_polling_loop_tick_monotonic
         while True:
-            await asyncio.sleep(15)
-            silence_seconds = time.monotonic() - last_polling_activity
-            if silence_seconds > POLLING_STUCK_TIMEOUT:
+            await asyncio.sleep(10)
+            silence = time.monotonic() - last_polling_loop_tick_monotonic
+            if silence > POLLING_DEAD_TIMEOUT:
                 logger.critical(
-                    "POLLING_STUCK_DETECTED silence=%.1fs — forcing full process restart",
-                    silence_seconds,
+                    "POLLING_COROUTINE_DEAD detected silence=%.1fs — forcing full process restart",
+                    silence,
                 )
                 os._exit(1)
 
+    async def polling_heartbeat_updater():
+        """Updates liveness tick every 5s while event loop is progressing. Stopped when polling exits (finally cancels tasks)."""
+        global last_polling_loop_tick_monotonic
+        while True:
+            await asyncio.sleep(5)
+            last_polling_loop_tick_monotonic = time.monotonic()
+
     async def start_polling():
+        global last_polling_loop_tick_monotonic
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("Webhook deleted before polling start")
         log_event(
@@ -624,13 +631,22 @@ async def main():
             outcome="success",
             correlation_id=instance_id,
         )
-        await dp.start_polling(
-            bot,
-            allowed_updates=used_updates if used_updates else None,
-            polling_timeout=POLLING_REQUEST_TIMEOUT,
-            handle_signals=False,
-            close_bot_session=True,
+        # Start liveness ticker alongside polling; it stops when polling exits (finally cancels all tasks).
+        updater_task = asyncio.create_task(
+            polling_heartbeat_updater(),
+            name="polling_heartbeat_updater",
         )
+        background_tasks.append(updater_task)
+        try:
+            await dp.start_polling(
+                bot,
+                allowed_updates=used_updates if used_updates else None,
+                polling_timeout=POLLING_REQUEST_TIMEOUT,
+                handle_signals=False,
+                close_bot_session=True,
+            )
+        finally:
+            last_polling_loop_tick_monotonic = time.monotonic()
 
     try:
         heartbeat_task = asyncio.create_task(event_loop_heartbeat())
