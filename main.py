@@ -578,6 +578,24 @@ async def main():
     async def polling_watchdog():
         while True:
             await asyncio.sleep(30)
+            now = time.monotonic()
+            worker_stale_s = now - watchdog_heartbeats.last_worker_iteration_timestamp
+            # Diagnostic: when worker stale > 120s and pool wait spikes were seen recently, log snapshot.
+            if worker_stale_s > 120:
+                try:
+                    from app.core.pool_monitor import get_last_pool_wait_spike_monotonic
+                    spike_at = get_last_pool_wait_spike_monotonic()
+                    if spike_at > 0 and (now - spike_at) < 300:
+                        logger.critical(
+                            "WATCHDOG_DIAGNOSTIC: worker heartbeat stale %.1fs and pool wait spike detected (spike %.1fs ago). "
+                            "event_loop_stale_s=%.1f healthcheck_stale_s=%.1f",
+                            worker_stale_s,
+                            now - spike_at,
+                            now - watchdog_heartbeats.last_event_loop_heartbeat,
+                            now - watchdog_heartbeats.last_successful_healthcheck_timestamp,
+                        )
+                except Exception:
+                    pass
             if watchdog_heartbeats.are_all_stale():
                 logger.critical(
                     "WATCHDOG: all heartbeats stale (event loop + worker + healthcheck). Forcing exit."
