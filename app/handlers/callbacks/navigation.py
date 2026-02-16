@@ -135,7 +135,7 @@ async def callback_privacy(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
-    await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), bot=callback.bot)
+    await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=callback.bot)
     await callback.answer()
 
 
