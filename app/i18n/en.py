@@ -312,7 +312,6 @@ LANG = {
     'main.ecosystem': "⚪️ Our Ecosystem",
     'main.ecosystem_title': "🔐 Our Ecosystem · Atlas Secure",
     'main.ecosystem_text': "Atlas Secure develops as a unified digital environment within Telegram.\n\n⚪️ Available in the ecosystem:\n\n📶 Stable access service\n• High speed without limits\n• Stable messengers\n• Banking and gov services work\n• Stable mobile connection\n\n📊 Only Tracker (coming soon)\nPersonal habit assistant — goals and focus in one place.\n\n⚙️ All services unified in one management system.\n\nAtlas Secure is not separate features, but a connected environment where everything works together.",
-    'main.tracker_soon': "In development",
     'main.settings': "⚙️ Settings",
     'main.settings_title': "⚙️ Atlas Secure Settings",
     'main.about_text': "Atlas Secure — digital ecosystem,\ndeployed within Telegram.\n\n🔐 Architecture without log storage\n⚡ High and stable connection speed\n📶 Proper operation in LTE / 5G / Wi-Fi\n🧩 Personal access keys\n🇪🇺 Yellow \n🛡 Privacy by default\n\n🌍 Multilingual interface\n💳 Secure payment methods\n\nThe ecosystem is built so\nthat the connection remains stable,\nand management — simple and transparent.",

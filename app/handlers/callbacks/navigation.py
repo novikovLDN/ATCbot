@@ -75,19 +75,11 @@ async def callback_ecosystem(callback: CallbackQuery):
     full_text = f"{title}\n\n{text}"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "main.about"), callback_data="menu_about")],
-        [InlineKeyboardButton(text="✍️ Трекер Only (скоро)", callback_data="tracker_soon")],
+        [InlineKeyboardButton(text="✍️ Трекер Only", url="https://t.me/ItsOnlyWbot")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
-
-
-@router.callback_query(F.data == "tracker_soon")
-async def callback_tracker_soon(callback: CallbackQuery):
-    """Трекер Only - в разработке"""
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "main.tracker_soon", "main.tracker_soon")
-    await callback.answer(text, show_alert=False)
 
 
 @router.callback_query(F.data == "menu_settings")
