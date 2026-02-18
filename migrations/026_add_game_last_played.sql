@@ -2,3 +2,4 @@
 -- Tracks when user last played the bowling game (7-day cooldown)
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS game_last_played TIMESTAMP WITH TIME ZONE;
+
