@@ -1,8 +1,8 @@
 """
-Bowling game handler - 7-day cooldown, 10% strike chance, +7 days subscription reward
+Bowling game handler - 7-day cooldown, Telegram dice 🎳, +7 days subscription reward on strike
 """
 import logging
-import random
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
@@ -83,13 +83,17 @@ async def callback_game_bowl(callback: CallbackQuery):
                 database._to_db_utc(now), telegram_id
             )
             
-            # Roll for strike (10% chance)
-            is_strike = random.random() < 0.10
-            pins = None
+            # Send Telegram dice animation
+            dice_message = await callback.message.answer_dice(emoji="🎳")
+            dice_value = dice_message.dice.value
+            # Bowling dice: value 6 = strike, values 1-5 = no strike
             
-            if is_strike:
+            # Wait for animation to show before sending result
+            await asyncio.sleep(4)
+            
+            if dice_value == 6:
                 # STRIKE! Grant +7 days subscription
-                logger.info("GAME_BOWL [user=%s, strike=True, pins=10]", telegram_id)
+                logger.info("GAME_BOWL [user=%s, strike=True, dice_value=6]", telegram_id)
                 
                 try:
                     # Grant 7 days subscription
@@ -105,7 +109,7 @@ async def callback_game_bowl(callback: CallbackQuery):
                     )
                     
                     logger.info(
-                        "GAME_BOWL [user=%s, strike=True, pins=10, grant_success=True, uuid=%s]",
+                        "GAME_BOWL [user=%s, strike=True, dice_value=6, grant_success=True, uuid=%s]",
                         telegram_id, result.get("uuid", "N/A")[:8] if result.get("uuid") else "N/A"
                     )
                 except Exception as e:
@@ -116,16 +120,15 @@ async def callback_game_bowl(callback: CallbackQuery):
                         "⚠️ Ошибка при начислении подписки. Обратитесь в поддержку."
                     )
             else:
-                # No strike - random pins (1-9)
-                pins = random.randint(1, 9)
+                # No strike - dice_value is 1-5
                 message_text = (
-                    f"🎳 Вы сбили {pins} кеглей из 10...\n\n"
+                    f"🎳 Вы сбили {dice_value} кеглей из 10...\n\n"
                     f"Увы, не страйк 😔 Попробуйте снова через 7 дней!"
                 )
-                logger.info("GAME_BOWL [user=%s, strike=False, pins=%s]", telegram_id, pins)
+                logger.info("GAME_BOWL [user=%s, strike=False, dice_value=%s]", telegram_id, dice_value)
             
             keyboard = get_back_keyboard(language)
-            await callback.message.edit_text(message_text, reply_markup=keyboard)
+            await callback.message.answer(message_text, reply_markup=keyboard)
             await callback.answer()
             
     except Exception as e:
