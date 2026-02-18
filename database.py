@@ -1764,32 +1764,47 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
     
     try:
         async with pool.acquire() as conn:
-            # Проверяем, что пользователь еще не был приглашен
-            existing = await conn.fetchrow(
-                "SELECT * FROM referrals WHERE referred_user_id = $1", referred_user_id
-            )
-            if existing:
-                return False
-            
-            # Создаем запись о реферале
-            await conn.execute(
-                """INSERT INTO referrals (referrer_user_id, referred_user_id, is_rewarded, reward_amount)
-                   VALUES ($1, $2, FALSE, 0)
-                   ON CONFLICT (referred_user_id) DO NOTHING""",
-                referrer_user_id, referred_user_id
-            )
-            
-            # Обновляем referrer_id у пользователя (IMMUTABLE - устанавливается только один раз)
-            # Также обновляем referred_by для обратной совместимости
-            # DO NOT use referred_at - column doesn't exist in schema
-            result = await conn.execute(
-                """UPDATE users 
-                   SET referrer_id = $1, referred_by = $1
-                   WHERE telegram_id = $2 
-                   AND referrer_id IS NULL 
-                   AND referred_by IS NULL""",
-                referrer_user_id, referred_user_id
-            )
+            async with conn.transaction():
+                # Проверяем, что пользователь еще не был приглашен
+                existing = await conn.fetchrow(
+                    "SELECT * FROM referrals WHERE referred_user_id = $1", referred_user_id
+                )
+                if existing:
+                    return False
+
+                # Создаем запись о реферале
+                await conn.execute(
+                    """INSERT INTO referrals (referrer_user_id, referred_user_id, is_rewarded, reward_amount)
+                       VALUES ($1, $2, FALSE, 0)
+                       ON CONFLICT (referred_user_id) DO NOTHING""",
+                    referrer_user_id, referred_user_id
+                )
+
+                # Обновляем referrer_id у пользователя (IMMUTABLE - устанавливается только один раз)
+                # Также обновляем referred_by для обратной совместимости
+                # DO NOT use referred_at - column doesn't exist in schema
+                result = await conn.execute(
+                    """UPDATE users
+                       SET referrer_id = $1, referred_by = $1
+                       WHERE telegram_id = $2
+                       AND referrer_id IS NULL
+                       AND referred_by IS NULL""",
+                    referrer_user_id, referred_user_id
+                )
+
+                # Анти-петля: проверяем ПОСЛЕ INSERT — не стал ли реферер одновременно нашим рефералом.
+                # Защищает от гонки A→B / B→A при одновременных /start командах.
+                referrer_row = await conn.fetchrow(
+                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
+                    referrer_user_id
+                )
+                if referrer_row:
+                    ref_of_referrer = referrer_row.get("referrer_id") or referrer_row.get("referred_by")
+                    if ref_of_referrer == referred_user_id:
+                        logger.warning(
+                            f"REFERRAL_LOOP_ABORTED [referrer={referrer_user_id}, referred={referred_user_id}]"
+                        )
+                        raise Exception("referral_loop_detected")
             
             # Verify that referrer_id was actually saved
             if result == "UPDATE 1":

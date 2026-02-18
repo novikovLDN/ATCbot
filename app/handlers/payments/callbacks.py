@@ -413,24 +413,27 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     """Оплата через СБП"""
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
     data = await state.get_data()
-    tariff_key = data.get("tariff", "basic")  # Используем "basic" как дефолт вместо "1"
-    
+    tariff_key = data.get("tariff_type", "basic")
+    period_days = data.get("period_days", 30)
+
     if tariff_key not in config.TARIFFS:
         error_msg = f"Invalid tariff_key '{tariff_key}' for user {telegram_id}. Valid tariffs: {list(config.TARIFFS.keys())}"
         logger.error(error_msg)
         await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
         return
-    
-    # Используем период 30 дней как дефолт
-    if 30 not in config.TARIFFS[tariff_key]:
-        error_msg = f"Period 30 days not found in tariff '{tariff_key}' for user {telegram_id}"
+
+    if period_days not in config.TARIFFS[tariff_key]:
+        period_days = 30
+
+    if period_days not in config.TARIFFS[tariff_key]:
+        error_msg = f"Period {period_days} days not found in tariff '{tariff_key}' for user {telegram_id}"
         logger.error(error_msg)
         await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
         return
-    
-    tariff_data = config.TARIFFS[tariff_key][30]  # Используем период 30 дней
+
+    tariff_data = config.TARIFFS[tariff_key][period_days]
     base_price = tariff_data["price"]
     
     # Рассчитываем цену с учетом скидки (та же логика, что в create_payment)
@@ -464,8 +467,10 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     language = await resolve_user_language(telegram_id)
     
     data = await state.get_data()
-    tariff_key = data.get("tariff", "1")
-    
+    tariff_type = data.get("tariff_type", "basic")
+    period_days = data.get("period_days", 30)
+    tariff_key = f"{tariff_type}_{period_days}"
+
     # Проверяем наличие pending платежа перед созданием
     existing_payment = await database.get_pending_payment_by_user(telegram_id)
     if existing_payment:
@@ -502,29 +507,17 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
     await callback.answer()
     
-    # Уведомляем администратора с реальной суммой платежа
-    # Используем базовую цену тарифа basic 30 дней как fallback
-    if tariff_key in config.TARIFFS and 30 in config.TARIFFS[tariff_key]:
-        tariff_data = config.TARIFFS[tariff_key][30]
-    elif "basic" in config.TARIFFS and 30 in config.TARIFFS["basic"]:
-        tariff_data = config.TARIFFS["basic"][30]
-        logger.warning(f"Using fallback tariff 'basic' 30 days for tariff_key '{tariff_key}'")
-    else:
-        error_msg = f"CRITICAL: Cannot find valid tariff data for tariff_key '{tariff_key}'"
-        logger.error(error_msg)
-        tariff_data = {"price": 149}  # Дефолтная цена
-    
     # Safe username extraction: can be None
     user_lang = await resolve_user_language(telegram_id)
     username = (callback.from_user.username if callback.from_user else None) or i18n_get_text(user_lang, "common.username_not_set")
-    
+
     # Admin notification: admin always sees Russian (ADMIN RU ALLOWED)
     admin_text = i18n_get_text(
         "ru",
         "admin.payment_notification",
         username=username,
         telegram_id=telegram_id,
-        tariff=f"{tariff_key}_30",
+        tariff=tariff_key,
         price=actual_amount
     )
     

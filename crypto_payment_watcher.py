@@ -167,15 +167,10 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
                         logger.error(f"Invalid payload format in CryptoBot invoice: invoice_id={invoice_id}, payload={payload}")
                         continue
                     
-                    # Получаем сумму оплаты (USD string from API, convert back to RUB)
-                    amount_usd_str = invoice_status.get("amount", "0")
-                    try:
-                        amount_usd = float(amount_usd_str) if amount_usd_str else 0.0
-                        from payments.cryptobot import RUB_TO_USD_RATE
-                        amount_rubles = amount_usd * RUB_TO_USD_RATE
-                    except (ValueError, TypeError):
-                        logger.error(f"Invalid amount in invoice status: {amount_usd_str}, invoice_id={invoice_id}")
-                        continue
+                    # Используем price_kopecks из pending_purchases — авторитетная сумма в рублях.
+                    # API CryptoBot возвращает в "amount" сумму в крипто-ассете (USDT/TON/BTC),
+                    # а не в фиате, поэтому пересчёт через курс даёт неверный результат для TON/BTC.
+                    amount_rubles = purchase.get("price_kopecks", 0) / 100.0
                     
                     # Финализируем покупку
                     result = await database.finalize_purchase(

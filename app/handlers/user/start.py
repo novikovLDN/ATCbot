@@ -47,7 +47,7 @@ async def cmd_start(message: Message, state: FSMContext):
     
     # Создаем пользователя если его нет (user already fetched above)
     if not user:
-        await database.create_user(telegram_id, username, "ru")
+        await database.create_user(telegram_id, username, start_language)
     else:
         # Обновляем username если изменился (safe: username can be None)
         if username is not None:
