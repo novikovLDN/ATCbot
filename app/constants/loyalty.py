@@ -8,6 +8,7 @@ Images: Telegram file_id per status key (silver / gold / platinum). No local fil
 """
 
 from typing import Optional, Tuple
+import config
 
 # (min_inclusive, max_inclusive or None for 50+), status_name, cashback_percent (display only)
 LOYALTY_TIERS = (
@@ -58,8 +59,13 @@ def get_loyalty_screen_attachment(current_status_key: str) -> Optional[str]:
     current_status_key: status name ("Silver Access" / "Gold Access" / "Platinum Access")
                         or key ("silver" / "gold" / "platinum"). Normalized to key internally.
     No dependencies on telegram_id, DB, or handlers.
+    
+    Note: file_ids are PROD-specific — returns None in non-prod environments.
     """
     if not current_status_key:
+        return None
+    # file_ids are PROD-specific — return None in non-prod environments
+    if config.APP_ENV != "prod":
         return None
     key = current_status_key.lower().split()[0]
     return LOYALTY_IMAGES.get(key)
@@ -70,8 +76,13 @@ def get_loyalty_photo_id(status_name: str) -> Optional[str]:
     Return PROD Telegram file_id for the loyalty screen by status name.
     status_name: "Silver Access" / "Gold Access" / "Platinum Access" (or key).
     Used only for «Программа лояльности» screen; no handlers logic.
+    
+    Note: file_ids are PROD-specific — returns None in non-prod environments.
     """
     if not status_name:
+        return None
+    # file_ids are PROD-specific — return None in non-prod environments
+    if config.APP_ENV != "prod":
         return None
     key = status_name.lower().split()[0]
     return LOYALTY_PHOTOS.get(key)
