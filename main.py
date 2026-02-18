@@ -248,13 +248,16 @@ async def main():
     # Запускаем HTTP сервер для мониторинга и диагностики
     # Endpoint: GET /health - возвращает статус БД и приложения
     # ====================================================================================
-    health_server_host = os.getenv("HEALTH_SERVER_HOST", "0.0.0.0")
-    health_server_port = int(os.getenv("HEALTH_SERVER_PORT", "8080"))
-    health_server_task = asyncio.create_task(
-        health_server.health_server_task(host=health_server_host, port=health_server_port, bot=bot)
-    )
-    background_tasks.append(health_server_task)
-    logger.info(f"Health check HTTP server started on http://{health_server_host}:{health_server_port}/health")
+    if not config.WEBHOOK_URL:
+        # In webhook mode, /health is served by FastAPI (app/api/__init__.py)
+        # In polling mode, use the dedicated health server
+        health_server_host = os.getenv("HEALTH_SERVER_HOST", "0.0.0.0")
+        health_server_port = int(os.getenv("HEALTH_SERVER_PORT", "8080"))
+        health_server_task = asyncio.create_task(
+            health_server.health_server_task(host=health_server_host, port=health_server_port, bot=bot)
+        )
+        background_tasks.append(health_server_task)
+        logger.info(f"Health check HTTP server started on http://{health_server_host}:{health_server_port}/health")
     
     # ====================================================================================
     # SAFE STARTUP GUARD: Фоновая задача повторной инициализации БД
