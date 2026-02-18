@@ -128,6 +128,10 @@ async def main():
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
+    # Pass bot and dp to webhook handler
+    from app.api import telegram_webhook as tg_webhook_module
+    tg_webhook_module.setup(bot, dp)
+
     # TELEGRAM_NETWORK_LIVENESS: wrap session so we only mark alive on successful HTTP response (no event-loop tick).
     _original_make_request = bot.session.make_request
 
@@ -544,42 +548,103 @@ async def main():
                 )
                 os._exit(1)
 
-    async def start_polling():
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook deleted before polling start")
-        log_event(
-            logger,
-            component="polling",
-            operation="polling_start",
-            outcome="success",
-            correlation_id=instance_id,
-        )
-        await dp.start_polling(
-            bot,
-            allowed_updates=used_updates if used_updates else None,
-            polling_timeout=POLLING_REQUEST_TIMEOUT,
-            handle_signals=False,
-            close_bot_session=True,
-        )
-
     try:
-        network_watchdog_task = asyncio.create_task(
-            telegram_network_watchdog(),
-            name="telegram_network_watchdog",
-        )
-        background_tasks.append(network_watchdog_task)
+        if config.WEBHOOK_URL:
+            # ── WEBHOOK MODE ──────────────────────────────────────
+            logger.info("STARTING_WEBHOOK_MODE url=%s port=%s",
+                        config.WEBHOOK_URL, config.WEBHOOK_PORT)
 
-        polling_task = asyncio.create_task(
-            start_polling(),
-            name="polling_task",
-        )
-        background_tasks.append(polling_task)
+            # Register webhook with Telegram
+            await bot.set_webhook(
+                url=config.WEBHOOK_URL,
+                secret_token=config.WEBHOOK_SECRET,
+                drop_pending_updates=True,
+                allowed_updates=used_updates if used_updates else None,
+            )
 
-        await polling_task
+            # Verify webhook was registered correctly
+            wh_info = await bot.get_webhook_info()
+            if wh_info.url != config.WEBHOOK_URL:
+                logger.critical(
+                    "WEBHOOK_VERIFICATION_FAILED expected=%s got=%s",
+                    config.WEBHOOK_URL, wh_info.url
+                )
+                sys.exit(1)
+            logger.info("WEBHOOK_VERIFIED url=%s", wh_info.url)
+
+            # Network watchdog works in both modes
+            network_watchdog_task = asyncio.create_task(
+                telegram_network_watchdog(),
+                name="telegram_network_watchdog",
+            )
+            background_tasks.append(network_watchdog_task)
+
+            # Start uvicorn serving FastAPI
+            import uvicorn
+            from app.api import app as fastapi_app
+
+            uv_config = uvicorn.Config(
+                fastapi_app,
+                host="0.0.0.0",
+                port=config.WEBHOOK_PORT,
+                log_level="warning",
+            )
+            uv_server = uvicorn.Server(uv_config)
+            webhook_server_task = asyncio.create_task(
+                uv_server.serve(), name="uvicorn_webhook"
+            )
+            background_tasks.append(webhook_server_task)
+            logger.info("UVICORN_STARTED host=0.0.0.0 port=%s", config.WEBHOOK_PORT)
+
+            # Keep process alive — wait for shutdown signal
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+
+        else:
+            # ── POLLING MODE (local development) ──────────────────
+            logger.info("STARTING_POLLING_MODE")
+            
+            async def start_polling():
+                await bot.delete_webhook(drop_pending_updates=True)
+                logger.info("Webhook deleted before polling start")
+                log_event(
+                    logger,
+                    component="polling",
+                    operation="polling_start",
+                    outcome="success",
+                    correlation_id=instance_id,
+                )
+                await dp.start_polling(
+                    bot,
+                    allowed_updates=used_updates if used_updates else None,
+                    polling_timeout=POLLING_REQUEST_TIMEOUT,
+                    handle_signals=False,
+                    close_bot_session=True,
+                )
+
+            network_watchdog_task = asyncio.create_task(
+                telegram_network_watchdog(),
+                name="telegram_network_watchdog",
+            )
+            background_tasks.append(network_watchdog_task)
+
+            polling_task = asyncio.create_task(
+                start_polling(),
+                name="polling_task",
+            )
+            background_tasks.append(polling_task)
+
+            await polling_task
     except SystemExit:
         raise
     finally:
         log_event(logger, component="shutdown", operation="shutdown_start", outcome="success")
+        # Delete webhook if in webhook mode
+        if config.WEBHOOK_URL:
+            try:
+                await bot.delete_webhook()
+                logger.info("WEBHOOK_DELETED")
+            except Exception as e:
+                logger.warning("webhook_delete_failed error=%s", e)
         # Stop polling cleanly
         try:
             if hasattr(dp, "stop_polling"):

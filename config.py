@@ -171,3 +171,10 @@ CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.spli
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
 
+# Webhook configuration
+# If WEBHOOK_URL is set → webhook mode (production/stage)
+# If not set → polling mode (local development)
+WEBHOOK_URL = env("WEBHOOK_URL")
+WEBHOOK_SECRET = env("WEBHOOK_SECRET")
+WEBHOOK_PORT = int(os.getenv("PORT") or env("WEBHOOK_PORT") or "8080")
+
