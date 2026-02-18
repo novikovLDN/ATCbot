@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 import database
 from app.i18n import get_text as i18n_get_text
@@ -28,6 +28,29 @@ async def callback_game_bowl(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
     
     try:
+        # Check active subscription first (game only for subscribers)
+        # This ensures grant_access will do RENEWAL (fast) instead of NEW ISSUANCE (slow VPN API call)
+        subscription = await database.get_subscription(telegram_id)
+        if not subscription:
+            message_text = (
+                "🎳 Боулинг-клуб только для подписчиков!\n\n"
+                "Приобретите подписку, чтобы играть."
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy"),
+                    callback_data="menu_buy_vpn"
+                )],
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "common.back"),
+                    callback_data="menu_main"
+                )]
+            ])
+            await callback.message.edit_text(message_text, reply_markup=keyboard)
+            await callback.answer()
+            logger.info("GAME_BOWL [user=%s, status=no_subscription]", telegram_id)
+            return
+        
         # Get user's last play time
         pool = await database.get_pool()
         if not pool:
