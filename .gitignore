@@ -48,3 +48,6 @@ ENV/
 env.bak/
 venv.bak/
 
+# VPN keys (sensitive data)
+vpn_keys.txt
+
