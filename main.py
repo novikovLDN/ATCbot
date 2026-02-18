@@ -547,10 +547,26 @@ async def main():
         sys.exit(1)
 
     async def telegram_network_watchdog():
-        """Liveness only via successful Telegram HTTP response. No event-loop tick, no silence-based logic."""
+        """Liveness only via successful Telegram HTTP response. No event-loop tick, no silence-based logic.
+
+        In WEBHOOK mode: tracks last_webhook_update_at from telegram_webhook module (updated on
+        every incoming Telegram request). Telegram pings /telegram/webhook every ~45s even with
+        no user activity, so silence > 180s is a real sign of broken connectivity.
+
+        In POLLING mode: tracks telegram_last_success_monotonic (updated on every make_request).
+        """
+        if TELEGRAM_LIVENESS_TIMEOUT <= 0:
+            logger.info("TELEGRAM_LIVENESS_TIMEOUT=0 — watchdog disabled")
+            return
+
         while True:
             await asyncio.sleep(10)
-            silence = time.monotonic() - telegram_last_success_monotonic
+            if config.WEBHOOK_URL:
+                from app.api import telegram_webhook as _tw
+                last_alive = _tw.last_webhook_update_at
+            else:
+                last_alive = telegram_last_success_monotonic
+            silence = time.monotonic() - last_alive
             if silence > TELEGRAM_LIVENESS_TIMEOUT:
                 logger.critical(
                     "TELEGRAM_NETWORK_DEAD silence=%s > timeout=%s — forcing full process restart",

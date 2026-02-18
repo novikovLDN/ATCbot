@@ -3,6 +3,7 @@ Telegram webhook endpoint.
 Receives updates from Telegram and feeds them to aiogram Dispatcher.
 """
 import logging
+import time
 from fastapi import APIRouter, Request, Response, Header
 from aiogram.types import Update
 import config
@@ -15,16 +16,26 @@ router = APIRouter()
 _bot = None
 _dp = None
 
+# Liveness heartbeat — updated on every incoming Telegram update.
+# Imported by main.py watchdog to track "last sign of life from Telegram".
+last_webhook_update_at: float = time.monotonic()
+
+
 def setup(bot, dp):
     global _bot, _dp
     _bot = bot
     _dp = dp
+
 
 @router.post("/telegram/webhook")
 async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
+    # Update liveness heartbeat on every Telegram ping
+    global last_webhook_update_at
+    last_webhook_update_at = time.monotonic()
+
     # Validate secret token
     if not config.WEBHOOK_SECRET:
         logger.error("WEBHOOK_SECRET not configured")
