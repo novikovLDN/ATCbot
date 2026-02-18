@@ -178,3 +178,6 @@ WEBHOOK_URL = env("WEBHOOK_URL")
 WEBHOOK_SECRET = env("WEBHOOK_SECRET")
 WEBHOOK_PORT = int(os.getenv("PORT") or env("WEBHOOK_PORT") or "8080")
 
+# Redis for FSM storage
+REDIS_URL = env("REDIS_URL", default="")
+

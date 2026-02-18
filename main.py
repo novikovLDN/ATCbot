@@ -13,6 +13,7 @@ from app.core.logging_config import setup_logging
 setup_logging()
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 import config
@@ -126,7 +127,14 @@ async def main():
 
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
-    dp = Dispatcher(storage=MemoryStorage())
+    if config.REDIS_URL:
+        storage = RedisStorage.from_url(config.REDIS_URL)
+        logger.info("FSM_STORAGE=redis url_prefix=%s", config.REDIS_URL[:20])
+    else:
+        storage = MemoryStorage()
+        logger.warning("FSM_STORAGE=memory — states will be lost on restart")
+
+    dp = Dispatcher(storage=storage)
 
     # Pass bot and dp to webhook handler
     from app.api import telegram_webhook as tg_webhook_module
