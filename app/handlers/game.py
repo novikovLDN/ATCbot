@@ -1,12 +1,12 @@
 """
-Bowling game handler - 7-day cooldown, Telegram dice 🎳, +7 days subscription reward on strike
+Bowling game handler - 7-day cooldown, 10% strike chance, +7 days subscription reward
 """
 import logging
-import asyncio
+import random
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery
 
 import database
 from app.i18n import get_text as i18n_get_text
@@ -28,29 +28,6 @@ async def callback_game_bowl(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
     
     try:
-        # Check active subscription first (game only for subscribers)
-        # This ensures grant_access will do RENEWAL (fast) instead of NEW ISSUANCE (slow VPN API call)
-        subscription = await database.get_subscription(telegram_id)
-        if not subscription:
-            message_text = (
-                "🎳 Боулинг-клуб только для подписчиков!\n\n"
-                "Приобретите подписку, чтобы играть."
-            )
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.buy"),
-                    callback_data="menu_buy_vpn"
-                )],
-                [InlineKeyboardButton(
-                    text=i18n_get_text(language, "common.back"),
-                    callback_data="menu_main"
-                )]
-            ])
-            await callback.message.edit_text(message_text, reply_markup=keyboard)
-            await callback.answer()
-            logger.info("GAME_BOWL [user=%s, status=no_subscription]", telegram_id)
-            return
-        
         # Get user's last play time
         pool = await database.get_pool()
         if not pool:
@@ -106,17 +83,13 @@ async def callback_game_bowl(callback: CallbackQuery):
                 database._to_db_utc(now), telegram_id
             )
             
-            # Send Telegram dice animation
-            dice_message = await callback.message.answer_dice(emoji="🎳")
-            dice_value = dice_message.dice.value
-            # Bowling dice: value 6 = strike, values 1-5 = no strike
+            # Roll for strike (10% chance)
+            is_strike = random.random() < 0.10
+            pins = None
             
-            # Wait for animation to show before sending result
-            await asyncio.sleep(4)
-            
-            if dice_value == 6:
+            if is_strike:
                 # STRIKE! Grant +7 days subscription
-                logger.info("GAME_BOWL [user=%s, strike=True, dice_value=6]", telegram_id)
+                logger.info("GAME_BOWL [user=%s, strike=True, pins=10]", telegram_id)
                 
                 try:
                     # Grant 7 days subscription
@@ -132,7 +105,7 @@ async def callback_game_bowl(callback: CallbackQuery):
                     )
                     
                     logger.info(
-                        "GAME_BOWL [user=%s, strike=True, dice_value=6, grant_success=True, uuid=%s]",
+                        "GAME_BOWL [user=%s, strike=True, pins=10, grant_success=True, uuid=%s]",
                         telegram_id, result.get("uuid", "N/A")[:8] if result.get("uuid") else "N/A"
                     )
                 except Exception as e:
@@ -143,15 +116,16 @@ async def callback_game_bowl(callback: CallbackQuery):
                         "⚠️ Ошибка при начислении подписки. Обратитесь в поддержку."
                     )
             else:
-                # No strike - dice_value is 1-5
+                # No strike - random pins (1-9)
+                pins = random.randint(1, 9)
                 message_text = (
-                    f"🎳 Вы сбили {dice_value} кеглей из 10...\n\n"
+                    f"🎳 Вы сбили {pins} кеглей из 10...\n\n"
                     f"Увы, не страйк 😔 Попробуйте снова через 7 дней!"
                 )
-                logger.info("GAME_BOWL [user=%s, strike=False, dice_value=%s]", telegram_id, dice_value)
+                logger.info("GAME_BOWL [user=%s, strike=False, pins=%s]", telegram_id, pins)
             
             keyboard = get_back_keyboard(language)
-            await callback.message.answer(message_text, reply_markup=keyboard)
+            await callback.message.edit_text(message_text, reply_markup=keyboard)
             await callback.answer()
             
     except Exception as e:
