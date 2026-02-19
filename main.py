@@ -25,7 +25,6 @@ import reminders
 import healthcheck
 import fast_expiry_cleanup
 import auto_renewal
-import health_server
 import admin_notifications
 import trial_notifications
 import activation_worker
@@ -87,8 +86,9 @@ ADVISORY_LOCK_KEY = 987654321
 # Advisory lock connection (held for process lifetime); released in finally via pool.release().
 instance_lock_conn = None
 
-# TELEGRAM_NETWORK_LIVENESS: webhook-only mode - liveness tracked via last_webhook_update_at in telegram_webhook.py
-TELEGRAM_LIVENESS_TIMEOUT = int(os.getenv("TELEGRAM_LIVENESS_TIMEOUT", "180"))  # 3 min; do not use 60 or 120
+# Network liveness timeout: watchdog checks if Telegram webhook requests are received
+# Liveness is tracked via last_webhook_update_at in telegram_webhook.py
+TELEGRAM_LIVENESS_TIMEOUT = int(os.getenv("TELEGRAM_LIVENESS_TIMEOUT", "180"))  # 3 min
 
 
 async def main():
@@ -454,9 +454,7 @@ async def main():
     else:
         logger.warning("Crypto payment watcher task skipped (DB not ready)")
     
-    # ====================================================================================
-    # WEBHOOK MODE ONLY: Bot initialization complete
-    # ====================================================================================
+    # Bot initialization complete
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")
     else:
@@ -526,7 +524,7 @@ async def main():
             # else: no-op, continue loop
 
     try:
-        # ── WEBHOOK MODE ONLY ──────────────────────────────────────
+        # Start webhook mode
         logger.info("STARTING_WEBHOOK_MODE url=%s port=%s",
                     config.WEBHOOK_URL, config.WEBHOOK_PORT)
 

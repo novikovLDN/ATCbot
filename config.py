@@ -171,12 +171,11 @@ CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.spli
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
 
-# Webhook configuration (MANDATORY - polling mode removed)
-# WEBHOOK_URL must be set - bot uses ONLY webhook mode
+# Webhook configuration (MANDATORY)
+# Bot uses ONLY webhook mode for receiving Telegram updates
 WEBHOOK_URL = env("WEBHOOK_URL")
 if not WEBHOOK_URL:
     print(f"ERROR: {APP_ENV.upper()}_WEBHOOK_URL environment variable is REQUIRED!", file=sys.stderr)
-    print(f"ERROR: Polling mode has been removed - webhook is mandatory", file=sys.stderr)
     sys.exit(1)
 WEBHOOK_SECRET = env("WEBHOOK_SECRET")
 if not WEBHOOK_SECRET:

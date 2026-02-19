@@ -1,7 +1,7 @@
 """
 Global Telegram update error boundary middleware.
 
-Ensures no handler exception can crash polling.
+Ensures no handler exception can crash webhook processing.
 Never swallows CancelledError.
 """
 import asyncio
