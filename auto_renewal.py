@@ -107,8 +107,16 @@ async def process_auto_renewals(bot: Bot):
 
     # Pool is created with acquire timeout in database._get_pool_config() (DB_POOL_ACQUIRE_TIMEOUT, default 10s).
     # This worker does not call VPN API (no httpx); only DB and Telegram.
+    # Pool timeout is already configured (10s); acquire_connection uses pool.acquire() which respects that timeout.
+    # For extra safety, we wrap acquire in wait_for to ensure cancellation if pool hangs.
     while True:
-        async with acquire_connection(pool, "auto_renewal_main") as conn:
+        cm = acquire_connection(pool, "auto_renewal_main")
+        try:
+            conn = await asyncio.wait_for(cm.__aenter__(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.error("auto_renewal: pool.acquire() timed out after 10s")
+            raise
+        try:
             notifications_to_send = []
             async with conn.transaction():
                 try:
@@ -353,7 +361,14 @@ async def process_auto_renewals(bot: Bot):
                     if sent is None:
                         continue
                     await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
-                    async with acquire_connection(pool, "auto_renewal_notify") as notify_conn:
+                    # Explicit timeout for notification connection acquire (pool timeout is 10s)
+                    notify_cm = acquire_connection(pool, "auto_renewal_notify")
+                    try:
+                        notify_conn = await asyncio.wait_for(notify_cm.__aenter__(), timeout=10.0)
+                    except asyncio.TimeoutError:
+                        logger.error("auto_renewal: pool.acquire() timed out for notify_conn after 10s")
+                        continue
+                    try:
                         marked = await notification_service.mark_notification_sent(item["payment_id"], conn=notify_conn)
                         if marked:
                             logger.info(
@@ -363,10 +378,22 @@ async def process_auto_renewals(bot: Bot):
                             logger.warning(
                                 f"NOTIFICATION_FLAG_ALREADY_SET [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
                             )
+                    finally:
+                        # Release notification connection
+                        try:
+                            await notify_cm.__aexit__(None, None, None)
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.error(
                         f"CRITICAL: Failed to send/mark auto-renewal notification: payment_id={item.get('payment_id')}, user={item.get('telegram_id')}, error={e}"
                     )
+        finally:
+            # Release connection (equivalent to __aexit__)
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception:
+                pass  # Ignore errors during cleanup
 
         await asyncio.sleep(0)
 

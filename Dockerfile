@@ -11,4 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Explicit copy so migrations are never excluded by build context or future .dockerignore
+COPY migrations/ ./migrations/
+
 CMD ["python", "main.py"]

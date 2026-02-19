@@ -346,10 +346,12 @@ async def main():
                             logger.info("Fast expiry cleanup task started (recovered)")
                         
                         if auto_renewal_task is None and recovered_tasks["auto_renewal"] is None:
-                            t = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
-                            recovered_tasks["auto_renewal"] = t
-                            background_tasks.append(t)
-                            logger.info("Auto-renewal task started (recovered)")
+                            _flags_recovery = get_feature_flags()
+                            if _flags_recovery.background_workers_enabled and _flags_recovery.auto_renewal_enabled:
+                                t = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
+                                recovered_tasks["auto_renewal"] = t
+                                background_tasks.append(t)
+                                logger.info("Auto-renewal task started (recovered)")
                         
                         if activation_worker_task is None and recovered_tasks["activation_worker"] is None:
                             t = asyncio.create_task(activation_worker.activation_worker_task(bot))
@@ -412,14 +414,21 @@ async def main():
     else:
         logger.warning("Fast expiry cleanup task skipped (DB not ready)")
     
-    # Запуск фоновой задачи для автопродления подписок (только если БД готова)
+    # Запуск фоновой задачи для автопродления подписок (только если БД готова И kill switch включён)
     auto_renewal_task = None
-    if database.DB_READY:
+    _flags = get_feature_flags()
+    if database.DB_READY and _flags.background_workers_enabled and _flags.auto_renewal_enabled:
         auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
         background_tasks.append(auto_renewal_task)
         logger.info("Auto-renewal task started")
     else:
-        logger.warning("Auto-renewal task skipped (DB not ready)")
+        if not database.DB_READY:
+            logger.warning("Auto-renewal task skipped (DB not ready)")
+        else:
+            logger.warning(
+                "Auto-renewal task skipped (feature flag: background_workers=%s, auto_renewal=%s)",
+                _flags.background_workers_enabled, _flags.auto_renewal_enabled
+            )
     
     # Запуск фоновой задачи для активации отложенных подписок (только если БД готова)
     activation_worker_task = None
