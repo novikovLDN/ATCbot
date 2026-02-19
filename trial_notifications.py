@@ -3,6 +3,7 @@
 """
 import asyncio
 import logging
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
@@ -14,12 +15,6 @@ import database
 import config
 from app import i18n
 from app.services.trials import service as trial_service
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
 from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
@@ -576,6 +571,11 @@ async def run_trial_scheduler(bot: Bot):
     _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
     
+    # Prevent worker burst at startup
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug("trial_notifications: startup jitter done (%.1fs)", jitter_s)
+    
     iteration_number = 0
     
     while True:
@@ -593,8 +593,7 @@ async def run_trial_scheduler(bot: Bot):
         should_exit_loop = False
         
         try:
-            # STEP 6 — F5: BACKGROUND WORKER SAFETY
-            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
             if not feature_flags.background_workers_enabled:
@@ -614,59 +613,12 @@ async def run_trial_scheduler(bot: Bot):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
             
-            # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
-            # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
-            try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-                
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-                
-                # VPN API component (not critical for trial notifications)
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-                
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-                
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
-                )
-                
-                # STEP 1.2: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in trial_notifications scheduler "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    iteration_outcome = "skipped"
-                    await asyncio.sleep(300)  # Sleep before next check
-                    continue
-                
-                # STEP 1.2: DEGRADED state allows continuation (workers continue with reduced functionality)
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in trial_notifications scheduler "
-                        f"(continuing with reduced functionality)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("trial_notifications: skipping — DB not ready")
+                iteration_outcome = "skipped"
+                await asyncio.sleep(300)  # Sleep before next check
+                continue
             
             # H1 fix: Wrap iteration body with timeout
             async def _run_iteration():

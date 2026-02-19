@@ -13,12 +13,6 @@ import database
 import config
 from app import i18n
 from app.services.notifications import service as notification_service
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
 from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
@@ -449,8 +443,7 @@ async def auto_renewal_task(bot: Bot):
         )
 
         try:
-            # STEP 6 — F5: BACKGROUND WORKER SAFETY
-            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
             if not feature_flags.background_workers_enabled or not feature_flags.auto_renewal_enabled:
@@ -463,61 +456,12 @@ async def auto_renewal_task(bot: Bot):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
 
-            # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
-            # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
-            try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-
-                # VPN API component (not critical for auto-renewal)
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
-                )
-
-                # STEP 1.2: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in auto_renewal_task "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    iteration_outcome = "skipped"
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-
-                # PART D.4: Workers continue normally if DEGRADED
-                # PART D.4: Workers skip only if system_state == UNAVAILABLE
-                # DEGRADED state allows continuation (optional components degraded, critical healthy)
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in auto_renewal_task "
-                        f"(continuing with reduced functionality - optional components degraded)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("auto_renewal: skipping — DB not ready")
+                iteration_outcome = "skipped"
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
 
             # Wrap entire iteration body so a hung run is cancelled after 2 minutes (avoids holding DB forever, liveness watchdog)
             async def _run_iteration_body():

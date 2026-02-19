@@ -1,6 +1,7 @@
 """Фоновая задача для автоматической проверки статуса CryptoBot платежей"""
 import asyncio
 import logging
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from aiogram import Bot
@@ -11,14 +12,6 @@ import config
 from app.services.language_service import resolve_user_language
 from app.i18n import get_text as i18n_get_text
 from payments import cryptobot
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
-from app.core.metrics import get_metrics
-from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -314,7 +307,12 @@ async def crypto_payment_watcher_task(bot: Bot):
     """
     logger.info(f"Crypto payment watcher task started: interval={CHECK_INTERVAL_SECONDS}s")
     
-    # Первая проверка сразу при запуске
+    # Prevent worker burst at startup
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug("crypto_payment_watcher: startup jitter done (%.1fs)", jitter_s)
+    
+    # Первая проверка после jitter
     try:
         async with _worker_lock:
             await check_crypto_payments(bot)
@@ -344,8 +342,7 @@ async def crypto_payment_watcher_task(bot: Bot):
         should_exit_loop = False
         
         try:
-            # STEP 6 — F5: BACKGROUND WORKER SAFETY
-            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
             if not feature_flags.background_workers_enabled:
@@ -365,67 +362,20 @@ async def crypto_payment_watcher_task(bot: Bot):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
             
-            # READ-ONLY system state awareness: Skip iteration if system is unavailable
-            try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-                
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-                
-                # VPN API component
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-                
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-                
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("crypto_payment_watcher: skipping — DB not ready")
+                outcome = "skipped"
+                reason = "DB not ready"
+                log_worker_iteration_end(
+                    worker_name="crypto_payment_watcher",
+                    outcome=outcome,
+                    items_processed=0,
+                    duration_ms=(time.time() - iteration_start_time) * 1000,
+                    reason=reason,
                 )
-                
-                # STEP 1.1 - RUNTIME GUARDRAILS: Workers read SystemState at iteration start
-                # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in crypto_payment_watcher "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    outcome = "skipped"
-                    reason = f"system_state=UNAVAILABLE (database={system_state.database.status.value})"
-                    log_worker_iteration_end(
-                        worker_name="crypto_payment_watcher",
-                        outcome=outcome,
-                        items_processed=0,
-                        duration_ms=(time.time() - iteration_start_time) * 1000,
-                        reason=reason,
-                    )
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-                
-                # PART D.4: Workers continue normally if DEGRADED
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in crypto_payment_watcher "
-                        f"(continuing with reduced functionality - optional components degraded)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
             
             # H1 fix: Wrap iteration body with timeout
             async def _run_iteration():

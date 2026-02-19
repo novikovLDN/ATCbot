@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import random
 import time
 from datetime import datetime, timezone
 from aiogram import Bot
@@ -19,16 +20,8 @@ from app.services.activation.exceptions import (
     ActivationFailedError,
     VPNActivationError,
 )
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
-from app.core.metrics import get_metrics
 from app.services.language_service import resolve_user_language
 from app import i18n
-from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -353,6 +346,11 @@ async def activation_worker_task(bot: Bot):
     """
     logger.info(f"Activation worker task started (interval={ACTIVATION_INTERVAL_SECONDS}s, max_attempts={MAX_ACTIVATION_ATTEMPTS})")
     
+    # Prevent worker burst at startup
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug("activation_worker: startup jitter done (%.1fs)", jitter_s)
+    
     iteration_number = 0
     
     # STEP 3 — PART B: WORKER LOOP SAFETY
@@ -375,117 +373,40 @@ async def activation_worker_task(bot: Bot):
         should_exit_loop = False
         
         try:
-            # READ-ONLY system state awareness: Skip iteration if system is unavailable
-            try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-                
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-                
-                # VPN API component
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-                
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-                
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
+            # Feature flag check
+            from app.core.feature_flags import get_feature_flags
+            feature_flags = get_feature_flags()
+            if not feature_flags.background_workers_enabled:
+                logger.warning(
+                    f"[FEATURE_FLAG] Background workers disabled, skipping iteration in activation_worker "
+                    f"(iteration={iteration_number})"
                 )
-                
-                # STEP 6 — F5: BACKGROUND WORKER SAFETY
-                # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
-                from app.core.feature_flags import get_feature_flags
-                feature_flags = get_feature_flags()
-                if not feature_flags.background_workers_enabled:
-                    logger.warning(
-                        f"[FEATURE_FLAG] Background workers disabled, skipping iteration in activation_worker "
-                        f"(iteration={iteration_number})"
-                    )
-                    outcome = "skipped"
-                    reason = "background_workers_enabled=false"
-                    log_worker_iteration_end(
-                        worker_name="activation_worker",
-                        outcome=outcome,
-                        items_processed=0,
-                        duration_ms=(time.time() - iteration_start_time) * 1000,
-                        reason=reason,
-                    )
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-                
-                # STEP 1.1 - RUNTIME GUARDRAILS: Workers read SystemState at iteration start
-                # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in activation_worker "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    outcome = "skipped"
-                    reason = f"system_state=UNAVAILABLE (database={system_state.database.status.value})"
-                    log_worker_iteration_end(
-                        worker_name="activation_worker",
-                        outcome=outcome,
-                        items_processed=0,
-                        duration_ms=(time.time() - iteration_start_time) * 1000,
-                        reason=reason,
-                    )
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-                
-                # STEP 6 — F2: CIRCUIT BREAKER LITE
-                # Check circuit breaker for VPN provisioning
-                from app.core.circuit_breaker import get_circuit_breaker
-                vpn_breaker = get_circuit_breaker("vpn_api")
-                if vpn_breaker.should_skip():
-                    logger.warning(
-                        f"[CIRCUIT_BREAKER] VPN API circuit breaker OPEN, skipping iteration in activation_worker "
-                        f"(iteration={iteration_number})"
-                    )
-                    outcome = "skipped"
-                    reason = "vpn_api_circuit_breaker=OPEN"
-                    log_worker_iteration_end(
-                        worker_name="activation_worker",
-                        outcome=outcome,
-                        items_processed=0,
-                        duration_ms=(time.time() - iteration_start_time) * 1000,
-                        reason=reason,
-                    )
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-                
-                # PART D.4: Workers continue normally if DEGRADED
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in activation_worker "
-                        f"(continuing with reduced functionality - optional components degraded)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
+                outcome = "skipped"
+                reason = "background_workers_enabled=false"
+                log_worker_iteration_end(
+                    worker_name="activation_worker",
+                    outcome=outcome,
+                    items_processed=0,
+                    duration_ms=(time.time() - iteration_start_time) * 1000,
+                    reason=reason,
+                )
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
             
-            # C1.1 - METRICS: Increment background iterations counter
-            metrics = get_metrics()
-            metrics.increment_counter("background_iterations_total")
-            
-            # D2.1 - COST CENTERS: Track background iteration cost
-            cost_model = get_cost_model()
-            cost_model.record_cost(CostCenter.BACKGROUND_ITERATIONS, cost_units=1.0)
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("activation_worker: skipping — DB not ready")
+                outcome = "skipped"
+                reason = "DB not ready"
+                log_worker_iteration_end(
+                    worker_name="activation_worker",
+                    outcome=outcome,
+                    items_processed=0,
+                    duration_ms=(time.time() - iteration_start_time) * 1000,
+                    reason=reason,
+                )
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
             
             # H1 fix: Wrap iteration body with timeout
             async def _run_iteration():

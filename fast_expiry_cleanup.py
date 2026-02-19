@@ -13,20 +13,13 @@ Fast Expiry Cleanup - автоматическое отключение истё
 import asyncio
 import logging
 import os
+import random
 import time
 from datetime import datetime, timezone
 import asyncpg
 import database
 import config
 from app.services.vpn import service as vpn_service
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
-from app.core.metrics import get_metrics
-from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -86,6 +79,11 @@ async def fast_expiry_cleanup_task():
         f"range: 60-300 seconds, using UTC time)"
     )
     
+    # Prevent worker burst at startup
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug("fast_expiry_cleanup: startup jitter done (%.1fs)", jitter_s)
+    
     iteration_number = 0
     
     while True:
@@ -106,8 +104,7 @@ async def fast_expiry_cleanup_task():
         iteration_error_type = None
         
         try:
-            # STEP 6 — F5: BACKGROUND WORKER SAFETY
-            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
             if not feature_flags.background_workers_enabled:
@@ -127,65 +124,11 @@ async def fast_expiry_cleanup_task():
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
             
-            # READ-ONLY system state awareness: Skip iteration if system is unavailable
-            try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-                
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-                
-                # VPN API component
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-                
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-                
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
-                )
-                
-                # STEP 1.1 - RUNTIME GUARDRAILS: Workers read SystemState at iteration start
-                # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in fast_expiry_cleanup "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    continue
-                
-                # PART D.4: Workers continue normally if DEGRADED
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in fast_expiry_cleanup "
-                        f"(continuing with reduced functionality - optional components degraded)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
-            
-            # C1.1 - METRICS: Increment background iterations counter
-            metrics = get_metrics()
-            metrics.increment_counter("background_iterations_total")
-            
-            # D2.1 - COST CENTERS: Track background iteration cost
-            cost_model = get_cost_model()
-            cost_model.record_cost(CostCenter.BACKGROUND_ITERATIONS, cost_units=1.0)
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("fast_expiry_cleanup: skipping — DB not ready")
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
             
             # Получаем текущее UTC время для сравнения
             # PostgreSQL TIMESTAMP хранит без timezone, поэтому используем naive datetime

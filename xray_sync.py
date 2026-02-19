@@ -6,6 +6,7 @@ After Xray restart/crash: all active users are auto-synced to Xray.
 """
 import asyncio
 import logging
+import random
 import time
 from typing import TYPE_CHECKING
 
@@ -152,6 +153,11 @@ async def xray_sync_worker_task(bot: "Bot") -> None:
     Periodic worker: health check Xray, trigger full sync on failure.
     Interval: 5 minutes.
     """
+    # Prevent worker burst at startup
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug("xray_sync: startup jitter done (%.1fs)", jitter_s)
+    
     iteration = 0
     while True:
         iteration += 1
