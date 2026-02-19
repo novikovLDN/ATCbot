@@ -87,6 +87,11 @@ async def fast_expiry_cleanup_task():
     iteration_number = 0
     
     while True:
+        # Initialize variables at top of loop to ensure they're always defined
+        items_processed = 0
+        outcome = "success"
+        iteration_error_type = None
+        
         # Множество для отслеживания UUID, которые мы уже обрабатываем (защита от race condition)
         # MEMORY_LEAK_FIX: Clear set at start of each iteration to prevent unbounded growth
         processing_uuids = set()
@@ -98,10 +103,6 @@ async def fast_expiry_cleanup_task():
             worker_name="fast_expiry_cleanup",
             iteration_number=iteration_number
         )
-        
-        items_processed = 0
-        outcome = "success"
-        iteration_error_type = None
         
         try:
             # Feature flag check
@@ -136,6 +137,7 @@ async def fast_expiry_cleanup_task():
             
             # H1 fix: Wrap iteration body with timeout
             async def _run_iteration_body():
+                nonlocal items_processed, outcome  # Allow modification of outer scope variables
                 # Event loop protection: prevent overlapping iterations
                 async with _worker_lock:
                     # Получаем истёкшие подписки с активными UUID
