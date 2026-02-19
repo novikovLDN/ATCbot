@@ -86,12 +86,12 @@ async def fast_expiry_cleanup_task():
         f"range: 60-300 seconds, using UTC time)"
     )
     
-    # Множество для отслеживания UUID, которые мы уже обрабатываем (защита от race condition)
-    processing_uuids = set()
-    
     iteration_number = 0
     
     while True:
+        # Множество для отслеживания UUID, которые мы уже обрабатываем (защита от race condition)
+        # MEMORY_LEAK_FIX: Clear set at start of each iteration to prevent unbounded growth
+        processing_uuids = set()
         iteration_start_time = time.time()
         iteration_number += 1
         
