@@ -89,6 +89,10 @@ def get_feature_flags() -> FeatureFlags:
     global _feature_flags
     
     if _feature_flags is None:
+        # Startup diagnostic: confirm env var is present at init time (Railway injects before process start)
+        _raw_auto_renewal = os.getenv("FEATURE_AUTO_RENEWAL_ENABLED", "<unset>")
+        logger.info("[FEATURE_FLAGS] FEATURE_AUTO_RENEWAL_ENABLED raw env=%s", _raw_auto_renewal)
+
         _feature_flags = FeatureFlags(
             payments_enabled=_parse_bool_env("FEATURE_PAYMENTS_ENABLED", default=True),
             vpn_provisioning_enabled=_parse_bool_env("FEATURE_VPN_PROVISIONING_ENABLED", default=True),
