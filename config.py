@@ -171,12 +171,19 @@ CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.spli
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
 
-# Webhook configuration
-# If WEBHOOK_URL is set → webhook mode (production/stage)
-# If not set → polling mode (local development)
+# Webhook configuration (MANDATORY - polling mode removed)
+# WEBHOOK_URL must be set - bot uses ONLY webhook mode
 WEBHOOK_URL = env("WEBHOOK_URL")
+if not WEBHOOK_URL:
+    print(f"ERROR: {APP_ENV.upper()}_WEBHOOK_URL environment variable is REQUIRED!", file=sys.stderr)
+    print(f"ERROR: Polling mode has been removed - webhook is mandatory", file=sys.stderr)
+    sys.exit(1)
 WEBHOOK_SECRET = env("WEBHOOK_SECRET")
+if not WEBHOOK_SECRET:
+    print(f"ERROR: {APP_ENV.upper()}_WEBHOOK_SECRET environment variable is REQUIRED!", file=sys.stderr)
+    sys.exit(1)
 WEBHOOK_PORT = int(os.getenv("PORT") or env("WEBHOOK_PORT") or "8080")
+print(f"INFO: Using WEBHOOK_URL from {APP_ENV.upper()}_WEBHOOK_URL", flush=True)
 
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")

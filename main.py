@@ -80,8 +80,6 @@ except Exception as e:
 
 logger = logging.getLogger(__name__)
 
-POLLING_REQUEST_TIMEOUT = 30
-
 # ADVISORY_LOCK_FIX: App-wide key for PostgreSQL advisory lock (replaces file lock).
 # Lock is automatically released when process dies (connection closed).
 ADVISORY_LOCK_KEY = 987654321
@@ -89,8 +87,7 @@ ADVISORY_LOCK_KEY = 987654321
 # Advisory lock connection (held for process lifetime); released in finally via pool.release().
 instance_lock_conn = None
 
-# TELEGRAM_NETWORK_LIVENESS: alive only when a successful Telegram API HTTP response is received (monotonic).
-telegram_last_success_monotonic = time.monotonic()
+# TELEGRAM_NETWORK_LIVENESS: webhook-only mode - liveness tracked via last_webhook_update_at in telegram_webhook.py
 TELEGRAM_LIVENESS_TIMEOUT = int(os.getenv("TELEGRAM_LIVENESS_TIMEOUT", "180"))  # 3 min; do not use 60 or 120
 
 
@@ -98,7 +95,7 @@ async def main():
     # Конфигурация уже проверена в config.py
     # Если переменные окружения не заданы, программа завершится с ошибкой
 
-    instance_id = os.getenv("POLLING_INSTANCE_ID", str(uuid.uuid4()))
+    instance_id = os.getenv("BOT_INSTANCE_ID", str(uuid.uuid4()))
     from datetime import datetime, timezone
     process_start_dt = datetime.now(timezone.utc).isoformat()
     logger.info(
@@ -140,22 +137,8 @@ async def main():
     from app.api import telegram_webhook as tg_webhook_module
     tg_webhook_module.setup(bot, dp)
 
-    # TELEGRAM_NETWORK_LIVENESS: in polling mode only, wrap session to mark alive on successful HTTP response.
-    # In webhook mode, liveness is tracked via last_webhook_update_at in telegram_webhook.py only.
-    if not config.WEBHOOK_URL:
-        _original_make_request = bot.session.make_request
-
-        async def _wrapped_make_request(*args, **kwargs):
-            try:
-                response = await _original_make_request(*args, **kwargs)
-                if response is not None:
-                    global telegram_last_success_monotonic
-                    telegram_last_success_monotonic = time.monotonic()
-                return response
-            except Exception:
-                raise
-
-        bot.session.make_request = _wrapped_make_request
+    # WEBHOOK-ONLY MODE: Liveness is tracked via last_webhook_update_at in telegram_webhook.py
+    # No session wrapper needed - webhook handler updates liveness on every POST request
 
     # Global concurrency limiter for update processing
     MAX_CONCURRENT_UPDATES = int(os.getenv("MAX_CONCURRENT_UPDATES", "20"))
@@ -259,16 +242,8 @@ async def main():
     # Запускаем HTTP сервер для мониторинга и диагностики
     # Endpoint: GET /health - возвращает статус БД и приложения
     # ====================================================================================
-    if not config.WEBHOOK_URL:
-        # In webhook mode, /health is served by FastAPI (app/api/__init__.py)
-        # In polling mode, use the dedicated health server
-        health_server_host = os.getenv("HEALTH_SERVER_HOST", "0.0.0.0")
-        health_server_port = int(os.getenv("HEALTH_SERVER_PORT", "8080"))
-        health_server_task = asyncio.create_task(
-            health_server.health_server_task(host=health_server_host, port=health_server_port, bot=bot)
-        )
-        background_tasks.append(health_server_task)
-        logger.info(f"Health check HTTP server started on http://{health_server_host}:{health_server_port}/health")
+    # In webhook mode, /health is served by FastAPI (app/api/__init__.py)
+    # No separate health server needed
     
     # ====================================================================================
     # SAFE STARTUP GUARD: Фоновая задача повторной инициализации БД
@@ -480,24 +455,17 @@ async def main():
         logger.warning("Crypto payment watcher task skipped (DB not ready)")
     
     # ====================================================================================
-    # TELEGRAM POLLING: Start polling ONLY AFTER DB init attempt finishes
-    # ====================================================================================
-    # ENSURE polling is started ONCE and ONLY from the primary process
-    # Polling starts AFTER all initialization (DB, workers, health checks)
+    # WEBHOOK MODE ONLY: Bot initialization complete
     # ====================================================================================
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")
     else:
         logger.warning("⚠️ Бот запущен в ДЕГРАДИРОВАННОМ режиме (БД недоступна)")
     
-    # 3️⃣ Startup log: polling vs webhook (do not log "polling started" in webhook mode)
     pid = os.getpid()
-    if not config.WEBHOOK_URL:
-        logger.info("Telegram polling started (pid=%s)", pid)
-    else:
-        logger.info("Telegram webhook mode (pid=%s), no polling", pid)
+    logger.info("Telegram webhook mode (pid=%s)", pid)
 
-    # PART 4 — Polling self-check: STAGE startup guard
+    # STAGE startup guard
     if os.getenv("ENVIRONMENT") == "STAGE":
         logger.info("STAGE_STARTUP_GUARD_ACTIVE")
     
@@ -517,7 +485,7 @@ async def main():
     except Exception as e:
         logger.warning(f"Failed to register bot commands: {e}")
     
-    # Log dispatcher configuration before polling
+    # Log dispatcher configuration
     try:
         used_updates = dp.resolve_used_update_types()
         logger.info(f"DISPATCHER_READY updates={used_updates}")
@@ -525,54 +493,14 @@ async def main():
         logger.warning(f"Failed to resolve update types: {e}")
         used_updates = None
 
-    # ====================================================================================
-    # PHASE 1 — TELEGRAM WEBHOOK AUDIT (polling mode only)
-    # In webhook mode we set webhook below; do NOT delete webhook here.
-    # In polling mode, ensure no webhook is active so getUpdates is used.
-    # ====================================================================================
-    if not config.WEBHOOK_URL:
-        try:
-            webhook_info = await bot.get_webhook_info()
-            webhook_audit = {
-                "url": webhook_info.url or "",
-                "has_custom_certificate": getattr(webhook_info, "has_custom_certificate", None),
-                "pending_update_count": getattr(webhook_info, "pending_update_count", None),
-                "ip_address": getattr(webhook_info, "ip_address", None),
-                "last_error_date": getattr(webhook_info, "last_error_date", None),
-                "last_error_message": getattr(webhook_info, "last_error_message", None),
-                "max_connections": getattr(webhook_info, "max_connections", None),
-            }
-            logger.info("WEBHOOK_AUDIT_STATE %s", json.dumps(webhook_audit, default=str))
-
-            if webhook_info.url and webhook_info.url.strip():
-                logger.warning("WEBHOOK_ACTIVE url=%s — deleting before polling", webhook_info.url)
-                await bot.delete_webhook(drop_pending_updates=True)
-                webhook_info_after = await bot.get_webhook_info()
-                webhook_after = {
-                    "url": webhook_info_after.url or "",
-                    "pending_update_count": getattr(webhook_info_after, "pending_update_count", None),
-                }
-                logger.info("WEBHOOK_AFTER_DELETE_STATE %s", json.dumps(webhook_after, default=str))
-                if webhook_info_after.url and webhook_info_after.url.strip():
-                    logger.critical(
-                        "CRITICAL: webhook.url still non-empty after delete: %s — exiting",
-                        webhook_info_after.url
-                    )
-                    sys.exit(1)
-        except Exception as e:
-            logger.exception("Webhook audit failed: %s", e)
-            sys.exit(1)
-
     async def telegram_network_watchdog():
-        """Liveness only via successful Telegram HTTP response. No event-loop tick, no silence-based logic.
-
-        In WEBHOOK mode: tracks last_webhook_update_at from telegram_webhook module (updated on
-        every incoming Telegram request). Telegram pings /telegram/webhook every ~45s even with
-        no user activity, so silence > 180s is a real sign of broken connectivity.
-
-        In POLLING mode: tracks telegram_last_success_monotonic (updated on every make_request).
-
-        SIMPLIFICATION: Passive mode — log CRITICAL instead of os._exit(1) to avoid crash loop.
+        """Webhook-only liveness watchdog.
+        
+        Tracks last_webhook_update_at from telegram_webhook module (updated on every incoming
+        Telegram request). Telegram pings /telegram/webhook every ~45s even with no user activity,
+        so silence > 180s is a real sign of broken connectivity.
+        
+        Passive mode — log CRITICAL instead of os._exit(1) to avoid crash loop.
         Grace period 60s after startup before first check.
         """
         if TELEGRAM_LIVENESS_TIMEOUT <= 0:
@@ -585,11 +513,8 @@ async def main():
 
         while True:
             await asyncio.sleep(10)
-            if config.WEBHOOK_URL:
-                from app.api import telegram_webhook as _tw
-                last_alive = _tw.last_webhook_update_at
-            else:
-                last_alive = telegram_last_success_monotonic
+            from app.api import telegram_webhook as _tw
+            last_alive = _tw.last_webhook_update_at
             silence = time.monotonic() - last_alive
             if silence > TELEGRAM_LIVENESS_TIMEOUT:
                 logger.critical(
@@ -601,20 +526,26 @@ async def main():
             # else: no-op, continue loop
 
     try:
-        if config.WEBHOOK_URL:
-            # ── WEBHOOK MODE ──────────────────────────────────────
-            logger.info("STARTING_WEBHOOK_MODE url=%s port=%s",
-                        config.WEBHOOK_URL, config.WEBHOOK_PORT)
+        # ── WEBHOOK MODE ONLY ──────────────────────────────────────
+        logger.info("STARTING_WEBHOOK_MODE url=%s port=%s",
+                    config.WEBHOOK_URL, config.WEBHOOK_PORT)
 
-            # Register webhook with Telegram
+        # Register webhook with Telegram (with error logging)
+        try:
             await bot.set_webhook(
                 url=config.WEBHOOK_URL,
                 secret_token=config.WEBHOOK_SECRET,
                 drop_pending_updates=True,
                 allowed_updates=used_updates if used_updates else None,
             )
+            logger.info("WEBHOOK_SET_SUCCESS url=%s", config.WEBHOOK_URL)
+        except Exception as e:
+            logger.error("WEBHOOK_SET_FAILED url=%s error=%s", config.WEBHOOK_URL, e)
+            logger.exception("Failed to set webhook - full traceback:")
+            sys.exit(1)
 
-            # Verify webhook was registered correctly
+        # Verify webhook was registered correctly
+        try:
             wh_info = await bot.get_webhook_info()
             if wh_info.url != config.WEBHOOK_URL:
                 logger.critical(
@@ -623,15 +554,30 @@ async def main():
                 )
                 sys.exit(1)
             logger.info("WEBHOOK_VERIFIED url=%s", wh_info.url)
+            
+            # Log webhook info for diagnostics
+            webhook_info_dict = {
+                "url": wh_info.url or "",
+                "has_custom_certificate": getattr(wh_info, "has_custom_certificate", None),
+                "pending_update_count": getattr(wh_info, "pending_update_count", None),
+                "last_error_date": getattr(wh_info, "last_error_date", None),
+                "last_error_message": getattr(wh_info, "last_error_message", None),
+            }
+            logger.info("WEBHOOK_INFO %s", json.dumps(webhook_info_dict, default=str))
+        except Exception as e:
+            logger.error("WEBHOOK_VERIFICATION_FAILED error=%s", e)
+            logger.exception("Failed to verify webhook - full traceback:")
+            sys.exit(1)
 
-            # Network watchdog works in both modes
-            network_watchdog_task = asyncio.create_task(
-                telegram_network_watchdog(),
-                name="telegram_network_watchdog",
-            )
-            background_tasks.append(network_watchdog_task)
+        # Start network watchdog
+        network_watchdog_task = asyncio.create_task(
+            telegram_network_watchdog(),
+            name="telegram_network_watchdog",
+        )
+        background_tasks.append(network_watchdog_task)
 
-            # Start uvicorn serving FastAPI
+        # Start uvicorn serving FastAPI
+        try:
             import uvicorn
             from app.api import app as fastapi_app
 
@@ -647,62 +593,23 @@ async def main():
             )
             background_tasks.append(webhook_server_task)
             logger.info("UVICORN_STARTED host=0.0.0.0 port=%s", config.WEBHOOK_PORT)
+        except Exception as e:
+            logger.error("UVICORN_START_FAILED port=%s error=%s", config.WEBHOOK_PORT, e)
+            logger.exception("Failed to start uvicorn - full traceback:")
+            sys.exit(1)
 
-            # Keep process alive — wait for shutdown signal
-            await asyncio.gather(*background_tasks, return_exceptions=True)
-
-        else:
-            # ── POLLING MODE (local development) ──────────────────
-            logger.info("STARTING_POLLING_MODE")
-            
-            async def start_polling():
-                await bot.delete_webhook(drop_pending_updates=True)
-                logger.info("Webhook deleted before polling start")
-                log_event(
-                    logger,
-                    component="polling",
-                    operation="polling_start",
-                    outcome="success",
-                    correlation_id=instance_id,
-                )
-                await dp.start_polling(
-                    bot,
-                    allowed_updates=used_updates if used_updates else None,
-                    polling_timeout=POLLING_REQUEST_TIMEOUT,
-                    handle_signals=False,
-                    close_bot_session=True,
-                )
-
-            network_watchdog_task = asyncio.create_task(
-                telegram_network_watchdog(),
-                name="telegram_network_watchdog",
-            )
-            background_tasks.append(network_watchdog_task)
-
-            polling_task = asyncio.create_task(
-                start_polling(),
-                name="polling_task",
-            )
-            background_tasks.append(polling_task)
-
-            await polling_task
+        # Keep process alive — wait for shutdown signal
+        await asyncio.gather(*background_tasks, return_exceptions=True)
     except SystemExit:
         raise
     finally:
         log_event(logger, component="shutdown", operation="shutdown_start", outcome="success")
-        # Delete webhook if in webhook mode
-        if config.WEBHOOK_URL:
-            try:
-                await bot.delete_webhook()
-                logger.info("WEBHOOK_DELETED")
-            except Exception as e:
-                logger.warning("webhook_delete_failed error=%s", e)
-        # Stop polling cleanly
+        # Delete webhook on shutdown
         try:
-            if hasattr(dp, "stop_polling"):
-                await dp.stop_polling()
+            await bot.delete_webhook()
+            logger.info("WEBHOOK_DELETED")
         except Exception as e:
-            logger.debug("stop_polling: %s", e)
+            logger.warning("webhook_delete_failed error=%s", e)
         
         # Cancel and await all background tasks gracefully
         log_event(
