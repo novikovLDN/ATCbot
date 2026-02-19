@@ -340,6 +340,8 @@ async def crypto_payment_watcher_task(bot: Bot):
         
         items_processed = 0
         outcome = "success"
+        iteration_error_type = None
+        should_exit_loop = False
         
         try:
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
@@ -427,67 +429,56 @@ async def crypto_payment_watcher_task(bot: Bot):
                 # Ignore system state errors - continue with normal flow
                 pass
             
-            # Process crypto payments
-            async with _worker_lock:
-                items_processed, outcome = await check_crypto_payments(bot)
-            await cleanup_expired_purchases()
+            # H1 fix: Wrap iteration body with timeout
+            async def _run_iteration():
+                # Process crypto payments
+                async with _worker_lock:
+                    items, result = await check_crypto_payments(bot)
+                await cleanup_expired_purchases()
+                return items, result
             
-            # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = None
-            if outcome == "failed":
-                error_type = "infra_error"  # Default, will be refined by classify_error if exception caught
-            
-            log_worker_iteration_end(
-                worker_name="crypto_payment_watcher",
-                outcome=outcome,
-                items_processed=items_processed,
-                error_type=error_type,
-                duration_ms=duration_ms
-            )
+            try:
+                items_processed, outcome = await asyncio.wait_for(_run_iteration(), timeout=120.0)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "WORKER_TIMEOUT worker=crypto_payment_watcher exceeded 120s — iteration cancelled"
+                )
+                items_processed = 0
+                outcome = "timeout"
+                iteration_error_type = "timeout"
+            except Exception as e:
+                logger.exception(f"crypto_payment_watcher: Unexpected error in iteration: {type(e).__name__}: {str(e)[:100]}")
+                items_processed = 0
+                outcome = "failed"
+                iteration_error_type = classify_error(e)
             
         except asyncio.CancelledError:
-            log_event(
-                logger,
-                component="worker",
-                operation="crypto_payment_watcher_iteration",
-                correlation_id=str(iteration_number),
-                outcome="cancelled",
-            )
-            break
+            logger.info("Crypto payment watcher task cancelled")
+            outcome = "cancelled"
+            should_exit_loop = True
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"crypto_payment_watcher: Database temporarily unavailable: {type(e).__name__}: {str(e)[:100]}")
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            log_worker_iteration_end(
-                worker_name="crypto_payment_watcher",
-                outcome="degraded",
-                items_processed=0,
-                error_type="infra_error",
-                duration_ms=duration_ms
-            )
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            # Worker always sleeps before next iteration, even on failure
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+            outcome = "degraded"
+            iteration_error_type = "infra_error"
         except Exception as e:
             logger.error(f"crypto_payment_watcher: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
             logger.debug("crypto_payment_watcher: Full traceback for task loop", exc_info=True)
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+            outcome = "failed"
+            iteration_error_type = classify_error(e)
+        finally:
+            # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = classify_error(e)
+            error_type = iteration_error_type if 'iteration_error_type' in locals() else (None if outcome == "success" else "infra_error")
             log_worker_iteration_end(
                 worker_name="crypto_payment_watcher",
-                outcome="failed",
-                items_processed=0,
+                outcome=outcome,
+                items_processed=items_processed if 'items_processed' in locals() else 0,
                 error_type=error_type,
                 duration_ms=duration_ms
             )
-            
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            # Worker always sleeps before next iteration, even on failure
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+            if outcome not in ("success", "cancelled", "skipped"):
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+        
+        if should_exit_loop:
+            break

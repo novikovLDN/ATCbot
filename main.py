@@ -192,21 +192,24 @@ async def main():
         # Продолжаем запуск бота в деградированном режиме
 
     # ADVISORY_LOCK_FIX: single-instance guard via PostgreSQL (1s max wait to avoid startup delay).
+    # H4 fix: Use try/finally to ensure connection is released on exception
     global instance_lock_conn
+    instance_lock_conn = None
     if database.DB_READY:
         pool = await database.get_pool()
         if not pool:
             logger.critical("DB pool missing; cannot acquire advisory lock. Exiting.")
             sys.exit(1)
-        instance_lock_conn = await pool.acquire()
         try:
+            instance_lock_conn = await pool.acquire()
             await instance_lock_conn.execute("SET lock_timeout = '1000'")
             await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
             logger.info("Advisory lock acquired")
         except Exception as e:
-            await pool.release(instance_lock_conn)
-            instance_lock_conn = None
             logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
+            if instance_lock_conn:
+                await pool.release(instance_lock_conn)
+                instance_lock_conn = None
     else:
         logger.warning("DB not ready; skipping advisory lock (single-instance guard disabled)")
     
@@ -498,7 +501,7 @@ async def main():
         Telegram request). Telegram pings /telegram/webhook every ~45s even with no user activity,
         so silence > 180s is a real sign of broken connectivity.
         
-        Passive mode — log CRITICAL instead of os._exit(1) to avoid crash loop.
+        C3 fix: Re-enabled os._exit(1) now that auto_renewal hang is fixed.
         Grace period 60s after startup before first check.
         """
         if TELEGRAM_LIVENESS_TIMEOUT <= 0:
@@ -509,18 +512,26 @@ async def main():
         TELEGRAM_LIVENESS_GRACE_PERIOD = 60
         await asyncio.sleep(TELEGRAM_LIVENESS_GRACE_PERIOD)
 
+        # M2 fix: Check if any updates received during grace period
+        from app.api import telegram_webhook as _tw
+        initial_time = _tw.last_webhook_update_at
+        if time.monotonic() - initial_time < 0.1:  # No updates received (time didn't advance)
+            logger.warning(
+                "WATCHDOG_GRACE_END: no webhook updates received in first 60s — "
+                "bot may have no traffic or webhook misconfigured"
+            )
+
         while True:
-            await asyncio.sleep(10)
-            from app.api import telegram_webhook as _tw
+            await asyncio.sleep(30)  # Check every 30s (was 10s, less frequent is fine)
             last_alive = _tw.last_webhook_update_at
-            silence = time.monotonic() - last_alive
-            if silence > TELEGRAM_LIVENESS_TIMEOUT:
+            elapsed = time.monotonic() - last_alive
+            if elapsed > TELEGRAM_LIVENESS_TIMEOUT:
                 logger.critical(
-                    "LIVENESS_CHECK_FAILED — would exit (watchdog passive) silence=%.0fs timeout=%s",
-                    silence,
+                    "LIVENESS_CHECK_FAILED elapsed=%.1fs threshold=%ss — exiting",
+                    elapsed,
                     TELEGRAM_LIVENESS_TIMEOUT,
                 )
-                # Passive: do NOT call os._exit(1); allows diagnosis without restart loop
+                os._exit(1)  # C3 fix: Re-enabled — root cause (auto_renewal hang) is fixed
             # else: no-op, continue loop
 
     try:

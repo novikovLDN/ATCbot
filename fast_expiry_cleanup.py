@@ -103,6 +103,7 @@ async def fast_expiry_cleanup_task():
         
         items_processed = 0
         outcome = "success"
+        iteration_error_type = None
         
         try:
             await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
@@ -192,22 +193,24 @@ async def fast_expiry_cleanup_task():
             # PostgreSQL TIMESTAMP хранит без timezone, поэтому используем naive datetime
             now_utc = datetime.now(timezone.utc)
             
-            # Event loop protection: prevent overlapping iterations
-            async with _worker_lock:
-                # Получаем истёкшие подписки с активными UUID
-                # Используем expires_at (в БД) - это и есть subscription_end
-                # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Each iteration is stateless, may be safely skipped
-                # STEP 1.3 - EXTERNAL DEPENDENCIES POLICY: DB unavailable → iteration skipped, no error raised
-                try:
-                    pool = await database.get_pool()
-                except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
-                    logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable (pool acquisition failed): {type(e).__name__}: {str(e)[:100]}")
-                    continue
-                except Exception as e:
-                    logger.error(f"fast_expiry_cleanup: Unexpected error getting DB pool: {type(e).__name__}: {str(e)[:100]}")
-                    continue
+            # H1 fix: Wrap iteration body with timeout
+            async def _run_iteration_body():
+                # Event loop protection: prevent overlapping iterations
+                async with _worker_lock:
+                    # Получаем истёкшие подписки с активными UUID
+                    # Используем expires_at (в БД) - это и есть subscription_end
+                    # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Each iteration is stateless, may be safely skipped
+                    # STEP 1.3 - EXTERNAL DEPENDENCIES POLICY: DB unavailable → iteration skipped, no error raised
+                    try:
+                        pool = await database.get_pool()
+                    except (asyncpg.PostgresError, asyncio.TimeoutError, RuntimeError) as e:
+                        logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable (pool acquisition failed): {type(e).__name__}: {str(e)[:100]}")
+                        return
+                    except Exception as e:
+                        logger.error(f"fast_expiry_cleanup: Unexpected error getting DB pool: {type(e).__name__}: {str(e)[:100]}")
+                        return
 
-                try:
+                    try:
                     last_seen_id = 0
                     while True:
                         # POOL_STABILITY: Fetch batch with short-lived conn; release immediately (no HTTP inside).
@@ -423,80 +426,51 @@ async def fast_expiry_cleanup_task():
                         await asyncio.sleep(0)
 
                     # STEP 2.3 — OBSERVABILITY: Log once per worker cycle (after all batches)
-                    duration_ms = (time.time() - iteration_start_time) * 1000
-                    log_worker_iteration_end(
-                        worker_name="fast_expiry_cleanup",
-                        outcome=outcome,
-                        items_processed=items_processed,
-                        duration_ms=duration_ms
-                    )
+                    # Note: outcome and items_processed set inside _run_iteration_body
                 except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
                     # RESILIENCE FIX: Temporary DB failures are logged as WARNING, not ERROR
                     logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable in main loop: {type(e).__name__}: {str(e)[:100]}")
-                    
-                    # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
-                    duration_ms = (time.time() - iteration_start_time) * 1000
-                    log_worker_iteration_end(
-                        worker_name="fast_expiry_cleanup",
-                        outcome="degraded",
-                        items_processed=items_processed,
-                        error_type="infra_error",
-                        duration_ms=duration_ms
-                    )
+                    outcome = "degraded"
                 except Exception as e:
                     logger.error(f"fast_expiry_cleanup: Unexpected error in main loop: {type(e).__name__}: {str(e)[:100]}")
                     logger.debug("fast_expiry_cleanup: Full traceback in main loop", exc_info=True)
-                    
-                    # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
-                    duration_ms = (time.time() - iteration_start_time) * 1000
-                    error_type = classify_error(e)
-                    log_worker_iteration_end(
-                        worker_name="fast_expiry_cleanup",
-                        outcome="failed",
-                        items_processed=items_processed,
-                        error_type=error_type,
-                        duration_ms=duration_ms
-                    )
+                    outcome = "failed"
+            
+            # H1 fix: Execute iteration body with timeout wrapper
+            try:
+                await asyncio.wait_for(_run_iteration_body(), timeout=120.0)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "WORKER_TIMEOUT worker=fast_expiry_cleanup exceeded 120s — iteration cancelled"
+                )
+                outcome = "timeout"
+                iteration_error_type = "timeout"
+            except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
+                # RESILIENCE FIX: Temporary DB failures don't crash the task
+                logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable in task loop: {type(e).__name__}: {str(e)[:100]}")
+                outcome = "degraded"
+                iteration_error_type = "infra_error"
+            except Exception as e:
+                logger.error(f"fast_expiry_cleanup: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
+                logger.debug("fast_expiry_cleanup: Full traceback for task loop", exc_info=True)
+                outcome = "failed"
+                iteration_error_type = classify_error(e)
+            finally:
+                # H2 fix: ITERATION_END always fires in finally block
+                duration_ms = (time.time() - iteration_start_time) * 1000
+                log_worker_iteration_end(
+                    worker_name="fast_expiry_cleanup",
+                    outcome=outcome,
+                    items_processed=items_processed,
+                    error_type=iteration_error_type if 'iteration_error_type' in locals() else None,
+                    duration_ms=duration_ms
+                )
+                if outcome not in ("success", "cancelled", "skipped"):
+                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
             
         except asyncio.CancelledError:
             logger.info("Fast expiry cleanup task cancelled")
             raise
-        except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
-            # RESILIENCE FIX: Temporary DB failures don't crash the task
-            logger.warning(f"fast_expiry_cleanup: Database temporarily unavailable in task loop: {type(e).__name__}: {str(e)[:100]}")
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            log_worker_iteration_end(
-                worker_name="fast_expiry_cleanup",
-                outcome="degraded",
-                items_processed=0,
-                error_type="infra_error",
-                duration_ms=duration_ms
-            )
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            # Worker always sleeps before next iteration, even on failure
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-        except Exception as e:
-            logger.error(f"fast_expiry_cleanup: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
-            logger.debug("fast_expiry_cleanup: Full traceback for task loop", exc_info=True)
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = classify_error(e)
-            log_worker_iteration_end(
-                worker_name="fast_expiry_cleanup",
-                outcome="failed",
-                items_processed=0,
-                error_type=error_type,
-                duration_ms=duration_ms
-            )
-            
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            # Worker always sleeps before next iteration, even on failure
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
 
 
 

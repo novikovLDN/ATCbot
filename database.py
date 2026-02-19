@@ -250,7 +250,7 @@ def _get_pool_config() -> dict:
     """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation."""
     return {
         "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "2")),
-        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "15")),
+        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "25")),  # Increased from 15 to handle peak load (6 workers + 20 webhook handlers)
         "max_inactive_connection_lifetime": 300,
         "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "10")),
         "command_timeout": int(os.getenv("DB_POOL_COMMAND_TIMEOUT", "30")),

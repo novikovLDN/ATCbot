@@ -588,6 +588,10 @@ async def run_trial_scheduler(bot: Bot):
             iteration_number=iteration_number
         )
         
+        iteration_outcome = "success"
+        iteration_error_type = None
+        should_exit_loop = False
+        
         try:
             # STEP 6 — F5: BACKGROUND WORKER SAFETY
             # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
@@ -650,6 +654,7 @@ async def run_trial_scheduler(bot: Bot):
                         f"[UNAVAILABLE] system_state — skipping iteration in trial_notifications scheduler "
                         f"(database={system_state.database.status.value})"
                     )
+                    iteration_outcome = "skipped"
                     await asyncio.sleep(300)  # Sleep before next check
                     continue
                 
@@ -663,62 +668,52 @@ async def run_trial_scheduler(bot: Bot):
                 # Ignore system state errors - continue with normal flow
                 pass
             
-            # Обрабатываем уведомления
-            await process_trial_notifications(bot)
+            # H1 fix: Wrap iteration body with timeout
+            async def _run_iteration():
+                # Обрабатываем уведомления
+                await process_trial_notifications(bot)
+                # Завершаем истёкшие trial-подписки
+                await expire_trial_subscriptions(bot)
             
-            # Завершаем истёкшие trial-подписки
-            await expire_trial_subscriptions(bot)
-            
-            # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end (success)
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            log_worker_iteration_end(
-                worker_name="trial_notifications",
-                outcome="success",
-                items_processed=0,  # Trial notifications don't track items per iteration
-                duration_ms=duration_ms
-            )
-            logger.info("[WORKER_DURATION] worker=trial_notifications duration=%.3fs", duration_ms / 1000.0)
+            try:
+                await asyncio.wait_for(_run_iteration(), timeout=120.0)
+                iteration_outcome = "success"
+            except asyncio.TimeoutError:
+                logger.error(
+                    "WORKER_TIMEOUT worker=trial_notifications exceeded 120s — iteration cancelled"
+                )
+                iteration_outcome = "timeout"
+                iteration_error_type = "timeout"
             
         except asyncio.CancelledError:
-            log_event(
-                logger,
-                component="worker",
-                operation="trial_notifications_iteration",
-                outcome="cancelled",
-            )
-            break
+            logger.info("Trial notifications task cancelled")
+            iteration_outcome = "cancelled"
+            should_exit_loop = True
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"trial_notifications: Database temporarily unavailable in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            log_worker_iteration_end(
-                worker_name="trial_notifications",
-                outcome="degraded",
-                items_processed=0,
-                error_type="infra_error",
-                duration_ms=duration_ms
-            )
-            
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-            continue  # Skip normal sleep after failure
+            iteration_outcome = "degraded"
+            iteration_error_type = "infra_error"
         except Exception as e:
             logger.error(f"trial_notifications: Unexpected error in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
             logger.debug("trial_notifications: Full traceback for scheduler loop", exc_info=True)
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+            iteration_outcome = "failed"
+            iteration_error_type = classify_error(e)
+        finally:
+            # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = classify_error(e)
             log_worker_iteration_end(
                 worker_name="trial_notifications",
-                outcome="failed",
+                outcome=iteration_outcome,
                 items_processed=0,
-                error_type=error_type,
+                error_type=iteration_error_type,
                 duration_ms=duration_ms
             )
+            if iteration_outcome not in ("success", "cancelled", "skipped"):
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+        
+        if should_exit_loop:
+            break
             
             # STEP 3 — PART B: WORKER LOOP SAFETY
             # Minimum safe sleep on failure to prevent tight retry storms
