@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import sys
-import time
 import uuid
 
 # Configure logging FIRST (before any other imports that may log)
@@ -86,10 +85,6 @@ ADVISORY_LOCK_KEY = 987654321
 # Advisory lock connection (held for process lifetime); released in finally via pool.release().
 instance_lock_conn = None
 
-# Network liveness timeout: watchdog checks if Telegram webhook requests are received
-# Liveness is tracked via last_webhook_update_at in telegram_webhook.py
-TELEGRAM_LIVENESS_TIMEOUT = int(os.getenv("TELEGRAM_LIVENESS_TIMEOUT", "180"))  # 3 min
-
 
 async def main():
     # Конфигурация уже проверена в config.py
@@ -136,9 +131,6 @@ async def main():
     # Pass bot and dp to webhook handler
     from app.api import telegram_webhook as tg_webhook_module
     tg_webhook_module.setup(bot, dp)
-
-    # WEBHOOK-ONLY MODE: Liveness is tracked via last_webhook_update_at in telegram_webhook.py
-    # No session wrapper needed - webhook handler updates liveness on every POST request
 
     # Global concurrency limiter for update processing
     MAX_CONCURRENT_UPDATES = int(os.getenv("MAX_CONCURRENT_UPDATES", "20"))
@@ -494,46 +486,6 @@ async def main():
         logger.warning(f"Failed to resolve update types: {e}")
         used_updates = None
 
-    async def telegram_network_watchdog():
-        """Webhook-only liveness watchdog.
-        
-        Tracks last_webhook_update_at from telegram_webhook module (updated on every incoming
-        Telegram request). Telegram pings /telegram/webhook every ~45s even with no user activity,
-        so silence > 180s is a real sign of broken connectivity.
-        
-        C3 fix: Re-enabled os._exit(1) now that auto_renewal hang is fixed.
-        Grace period 60s after startup before first check.
-        """
-        if TELEGRAM_LIVENESS_TIMEOUT <= 0:
-            logger.info("TELEGRAM_LIVENESS_TIMEOUT=0 — watchdog disabled")
-            return
-
-        # Grace period so startup/health checks don't trigger false positive
-        TELEGRAM_LIVENESS_GRACE_PERIOD = 60
-        await asyncio.sleep(TELEGRAM_LIVENESS_GRACE_PERIOD)
-
-        # M2 fix: Check if any updates received during grace period
-        from app.api import telegram_webhook as _tw
-        initial_time = _tw.last_webhook_update_at
-        if time.monotonic() - initial_time < 0.1:  # No updates received (time didn't advance)
-            logger.warning(
-                "WATCHDOG_GRACE_END: no webhook updates received in first 60s — "
-                "bot may have no traffic or webhook misconfigured"
-            )
-
-        while True:
-            await asyncio.sleep(30)  # Check every 30s (was 10s, less frequent is fine)
-            last_alive = _tw.last_webhook_update_at
-            elapsed = time.monotonic() - last_alive
-            if elapsed > TELEGRAM_LIVENESS_TIMEOUT:
-                logger.critical(
-                    "LIVENESS_CHECK_FAILED elapsed=%.1fs threshold=%ss — exiting",
-                    elapsed,
-                    TELEGRAM_LIVENESS_TIMEOUT,
-                )
-                os._exit(1)  # C3 fix: Re-enabled — root cause (auto_renewal hang) is fixed
-            # else: no-op, continue loop
-
     try:
         # Start webhook mode
         logger.info("STARTING_WEBHOOK_MODE url=%s port=%s",
@@ -577,13 +529,6 @@ async def main():
             logger.error("WEBHOOK_VERIFICATION_FAILED error=%s", e)
             logger.exception("Failed to verify webhook - full traceback:")
             sys.exit(1)
-
-        # Start network watchdog
-        network_watchdog_task = asyncio.create_task(
-            telegram_network_watchdog(),
-            name="telegram_network_watchdog",
-        )
-        background_tasks.append(network_watchdog_task)
 
         # Start uvicorn serving FastAPI
         try:
