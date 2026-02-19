@@ -26,8 +26,6 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 import config
 from app.utils.retry import retry_async
-from app.core.metrics import get_metrics, timer
-from app.core.cost_model import get_cost_model, CostCenter
 
 logger = logging.getLogger(__name__)
 
@@ -194,15 +192,6 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-    # STEP 6 — F2: CIRCUIT BREAKER LITE
-    # Check circuit breaker before making VPN API call
-    from app.core.circuit_breaker import get_circuit_breaker
-    vpn_breaker = get_circuit_breaker("vpn_api")
-    if vpn_breaker.should_skip():
-        # Circuit breaker is OPEN - skip operation
-        # This is logged by should_skip() (throttled)
-        raise VPNAPIError("VPN API circuit breaker is OPEN")
-    
     assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
     assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
     expiry_ms = int(subscription_end.timestamp() * 1000)
@@ -261,113 +250,95 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             response.raise_for_status()
             return response
     
-    # C1.1 - METRICS: Measure VPN API latency
-    with timer("vpn_api_latency_ms"):
+    try:
+        response = await retry_async(
+            _make_request,
+            retries=MAX_RETRIES,
+            base_delay=RETRY_DELAY,
+            max_delay=5.0,
+            retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
+        )
+        
+        # STEP 4 — PART D: EXTERNAL DEPENDENCY SANDBOXING
+        # Parse JSON response (API returns uuid and vless_link)
+        # Treat all external responses as untrusted and possibly malformed
         try:
-            response = await retry_async(
-                _make_request,
-                retries=MAX_RETRIES,
-                base_delay=RETRY_DELAY,
-                max_delay=5.0,
-                retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
-            )
-            
-            # C1.1 - METRICS: Track retries
-            metrics = get_metrics()
-            metrics.increment_counter("retries_total", value=MAX_RETRIES)
-            
-            # D2.1 - COST CENTERS: Track VPN API call cost
-            cost_model = get_cost_model()
-            cost_model.record_cost(CostCenter.VPN_API_CALLS, cost_units=1.0)
-            cost_model.record_cost(CostCenter.EXTERNAL_API_CALLS, cost_units=1.0)
-            if MAX_RETRIES > 0:
-                cost_model.record_cost(CostCenter.RETRIES, cost_units=MAX_RETRIES)
-            
-            # STEP 4 — PART D: EXTERNAL DEPENDENCY SANDBOXING
-            # Parse JSON response (API returns uuid and vless_link)
-            # Treat all external responses as untrusted and possibly malformed
-            try:
-                data = response.json()
-            except Exception as e:
-                error_msg = f"Invalid JSON response: {response.text[:200]}"
-                logger.error(f"vpn_api add_user: INVALID_JSON [{error_msg}]")
-                raise InvalidResponseError(error_msg) from e
-            
-            # STEP 4 — PART D: EXTERNAL DEPENDENCY SANDBOXING
-            # Validate response schema - only allow expected fields
-            if not isinstance(data, dict):
-                error_msg = f"Invalid response type: expected dict, got {type(data)}"
-                logger.error(f"vpn_api add_user: INVALID_RESPONSE_TYPE [{error_msg}]")
-                raise InvalidResponseError(error_msg)
-            
-            # Strict schema: API must return uuid and vless_link (no local fallback)
-            required_fields = {"uuid", "vless_link"}
-            if not required_fields.issubset(data.keys()):
-                raise InvalidResponseError(
-                    f"Invalid API response. Expected fields: {required_fields}, got: {set(data.keys())}"
-                )
-
-            returned_uuid = data.get("uuid")
-            vless_link = data.get("vless_link")
-
-            if not returned_uuid:
-                error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
-                logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
-                raise InvalidResponseError(error_msg)
-
-            returned_uuid = str(returned_uuid).strip()
-            # Xray is source of truth: always trust returned UUID (no mismatch assertion)
-            logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={returned_uuid}")
-
-            if not vless_link:
-                raise InvalidResponseError(
-                    "Xray API did not return vless_link. "
-                    "Local fallback generation is forbidden by architecture."
-                )
-
-            vless_url = vless_link
-
-            uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
-            logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
-            logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
-
-            try:
-                import database
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(
-                        database._log_vpn_lifecycle_audit_async(
-                            action="vpn_add_user",
-                            telegram_id=0,
-                            uuid=returned_uuid,
-                            source=None,
-                            result="success",
-                            details="UUID from Xray (source of truth)"
-                        )
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to log VPN add_user audit (non-blocking): {e}")
-
-            return {
-                "uuid": returned_uuid,
-                "vless_url": vless_url
-            }
-            
-        except (AuthError, InvalidResponseError) as e:
-            # Domain exceptions should NOT be retried - raise immediately
-            # STEP 6 — F2: CIRCUIT BREAKER LITE
-            # Don't record failure for domain errors (not transient)
-            logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=domain_error, environment={config.APP_ENV}, error={str(e)[:100]}]")
-            raise
+            data = response.json()
         except Exception as e:
-            # All other exceptions are wrapped by retry_async or are unexpected
-            # STEP 6 — F2: CIRCUIT BREAKER LITE
-            # Record failure for transient errors
-            vpn_breaker.record_failure()
-            error_msg = f"Failed to create VLESS user: {e}"
-            logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
-            raise VPNAPIError(error_msg) from e
+            error_msg = f"Invalid JSON response: {response.text[:200]}"
+            logger.error(f"vpn_api add_user: INVALID_JSON [{error_msg}]")
+            raise InvalidResponseError(error_msg) from e
+        
+        # STEP 4 — PART D: EXTERNAL DEPENDENCY SANDBOXING
+        # Validate response schema - only allow expected fields
+        if not isinstance(data, dict):
+            error_msg = f"Invalid response type: expected dict, got {type(data)}"
+            logger.error(f"vpn_api add_user: INVALID_RESPONSE_TYPE [{error_msg}]")
+            raise InvalidResponseError(error_msg)
+        
+        # Strict schema: API must return uuid and vless_link (no local fallback)
+        required_fields = {"uuid", "vless_link"}
+        if not required_fields.issubset(data.keys()):
+            raise InvalidResponseError(
+                f"Invalid API response. Expected fields: {required_fields}, got: {set(data.keys())}"
+            )
+
+        returned_uuid = data.get("uuid")
+        vless_link = data.get("vless_link")
+
+        if not returned_uuid:
+            error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
+            logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
+            raise InvalidResponseError(error_msg)
+
+        returned_uuid = str(returned_uuid).strip()
+        # Xray is source of truth: always trust returned UUID (no mismatch assertion)
+        logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={returned_uuid}")
+
+        if not vless_link:
+            raise InvalidResponseError(
+                "Xray API did not return vless_link. "
+                "Local fallback generation is forbidden by architecture."
+            )
+
+        vless_url = vless_link
+
+        uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
+        logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
+        logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
+
+        try:
+            import database
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(
+                    database._log_vpn_lifecycle_audit_async(
+                        action="vpn_add_user",
+                        telegram_id=0,
+                        uuid=returned_uuid,
+                        source=None,
+                        result="success",
+                        details="UUID from Xray (source of truth)"
+                    )
+                )
+        except Exception as e:
+            logger.warning(f"Failed to log VPN add_user audit (non-blocking): {e}")
+
+        return {
+            "uuid": returned_uuid,
+            "vless_url": vless_url
+        }
+        
+    except (AuthError, InvalidResponseError) as e:
+        # Domain exceptions should NOT be retried - raise immediately
+        logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=domain_error, environment={config.APP_ENV}, error={str(e)[:100]}]")
+        raise
+    except Exception as e:
+        # All other exceptions are wrapped by retry_async or are unexpected
+        error_msg = f"Failed to create VLESS user: {e}"
+        logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
+        raise VPNAPIError(error_msg) from e
 
 
 async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
@@ -483,11 +454,6 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
         f"expiry_timestamp_ms={expiry_ms}, subscription_end={subscription_end.isoformat()}]"
     )
     
-    from app.core.circuit_breaker import get_circuit_breaker
-    vpn_breaker = get_circuit_breaker("vpn_api")
-    if vpn_breaker.should_skip():
-        raise VPNAPIError("VPN API circuit breaker is OPEN")
-    
     try:
         async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=headers, json=json_body)
@@ -501,7 +467,6 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     except (AuthError, InvalidResponseError):
         raise
     except Exception as e:
-        vpn_breaker.record_failure()
         raise VPNAPIError(f"Failed to update VLESS user expiry: {e}") from e
 
 
@@ -654,66 +619,53 @@ async def remove_vless_user(uuid: str) -> None:
             response.raise_for_status()
             return response
     
-    # C1.1 - METRICS: Measure VPN API latency
-    with timer("vpn_api_latency_ms"):
-        try:
-            response = await retry_async(
-                _make_request,
-                retries=MAX_RETRIES,
-                base_delay=RETRY_DELAY,
-                max_delay=5.0,
-                retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
-            )
-            
-            # C1.1 - METRICS: Track retries
-            metrics = get_metrics()
-            metrics.increment_counter("retries_total", value=MAX_RETRIES)
-            
-            # D2.1 - COST CENTERS: Track VPN API call cost
-            cost_model = get_cost_model()
-            cost_model.record_cost(CostCenter.VPN_API_CALLS, cost_units=1.0)
-            cost_model.record_cost(CostCenter.EXTERNAL_API_CALLS, cost_units=1.0)
-            if MAX_RETRIES > 0:
-                cost_model.record_cost(CostCenter.RETRIES, cost_units=MAX_RETRIES)
-            
-            # If we got here and response is 404, it was handled in _make_request
-            if response.status_code == 404:
-                logger.info(f"XRAY_CALL_SUCCESS [operation=remove_user, uuid={uuid_preview}, environment={config.APP_ENV}, status=idempotent_404]")
-                return
-            
-            logger.info(f"XRAY_CALL_SUCCESS [operation=remove_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
-            
-            # VPN AUDIT LOG: Log successful UUID removal (non-blocking)
-            # Note: Full audit log will be written by caller with correct telegram_id and source
-            try:
-                import database
-                import asyncio
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(
-                        database._log_vpn_lifecycle_audit_async(
-                            action="vpn_remove_user",
-                            telegram_id=0,  # Will be updated by caller
-                            uuid=uuid_clean,
-                            source=None,  # Will be updated by caller
-                            result="success",
-                            details="UUID removed via VPN API"
-                        )
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to log VPN remove_user audit (non-blocking): {e}")
-            
+    try:
+        response = await retry_async(
+            _make_request,
+            retries=MAX_RETRIES,
+            base_delay=RETRY_DELAY,
+            max_delay=5.0,
+            retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
+        )
+        
+        # If we got here and response is 404, it was handled in _make_request
+        if response.status_code == 404:
+            logger.info(f"XRAY_CALL_SUCCESS [operation=remove_user, uuid={uuid_preview}, environment={config.APP_ENV}, status=idempotent_404]")
             return
-            
-        except (AuthError, ValueError) as e:
-            # Domain exceptions should NOT be retried - raise immediately
-            logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=domain_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={str(e)[:100]}]")
-            raise
+        
+        logger.info(f"XRAY_CALL_SUCCESS [operation=remove_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
+        
+        # VPN AUDIT LOG: Log successful UUID removal (non-blocking)
+        # Note: Full audit log will be written by caller with correct telegram_id and source
+        try:
+            import database
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(
+                    database._log_vpn_lifecycle_audit_async(
+                        action="vpn_remove_user",
+                        telegram_id=0,  # Will be updated by caller
+                        uuid=uuid_clean,
+                        source=None,  # Will be updated by caller
+                        result="success",
+                        details="UUID removed via VPN API"
+                    )
+                )
         except Exception as e:
-            # All other exceptions are wrapped by retry_async or are unexpected
-            error_msg = f"Failed to remove VLESS user: {e}"
-            logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=transient_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={error_msg[:100]}]")
-            raise VPNAPIError(error_msg) from e
+            logger.warning(f"Failed to log VPN remove_user audit (non-blocking): {e}")
+        
+        return
+        
+    except (AuthError, ValueError) as e:
+        # Domain exceptions should NOT be retried - raise immediately
+        logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=domain_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={str(e)[:100]}]")
+        raise
+    except Exception as e:
+        # All other exceptions are wrapped by retry_async or are unexpected
+        error_msg = f"Failed to remove VLESS user: {e}"
+        logger.error(f"XRAY_CALL_FAILED [operation=remove_user, error_type=transient_error, uuid={uuid_preview}, environment={config.APP_ENV}, error={error_msg[:100]}]")
+        raise VPNAPIError(error_msg) from e
 
 
 async def safe_remove_vless_user_with_retry(uuid: str, *, max_retries: int = 3) -> None:

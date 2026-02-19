@@ -227,13 +227,9 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                     error_msg = str(e)
                     new_attempts = current_attempts + 1
                     try:
-                        from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                        system_state = recalculate_from_runtime()
+                        # Simple VPN API availability check
                         vpn_api_permanently_disabled = not config.VPN_ENABLED
-                        vpn_api_temporarily_unavailable = (
-                            system_state.vpn_api.status == ComponentStatus.DEGRADED and
-                            config.VPN_ENABLED
-                        )
+                        vpn_api_temporarily_unavailable = False  # Simplified - no SystemState check
                     except Exception:
                         vpn_api_permanently_disabled = not config.VPN_ENABLED
                         vpn_api_temporarily_unavailable = config.VPN_ENABLED

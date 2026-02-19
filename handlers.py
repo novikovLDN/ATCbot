@@ -74,7 +74,6 @@ from app.utils.security import (
     sanitize_for_logging,
 )
 from app.core.feature_flags import get_feature_flags
-from app.core.circuit_breaker import get_circuit_breaker
 from app.constants.loyalty import get_loyalty_status_names, get_loyalty_screen_attachment
 from app.core.rate_limit import check_rate_limit
 from app.handlers.common.states import (
