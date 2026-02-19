@@ -449,9 +449,6 @@ async def auto_renewal_task(bot: Bot):
         )
 
         try:
-            # Ждем до следующей проверки (5-15 минут, по умолчанию 10 минут)
-            await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS)
-
             # STEP 6 — F5: BACKGROUND WORKER SAFETY
             # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
             from app.core.feature_flags import get_feature_flags
@@ -569,4 +566,8 @@ async def auto_renewal_task(bot: Bot):
 
         if should_exit_loop:
             break
+        
+        # Sleep after iteration completes (outside try/finally)
+        # Ждем до следующей проверки (5-15 минут, по умолчанию 10 минут)
+        await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS)
 

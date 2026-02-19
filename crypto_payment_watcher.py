@@ -344,8 +344,6 @@ async def crypto_payment_watcher_task(bot: Bot):
         should_exit_loop = False
         
         try:
-            await asyncio.sleep(CHECK_INTERVAL_SECONDS)
-            
             # STEP 6 — F5: BACKGROUND WORKER SAFETY
             # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
             from app.core.feature_flags import get_feature_flags
@@ -482,3 +480,6 @@ async def crypto_payment_watcher_task(bot: Bot):
         
         if should_exit_loop:
             break
+        
+        # Sleep after iteration completes (outside try/finally)
+        await asyncio.sleep(CHECK_INTERVAL_SECONDS)

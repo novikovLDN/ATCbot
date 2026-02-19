@@ -714,13 +714,7 @@ async def run_trial_scheduler(bot: Bot):
         
         if should_exit_loop:
             break
-            
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-            continue  # Skip normal sleep after failure
         
-        # STEP 3 — PART B: WORKER LOOP SAFETY
-        # Worker always sleeps before next iteration (normal operation)
+        # Sleep after iteration completes (outside try/finally)
         # Ждём 5 минут до следующей проверки
         await asyncio.sleep(300)

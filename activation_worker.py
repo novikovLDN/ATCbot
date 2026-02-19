@@ -375,8 +375,6 @@ async def activation_worker_task(bot: Bot):
         should_exit_loop = False
         
         try:
-            await asyncio.sleep(ACTIVATION_INTERVAL_SECONDS)
-            
             # READ-ONLY system state awareness: Skip iteration if system is unavailable
             try:
                 now = datetime.now(timezone.utc)
@@ -540,3 +538,6 @@ async def activation_worker_task(bot: Bot):
         
         if should_exit_loop:
             break
+        
+        # Sleep after iteration completes (outside try/finally)
+        await asyncio.sleep(ACTIVATION_INTERVAL_SECONDS)
