@@ -106,64 +106,8 @@ async def apply_migration(conn: asyncpg.Connection, version: str, migration_path
         logger.info(f"Applying migration {version}: {migration_path.name}")
         logger.debug(f"Migration SQL content:\n{sql_content}")
         
-        # Проверяем, содержит ли миграция DO блоки
-        # Если содержит, выполняем весь файл целиком (PostgreSQL правильно обработает несколько команд)
-        # Если нет, можем разделить по точкам с запятой для лучшей диагностики ошибок
-        has_do_block = 'DO $$' in sql_content.upper() or 'DO $' in sql_content.upper()
-        
-        if has_do_block:
-            # Выполняем весь SQL файл целиком
-            # PostgreSQL правильно обработает несколько команд, разделенных точкой с запятой
-            # Это гарантирует, что DO $$ блоки не будут разорваны
-            await conn.execute(sql_content)
-        else:
-            # Простой парсер для файлов без DO блоков
-            # Разделяем по точке с запятой вне строк
-            commands = []
-            current_command = []
-            in_single_quote = False
-            in_double_quote = False
-            
-            for char in sql_content:
-                current_command.append(char)
-                
-                if not in_single_quote and not in_double_quote:
-                    if char == "'":
-                        in_single_quote = True
-                    elif char == '"':
-                        in_double_quote = True
-                    elif char == ';':
-                        # Конец команды
-                        command_text = ''.join(current_command).strip()
-                        if command_text and not command_text.startswith('--'):
-                            commands.append(command_text)
-                        current_command = []
-                else:
-                    if in_single_quote and char == "'":
-                        # Проверяем экранированную кавычку
-                        if len(current_command) > 1 and current_command[-2] == "'":
-                            continue  # Двойная кавычка - экранирование
-                        in_single_quote = False
-                    elif in_double_quote and char == '"':
-                        if len(current_command) > 1 and current_command[-2] == '"':
-                            continue  # Двойная кавычка - экранирование
-                        in_double_quote = False
-            
-            # Если осталась незавершённая команда
-            if current_command:
-                command_text = ''.join(current_command).strip()
-                if command_text and not command_text.startswith('--'):
-                    commands.append(command_text)
-            
-            # Выполняем каждую команду
-            for cmd in commands:
-                cmd = cmd.strip()
-                if cmd and not cmd.startswith('--'):
-                    # Удаляем завершающую точку с запятой
-                    if cmd.endswith(';'):
-                        cmd = cmd[:-1].strip()
-                    if cmd:
-                        await conn.execute(cmd)
+        # asyncpg executes multi-statement SQL natively; no custom parser needed
+        await conn.execute(sql_content)
         
         # Записываем версию в schema_migrations
         await conn.execute(

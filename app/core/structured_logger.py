@@ -34,8 +34,8 @@ def log_event(
 
     Args:
         logger: Logger instance
-        component: Component name (e.g., "polling", "worker", "http", "telegram")
-        operation: Operation name (e.g., "polling_start", "reminders_iteration", "health_check")
+        component: Component name (e.g., "webhook", "worker", "http", "telegram")
+        operation: Operation name (e.g., "webhook_start", "reminders_iteration", "health_check")
         correlation_id: Request/task/iteration identifier (optional)
         outcome: Outcome (e.g., "success", "failed", "cancelled")
         duration_ms: Duration in milliseconds (omitted if None)

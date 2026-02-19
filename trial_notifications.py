@@ -3,6 +3,7 @@
 """
 import asyncio
 import logging
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
@@ -14,12 +15,6 @@ import database
 import config
 from app import i18n
 from app.services.trials import service as trial_service
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
 from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
@@ -128,6 +123,13 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
     if not trial_expires_at or not subscription_expires_at:
         return
 
+    # Phase 1: Read phase — collect all decisions with a short-lived DB connection
+    should_send_final = False
+    reason_final = None
+    payload_final = None
+    final_reminder_config = None
+    pending_notifications: list[tuple] = []
+
     async with pool.acquire() as conn:
         try:
             # TOCTOU: Re-check active paid subscription (may have been bought after batch fetch)
@@ -138,7 +140,7 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
 
             final_reminder_config = trial_service.get_final_reminder_config()
             final_reminder_sent = row.get(final_reminder_config["db_flag"], False)
-            should_send, reason = await trial_service.should_send_final_reminder(
+            should_send_final, reason_final = await trial_service.should_send_final_reminder(
                 telegram_id=telegram_id,
                 trial_expires_at=trial_expires_at,
                 subscription_expires_at=subscription_expires_at,
@@ -146,118 +148,130 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 now=now,
                 conn=conn
             )
-            if should_send:
-                payload = trial_service.prepare_notification_payload(
+            if should_send_final:
+                payload_final = trial_service.prepare_notification_payload(
                     notification_key=final_reminder_config["notification_key"],
                     has_button=final_reminder_config["has_button"]
                 )
-                success, status = await send_trial_notification(
-                    bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
-                )
-                timing = trial_service.calculate_trial_timing(trial_expires_at, now)
-                if success:
-                    await conn.execute(
-                        f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
-                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                        telegram_id
-                    )
-                    logger.info(
-                        f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
-                        f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
-                    )
-                elif status == "failed_permanently":
-                    await conn.execute(
-                        f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
-                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                        telegram_id
-                    )
-                    logger.warning(
-                        f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
-                        f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
-                    )
-                else:
-                    logger.warning(
-                        f"trial_reminder_failed_temporary: user={telegram_id}, notification=final_6h_before_expiry, "
-                        f"reason=temporary_error, will_retry=True"
-                    )
-                return
-            elif reason:
+            elif reason_final:
                 logger.debug(
                     f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
-                    f"reason={reason}"
+                    f"reason={reason_final}"
                 )
+
+            if not should_send_final:
+                notification_flags = {
+                    "trial_notif_6h_sent": row.get("trial_notif_6h_sent", False),
+                    "trial_notif_60h_sent": row.get("trial_notif_60h_sent", False),
+                }
+                for notification in TRIAL_NOTIFICATION_SCHEDULE:
+                    try:
+                        should_send, reason = await trial_service.should_send_notification(
+                            telegram_id=telegram_id,
+                            trial_expires_at=trial_expires_at,
+                            subscription_expires_at=subscription_expires_at,
+                            notification_schedule=notification,
+                            notification_flags=notification_flags,
+                            now=now,
+                            conn=conn
+                        )
+                        if not should_send:
+                            if reason:
+                                logger.debug(
+                                    f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
+                                    f"reason={reason}"
+                                )
+                            continue
+                        payload = trial_service.prepare_notification_payload(
+                            notification_key=notification["key"],
+                            has_button=notification["has_button"]
+                        )
+                        db_flag = notification.get("db_flag", f"trial_notif_{notification['hours']}h_sent")
+                        pending_notifications.append((notification, payload, db_flag))
+                        # Optimistically mark sent to prevent duplicate sends within this run
+                        notification_flags[db_flag] = True
+                    except trial_service.TrialServiceError as e:
+                        logger.warning(
+                            f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
+                            f"service_error={type(e).__name__}: {str(e)}"
+                        )
+                        continue
         except trial_service.TrialServiceError as e:
             logger.warning(
                 f"trial_reminder_skipped: user={telegram_id}, notification=final_6h_before_expiry, "
                 f"service_error={type(e).__name__}: {str(e)}"
             )
             return
+    # conn released — Telegram I/O below does NOT hold a DB connection
 
-        notification_flags = {
-            "trial_notif_6h_sent": row.get("trial_notif_6h_sent", False),
-            "trial_notif_60h_sent": row.get("trial_notif_60h_sent", False),
-        }
-        for notification in TRIAL_NOTIFICATION_SCHEDULE:
-            try:
-                should_send, reason = await trial_service.should_send_notification(
-                    telegram_id=telegram_id,
-                    trial_expires_at=trial_expires_at,
-                    subscription_expires_at=subscription_expires_at,
-                    notification_schedule=notification,
-                    notification_flags=notification_flags,
-                    now=now,
-                    conn=conn
+    # Phase 2+3: Telegram I/O then DB write for final reminder
+    if should_send_final:
+        success, status = await send_trial_notification(
+            bot, pool, telegram_id, payload_final["notification_key"], payload_final["has_button"]
+        )
+        timing = trial_service.calculate_trial_timing(trial_expires_at, now)
+        async with pool.acquire() as conn:
+            if success:
+                await conn.execute(
+                    f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
+                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                    telegram_id
                 )
-                if not should_send:
-                    if reason:
-                        logger.debug(
-                            f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
-                            f"reason={reason}"
-                        )
-                    continue
-                payload = trial_service.prepare_notification_payload(
-                    notification_key=notification["key"],
-                    has_button=notification["has_button"]
+                logger.info(
+                    f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
+                    f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
                 )
-                success, status = await send_trial_notification(
-                    bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
+            elif status == "failed_permanently":
+                await conn.execute(
+                    f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
+                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                    telegram_id
                 )
-                db_flag = notification.get("db_flag", f"trial_notif_{notification['hours']}h_sent")
-                timing = trial_service.calculate_trial_timing(trial_expires_at, now)
-                if success:
-                    await conn.execute(
-                        f"UPDATE subscriptions SET {db_flag} = TRUE "
-                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                        telegram_id
-                    )
-                    notification_flags[db_flag] = True
-                    logger.info(
-                        f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
-                        f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
-                    )
-                elif status == "failed_permanently":
-                    await conn.execute(
-                        f"UPDATE subscriptions SET {db_flag} = TRUE "
-                        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                        telegram_id
-                    )
-                    notification_flags[db_flag] = True
-                    logger.warning(
-                        f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
-                        f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
-                        f"will_not_retry=True"
-                    )
-                else:
-                    logger.warning(
-                        f"trial_reminder_failed_temporary: user={telegram_id}, notification={notification['key']}, "
-                        f"reason=temporary_error, will_retry=True"
-                    )
-            except trial_service.TrialServiceError as e:
                 logger.warning(
-                    f"trial_reminder_skipped: user={telegram_id}, notification={notification['key']}, "
-                    f"service_error={type(e).__name__}: {str(e)}"
+                    f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
+                    f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
                 )
-                continue
+            else:
+                logger.warning(
+                    f"trial_reminder_failed_temporary: user={telegram_id}, notification=final_6h_before_expiry, "
+                    f"reason=temporary_error, will_retry=True"
+                )
+        return
+
+    # Phase 2+3: Telegram I/O then DB write for notification schedule
+    for notification, payload, db_flag in pending_notifications:
+        success, status = await send_trial_notification(
+            bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
+        )
+        timing = trial_service.calculate_trial_timing(trial_expires_at, now)
+        if success:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    f"UPDATE subscriptions SET {db_flag} = TRUE "
+                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                    telegram_id
+                )
+            logger.info(
+                f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
+                f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
+            )
+        elif status == "failed_permanently":
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    f"UPDATE subscriptions SET {db_flag} = TRUE "
+                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
+                    telegram_id
+                )
+            logger.warning(
+                f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
+                f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
+                f"will_not_retry=True"
+            )
+        else:
+            logger.warning(
+                f"trial_reminder_failed_temporary: user={telegram_id}, notification={notification['key']}, "
+                f"reason=temporary_error, will_retry=True"
+            )
 
 
 async def process_trial_notifications(bot: Bot):
@@ -557,6 +571,11 @@ async def run_trial_scheduler(bot: Bot):
     _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
     
+    # Prevent worker burst at startup
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug("trial_notifications: startup jitter done (%.1fs)", jitter_s)
+    
     iteration_number = 0
     
     while True:
@@ -569,9 +588,12 @@ async def run_trial_scheduler(bot: Bot):
             iteration_number=iteration_number
         )
         
+        iteration_outcome = "success"
+        iteration_error_type = None
+        should_exit_loop = False
+        
         try:
-            # STEP 6 — F5: BACKGROUND WORKER SAFETY
-            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
             if not feature_flags.background_workers_enabled:
@@ -591,122 +613,60 @@ async def run_trial_scheduler(bot: Bot):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
             
-            # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
-            # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("trial_notifications: skipping — DB not ready")
+                iteration_outcome = "skipped"
+                await asyncio.sleep(300)  # Sleep before next check
+                continue
+            
+            # H1 fix: Wrap iteration body with timeout
+            async def _run_iteration():
+                # Обрабатываем уведомления
+                await process_trial_notifications(bot)
+                # Завершаем истёкшие trial-подписки
+                await expire_trial_subscriptions(bot)
+            
             try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-                
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-                
-                # VPN API component (not critical for trial notifications)
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-                
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-                
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
+                await asyncio.wait_for(_run_iteration(), timeout=120.0)
+                iteration_outcome = "success"
+            except asyncio.TimeoutError:
+                logger.error(
+                    "WORKER_TIMEOUT worker=trial_notifications exceeded 120s — iteration cancelled"
                 )
-                
-                # STEP 1.2: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in trial_notifications scheduler "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    await asyncio.sleep(300)  # Sleep before next check
-                    continue
-                
-                # STEP 1.2: DEGRADED state allows continuation (workers continue with reduced functionality)
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in trial_notifications scheduler "
-                        f"(continuing with reduced functionality)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
-            
-            # Обрабатываем уведомления
-            await process_trial_notifications(bot)
-            
-            # Завершаем истёкшие trial-подписки
-            await expire_trial_subscriptions(bot)
-            
-            # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end (success)
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            log_worker_iteration_end(
-                worker_name="trial_notifications",
-                outcome="success",
-                items_processed=0,  # Trial notifications don't track items per iteration
-                duration_ms=duration_ms
-            )
-            logger.info("[WORKER_DURATION] worker=trial_notifications duration=%.3fs", duration_ms / 1000.0)
+                iteration_outcome = "timeout"
+                iteration_error_type = "timeout"
             
         except asyncio.CancelledError:
-            log_event(
-                logger,
-                component="worker",
-                operation="trial_notifications_iteration",
-                outcome="cancelled",
-            )
-            break
+            logger.info("Trial notifications task cancelled")
+            iteration_outcome = "cancelled"
+            should_exit_loop = True
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"trial_notifications: Database temporarily unavailable in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            log_worker_iteration_end(
-                worker_name="trial_notifications",
-                outcome="degraded",
-                items_processed=0,
-                error_type="infra_error",
-                duration_ms=duration_ms
-            )
-            
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-            continue  # Skip normal sleep after failure
+            iteration_outcome = "degraded"
+            iteration_error_type = "infra_error"
         except Exception as e:
             logger.error(f"trial_notifications: Unexpected error in scheduler loop: {type(e).__name__}: {str(e)[:100]}")
             logger.debug("trial_notifications: Full traceback for scheduler loop", exc_info=True)
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+            iteration_outcome = "failed"
+            iteration_error_type = classify_error(e)
+        finally:
+            # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = classify_error(e)
             log_worker_iteration_end(
                 worker_name="trial_notifications",
-                outcome="failed",
+                outcome=iteration_outcome,
                 items_processed=0,
-                error_type=error_type,
+                error_type=iteration_error_type,
                 duration_ms=duration_ms
             )
-            
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-            continue  # Skip normal sleep after failure
+            if iteration_outcome not in ("success", "cancelled", "skipped"):
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
         
-        # STEP 3 — PART B: WORKER LOOP SAFETY
-        # Worker always sleeps before next iteration (normal operation)
+        if should_exit_loop:
+            break
+        
+        # Sleep after iteration completes (outside try/finally)
         # Ждём 5 минут до следующей проверки
         await asyncio.sleep(300)

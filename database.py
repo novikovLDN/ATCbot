@@ -14,8 +14,6 @@ import config
 import vpn_utils
 from app.utils.retry import retry_async
 from app.core.system_state import ComponentStatus
-from app.core.metrics import get_metrics, timer
-from app.core.cost_model import get_cost_model, CostCenter
 # outline_api removed - use vpn_utils instead
 
 if TYPE_CHECKING:
@@ -250,7 +248,7 @@ def _get_pool_config() -> dict:
     """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation."""
     return {
         "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "2")),
-        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "15")),
+        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "25")),  # Increased from 15 to handle peak load (6 workers + 20 webhook handlers)
         "max_inactive_connection_lifetime": 300,
         "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "10")),
         "command_timeout": int(os.getenv("DB_POOL_COMMAND_TIMEOUT", "30")),
@@ -288,22 +286,14 @@ async def get_pool() -> asyncpg.Pool:
     if not DATABASE_URL:
         raise RuntimeError(f"{config.APP_ENV.upper()}_DATABASE_URL is not configured")
     if _pool is None:
-        # C1.1 - METRICS: Measure pool creation latency
         pool_config = _get_pool_config()
-        with timer("db_latency_ms"):
-            _pool = await retry_async(
-                lambda: asyncpg.create_pool(DATABASE_URL, **pool_config),
-                retries=1,
-                base_delay=0.5,
-                max_delay=5.0,
-                retry_on=(asyncpg.PostgresError,)
-            )
-        metrics = get_metrics()
-        metrics.increment_counter("retries_total", value=1)
-        
-        # D2.1 - COST CENTERS: Track DB connection cost
-        cost_model = get_cost_model()
-        cost_model.record_cost(CostCenter.DB_CONNECTIONS, cost_units=1.0)
+        _pool = await retry_async(
+            lambda: asyncpg.create_pool(DATABASE_URL, **pool_config),
+            retries=1,
+            base_delay=0.5,
+            max_delay=5.0,
+            retry_on=(asyncpg.PostgresError,)
+        )
         
         logger.info(
             "DB_POOL_CONFIG min=%s max=%s acquire_timeout=%s command_timeout=%s",
@@ -1012,23 +1002,7 @@ async def init_db() -> bool:
         DB_READY = True
         logger.info("Database fully initialized")
         
-        # PART C.3: After successful init_db(), explicitly call SystemState.recalculate()
-        # PART E.6: Explicit logging on SystemState update (REQUIRED)
-        try:
-            from app.core.system_state import recalculate_from_runtime
-            system_state = recalculate_from_runtime()
-            
-            # PART E.6: Explicit logging format: "SystemState updated: DEGRADED (db=healthy, payments=healthy, vpn_api=degraded)"
-            state_str = "HEALTHY" if system_state.is_healthy else ("DEGRADED" if system_state.is_degraded else "UNAVAILABLE")
-            logger.info(
-                f"SystemState updated: {state_str} "
-                f"(db={system_state.database.status.value}, "
-                f"payments={system_state.payments.status.value}, "
-                f"vpn_api={system_state.vpn_api.status.value})"
-            )
-        except Exception as e:
-            # SystemState recalculation must not break init_db()
-            logger.debug(f"Error recalculating SystemState: {e}")
+        # SystemState recalculation removed - no longer needed
         
         return True
 
@@ -1764,32 +1738,47 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
     
     try:
         async with pool.acquire() as conn:
-            # Проверяем, что пользователь еще не был приглашен
-            existing = await conn.fetchrow(
-                "SELECT * FROM referrals WHERE referred_user_id = $1", referred_user_id
-            )
-            if existing:
-                return False
-            
-            # Создаем запись о реферале
-            await conn.execute(
-                """INSERT INTO referrals (referrer_user_id, referred_user_id, is_rewarded, reward_amount)
-                   VALUES ($1, $2, FALSE, 0)
-                   ON CONFLICT (referred_user_id) DO NOTHING""",
-                referrer_user_id, referred_user_id
-            )
-            
-            # Обновляем referrer_id у пользователя (IMMUTABLE - устанавливается только один раз)
-            # Также обновляем referred_by для обратной совместимости
-            # DO NOT use referred_at - column doesn't exist in schema
-            result = await conn.execute(
-                """UPDATE users 
-                   SET referrer_id = $1, referred_by = $1
-                   WHERE telegram_id = $2 
-                   AND referrer_id IS NULL 
-                   AND referred_by IS NULL""",
-                referrer_user_id, referred_user_id
-            )
+            async with conn.transaction():
+                # Проверяем, что пользователь еще не был приглашен
+                existing = await conn.fetchrow(
+                    "SELECT * FROM referrals WHERE referred_user_id = $1", referred_user_id
+                )
+                if existing:
+                    return False
+
+                # Создаем запись о реферале
+                await conn.execute(
+                    """INSERT INTO referrals (referrer_user_id, referred_user_id, is_rewarded, reward_amount)
+                       VALUES ($1, $2, FALSE, 0)
+                       ON CONFLICT (referred_user_id) DO NOTHING""",
+                    referrer_user_id, referred_user_id
+                )
+
+                # Обновляем referrer_id у пользователя (IMMUTABLE - устанавливается только один раз)
+                # Также обновляем referred_by для обратной совместимости
+                # DO NOT use referred_at - column doesn't exist in schema
+                result = await conn.execute(
+                    """UPDATE users
+                       SET referrer_id = $1, referred_by = $1
+                       WHERE telegram_id = $2
+                       AND referrer_id IS NULL
+                       AND referred_by IS NULL""",
+                    referrer_user_id, referred_user_id
+                )
+
+                # Анти-петля: проверяем ПОСЛЕ INSERT — не стал ли реферер одновременно нашим рефералом.
+                # Защищает от гонки A→B / B→A при одновременных /start командах.
+                referrer_row = await conn.fetchrow(
+                    "SELECT referrer_id, referred_by FROM users WHERE telegram_id = $1",
+                    referrer_user_id
+                )
+                if referrer_row:
+                    ref_of_referrer = referrer_row.get("referrer_id") or referrer_row.get("referred_by")
+                    if ref_of_referrer == referred_user_id:
+                        logger.warning(
+                            f"REFERRAL_LOOP_ABORTED [referrer={referrer_user_id}, referred={referred_user_id}]"
+                        )
+                        raise Exception("referral_loop_detected")
             
             # Verify that referrer_id was actually saved
             if result == "UPDATE 1":
@@ -3628,14 +3617,6 @@ async def reissue_vpn_key_atomic(
 
             # PHASE 1 (outside DB transaction): add_vless_user
             new_uuid = _generate_subscription_uuid()
-            try:
-                from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                st = recalculate_from_runtime()
-                if st.vpn_api.status != ComponentStatus.HEALTHY:
-                    raise Exception(f"VPN API is {st.vpn_api.status.value}, cannot reissue access")
-            except Exception as e:
-                if "VPN API is" in str(e):
-                    raise
             vless_result = await vpn_utils.add_vless_user(
                 telegram_id=telegram_id,
                 subscription_end=expires_at,
@@ -4253,40 +4234,17 @@ async def grant_access(
                     await asyncio.sleep(delay)
 
                 try:
-                    # PART D.7: If vpn_api != healthy, NEVER call VPN API
-                    try:
-                        from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                        system_state = recalculate_from_runtime()
-                        if system_state.vpn_api.status != ComponentStatus.HEALTHY:
-                            logger.warning(
-                                f"grant_access: VPN_API_DISABLED [user={telegram_id}] - "
-                                f"VPN API is {system_state.vpn_api.status.value}, skipping VPN call, marking as pending"
-                            )
-                            vless_result = None
-                            vless_url = None
-                        else:
-                            vless_result = await vpn_utils.add_vless_user(
-                                telegram_id=telegram_id,
-                                subscription_end=subscription_end,
-                                uuid=new_uuid
-                            )
-                            vless_url = vless_result.get("vless_url")
-                            uuid_from_api = vless_result.get("uuid")
-                            if not uuid_from_api:
-                                raise RuntimeError("Xray API returned empty UUID")
-                            new_uuid = uuid_from_api  # HARD OVERRIDE
-                    except Exception as e:
-                        logger.warning(f"grant_access: VPN_API_CHECK_FAILED [user={telegram_id}]: {e}, proceeding with VPN call")
-                        vless_result = await vpn_utils.add_vless_user(
-                            telegram_id=telegram_id,
-                            subscription_end=subscription_end,
-                            uuid=new_uuid
-                        )
-                        vless_url = vless_result.get("vless_url")
-                        uuid_from_api = vless_result.get("uuid")
-                        if not uuid_from_api:
-                            raise RuntimeError("Xray API returned empty UUID")
-                        new_uuid = uuid_from_api  # HARD OVERRIDE
+                    # VPN API call - config.VPN_ENABLED already checked above
+                    vless_result = await vpn_utils.add_vless_user(
+                        telegram_id=telegram_id,
+                        subscription_end=subscription_end,
+                        uuid=new_uuid
+                    )
+                    vless_url = vless_result.get("vless_url")
+                    uuid_from_api = vless_result.get("uuid")
+                    if not uuid_from_api:
+                        raise RuntimeError("Xray API returned empty UUID")
+                    new_uuid = uuid_from_api  # HARD OVERRIDE
 
                     # ВАЛИДАЦИЯ: Проверяем что UUID и VLESS URL получены (new_uuid now from API)
                     if not new_uuid:
@@ -4345,30 +4303,12 @@ async def grant_access(
         # PART D.7: Handle case where VPN API is disabled (no vless_url)
         # If VPN API is disabled, set activation_status to 'pending' instead of raising error
         if not new_uuid or not vless_url:
-            # Check if VPN API is disabled (not just failed)
-            try:
-                from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                system_state = recalculate_from_runtime()
-                if system_state.vpn_api.status != ComponentStatus.HEALTHY:
-                    # PART D.7: VPN API is disabled - mark as pending
-                    logger.info(
-                        f"grant_access: VPN_API_DISABLED_PENDING [user={telegram_id}] - "
-                        f"VPN API is {system_state.vpn_api.status.value}, setting activation_status='pending'"
-                    )
-                    # Will set activation_status='pending' in DB insert below
-                    pending_activation = True
-                else:
-                    # VPN API is healthy but failed - this is an error
-                    error_msg = f"VPN API failed to return UUID/vless_url after retries for user {telegram_id}"
-                    logger.error(f"grant_access: CRITICAL_VPN_API_FAILURE [user={telegram_id}, error={error_msg}]")
-                    raise Exception(error_msg)
-            except Exception as e:
-                if "VPN API failed" in str(e):
-                    raise  # Re-raise VPN API failure errors
-                # If system_state check failed, treat as error
-                error_msg = f"VPN API failed to return UUID/vless_url after retries for user {telegram_id}"
-                logger.error(f"grant_access: CRITICAL_VPN_API_FAILURE [user={telegram_id}, error={error_msg}]")
-                raise Exception(error_msg)
+            # VPN API call failed - mark as pending
+            logger.warning(
+                f"grant_access: VPN_API_CALL_FAILED [user={telegram_id}] - "
+                f"setting activation_status='pending'"
+            )
+            pending_activation = True
         else:
             pending_activation = False
         
@@ -4609,24 +4549,21 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
             )
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                st = recalculate_from_runtime()
-                if st.vpn_api.status == ComponentStatus.HEALTHY:
-                    new_uuid_pre = _generate_subscription_uuid()
-                    vless_result = await vpn_utils.add_vless_user(
-                        telegram_id=telegram_id,
-                        subscription_end=subscription_end_pre,
-                        uuid=new_uuid_pre
-                    )
-                    pre_provisioned_uuid = {
-                        "uuid": vless_result["uuid"].strip(),
-                        "vless_url": vless_result["vless_url"]
-                    }
-                    uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
-                    logger.info(
-                        f"approve_payment_atomic: TWO_PHASE_PHASE1_DONE [payment_id={payment_id}, user={telegram_id}, "
-                        f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
-                    )
+                new_uuid_pre = _generate_subscription_uuid()
+                vless_result = await vpn_utils.add_vless_user(
+                    telegram_id=telegram_id,
+                    subscription_end=subscription_end_pre,
+                    uuid=new_uuid_pre
+                )
+                pre_provisioned_uuid = {
+                    "uuid": vless_result["uuid"].strip(),
+                    "vless_url": vless_result["vless_url"]
+                }
+                uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
+                logger.info(
+                    f"approve_payment_atomic: TWO_PHASE_PHASE1_DONE [payment_id={payment_id}, user={telegram_id}, "
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                )
             except Exception as phase1_err:
                 logger.warning(
                     f"approve_payment_atomic: Phase 1 add_vless_user failed: payment_id={payment_id}, error={phase1_err}"
@@ -6525,26 +6462,23 @@ async def finalize_purchase(
                 )
             if is_new_issuance and config.VPN_ENABLED:
                 try:
-                    from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                    st = recalculate_from_runtime()
-                    if st.vpn_api.status == ComponentStatus.HEALTHY:
-                        duration_pre = timedelta(days=period_days)
-                        subscription_end_pre = now_pre + duration_pre
-                        new_uuid_pre = _generate_subscription_uuid()
-                        vless_result = await vpn_utils.add_vless_user(
-                            telegram_id=telegram_id,
-                            subscription_end=subscription_end_pre,
-                            uuid=new_uuid_pre
-                        )
-                        pre_provisioned_uuid = {
-                            "uuid": vless_result["uuid"].strip(),
-                            "vless_url": vless_result["vless_url"]
-                        }
-                        uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
-                        logger.info(
-                            f"finalize_purchase: TWO_PHASE_PHASE1_DONE [purchase_id={purchase_id}, "
-                            f"user={telegram_id}, uuid={uuid_to_cleanup_on_failure[:8]}...]"
-                        )
+                    duration_pre = timedelta(days=period_days)
+                    subscription_end_pre = now_pre + duration_pre
+                    new_uuid_pre = _generate_subscription_uuid()
+                    vless_result = await vpn_utils.add_vless_user(
+                        telegram_id=telegram_id,
+                        subscription_end=subscription_end_pre,
+                        uuid=new_uuid_pre
+                    )
+                    pre_provisioned_uuid = {
+                        "uuid": vless_result["uuid"].strip(),
+                        "vless_url": vless_result["vless_url"]
+                    }
+                    uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
+                    logger.info(
+                        f"finalize_purchase: TWO_PHASE_PHASE1_DONE [purchase_id={purchase_id}, "
+                        f"user={telegram_id}, uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                    )
                 except Exception as phase1_err:
                     logger.warning(
                         f"finalize_purchase: Phase 1 add_vless_user failed (grant_access may use pending_activation): "
@@ -7583,24 +7517,21 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
             )
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                st = recalculate_from_runtime()
-                if st.vpn_api.status == ComponentStatus.HEALTHY:
-                    new_uuid_pre = _generate_subscription_uuid()
-                    vless_result = await vpn_utils.add_vless_user(
-                        telegram_id=telegram_id,
-                        subscription_end=subscription_end_pre,
-                        uuid=new_uuid_pre
-                    )
-                    pre_provisioned_uuid = {
-                        "uuid": vless_result["uuid"].strip(),
-                        "vless_url": vless_result["vless_url"]
-                    }
-                    uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
-                    logger.info(
-                        f"admin_grant_access_atomic: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                        f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
-                    )
+                new_uuid_pre = _generate_subscription_uuid()
+                vless_result = await vpn_utils.add_vless_user(
+                    telegram_id=telegram_id,
+                    subscription_end=subscription_end_pre,
+                    uuid=new_uuid_pre
+                )
+                pre_provisioned_uuid = {
+                    "uuid": vless_result["uuid"].strip(),
+                    "vless_url": vless_result["vless_url"]
+                }
+                uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
+                logger.info(
+                    f"admin_grant_access_atomic: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                )
             except Exception as phase1_err:
                 logger.warning(
                     f"admin_grant_access_atomic: Phase 1 add_vless_user failed: user={telegram_id}, error={phase1_err}"
@@ -7748,24 +7679,21 @@ async def finalize_balance_purchase(
             )
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                st = recalculate_from_runtime()
-                if st.vpn_api.status == ComponentStatus.HEALTHY:
-                    new_uuid_pre = _generate_subscription_uuid()
-                    vless_result = await vpn_utils.add_vless_user(
-                        telegram_id=telegram_id,
-                        subscription_end=subscription_end_pre,
-                        uuid=new_uuid_pre
-                    )
-                    pre_provisioned_uuid = {
-                        "uuid": vless_result["uuid"].strip(),
-                        "vless_url": vless_result["vless_url"]
-                    }
-                    uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
-                    logger.info(
-                        f"finalize_balance_purchase: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                        f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
-                    )
+                new_uuid_pre = _generate_subscription_uuid()
+                vless_result = await vpn_utils.add_vless_user(
+                    telegram_id=telegram_id,
+                    subscription_end=subscription_end_pre,
+                    uuid=new_uuid_pre
+                )
+                pre_provisioned_uuid = {
+                    "uuid": vless_result["uuid"].strip(),
+                    "vless_url": vless_result["vless_url"]
+                }
+                uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
+                logger.info(
+                    f"finalize_balance_purchase: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                )
             except Exception as phase1_err:
                 logger.warning(
                     f"finalize_balance_purchase: Phase 1 add_vless_user failed: user={telegram_id}, error={phase1_err}"
@@ -8182,24 +8110,21 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
             )
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                from app.core.system_state import recalculate_from_runtime, ComponentStatus
-                st = recalculate_from_runtime()
-                if st.vpn_api.status == ComponentStatus.HEALTHY:
-                    new_uuid_pre = _generate_subscription_uuid()
-                    vless_result = await vpn_utils.add_vless_user(
-                        telegram_id=telegram_id,
-                        subscription_end=subscription_end_pre,
-                        uuid=new_uuid_pre
-                    )
-                    pre_provisioned_uuid = {
-                        "uuid": vless_result["uuid"].strip(),
-                        "vless_url": vless_result["vless_url"]
-                    }
-                    uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
-                    logger.info(
-                        f"admin_grant_access_minutes_atomic: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                        f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
-                    )
+                new_uuid_pre = _generate_subscription_uuid()
+                vless_result = await vpn_utils.add_vless_user(
+                    telegram_id=telegram_id,
+                    subscription_end=subscription_end_pre,
+                    uuid=new_uuid_pre
+                )
+                pre_provisioned_uuid = {
+                    "uuid": vless_result["uuid"].strip(),
+                    "vless_url": vless_result["vless_url"]
+                }
+                uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
+                logger.info(
+                    f"admin_grant_access_minutes_atomic: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                )
             except Exception as phase1_err:
                 logger.warning(
                     f"admin_grant_access_minutes_atomic: Phase 1 add_vless_user failed: user={telegram_id}, error={phase1_err}"

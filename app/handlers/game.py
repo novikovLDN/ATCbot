@@ -45,9 +45,6 @@ async def callback_game_bowl(callback: CallbackQuery, bot: Bot = None):
 
         async with pool.acquire() as conn:
             await conn.execute(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS game_last_played TIMESTAMPTZ"
-            )
-            await conn.execute(
                 "INSERT INTO users (telegram_id, language) VALUES ($1, $2) ON CONFLICT (telegram_id) DO NOTHING",
                 telegram_id,
                 language,
@@ -149,7 +146,7 @@ async def callback_game_bowl(callback: CallbackQuery, bot: Bot = None):
             )
         else:
             text = (
-                f"🎳 Вы сбили {dice_value} кеглей из 10.\n\n"
+                f"🎳 Вы сбили {dice_value} кеглей из 6.\n\n"
                 "Увы, не страйк 😔 Попробуйте снова через 7 дней!"
             )
             logger.info("GAME_BOWL [user=%s] strike=False dice_value=%s", telegram_id, dice_value)

@@ -50,23 +50,14 @@ async def callback_admin_dashboard(callback: CallbackQuery):
         return
     
     try:
-        from app.core.system_health import evaluate_system_health, get_error_summary_compact
-        
-        # Get system health report
-        health_report = await evaluate_system_health()
-        error_summary = await get_error_summary_compact()
+        # Simple health check
+        db_ready = database.DB_READY
+        status = "✅ OK" if db_ready else "⚠️ DEGRADED"
         
         # Build dashboard text
         text = f"📊 Admin Dashboard\n\n"
-        text += health_report.summary
-        text += "\n\n"
-        
-        # Add error summary if any
-        if error_summary:
-            text += "⚠️ ACTIVE ISSUES:\n\n"
-            for i, error in enumerate(error_summary[:5], 1):  # Limit to 5 issues
-                text += f"{i}. {error['component'].upper()}: {error['reason']}\n"
-                text += f"   → {error['impact']}\n\n"
+        text += f"Status: {status}\n"
+        text += f"Database: {'✅ Ready' if db_ready else '❌ Not Ready'}\n\n"
         
         # Add refresh button
         user = await database.get_user(callback.from_user.id)
@@ -85,7 +76,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
             "admin_dashboard_viewed",
             callback.from_user.id,
             None,
-            f"Admin viewed dashboard: severity={health_report.level.value}, issues={len(error_summary)}"
+            f"Admin viewed dashboard: db_ready={db_ready}"
         )
         
     except Exception as e:
@@ -444,12 +435,12 @@ async def callback_admin_system(callback: CallbackQuery):
         return
     
     try:
-        from app.core.system_state import SystemState, SystemSeverity, recalculate_from_runtime
+        # Simple system status check
+        db_ready = database.DB_READY
+        status_emoji = "✅" if db_ready else "⚠️"
+        status_text = "OK" if db_ready else "DEGRADED"
         
-        # PART A.3: Get current system state
-        system_state = recalculate_from_runtime()
-        
-        # PART A.3: Count pending activations
+        # Count pending activations
         pending_activations = 0
         try:
             pool = await database.get_pool()
@@ -460,35 +451,18 @@ async def callback_admin_system(callback: CallbackQuery):
         except Exception:
             pass
         
-        # PART A.3: Calculate severity
-        severity = system_state.get_severity(pending_activations=pending_activations)
+        text = f"{status_emoji} Система ({status_text})\n\n"
         
-        # PART A.3: Get error summary
-        errors = system_state.get_error_summary()
-        
-        # PART A.3: Build status text with severity color
-        severity_emoji = {
-            SystemSeverity.GREEN: "🟢",
-            SystemSeverity.YELLOW: "🟡",
-            SystemSeverity.RED: "🔴"
-        }
-        
-        text = f"{severity_emoji[severity]} Система ({severity.value.upper()})\n\n"
-        
-        # PART A.3: Component summary
+        # Component summary
         text += "📊 Компоненты:\n"
-        text += f"  • База данных: {system_state.database.status.value}\n"
-        text += f"  • Платежи: {system_state.payments.status.value}\n"
-        text += f"  • VPN API: {system_state.vpn_api.status.value}\n"
+        text += f"  • База данных: {'✅ Ready' if db_ready else '❌ Not Ready'}\n"
+        text += f"  • VPN API: {'✅ Enabled' if config.VPN_ENABLED else '⚠️ Disabled'}\n"
         text += f"  • Ожидающих активаций: {pending_activations}\n\n"
         
-        # PART B.4: Error summary (only actionable issues)
-        if errors:
+        if not db_ready:
             text += "⚠️ Проблемы:\n"
-            for error in errors:
-                text += f"  • {error['component']}: {error['reason']}\n"
-                text += f"    → {error['impact']}\n"
-            text += "\n"
+            text += "  • База данных недоступна\n"
+            text += "    → Бот работает в деградированном режиме\n\n"
         else:
             text += "✅ Проблем не обнаружено\n\n"
 

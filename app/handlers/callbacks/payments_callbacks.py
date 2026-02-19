@@ -224,6 +224,13 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         logger.info(f"ADMIN_NOTIFICATION_SENT withdrawal_id={wid} user={telegram_id} amount={amount:.2f} RUB")
     except Exception as e:
         logger.error(f"CRITICAL: Failed to send withdrawal notification to admin: withdrawal_id={wid} user={telegram_id} error={e}", exc_info=True)
+        try:
+            await database._log_audit_event_atomic_standalone(
+                "withdrawal_admin_notify_failed", telegram_id, None,
+                f"withdrawal_id={wid} amount={amount:.2f} error={e}"
+            )
+        except Exception:
+            pass
 
 
 @payments_router.callback_query(F.data == "withdraw_cancel")

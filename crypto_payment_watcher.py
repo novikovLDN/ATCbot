@@ -1,6 +1,7 @@
 """Фоновая задача для автоматической проверки статуса CryptoBot платежей"""
 import asyncio
 import logging
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from aiogram import Bot
@@ -11,14 +12,6 @@ import config
 from app.services.language_service import resolve_user_language
 from app.i18n import get_text as i18n_get_text
 from payments import cryptobot
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
-from app.core.metrics import get_metrics
-from app.core.cost_model import get_cost_model, CostCenter
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
     log_worker_iteration_end,
@@ -167,15 +160,10 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
                         logger.error(f"Invalid payload format in CryptoBot invoice: invoice_id={invoice_id}, payload={payload}")
                         continue
                     
-                    # Получаем сумму оплаты (USD string from API, convert back to RUB)
-                    amount_usd_str = invoice_status.get("amount", "0")
-                    try:
-                        amount_usd = float(amount_usd_str) if amount_usd_str else 0.0
-                        from payments.cryptobot import RUB_TO_USD_RATE
-                        amount_rubles = amount_usd * RUB_TO_USD_RATE
-                    except (ValueError, TypeError):
-                        logger.error(f"Invalid amount in invoice status: {amount_usd_str}, invoice_id={invoice_id}")
-                        continue
+                    # Используем price_kopecks из pending_purchases — авторитетная сумма в рублях.
+                    # API CryptoBot возвращает в "amount" сумму в крипто-ассете (USDT/TON/BTC),
+                    # а не в фиате, поэтому пересчёт через курс даёт неверный результат для TON/BTC.
+                    amount_rubles = purchase.get("price_kopecks", 0) / 100.0
                     
                     # Финализируем покупку
                     result = await database.finalize_purchase(
@@ -319,7 +307,12 @@ async def crypto_payment_watcher_task(bot: Bot):
     """
     logger.info(f"Crypto payment watcher task started: interval={CHECK_INTERVAL_SECONDS}s")
     
-    # Первая проверка сразу при запуске
+    # Prevent worker burst at startup
+    jitter_s = random.uniform(5, 60)
+    await asyncio.sleep(jitter_s)
+    logger.debug("crypto_payment_watcher: startup jitter done (%.1fs)", jitter_s)
+    
+    # Первая проверка после jitter
     try:
         async with _worker_lock:
             await check_crypto_payments(bot)
@@ -345,12 +338,11 @@ async def crypto_payment_watcher_task(bot: Bot):
         
         items_processed = 0
         outcome = "success"
+        iteration_error_type = None
+        should_exit_loop = False
         
         try:
-            await asyncio.sleep(CHECK_INTERVAL_SECONDS)
-            
-            # STEP 6 — F5: BACKGROUND WORKER SAFETY
-            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
             if not feature_flags.background_workers_enabled:
@@ -370,129 +362,74 @@ async def crypto_payment_watcher_task(bot: Bot):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
             
-            # READ-ONLY system state awareness: Skip iteration if system is unavailable
-            try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-                
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-                
-                # VPN API component
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-                
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-                
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("crypto_payment_watcher: skipping — DB not ready")
+                outcome = "skipped"
+                reason = "DB not ready"
+                log_worker_iteration_end(
+                    worker_name="crypto_payment_watcher",
+                    outcome=outcome,
+                    items_processed=0,
+                    duration_ms=(time.time() - iteration_start_time) * 1000,
+                    reason=reason,
                 )
-                
-                # STEP 1.1 - RUNTIME GUARDRAILS: Workers read SystemState at iteration start
-                # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in crypto_payment_watcher "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    outcome = "skipped"
-                    reason = f"system_state=UNAVAILABLE (database={system_state.database.status.value})"
-                    log_worker_iteration_end(
-                        worker_name="crypto_payment_watcher",
-                        outcome=outcome,
-                        items_processed=0,
-                        duration_ms=(time.time() - iteration_start_time) * 1000,
-                        reason=reason,
-                    )
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-                
-                # PART D.4: Workers continue normally if DEGRADED
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in crypto_payment_watcher "
-                        f"(continuing with reduced functionality - optional components degraded)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
             
-            # Process crypto payments
-            async with _worker_lock:
-                items_processed, outcome = await check_crypto_payments(bot)
-            await cleanup_expired_purchases()
+            # H1 fix: Wrap iteration body with timeout
+            async def _run_iteration():
+                # Process crypto payments
+                async with _worker_lock:
+                    items, result = await check_crypto_payments(bot)
+                await cleanup_expired_purchases()
+                return items, result
             
-            # STEP 2.3 — OBSERVABILITY: Structured logging for worker iteration end
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = None
-            if outcome == "failed":
-                error_type = "infra_error"  # Default, will be refined by classify_error if exception caught
-            
-            log_worker_iteration_end(
-                worker_name="crypto_payment_watcher",
-                outcome=outcome,
-                items_processed=items_processed,
-                error_type=error_type,
-                duration_ms=duration_ms
-            )
+            try:
+                items_processed, outcome = await asyncio.wait_for(_run_iteration(), timeout=120.0)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "WORKER_TIMEOUT worker=crypto_payment_watcher exceeded 120s — iteration cancelled"
+                )
+                items_processed = 0
+                outcome = "timeout"
+                iteration_error_type = "timeout"
+            except Exception as e:
+                logger.exception(f"crypto_payment_watcher: Unexpected error in iteration: {type(e).__name__}: {str(e)[:100]}")
+                items_processed = 0
+                outcome = "failed"
+                iteration_error_type = classify_error(e)
             
         except asyncio.CancelledError:
-            log_event(
-                logger,
-                component="worker",
-                operation="crypto_payment_watcher_iteration",
-                correlation_id=str(iteration_number),
-                outcome="cancelled",
-            )
-            break
+            logger.info("Crypto payment watcher task cancelled")
+            outcome = "cancelled"
+            should_exit_loop = True
         except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
             # RESILIENCE FIX: Temporary DB failures don't crash the task loop
             logger.warning(f"crypto_payment_watcher: Database temporarily unavailable: {type(e).__name__}: {str(e)[:100]}")
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with degraded outcome
-            duration_ms = (time.time() - iteration_start_time) * 1000
-            log_worker_iteration_end(
-                worker_name="crypto_payment_watcher",
-                outcome="degraded",
-                items_processed=0,
-                error_type="infra_error",
-                duration_ms=duration_ms
-            )
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            # Worker always sleeps before next iteration, even on failure
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+            outcome = "degraded"
+            iteration_error_type = "infra_error"
         except Exception as e:
             logger.error(f"crypto_payment_watcher: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
             logger.debug("crypto_payment_watcher: Full traceback for task loop", exc_info=True)
-            
-            # STEP 2.3 — OBSERVABILITY: Log iteration end with failed outcome
+            outcome = "failed"
+            iteration_error_type = classify_error(e)
+        finally:
+            # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000
-            error_type = classify_error(e)
+            error_type = iteration_error_type if 'iteration_error_type' in locals() else (None if outcome == "success" else "infra_error")
             log_worker_iteration_end(
                 worker_name="crypto_payment_watcher",
-                outcome="failed",
-                items_processed=0,
+                outcome=outcome,
+                items_processed=items_processed if 'items_processed' in locals() else 0,
                 error_type=error_type,
                 duration_ms=duration_ms
             )
-            
-            # STEP 3 — PART B: WORKER LOOP SAFETY
-            # Minimum safe sleep on failure to prevent tight retry storms
-            # Worker always sleeps before next iteration, even on failure
-            await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+            if outcome not in ("success", "cancelled", "skipped"):
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+        
+        if should_exit_loop:
+            break
+        
+        # Sleep after iteration completes (outside try/finally)
+        await asyncio.sleep(CHECK_INTERVAL_SECONDS)

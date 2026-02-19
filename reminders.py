@@ -13,6 +13,11 @@ from app.services.notifications import service as notification_service
 from app.services.notifications.service import ReminderType
 from app.utils.telegram_safe import safe_send_message
 from app.core.structured_logger import log_event
+from app.utils.logging_helpers import (
+    log_worker_iteration_start,
+    log_worker_iteration_end,
+    classify_error,
+)
 # import outline_api  # DISABLED - мигрировали на Xray Core (VLESS)
 
 # Idempotency: skip if reminder sent within this window (container restart guard)
@@ -159,44 +164,55 @@ async def reminders_task(bot: Bot):
     # Небольшая задержка при старте, чтобы БД успела инициализироваться
     await asyncio.sleep(60)
 
-    iteration = 0
+    iteration_number = 0
     while True:
-        iteration += 1
-        start_time = time.time()
+        iteration_number += 1
+        iteration_start_time = time.time()
+        
+        # H1+H2 fix: Add iteration start logging and timeout wrapper
+        correlation_id = log_worker_iteration_start(
+            worker_name="reminders",
+            iteration_number=iteration_number
+        )
+        
+        iteration_outcome = "success"
+        iteration_error_type = None
+        
         try:
-            # Отправляем напоминания об окончании подписки
-            await send_smart_reminders(bot)
-            duration_ms = int((time.time() - start_time) * 1000)
-            log_event(
-                logger,
-                component="worker",
-                operation="reminders_iteration",
-                correlation_id=str(iteration),
-                outcome="success",
-                duration_ms=duration_ms,
-            )
+            # H1 fix: Wrap iteration body with timeout
+            async def _run_iteration():
+                await send_smart_reminders(bot)
+            
+            try:
+                await asyncio.wait_for(_run_iteration(), timeout=120.0)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "WORKER_TIMEOUT worker=reminders exceeded 120s — iteration cancelled"
+                )
+                iteration_outcome = "timeout"
+                iteration_error_type = "timeout"
         except asyncio.CancelledError:
-            log_event(
-                logger,
-                component="worker",
-                operation="reminders_iteration",
-                correlation_id=str(iteration),
-                outcome="cancelled",
-            )
+            logger.info("Reminders task cancelled")
+            iteration_outcome = "cancelled"
             break
         except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
-            log_event(
-                logger,
-                component="worker",
-                operation="reminders_iteration",
-                correlation_id=str(iteration),
-                outcome="failed",
+            logger.error(f"reminders: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
+            logger.debug("reminders: Full traceback for task loop", exc_info=True)
+            iteration_outcome = "failed"
+            iteration_error_type = classify_error(e)
+        finally:
+            # H2 fix: ITERATION_END always fires in finally block
+            duration_ms = int((time.time() - iteration_start_time) * 1000)
+            log_worker_iteration_end(
+                worker_name="reminders",
+                outcome=iteration_outcome,
+                items_processed=0,
+                error_type=iteration_error_type,
                 duration_ms=duration_ms,
-                reason=str(e)[:200],
-                level="error",
             )
-            logger.exception("Error in reminders_task: %s", e)
+        
+        if iteration_outcome == "cancelled":
+            break
         
         # Проверяем каждые 45 минут для баланса между точностью и нагрузкой
         await asyncio.sleep(45 * 60)  # 45 минут в секундах

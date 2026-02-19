@@ -13,12 +13,6 @@ import database
 import config
 from app import i18n
 from app.services.notifications import service as notification_service
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
 from app.services.language_service import resolve_user_language
 from app.utils.logging_helpers import (
     log_worker_iteration_start,
@@ -107,8 +101,16 @@ async def process_auto_renewals(bot: Bot):
 
     # Pool is created with acquire timeout in database._get_pool_config() (DB_POOL_ACQUIRE_TIMEOUT, default 10s).
     # This worker does not call VPN API (no httpx); only DB and Telegram.
+    # Pool timeout is already configured (10s); acquire_connection uses pool.acquire() which respects that timeout.
+    # For extra safety, we wrap acquire in wait_for to ensure cancellation if pool hangs.
     while True:
-        async with acquire_connection(pool, "auto_renewal_main") as conn:
+        cm = acquire_connection(pool, "auto_renewal_main")
+        try:
+            conn = await asyncio.wait_for(cm.__aenter__(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.error("auto_renewal: pool.acquire() timed out after 10s")
+            raise
+        try:
             notifications_to_send = []
             async with conn.transaction():
                 try:
@@ -353,7 +355,14 @@ async def process_auto_renewals(bot: Bot):
                     if sent is None:
                         continue
                     await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec
-                    async with acquire_connection(pool, "auto_renewal_notify") as notify_conn:
+                    # Explicit timeout for notification connection acquire (pool timeout is 10s)
+                    notify_cm = acquire_connection(pool, "auto_renewal_notify")
+                    try:
+                        notify_conn = await asyncio.wait_for(notify_cm.__aenter__(), timeout=10.0)
+                    except asyncio.TimeoutError:
+                        logger.error("auto_renewal: pool.acquire() timed out for notify_conn after 10s")
+                        continue
+                    try:
                         marked = await notification_service.mark_notification_sent(item["payment_id"], conn=notify_conn)
                         if marked:
                             logger.info(
@@ -363,10 +372,22 @@ async def process_auto_renewals(bot: Bot):
                             logger.warning(
                                 f"NOTIFICATION_FLAG_ALREADY_SET [type=auto_renewal, payment_id={item['payment_id']}, user={item['telegram_id']}]"
                             )
+                    finally:
+                        # Release notification connection
+                        try:
+                            await notify_cm.__aexit__(None, None, None)
+                        except Exception:
+                            pass
                 except Exception as e:
                     logger.error(
                         f"CRITICAL: Failed to send/mark auto-renewal notification: payment_id={item.get('payment_id')}, user={item.get('telegram_id')}, error={e}"
                     )
+        finally:
+            # Release connection (equivalent to __aexit__)
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception:
+                pass  # Ignore errors during cleanup
 
         await asyncio.sleep(0)
 
@@ -422,11 +443,7 @@ async def auto_renewal_task(bot: Bot):
         )
 
         try:
-            # Ждем до следующей проверки (5-15 минут, по умолчанию 10 минут)
-            await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS)
-
-            # STEP 6 — F5: BACKGROUND WORKER SAFETY
-            # Global worker guard: respect FeatureFlags, SystemState, CircuitBreaker
+            # Feature flag check
             from app.core.feature_flags import get_feature_flags
             feature_flags = get_feature_flags()
             if not feature_flags.background_workers_enabled or not feature_flags.auto_renewal_enabled:
@@ -439,61 +456,12 @@ async def auto_renewal_task(bot: Bot):
                 await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
                 continue
 
-            # STEP 1.1 - RUNTIME GUARDRAILS: Read SystemState at iteration start
-            # STEP 1.2 - BACKGROUND WORKERS CONTRACT: Check system state before processing
-            try:
-                now = datetime.now(timezone.utc)
-                db_ready = database.DB_READY
-
-                # Build SystemState for awareness (read-only)
-                if db_ready:
-                    db_component = healthy_component(last_checked_at=now)
-                else:
-                    db_component = unavailable_component(
-                        error="DB not ready (degraded mode)",
-                        last_checked_at=now
-                    )
-
-                # VPN API component (not critical for auto-renewal)
-                if config.VPN_ENABLED and config.XRAY_API_URL:
-                    vpn_component = healthy_component(last_checked_at=now)
-                else:
-                    vpn_component = degraded_component(
-                        error="VPN API not configured",
-                        last_checked_at=now
-                    )
-
-                # Payments component (always healthy)
-                payments_component = healthy_component(last_checked_at=now)
-
-                system_state = SystemState(
-                    database=db_component,
-                    vpn_api=vpn_component,
-                    payments=payments_component,
-                )
-
-                # STEP 1.2: Skip iteration if system is UNAVAILABLE
-                # DEGRADED state does NOT stop iteration (workers continue with reduced functionality)
-                if system_state.is_unavailable:
-                    logger.warning(
-                        f"[UNAVAILABLE] system_state — skipping iteration in auto_renewal_task "
-                        f"(database={system_state.database.status.value})"
-                    )
-                    iteration_outcome = "skipped"
-                    await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
-                    continue
-
-                # PART D.4: Workers continue normally if DEGRADED
-                # PART D.4: Workers skip only if system_state == UNAVAILABLE
-                # DEGRADED state allows continuation (optional components degraded, critical healthy)
-                if system_state.is_degraded:
-                    logger.info(
-                        f"[DEGRADED] system_state detected in auto_renewal_task "
-                        f"(continuing with reduced functionality - optional components degraded)"
-                    )
-            except Exception:
-                # Ignore system state errors - continue with normal flow
-                pass
+            # Simple DB readiness check
+            if not database.DB_READY:
+                logger.warning("auto_renewal: skipping — DB not ready")
+                iteration_outcome = "skipped"
+                await asyncio.sleep(MINIMUM_SAFE_SLEEP_ON_FAILURE)
+                continue
 
             # Wrap entire iteration body so a hung run is cancelled after 2 minutes (avoids holding DB forever, liveness watchdog)
             async def _run_iteration_body():
@@ -542,4 +510,8 @@ async def auto_renewal_task(bot: Bot):
 
         if should_exit_loop:
             break
+        
+        # Sleep after iteration completes (outside try/finally)
+        # Ждем до следующей проверки (5-15 минут, по умолчанию 10 минут)
+        await asyncio.sleep(AUTO_RENEWAL_INTERVAL_SECONDS)
 
