@@ -9080,12 +9080,13 @@ async def decrease_bonus_balance(telegram_id: int, amount_rubles: float, conn=No
         return await _do_decrease(conn)
 
 
-async def update_farm_last_good_harvest(telegram_id: int, conn=None) -> bool:
+async def update_farm_last_good_harvest(telegram_id: int, dt: Optional[datetime] = None, conn=None) -> bool:
     """
-    Update farm_last_good_harvest timestamp to now
+    Update farm_last_good_harvest timestamp
     
     Args:
         telegram_id: User Telegram ID
+        dt: Optional datetime (defaults to now)
         conn: Optional connection (if caller holds transaction)
     
     Returns:
@@ -9095,7 +9096,9 @@ async def update_farm_last_good_harvest(telegram_id: int, conn=None) -> bool:
         logger.warning("DB not ready, update_farm_last_good_harvest skipped")
         return False
     
-    now_naive = _to_db_utc(datetime.now(timezone.utc))
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    now_naive = _to_db_utc(dt)
     
     async def _do_update(c):
         await c.execute(
@@ -9113,3 +9116,43 @@ async def update_farm_last_good_harvest(telegram_id: int, conn=None) -> bool:
     
     async with pool.acquire() as conn:
         return await _do_update(conn)
+
+
+async def get_farm_last_good_harvest(telegram_id: int, conn=None) -> Optional[datetime]:
+    """
+    Get farm_last_good_harvest timestamp for user
+    
+    Args:
+        telegram_id: User Telegram ID
+        conn: Optional connection (if caller holds transaction)
+    
+    Returns:
+        datetime if exists, None otherwise
+    """
+    if not DB_READY:
+        return None
+    
+    async def _do_get(c):
+        row = await c.fetchrow(
+            "SELECT farm_last_good_harvest FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+        if not row or not row.get("farm_last_good_harvest"):
+            return None
+        
+        dt = row["farm_last_good_harvest"]
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
+    
+    if conn is not None:
+        return await _do_get(conn)
+    
+    pool = await get_pool()
+    if pool is None:
+        return None
+    
+    async with pool.acquire() as conn:
+        return await _do_get(conn)
