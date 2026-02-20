@@ -556,13 +556,13 @@ def format_time_remaining(seconds: int) -> str:
 
 def sync_farm_plot_statuses(farm_plots: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Sync plot statuses based on planted_at + 48 hours
+    Sync plot statuses based on planted_at + 144 hours (6 days)
     
     Returns:
         Updated farm_plots list with synced statuses
     """
     now = datetime.now(timezone.utc)
-    growth_time = timedelta(hours=48)
+    growth_time = timedelta(hours=144)  # 6 days
     
     updated_plots = []
     for plot in farm_plots:
@@ -597,14 +597,19 @@ def sync_farm_plot_statuses(farm_plots: List[Dict[str, Any]]) -> List[Dict[str, 
 def create_farm_keyboard(farm_plots: List[Dict[str, Any]], farm_plot_count: int, bonus_balance: float, can_buy_plot: bool, upgrade_price: float) -> InlineKeyboardMarkup:
     """Create inline keyboard for farm screen"""
     buttons = []
+    now = datetime.now(timezone.utc)
+    growth_time = timedelta(hours=144)  # 6 days
+    bad_weather_warning_threshold = timedelta(days=3)  # Show warning after 3 days
     
     # Plot buttons
     for plot_idx in range(farm_plot_count):
         plot = next((p for p in farm_plots if p.get("plot_id") == plot_idx), None)
         if not plot:
-            plot = {"plot_id": plot_idx, "status": "empty", "planted_at": None}
+            plot = {"plot_id": plot_idx, "status": "empty", "planted_at": None, "weather": None}
         
         status = plot.get("status", "empty")
+        weather = plot.get("weather")
+        planted_at_str = plot.get("planted_at")
         
         if status == "empty":
             buttons.append([InlineKeyboardButton(
@@ -612,10 +617,34 @@ def create_farm_keyboard(farm_plots: List[Dict[str, Any]], farm_plot_count: int,
                 callback_data=f"farm_plant_{plot_idx}"
             )])
         elif status == "growing":
-            buttons.append([InlineKeyboardButton(
-                text=f"⏳ Растёт #{plot_idx + 1}",
-                callback_data="farm_noop"
-            )])
+            # Check if bad weather warning should be shown
+            show_bad_weather_warning = False
+            if weather == "bad" and planted_at_str:
+                try:
+                    if isinstance(planted_at_str, str):
+                        planted_at = datetime.fromisoformat(planted_at_str.replace("Z", "+00:00"))
+                    else:
+                        planted_at = planted_at_str
+                    
+                    if planted_at.tzinfo is None:
+                        planted_at = planted_at.replace(tzinfo=timezone.utc)
+                    
+                    time_since_planted = now - planted_at
+                    if time_since_planted >= bad_weather_warning_threshold:
+                        show_bad_weather_warning = True
+                except Exception:
+                    pass
+            
+            if show_bad_weather_warning:
+                buttons.append([InlineKeyboardButton(
+                    text=f"🌧 Пересадить #{plot_idx + 1}",
+                    callback_data=f"farm_replant_{plot_idx}"
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    text=f"⏳ Растёт #{plot_idx + 1}",
+                    callback_data="farm_noop"
+                )])
         elif status == "ready":
             buttons.append([InlineKeyboardButton(
                 text=f"🌻 Собрать #{plot_idx + 1}",
@@ -682,12 +711,13 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
         farm_data = await database.get_farm_data(telegram_id)
         farm_plots = farm_data.get("farm_plots", [])
         farm_plot_count = farm_data.get("farm_plot_count", 1)
+        farm_last_good_harvest = farm_data.get("farm_last_good_harvest")
         # Use real user balance (same field used throughout the bot)
         balance = await database.get_user_balance(telegram_id)
         
         # Initialize plots if empty
         if not farm_plots:
-            farm_plots = [{"plot_id": 0, "status": "empty", "planted_at": None}]
+            farm_plots = [{"plot_id": 0, "status": "empty", "planted_at": None, "weather": None}]
             await database.save_farm_plots(telegram_id, farm_plots)
         
         # Ensure we have correct number of plots
@@ -695,7 +725,8 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
             farm_plots.append({
                 "plot_id": len(farm_plots),
                 "status": "empty",
-                "planted_at": None
+                "planted_at": None,
+                "weather": None
             })
         
         # Sync plot statuses
@@ -704,16 +735,18 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
         
         # Build farm message
         now = datetime.now(timezone.utc)
-        growth_time = timedelta(hours=48)
+        growth_time = timedelta(hours=144)  # 6 days
+        bad_weather_warning_threshold = timedelta(days=3)
         lines = ["🌾 Ваша ферма\n"]
         
         for plot_idx in range(farm_plot_count):
             plot = next((p for p in farm_plots if p.get("plot_id") == plot_idx), None)
             if not plot:
-                plot = {"plot_id": plot_idx, "status": "empty", "planted_at": None}
+                plot = {"plot_id": plot_idx, "status": "empty", "planted_at": None, "weather": None}
             
             status = plot.get("status", "empty")
             planted_at_str = plot.get("planted_at")
+            weather = plot.get("weather")
             
             if status == "empty":
                 lines.append(f"Грядка {plot_idx + 1}: ⬜ Пусто")
@@ -728,7 +761,12 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
                         planted_at = planted_at.replace(tzinfo=timezone.utc)
                     
                     ready_time = planted_at + growth_time
-                    if now < ready_time:
+                    time_since_planted = now - planted_at
+                    
+                    # Check for bad weather warning
+                    if weather == "bad" and time_since_planted >= bad_weather_warning_threshold:
+                        lines.append(f"Грядка {plot_idx + 1}: ⛈ Плохая погода")
+                    elif now < ready_time:
                         remaining = ready_time - now
                         remaining_seconds = int(remaining.total_seconds())
                         time_str = format_time_remaining(remaining_seconds)
@@ -791,7 +829,7 @@ async def callback_farm_plant(callback: CallbackQuery, bot: Bot = None):
         # Find plot
         plot = next((p for p in farm_plots if p.get("plot_id") == plot_id), None)
         if not plot:
-            plot = {"plot_id": plot_id, "status": "empty", "planted_at": None}
+            plot = {"plot_id": plot_id, "status": "empty", "planted_at": None, "weather": None}
             farm_plots.append(plot)
         
         # Check if plot is empty
@@ -799,10 +837,29 @@ async def callback_farm_plant(callback: CallbackQuery, bot: Bot = None):
             await callback.answer("Эта грядка уже занята!", show_alert=True)
             return
         
+        # Get farm data to check last good harvest for weather guarantee
+        farm_data = await database.get_farm_data(telegram_id)
+        farm_last_good_harvest = farm_data.get("farm_last_good_harvest")
+        
+        # Determine weather outcome
+        # Guarantee rule: if no good harvest in 30 days, force good weather
+        force_good_weather = False
+        if farm_last_good_harvest:
+            days_since_good = (datetime.now(timezone.utc) - farm_last_good_harvest).days
+            if days_since_good >= 30:
+                force_good_weather = True
+        
+        # Random weather: 70% good, 30% bad (unless guarantee rule applies)
+        if force_good_weather:
+            weather = "good"
+        else:
+            weather = "good" if random.random() < 0.7 else "bad"
+        
         # Plant seed
         now = datetime.now(timezone.utc)
         plot["status"] = "growing"
         plot["planted_at"] = now.isoformat()
+        plot["weather"] = weather
         
         # Update plots list
         for i, p in enumerate(farm_plots):
@@ -827,7 +884,7 @@ async def callback_farm_plant(callback: CallbackQuery, bot: Bot = None):
 @router.callback_query(F.data.startswith("farm_harvest_"))
 async def callback_farm_harvest(callback: CallbackQuery, bot: Bot = None):
     """Harvest ready plot"""
-    await callback.answer("🌻 +10 ₽ получено!")
+    await callback.answer()  # Will show custom message based on weather
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -866,7 +923,7 @@ async def callback_farm_harvest(callback: CallbackQuery, bot: Bot = None):
                 if planted_at.tzinfo is None:
                     planted_at = planted_at.replace(tzinfo=timezone.utc)
                 
-                growth_time = timedelta(hours=48)
+                growth_time = timedelta(hours=144)  # 6 days
                 ready_time = planted_at + growth_time
                 now = datetime.now(timezone.utc)
                 
@@ -878,15 +935,28 @@ async def callback_farm_harvest(callback: CallbackQuery, bot: Bot = None):
                 await callback.answer("Ошибка проверки времени", show_alert=True)
                 return
             
-            # Harvest: add 10 RUB to balance (same field used throughout the bot)
-            success = await database.increase_balance(telegram_id, 10.0, source="farm_harvest", description="Farm harvest reward", conn=conn)
-            if not success:
-                await callback.answer("Ошибка при начислении", show_alert=True)
-                return
+            # Check weather outcome
+            weather = plot.get("weather", "good")
+            
+            if weather == "good":
+                # Good harvest: add 10 RUB to balance
+                success = await database.increase_balance(telegram_id, 10.0, source="farm_harvest", description="Farm harvest reward", conn=conn)
+                if not success:
+                    await callback.answer("Ошибка при начислении", show_alert=True)
+                    return
+                
+                # Update last good harvest timestamp
+                await database.update_farm_last_good_harvest(telegram_id, conn=conn)
+                
+                await callback.answer("🌻 Отличный урожай! +10 ₽ зачислено на баланс!", show_alert=True)
+            else:
+                # Bad weather: no reward
+                await callback.answer("🌧 Увы, на вашей грядке была плохая погода — урожай погиб 😢\nМожно посадить снова!", show_alert=True)
             
             # Reset plot
             plot["status"] = "empty"
             plot["planted_at"] = None
+            plot["weather"] = None
             
             # Update plots list
             for i, p in enumerate(farm_plots):
@@ -977,3 +1047,47 @@ async def callback_farm_buy_plot(callback: CallbackQuery, bot: Bot = None):
 async def callback_farm_noop(callback: CallbackQuery):
     """No-op handler for disabled buttons"""
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("farm_replant_"))
+async def callback_farm_replant(callback: CallbackQuery, bot: Bot = None):
+    """Replant plot after bad weather"""
+    await callback.answer("🌧 Урожай погиб. Можно посадить снова!")
+    
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    
+    try:
+        plot_id = int(callback.data.split("_")[2])
+        
+        # Get farm data
+        farm_data = await database.get_farm_data(telegram_id)
+        farm_plots = farm_data.get("farm_plots", [])
+        
+        # Find plot
+        plot = next((p for p in farm_plots if p.get("plot_id") == plot_id), None)
+        if not plot:
+            await callback.answer("Грядка не найдена", show_alert=True)
+            return
+        
+        # Reset plot to empty
+        plot["status"] = "empty"
+        plot["planted_at"] = None
+        plot["weather"] = None
+        
+        # Update plots list
+        for i, p in enumerate(farm_plots):
+            if p.get("plot_id") == plot_id:
+                farm_plots[i] = plot
+                break
+        
+        await database.save_farm_plots(telegram_id, farm_plots)
+        
+        # Refresh farm screen
+        await callback_game_farm(callback, bot)
+        
+        logger.info("GAME_FARM [user=%s] replanted plot=%s", telegram_id, plot_id)
+        
+    except Exception as e:
+        logger.exception("GAME_FARM_REPLANT [user=%s] error=%s", telegram_id, e)
+        await callback.answer("Ошибка при пересадке", show_alert=True)

@@ -8859,37 +8859,47 @@ async def get_farm_data(telegram_id: int) -> Dict[str, Any]:
         {
             "farm_plots": List[Dict],  # JSONB array of plot objects
             "farm_plot_count": int,     # Number of plots (1-5)
-            "bonus_balance": float      # Bonus balance in rubles
+            "bonus_balance": float,     # Bonus balance in rubles
+            "farm_last_good_harvest": Optional[datetime]  # Last good harvest timestamp
         }
     """
     if not DB_READY:
         logger.warning("DB not ready, get_farm_data skipped")
-        return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0}
+        return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0, "farm_last_good_harvest": None}
     
     pool = await get_pool()
     if pool is None:
         logger.warning("Pool is None, get_farm_data skipped")
-        return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0}
+        return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0, "farm_last_good_harvest": None}
     
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT farm_plots, farm_plot_count, bonus_balance 
+            """SELECT farm_plots, farm_plot_count, bonus_balance, farm_last_good_harvest 
                FROM users WHERE telegram_id = $1""",
             telegram_id
         )
         
         if not row:
-            return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0}
+            return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0, "farm_last_good_harvest": None}
         
         farm_plots = row.get("farm_plots") or []
         farm_plot_count = row.get("farm_plot_count") or 1
         bonus_balance_kopecks = row.get("bonus_balance") or 0
         bonus_balance_rubles = bonus_balance_kopecks / 100.0
+        farm_last_good_harvest = row.get("farm_last_good_harvest")
+        
+        # Convert naive datetime to aware UTC if needed
+        if farm_last_good_harvest and isinstance(farm_last_good_harvest, datetime):
+            if farm_last_good_harvest.tzinfo is None:
+                farm_last_good_harvest = farm_last_good_harvest.replace(tzinfo=timezone.utc)
+            else:
+                farm_last_good_harvest = farm_last_good_harvest.astimezone(timezone.utc)
         
         return {
             "farm_plots": farm_plots if isinstance(farm_plots, list) else [],
             "farm_plot_count": int(farm_plot_count),
-            "bonus_balance": bonus_balance_rubles
+            "bonus_balance": bonus_balance_rubles,
+            "farm_last_good_harvest": farm_last_good_harvest
         }
 
 
@@ -9068,3 +9078,38 @@ async def decrease_bonus_balance(telegram_id: int, amount_rubles: float, conn=No
     
     async with pool.acquire() as conn:
         return await _do_decrease(conn)
+
+
+async def update_farm_last_good_harvest(telegram_id: int, conn=None) -> bool:
+    """
+    Update farm_last_good_harvest timestamp to now
+    
+    Args:
+        telegram_id: User Telegram ID
+        conn: Optional connection (if caller holds transaction)
+    
+    Returns:
+        True if successful
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, update_farm_last_good_harvest skipped")
+        return False
+    
+    now_naive = _to_db_utc(datetime.now(timezone.utc))
+    
+    async def _do_update(c):
+        await c.execute(
+            "UPDATE users SET farm_last_good_harvest = $1 WHERE telegram_id = $2",
+            now_naive, telegram_id
+        )
+        return True
+    
+    if conn is not None:
+        return await _do_update(conn)
+    
+    pool = await get_pool()
+    if pool is None:
+        return False
+    
+    async with pool.acquire() as conn:
+        return await _do_update(conn)
