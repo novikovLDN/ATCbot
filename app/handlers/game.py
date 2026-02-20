@@ -806,6 +806,14 @@ async def _render_farm(callback: CallbackQuery, pool, farm_plots=None, balance=N
                 callback_data=f"farm_harvest_{i}"
             )])
     
+    # Add "Plant on all" button if there's at least one empty plot
+    has_empty = any(p.get("status") == "empty" for p in farm_plots)
+    if has_empty:
+        buttons.append([InlineKeyboardButton(
+            text="🌱 Посадить на все грядки",
+            callback_data="farm_plant_all"
+        )])
+    
     if next_price and plot_count < 5:
         can_afford = balance_kopecks >= next_price * 100
         btn_text = f"➕ Купить грядку — {next_price} ₽" if can_afford else f"➕ Грядка {next_price} ₽ (недостаточно средств)"
@@ -997,6 +1005,45 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     await callback.answer(f"✅ Куплена новая грядка за {price} ₽!", show_alert=True)
     # Pass updated farm_plots + new balance + new plot_count directly
     await _render_farm(callback, pool, farm_plots=farm_plots, balance=balance_rubles, plot_count=new_plot_count)
+
+
+@router.callback_query(F.data == "farm_plant_all", StateFilter("*"))
+async def callback_farm_plant_all(callback: CallbackQuery, state: FSMContext):
+    telegram_id = callback.from_user.id
+    pool = await database.get_pool()
+    if not pool:
+        await callback.answer("❌ Ошибка базы данных", show_alert=True)
+        return
+    
+    now = datetime.now(timezone.utc)
+    
+    farm_data = await database.get_farm_data(telegram_id)
+    farm_plots = farm_data.get("farm_plots", [])
+    plot_count = farm_data.get("farm_plot_count", 1)
+    balance_rubles = await database.get_user_balance(telegram_id)
+    
+    async with pool.acquire() as conn:
+        last_good = await database.get_farm_last_good_harvest(telegram_id, conn=conn)
+    
+    planted_count = 0
+    for plot in farm_plots:
+        if plot.get("status") == "empty":
+            force_good = (last_good is None) or ((now - last_good).days >= 30)
+            weather = "good" if force_good else ("good" if random.random() < 0.7 else "bad")
+            plot["status"] = "growing"
+            plot["planted_at"] = now.isoformat()
+            plot["weather"] = weather
+            planted_count += 1
+    
+    if planted_count == 0:
+        await callback.answer("❌ Нет пустых грядок", show_alert=True)
+        return
+    
+    await database.save_farm_plots(telegram_id, farm_plots)
+    await callback.answer(f"🌱 Посажено на {planted_count} грядок!")
+    await _render_farm(callback, pool, farm_plots=farm_plots, 
+                       balance=balance_rubles, plot_count=plot_count)
+    logger.info(f"GAME_FARM [user={telegram_id}] plant_all count={planted_count}")
 
 
 @router.callback_query(F.data == "farm_noop", StateFilter("*"))
