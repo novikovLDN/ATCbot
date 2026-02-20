@@ -316,53 +316,37 @@ def get_support_keyboard(language: str):
 
 def get_instruction_keyboard(language: str, platform: str = "unknown"):
     """
-    Клавиатура экрана 'Инструкция' для v2RayTun
-
-    Args:
-        language: Язык пользователя
-        platform: Платформа пользователя ("ios", "android", или "unknown")
+    Клавиатура экрана 'Инструкция' для v2RayTun.
+    Всегда показываем 5 кнопок: Android, Windows, iOS, MacOS, TV.
     """
-    buttons = []
-
-    if platform == "ios":
-        buttons.append([
+    buttons = [
+        [
             InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_ios", "instruction_download_ios"),
-                url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_macos", "instruction_download_macos"),
-                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
-            ),
-        ])
-    elif platform == "android":
-        buttons.append([
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_android", "instruction_download_android"),
-                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
-            )
-        ])
-    else:
-        buttons.append([
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_ios", "instruction_download_ios"),
-                url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_android", "instruction_download_android"),
+                text=i18n_get_text(language, "instruction._download_android", "🤖 Android"),
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
-        ])
-        buttons.append([
             InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_desktop", "instruction_download_desktop"),
+                text=i18n_get_text(language, "instruction._download_desktop", "💻 Windows"),
                 url="https://www.mediafire.com/folder/lpcbgr4ox8u5x/Atlas_Secure"
             ),
+        ],
+        [
             InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_macos", "instruction_download_macos"),
+                text=i18n_get_text(language, "instruction._download_ios", "📱 iOS"),
                 url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
             ),
-        ])
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "instruction._download_macos", "🍎 MacOS"),
+                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "instruction._download_tv", "📺 TV"),
+                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
+            ),
+        ],
+    ]
 
     buttons.append([
         InlineKeyboardButton(
