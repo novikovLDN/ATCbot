@@ -1193,12 +1193,12 @@ async def get_farm_data(telegram_id: int) -> Tuple[List[Dict[str, Any]], int, in
     """
     if not DB_READY:
         logger.warning("DB not ready, get_farm_data skipped")
-        return ([], 3, 0)
+        return ([], 1, 0)
     
     pool = await get_pool()
     if pool is None:
         logger.warning("Pool is None, get_farm_data skipped")
-        return ([], 3, 0)
+        return ([], 1, 0)
     
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -1233,6 +1233,29 @@ async def get_farm_data(telegram_id: int) -> Tuple[List[Dict[str, Any]], int, in
             farm_plots = []
         elif isinstance(farm_plots, str):
             farm_plots = json.loads(farm_plots)
+        
+        # Ensure plot 0 always exists for every user (free first plot)
+        if not farm_plots or len(farm_plots) == 0:
+            default_plots = [
+                {
+                    "plot_id": 0,
+                    "status": "empty",
+                    "plant_type": None,
+                    "planted_at": None,
+                    "ready_at": None,
+                    "dead_at": None,
+                    "notified_ready": False,
+                    "notified_12h": False,
+                    "notified_dead": False,
+                    "water_used_at": None,
+                    "fertilizer_used_at": None,
+                }
+            ]
+            farm_plots = default_plots
+            await conn.execute(
+                "UPDATE users SET farm_plots = $1::jsonb, farm_plot_count = 1 WHERE telegram_id = $2",
+                json.dumps(farm_plots), telegram_id
+            )
         
         plot_count = row.get("farm_plot_count", 1)
         balance = row.get("balance", 0)

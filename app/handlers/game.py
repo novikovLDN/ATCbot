@@ -524,9 +524,11 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
     if changed:
         await database.save_farm_plots(telegram_id, farm_plots)
     
-    # Build text
+    # Build text (plot 0 always visible; plots 1-8 only if purchased, i.e. plot_id < plot_count)
     lines = ["🌾 <b>Ваша ферма</b>\n"]
     for plot in farm_plots:
+        if plot["plot_id"] >= plot_count:
+            continue
         i = plot["plot_id"]
         status = plot["status"]
         pt = plot.get("plant_type")
@@ -548,9 +550,11 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
     lines.append(f"\n💰 Баланс: {balance/100:.2f} ₽")
     text = "\n".join(lines)
     
-    # Build keyboard
+    # Build keyboard (same visibility: plot_id < plot_count)
     buttons = []
     for plot in farm_plots:
+        if plot["plot_id"] >= plot_count:
+            continue
         i = plot["plot_id"]
         status = plot["status"]
         pt = plot.get("plant_type")
