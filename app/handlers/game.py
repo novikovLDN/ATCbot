@@ -674,45 +674,21 @@ def get_upgrade_price(current_count: int) -> float:
     return prices.get(current_count, 0.0)
 
 
-@router.callback_query(F.data == "game_farm")
-async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
-    """Farm game screen - show plots and status"""
-    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
-        return
+async def _show_farm_screen(callback: CallbackQuery, telegram_id: int) -> bool:
+    """
+    Helper function to build and display farm screen.
+    Does NOT call callback.answer() - caller should do that.
     
-    await callback.answer()
-    
-    bot = bot or callback.bot
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    
+    Returns:
+        True if successful, False on error
+    """
     try:
-        # Check subscription
-        subscription = await database.get_subscription(telegram_id)
-        if not subscription:
-            paywall_text = (
-                "🌾 Ферма доступна только подписчикам!\n\n"
-                "Приобретите подписку, чтобы играть."
-            )
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.buy"),
-                    callback_data="menu_buy_vpn",
-                )],
-                [InlineKeyboardButton(
-                    text="🔙 К играм",
-                    callback_data="games_menu",
-                )],
-            ])
-            await callback.message.edit_text(paywall_text, reply_markup=keyboard)
-            logger.info("GAME_FARM [user=%s] no_subscription paywall", telegram_id)
-            return
+        language = await resolve_user_language(telegram_id)
         
         # Get farm data
         farm_data = await database.get_farm_data(telegram_id)
         farm_plots = farm_data.get("farm_plots", [])
         farm_plot_count = farm_data.get("farm_plot_count", 1)
-        farm_last_good_harvest = farm_data.get("farm_last_good_harvest")
         # Use real user balance (same field used throughout the bot)
         balance = await database.get_user_balance(telegram_id)
         
@@ -796,6 +772,7 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
             can_buy_plot and has_enough_balance, upgrade_price
         )
         
+        # Update message with new farm state
         try:
             await callback.message.edit_text(text, reply_markup=keyboard)
         except TelegramBadRequest as e:
@@ -803,6 +780,54 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
                 pass  # silently ignore
             else:
                 raise
+        
+        return True
+        
+    except Exception as e:
+        logger.exception("_show_farm_screen [user=%s] error=%s", telegram_id, e)
+        return False
+
+
+@router.callback_query(F.data == "game_farm")
+async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
+    """Farm game screen - show plots and status"""
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+    
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    
+    try:
+        # Check subscription
+        subscription = await database.get_subscription(telegram_id)
+        if not subscription:
+            paywall_text = (
+                "🌾 Ферма доступна только подписчикам!\n\n"
+                "Приобретите подписку, чтобы играть."
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy"),
+                    callback_data="menu_buy_vpn",
+                )],
+                [InlineKeyboardButton(
+                    text="🔙 К играм",
+                    callback_data="games_menu",
+                )],
+            ])
+            await callback.message.edit_text(paywall_text, reply_markup=keyboard)
+            logger.info("GAME_FARM [user=%s] no_subscription paywall", telegram_id)
+            return
+        
+        # Show farm screen using helper
+        success = await _show_farm_screen(callback, telegram_id)
+        if not success:
+            await callback.message.edit_text(
+                i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
+                reply_markup=get_games_back_keyboard(language),
+            )
         
     except Exception as e:
         logger.exception("GAME_FARM [user=%s] error=%s", telegram_id, e)
@@ -876,22 +901,12 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
         await database.save_farm_plots(telegram_id, farm_plots)
         
         # Answer callback first to acknowledge click
-        await callback.answer("🌱 Семя посажено!")
+        await callback.answer("🌱 Семя посажено!", show_alert=False)
         
-        # Refresh farm screen - get bot from callback
-        bot = callback.bot
-        try:
-            await callback_game_farm(callback, bot)
-        except Exception as refresh_error:
-            logger.exception("GAME_FARM_PLANT [user=%s] error refreshing farm screen: %s", telegram_id, refresh_error)
-            # Try to send error message
-            try:
-                await callback.message.edit_text(
-                    i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
-                    reply_markup=get_games_back_keyboard(language),
-                )
-            except Exception:
-                pass
+        # Refresh farm screen
+        success = await _show_farm_screen(callback, telegram_id)
+        if not success:
+            logger.warning("GAME_FARM_PLANT [user=%s] failed to refresh farm screen", telegram_id)
         
         logger.info("GAME_FARM_PLANT [user=%s] planted plot=%s successfully", telegram_id, plot_id)
         
@@ -906,7 +921,7 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("farm_harvest_"), StateFilter("*"))
 async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     """Harvest ready plot"""
-    await callback.answer()  # Will show custom message based on weather
+    # Don't answer here - will answer with custom message after processing
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -989,9 +1004,11 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
             await database.save_farm_plots(telegram_id, farm_plots)
         
         # Refresh farm screen
-        await callback_game_farm(callback, bot)
+        success = await _show_farm_screen(callback, telegram_id)
+        if not success:
+            logger.warning("GAME_FARM_HARVEST [user=%s] failed to refresh farm screen", telegram_id)
         
-        logger.info("GAME_FARM [user=%s] harvested plot=%s", telegram_id, plot_id)
+        logger.info("GAME_FARM_HARVEST [user=%s] harvested plot=%s", telegram_id, plot_id)
         
     except Exception as e:
         logger.exception("GAME_FARM_HARVEST [user=%s] error=%s", telegram_id, e)
@@ -1055,11 +1072,12 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
             })
             await database.save_farm_plots(telegram_id, farm_plots)
         
-        # Refresh farm screen - get bot from callback
-        bot = callback.bot
-        await callback_game_farm(callback, bot)
+        # Refresh farm screen
+        success = await _show_farm_screen(callback, telegram_id)
+        if not success:
+            logger.warning("GAME_FARM_BUY_PLOT [user=%s] failed to refresh farm screen", telegram_id)
         
-        logger.info("GAME_FARM [user=%s] bought plot count=%s", telegram_id, new_count)
+        logger.info("GAME_FARM_BUY_PLOT [user=%s] bought plot count=%s", telegram_id, new_count)
         
     except Exception as e:
         logger.exception("GAME_FARM_BUY_PLOT [user=%s] error=%s", telegram_id, e)
@@ -1106,11 +1124,12 @@ async def callback_farm_replant(callback: CallbackQuery, state: FSMContext):
         
         await database.save_farm_plots(telegram_id, farm_plots)
         
-        # Refresh farm screen - get bot from callback
-        bot = callback.bot
-        await callback_game_farm(callback, bot)
+        # Refresh farm screen
+        success = await _show_farm_screen(callback, telegram_id)
+        if not success:
+            logger.warning("GAME_FARM_REPLANT [user=%s] failed to refresh farm screen", telegram_id)
         
-        logger.info("GAME_FARM [user=%s] replanted plot=%s", telegram_id, plot_id)
+        logger.info("GAME_FARM_REPLANT [user=%s] replanted plot=%s", telegram_id, plot_id)
         
     except Exception as e:
         logger.exception("GAME_FARM_REPLANT [user=%s] error=%s", telegram_id, e)
