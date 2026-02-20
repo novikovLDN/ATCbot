@@ -40,6 +40,10 @@ def get_games_menu_keyboard(language: str) -> InlineKeyboardMarkup:
             callback_data="game_bomber"
         )],
         [InlineKeyboardButton(
+            text="🌾 Ферма",
+            callback_data="game_farm"
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )],
@@ -534,3 +538,432 @@ async def callback_bomber_exit(callback: CallbackQuery, state: FSMContext):
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
         )
+
+
+# ====================================================================================
+# FARM GAME HANDLERS
+# ====================================================================================
+
+def format_time_remaining(seconds: int) -> str:
+    """Format seconds to 'Xч Yм' format"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours > 0:
+        return f"{hours}ч {minutes}м"
+    return f"{minutes}м"
+
+
+def sync_farm_plot_statuses(farm_plots: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Sync plot statuses based on planted_at + 48 hours
+    
+    Returns:
+        Updated farm_plots list with synced statuses
+    """
+    now = datetime.now(timezone.utc)
+    growth_time = timedelta(hours=48)
+    
+    updated_plots = []
+    for plot in farm_plots:
+        plot = plot.copy()
+        status = plot.get("status", "empty")
+        planted_at_str = plot.get("planted_at")
+        
+        if status == "growing" and planted_at_str:
+            try:
+                if isinstance(planted_at_str, str):
+                    planted_at = datetime.fromisoformat(planted_at_str.replace("Z", "+00:00"))
+                else:
+                    planted_at = planted_at_str
+                
+                if planted_at.tzinfo is None:
+                    planted_at = planted_at.replace(tzinfo=timezone.utc)
+                
+                ready_time = planted_at + growth_time
+                if now >= ready_time:
+                    plot["status"] = "ready"
+                plot["planted_at"] = planted_at.isoformat()
+            except Exception as e:
+                logger.error(f"Error syncing plot status: {e}")
+                plot["status"] = "empty"
+                plot["planted_at"] = None
+        
+        updated_plots.append(plot)
+    
+    return updated_plots
+
+
+def create_farm_keyboard(farm_plots: List[Dict[str, Any]], farm_plot_count: int, bonus_balance: float, can_buy_plot: bool, upgrade_price: float) -> InlineKeyboardMarkup:
+    """Create inline keyboard for farm screen"""
+    buttons = []
+    
+    # Plot buttons
+    for plot_idx in range(farm_plot_count):
+        plot = next((p for p in farm_plots if p.get("plot_id") == plot_idx), None)
+        if not plot:
+            plot = {"plot_id": plot_idx, "status": "empty", "planted_at": None}
+        
+        status = plot.get("status", "empty")
+        
+        if status == "empty":
+            buttons.append([InlineKeyboardButton(
+                text=f"🌱 Посадить #{plot_idx + 1}",
+                callback_data=f"farm_plant_{plot_idx}"
+            )])
+        elif status == "growing":
+            buttons.append([InlineKeyboardButton(
+                text=f"⏳ Растёт #{plot_idx + 1}",
+                callback_data="farm_noop"
+            )])
+        elif status == "ready":
+            buttons.append([InlineKeyboardButton(
+                text=f"🌻 Собрать #{plot_idx + 1}",
+                callback_data=f"farm_harvest_{plot_idx}"
+            )])
+    
+    # Buy plot button
+    if can_buy_plot and farm_plot_count < 5:
+        buttons.append([InlineKeyboardButton(
+            text=f"➕ Купить грядку — {int(upgrade_price)} ₽",
+            callback_data="farm_buy_plot"
+        )])
+    
+    # Back button
+    buttons.append([InlineKeyboardButton(
+        text="🔙 К играм",
+        callback_data="games_menu"
+    )])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_upgrade_price(current_count: int) -> float:
+    """Get upgrade price for next plot"""
+    prices = {1: 50.0, 2: 100.0, 3: 200.0, 4: 400.0}
+    return prices.get(current_count, 0.0)
+
+
+@router.callback_query(F.data == "game_farm")
+async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
+    """Farm game screen - show plots and status"""
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+    
+    await callback.answer()
+    
+    bot = bot or callback.bot
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    
+    try:
+        # Check subscription
+        subscription = await database.get_subscription(telegram_id)
+        if not subscription:
+            paywall_text = (
+                "🌾 Ферма доступна только подписчикам!\n\n"
+                "Приобретите подписку, чтобы играть."
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy"),
+                    callback_data="menu_buy_vpn",
+                )],
+                [InlineKeyboardButton(
+                    text="🔙 К играм",
+                    callback_data="games_menu",
+                )],
+            ])
+            await callback.message.edit_text(paywall_text, reply_markup=keyboard)
+            logger.info("GAME_FARM [user=%s] no_subscription paywall", telegram_id)
+            return
+        
+        # Get farm data
+        farm_data = await database.get_farm_data(telegram_id)
+        farm_plots = farm_data.get("farm_plots", [])
+        farm_plot_count = farm_data.get("farm_plot_count", 1)
+        bonus_balance = farm_data.get("bonus_balance", 0.0)
+        
+        # Initialize plots if empty
+        if not farm_plots:
+            farm_plots = [{"plot_id": 0, "status": "empty", "planted_at": None}]
+            await database.save_farm_plots(telegram_id, farm_plots)
+        
+        # Ensure we have correct number of plots
+        while len(farm_plots) < farm_plot_count:
+            farm_plots.append({
+                "plot_id": len(farm_plots),
+                "status": "empty",
+                "planted_at": None
+            })
+        
+        # Sync plot statuses
+        farm_plots = sync_farm_plot_statuses(farm_plots)
+        await database.save_farm_plots(telegram_id, farm_plots)
+        
+        # Build farm message
+        now = datetime.now(timezone.utc)
+        growth_time = timedelta(hours=48)
+        lines = ["🌾 Ваша ферма\n"]
+        
+        for plot_idx in range(farm_plot_count):
+            plot = next((p for p in farm_plots if p.get("plot_id") == plot_idx), None)
+            if not plot:
+                plot = {"plot_id": plot_idx, "status": "empty", "planted_at": None}
+            
+            status = plot.get("status", "empty")
+            planted_at_str = plot.get("planted_at")
+            
+            if status == "empty":
+                lines.append(f"Грядка {plot_idx + 1}: ⬜ Пусто")
+            elif status == "growing" and planted_at_str:
+                try:
+                    if isinstance(planted_at_str, str):
+                        planted_at = datetime.fromisoformat(planted_at_str.replace("Z", "+00:00"))
+                    else:
+                        planted_at = planted_at_str
+                    
+                    if planted_at.tzinfo is None:
+                        planted_at = planted_at.replace(tzinfo=timezone.utc)
+                    
+                    ready_time = planted_at + growth_time
+                    if now < ready_time:
+                        remaining = ready_time - now
+                        remaining_seconds = int(remaining.total_seconds())
+                        time_str = format_time_remaining(remaining_seconds)
+                        lines.append(f"Грядка {plot_idx + 1}: 🌱 Растёт → готово через {time_str}")
+                    else:
+                        lines.append(f"Грядка {plot_idx + 1}: 🌻 Урожай готов!")
+                except Exception as e:
+                    logger.error(f"Error formatting plot time: {e}")
+                    lines.append(f"Грядка {plot_idx + 1}: ⬜ Пусто")
+            elif status == "ready":
+                lines.append(f"Грядка {plot_idx + 1}: 🌻 Урожай готов!")
+            else:
+                lines.append(f"Грядка {plot_idx + 1}: ⬜ Пусто")
+        
+        lines.append(f"\n💰 Баланс: {bonus_balance:.2f} ₽")
+        
+        text = "\n".join(lines)
+        
+        # Check if can buy plot
+        can_buy_plot = farm_plot_count < 5
+        upgrade_price = get_upgrade_price(farm_plot_count) if can_buy_plot else 0.0
+        has_enough_balance = bonus_balance >= upgrade_price if can_buy_plot else False
+        
+        keyboard = create_farm_keyboard(
+            farm_plots, farm_plot_count, bonus_balance,
+            can_buy_plot and has_enough_balance, upgrade_price
+        )
+        
+        await callback.message.edit_text(text, reply_markup=keyboard)
+        
+    except Exception as e:
+        logger.exception("GAME_FARM [user=%s] error=%s", telegram_id, e)
+        await callback.message.edit_text(
+            i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
+            reply_markup=get_games_back_keyboard(language),
+        )
+
+
+@router.callback_query(F.data.startswith("farm_plant_"))
+async def callback_farm_plant(callback: CallbackQuery, bot: Bot = None):
+    """Plant seed on empty plot"""
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    
+    try:
+        plot_id = int(callback.data.split("_")[2])
+        
+        # Get farm data
+        farm_data = await database.get_farm_data(telegram_id)
+        farm_plots = farm_data.get("farm_plots", [])
+        
+        # Find plot
+        plot = next((p for p in farm_plots if p.get("plot_id") == plot_id), None)
+        if not plot:
+            plot = {"plot_id": plot_id, "status": "empty", "planted_at": None}
+            farm_plots.append(plot)
+        
+        # Check if plot is empty
+        if plot.get("status") != "empty":
+            await callback.answer("Эта грядка уже занята!", show_alert=True)
+            return
+        
+        # Plant seed
+        now = datetime.now(timezone.utc)
+        plot["status"] = "growing"
+        plot["planted_at"] = now.isoformat()
+        
+        # Update plots list
+        for i, p in enumerate(farm_plots):
+            if p.get("plot_id") == plot_id:
+                farm_plots[i] = plot
+                break
+        else:
+            farm_plots.append(plot)
+        
+        await database.save_farm_plots(telegram_id, farm_plots)
+        
+        # Refresh farm screen
+        await callback_game_farm(callback, bot)
+        
+        logger.info("GAME_FARM [user=%s] planted plot=%s", telegram_id, plot_id)
+        
+    except Exception as e:
+        logger.exception("GAME_FARM_PLANT [user=%s] error=%s", telegram_id, e)
+        await callback.answer("Ошибка при посадке", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("farm_harvest_"))
+async def callback_farm_harvest(callback: CallbackQuery, bot: Bot = None):
+    """Harvest ready plot"""
+    await callback.answer("🌻 +10 ₽ получено!")
+    
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    
+    try:
+        plot_id = int(callback.data.split("_")[2])
+        
+        pool = await database.get_pool()
+        if not pool:
+            await callback.answer("Ошибка базы данных", show_alert=True)
+            return
+        
+        async with pool.acquire() as conn:
+            # Get farm data
+            farm_data = await database.get_farm_data(telegram_id)
+            farm_plots = farm_data.get("farm_plots", [])
+            
+            # Find plot
+            plot = next((p for p in farm_plots if p.get("plot_id") == plot_id), None)
+            if not plot:
+                await callback.answer("Грядка не найдена", show_alert=True)
+                return
+            
+            # Verify plot is ready
+            planted_at_str = plot.get("planted_at")
+            if not planted_at_str:
+                await callback.answer("Грядка пуста", show_alert=True)
+                return
+            
+            try:
+                if isinstance(planted_at_str, str):
+                    planted_at = datetime.fromisoformat(planted_at_str.replace("Z", "+00:00"))
+                else:
+                    planted_at = planted_at_str
+                
+                if planted_at.tzinfo is None:
+                    planted_at = planted_at.replace(tzinfo=timezone.utc)
+                
+                growth_time = timedelta(hours=48)
+                ready_time = planted_at + growth_time
+                now = datetime.now(timezone.utc)
+                
+                if now < ready_time:
+                    await callback.answer("Урожай ещё не готов!", show_alert=True)
+                    return
+            except Exception as e:
+                logger.error(f"Error checking harvest time: {e}")
+                await callback.answer("Ошибка проверки времени", show_alert=True)
+                return
+            
+            # Harvest: add 10 RUB to bonus_balance
+            success = await database.increase_bonus_balance(telegram_id, 10.0, conn=conn)
+            if not success:
+                await callback.answer("Ошибка при начислении", show_alert=True)
+                return
+            
+            # Reset plot
+            plot["status"] = "empty"
+            plot["planted_at"] = None
+            
+            # Update plots list
+            for i, p in enumerate(farm_plots):
+                if p.get("plot_id") == plot_id:
+                    farm_plots[i] = plot
+                    break
+            
+            await database.save_farm_plots(telegram_id, farm_plots)
+        
+        # Refresh farm screen
+        await callback_game_farm(callback, bot)
+        
+        logger.info("GAME_FARM [user=%s] harvested plot=%s", telegram_id, plot_id)
+        
+    except Exception as e:
+        logger.exception("GAME_FARM_HARVEST [user=%s] error=%s", telegram_id, e)
+        await callback.answer("Ошибка при сборе урожая", show_alert=True)
+
+
+@router.callback_query(F.data == "farm_buy_plot")
+async def callback_farm_buy_plot(callback: CallbackQuery, bot: Bot = None):
+    """Buy additional plot"""
+    await callback.answer()
+    
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    
+    try:
+        pool = await database.get_pool()
+        if not pool:
+            await callback.answer("Ошибка базы данных", show_alert=True)
+            return
+        
+        async with pool.acquire() as conn:
+            # Get farm data
+            farm_data = await database.get_farm_data(telegram_id)
+            farm_plot_count = farm_data.get("farm_plot_count", 1)
+            bonus_balance = farm_data.get("bonus_balance", 0.0)
+            
+            # Check max plots
+            if farm_plot_count >= 5:
+                await callback.answer("Максимум 5 грядок!", show_alert=True)
+                return
+            
+            # Calculate upgrade price
+            upgrade_price = get_upgrade_price(farm_plot_count)
+            
+            # Check balance
+            if bonus_balance < upgrade_price:
+                await callback.answer(
+                    f"Недостаточно средств! Нужно {int(upgrade_price)} ₽",
+                    show_alert=True
+                )
+                return
+            
+            # Deduct cost
+            success = await database.decrease_bonus_balance(telegram_id, upgrade_price, conn=conn)
+            if not success:
+                await callback.answer("Ошибка при списании", show_alert=True)
+                return
+            
+            # Increment plot count
+            new_count = farm_plot_count + 1
+            await database.update_farm_plot_count(telegram_id, new_count)
+            
+            # Add new empty plot
+            farm_plots = farm_data.get("farm_plots", [])
+            farm_plots.append({
+                "plot_id": farm_plot_count,
+                "status": "empty",
+                "planted_at": None
+            })
+            await database.save_farm_plots(telegram_id, farm_plots)
+        
+        # Refresh farm screen
+        await callback_game_farm(callback, bot)
+        
+        logger.info("GAME_FARM [user=%s] bought plot count=%s", telegram_id, new_count)
+        
+    except Exception as e:
+        logger.exception("GAME_FARM_BUY_PLOT [user=%s] error=%s", telegram_id, e)
+        await callback.answer("Ошибка при покупке грядки", show_alert=True)
+
+
+@router.callback_query(F.data == "farm_noop")
+async def callback_farm_noop(callback: CallbackQuery):
+    """No-op handler for disabled buttons"""
+    await callback.answer()

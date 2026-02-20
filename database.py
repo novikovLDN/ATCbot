@@ -7,6 +7,7 @@ import base64
 import uuid as uuid_lib
 import random
 import string
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
@@ -8844,3 +8845,226 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
             "new_users": new_users,
             "new_subscriptions": new_subscriptions
         }
+
+
+# ====================================================================================
+# FARM GAME FUNCTIONS
+# ====================================================================================
+
+async def get_farm_data(telegram_id: int) -> Dict[str, Any]:
+    """
+    Get farm game data for user
+    
+    Returns:
+        {
+            "farm_plots": List[Dict],  # JSONB array of plot objects
+            "farm_plot_count": int,     # Number of plots (1-5)
+            "bonus_balance": float      # Bonus balance in rubles
+        }
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, get_farm_data skipped")
+        return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0}
+    
+    pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_farm_data skipped")
+        return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0}
+    
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT farm_plots, farm_plot_count, bonus_balance 
+               FROM users WHERE telegram_id = $1""",
+            telegram_id
+        )
+        
+        if not row:
+            return {"farm_plots": [], "farm_plot_count": 1, "bonus_balance": 0.0}
+        
+        farm_plots = row.get("farm_plots") or []
+        farm_plot_count = row.get("farm_plot_count") or 1
+        bonus_balance_kopecks = row.get("bonus_balance") or 0
+        bonus_balance_rubles = bonus_balance_kopecks / 100.0
+        
+        return {
+            "farm_plots": farm_plots if isinstance(farm_plots, list) else [],
+            "farm_plot_count": int(farm_plot_count),
+            "bonus_balance": bonus_balance_rubles
+        }
+
+
+async def save_farm_plots(telegram_id: int, farm_plots: List[Dict[str, Any]], conn=None) -> bool:
+    """
+    Save farm plots JSONB array to database
+    
+    Args:
+        telegram_id: User Telegram ID
+        farm_plots: List of plot dictionaries
+        conn: Optional connection (if caller holds transaction)
+    
+    Returns:
+        True if successful
+    """
+    import json
+    
+    if not DB_READY:
+        logger.warning("DB not ready, save_farm_plots skipped")
+        return False
+    
+    async def _do_save(c):
+        await c.execute(
+            "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+            json.dumps(farm_plots), telegram_id
+        )
+        return True
+    
+    if conn is not None:
+        return await _do_save(conn)
+    
+    pool = await get_pool()
+    if pool is None:
+        return False
+    
+    async with pool.acquire() as conn:
+        return await _do_save(conn)
+
+
+async def update_farm_plot_count(telegram_id: int, count: int, conn=None) -> bool:
+    """
+    Update farm plot count
+    
+    Args:
+        telegram_id: User Telegram ID
+        count: New plot count (1-5)
+        conn: Optional connection (if caller holds transaction)
+    
+    Returns:
+        True if successful
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, update_farm_plot_count skipped")
+        return False
+    
+    async def _do_update(c):
+        await c.execute(
+            "UPDATE users SET farm_plot_count = $1 WHERE telegram_id = $2",
+            count, telegram_id
+        )
+        return True
+    
+    if conn is not None:
+        return await _do_update(conn)
+    
+    pool = await get_pool()
+    if pool is None:
+        return False
+    
+    async with pool.acquire() as conn:
+        return await _do_update(conn)
+
+
+async def increase_bonus_balance(telegram_id: int, amount_rubles: float, conn=None) -> bool:
+    """
+    Increase user's bonus_balance (for farm rewards)
+    
+    Args:
+        telegram_id: User Telegram ID
+        amount_rubles: Amount in rubles to add
+        conn: Optional connection (if caller holds transaction)
+    
+    Returns:
+        True if successful
+    """
+    if amount_rubles <= 0:
+        logger.error(f"Invalid amount for increase_bonus_balance: {amount_rubles}")
+        return False
+    
+    amount_kopecks = int(amount_rubles * 100)
+    
+    if not DB_READY:
+        logger.warning("DB not ready, increase_bonus_balance skipped")
+        return False
+    
+    async def _do_increase(c):
+        await c.execute(
+            "UPDATE users SET bonus_balance = bonus_balance + $1 WHERE telegram_id = $2",
+            amount_kopecks, telegram_id
+        )
+        logger.info(
+            f"BONUS_BALANCE_INCREASED user={telegram_id} amount={amount_rubles:.2f} RUB "
+            f"({amount_kopecks} kopecks)"
+        )
+        return True
+    
+    if conn is not None:
+        return await _do_increase(conn)
+    
+    pool = await get_pool()
+    if pool is None:
+        return False
+    
+    async with pool.acquire() as conn:
+        return await _do_increase(conn)
+
+
+async def decrease_bonus_balance(telegram_id: int, amount_rubles: float, conn=None) -> bool:
+    """
+    Decrease user's bonus_balance (for farm plot purchases)
+    
+    Args:
+        telegram_id: User Telegram ID
+        amount_rubles: Amount in rubles to deduct
+        conn: Optional connection (if caller holds transaction)
+    
+    Returns:
+        True if successful, False if insufficient balance
+    """
+    if amount_rubles <= 0:
+        logger.error(f"Invalid amount for decrease_bonus_balance: {amount_rubles}")
+        return False
+    
+    amount_kopecks = int(amount_rubles * 100)
+    
+    if not DB_READY:
+        logger.warning("DB not ready, decrease_bonus_balance skipped")
+        return False
+    
+    async def _do_decrease(c):
+        # Check balance first
+        row = await c.fetchrow(
+            "SELECT bonus_balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+            telegram_id
+        )
+        
+        if not row:
+            logger.error(f"User {telegram_id} not found")
+            return False
+        
+        current_balance = row.get("bonus_balance") or 0
+        
+        if current_balance < amount_kopecks:
+            logger.warning(
+                f"Insufficient bonus_balance for user {telegram_id}: "
+                f"{current_balance} < {amount_kopecks}"
+            )
+            return False
+        
+        await c.execute(
+            "UPDATE users SET bonus_balance = bonus_balance - $1 WHERE telegram_id = $2",
+            amount_kopecks, telegram_id
+        )
+        logger.info(
+            f"BONUS_BALANCE_DECREASED user={telegram_id} amount={amount_rubles:.2f} RUB "
+            f"({amount_kopecks} kopecks)"
+        )
+        return True
+    
+    if conn is not None:
+        return await _do_decrease(conn)
+    
+    pool = await get_pool()
+    if pool is None:
+        return False
+    
+    async with pool.acquire() as conn:
+        return await _do_decrease(conn)
