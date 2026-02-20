@@ -7,6 +7,7 @@ import base64
 import uuid as uuid_lib
 import random
 import string
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import logging
@@ -1178,6 +1179,115 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
             except Exception as e:
                 logger.exception(f"Error increasing balance for user {telegram_id}")
                 return False
+
+
+async def get_farm_data(telegram_id: int) -> Tuple[List[Dict[str, Any]], int, int]:
+    """
+    Получить данные фермы пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+    
+    Returns:
+        Tuple of (farm_plots: list, plot_count: int, balance: int in kopecks)
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, get_farm_data skipped")
+        return ([], 3, 0)
+    
+    pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_farm_data skipped")
+        return ([], 3, 0)
+    
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT farm_plots, farm_plot_count, balance FROM users WHERE telegram_id = $1",
+            telegram_id
+        )
+        if row is None:
+            # Initialize default farm data
+            default_plots = []
+            for i in range(3):
+                default_plots.append({
+                    "plot_id": i,
+                    "status": "empty",
+                    "plant_type": None,
+                    "planted_at": None,
+                    "ready_at": None,
+                    "dead_at": None,
+                    "notified_ready": False,
+                    "notified_12h": False,
+                    "notified_dead": False,
+                    "water_used_at": None,
+                    "fertilizer_used_at": None
+                })
+            await conn.execute(
+                "INSERT INTO users (telegram_id, farm_plots, farm_plot_count, balance) VALUES ($1, $2::jsonb, $3, $4) ON CONFLICT (telegram_id) DO UPDATE SET farm_plots = $2::jsonb, farm_plot_count = $3",
+                telegram_id, json.dumps(default_plots), 3, 0
+            )
+            return (default_plots, 3, 0)
+        
+        farm_plots = row.get("farm_plots")
+        if farm_plots is None:
+            farm_plots = []
+        elif isinstance(farm_plots, str):
+            farm_plots = json.loads(farm_plots)
+        
+        plot_count = row.get("farm_plot_count", 3)
+        balance = row.get("balance", 0)
+        if balance is None:
+            balance = 0
+        
+        return (farm_plots, plot_count, balance)
+
+
+async def save_farm_plots(telegram_id: int, farm_plots: List[Dict[str, Any]]) -> None:
+    """
+    Сохранить данные грядок пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        farm_plots: Список объектов грядок
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, save_farm_plots skipped")
+        return
+    
+    pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, save_farm_plots skipped")
+        return
+    
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+            json.dumps(farm_plots), telegram_id
+        )
+
+
+async def update_farm_plot_count(telegram_id: int, count: int) -> None:
+    """
+    Обновить количество грядок пользователя
+    
+    Args:
+        telegram_id: Telegram ID пользователя
+        count: Новое количество грядок
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, update_farm_plot_count skipped")
+        return
+    
+    pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, update_farm_plot_count skipped")
+        return
+    
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET farm_plot_count = $1 WHERE telegram_id = $2",
+            count, telegram_id
+        )
 
 
 async def decrease_balance(telegram_id: int, amount: float, source: str = "subscription_payment", description: Optional[str] = None, conn=None) -> bool:
