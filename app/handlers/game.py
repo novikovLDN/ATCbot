@@ -28,15 +28,15 @@ def get_games_menu_keyboard(language: str) -> InlineKeyboardMarkup:
     """Games menu keyboard"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🎳 Боулинг",
+            text=i18n_get_text(language, "games.button_bowling", "🎳 Боулинг"),
             callback_data="game_bowling"
         )],
         [InlineKeyboardButton(
-            text="🎲 Кубики",
+            text=i18n_get_text(language, "games.button_dice", "🎲 Кубики"),
             callback_data="game_dice"
         )],
         [InlineKeyboardButton(
-            text="💣 Бомбер",
+            text=i18n_get_text(language, "games.button_bomber", "💣 Бомбер"),
             callback_data="game_bomber"
         )],
         [InlineKeyboardButton(
@@ -50,7 +50,7 @@ def get_games_back_keyboard(language: str) -> InlineKeyboardMarkup:
     """Back to games menu keyboard"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="🔙 К играм",
+            text=i18n_get_text(language, "games.back_to_games", "🔙 К играм"),
             callback_data="games_menu"
         )],
     ])
@@ -67,14 +67,7 @@ async def callback_games_menu(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
-    text = (
-        "🎮 Добро пожаловать в Игровой зал!\n"
-        "Здесь вы можете отвлечься и попытать удачу — а заодно выиграть дополнительные дни подписки.\n\n"
-        "🎳 Боулинг — сбей кегли и получи бонусные дни\n"
-        "🎲 Кубики — брось кубик и получи столько дней подписки, сколько выпало\n"
-        "💣 Бомбер — стратегическая игра на выживание\n\n"
-        "Выбирай игру и испытай удачу! 🍀"
-    )
+    text = i18n_get_text(language, "games.menu_title", "🎮 Добро пожаловать в Игровой зал!\nЗдесь вы можете отвлечься и попытать удачу — а заодно выиграть дополнительные дни подписки.\n\n🎳 Боулинг — сбей кегли и получи бонусные дни\n🎲 Кубики — брось кубик и получи столько дней подписки, сколько выпало\n💣 Бомбер — стратегическая игра на выживание\n\nВыбирай игру и испытай удачу! 🍀")
     
     await callback.message.edit_text(
         text,
@@ -128,10 +121,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     remaining = cooldown - time_since
                     days = remaining.days
                     hours = remaining.seconds // 3600
-                    text = (
-                        "Боулинг-клуб закрыт 🎳\n"
-                        f"Следующая игра доступна через: {days}д {hours}ч"
-                    )
+                    text = i18n_get_text(language, "games.bowling_cooldown", "Боулинг-клуб закрыт 🎳\nСледующая игра доступна через: {days}д {hours}ч").format(days=days, hours=hours)
                     await callback.message.edit_text(
                         text,
                         reply_markup=get_games_back_keyboard(language),
@@ -144,10 +134,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
 
             subscription = await database.get_subscription(telegram_id)
             if not subscription:
-                paywall_text = (
-                    "🎳 Боулинг-клуб только для подписчиков!\n\n"
-                    "Приобретите подписку, чтобы играть."
-                )
+                paywall_text = i18n_get_text(language, "games.bowling_paywall", "🎳 Боулинг-клуб только для подписчиков!\n\nПриобретите подписку, чтобы играть.")
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "main.buy"),
@@ -184,22 +171,14 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     end_str = end_dt.strftime("%d.%m.%Y")
                 else:
                     end_str = "—"
-                text = (
-                    "🎳 <b>Страйк!</b> Все кегли сбиты!\n\n"
-                    "🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\n"
-                    f"Доступ до: {end_str}"
-                )
+                text = i18n_get_text(language, "games.bowling_strike_success", "🎳 <b>Страйк!</b> Все кегли сбиты!\n\n🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\nДоступ до: {date}").format(date=end_str)
                 logger.info(
                     "GAME_BOWL [user=%s] strike=True dice_value=6 grant_ok expires=%s",
                     telegram_id, end_str,
                 )
             except Exception as e:
                 logger.error("GAME_BOWL [user=%s] strike=True grant_error=%s", telegram_id, e)
-                text = (
-                    "🎳 <b>Страйк!</b> Все кегли сбиты!\n\n"
-                    "🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\n"
-                    "⚠️ Ошибка при начислении. Обратитесь в поддержку."
-                )
+                text = i18n_get_text(language, "games.bowling_strike_error", "🎳 <b>Страйк!</b> Все кегли сбиты!\n\n🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\n⚠️ Ошибка при начислении. Обратитесь в поддержку.")
             await bot.send_message(
                 chat_id=chat_id,
                 text=text,
@@ -207,10 +186,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                 parse_mode="HTML",
             )
         else:
-            text = (
-                f"🎳 Вы сбили {dice_value} кеглей из 6.\n\n"
-                "Увы, не страйк 😔 Попробуйте снова через 7 дней!"
-            )
+            text = i18n_get_text(language, "games.bowling_no_strike", "🎳 Вы сбили {value} кеглей из 6.\n\nУвы, не страйк 😔 Попробуйте снова через 7 дней!").format(value=dice_value)
             logger.info("GAME_BOWL [user=%s] strike=False dice_value=%s", telegram_id, dice_value)
             await bot.send_message(
                 chat_id=chat_id,
@@ -265,7 +241,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                 database._from_db_utc(dice_last_played_raw) if dice_last_played_raw else None
             )
             now = datetime.now(timezone.utc)
-            cooldown = timedelta(days=7)
+            cooldown = timedelta(days=14)
 
             if dice_last_played:
                 time_since = now - dice_last_played
@@ -273,10 +249,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                     remaining = cooldown - time_since
                     days = remaining.days
                     hours = remaining.seconds // 3600
-                    text = (
-                        "⏳ Вы уже бросали кубик!\n"
-                        f"Следующий бросок доступен через: {days} дней {hours} часов"
-                    )
+                    text = i18n_get_text(language, "games.dice_cooldown", "⏳ Вы уже бросали кубик!\nСледующий бросок доступен через: {days} дней {hours} часов").format(days=days, hours=hours)
                     await callback.message.edit_text(
                         text,
                         reply_markup=get_games_back_keyboard(language),
@@ -289,17 +262,14 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
 
             subscription = await database.get_subscription(telegram_id)
             if not subscription:
-                paywall_text = (
-                    "🎲 Игра в кубики только для подписчиков!\n\n"
-                    "Приобретите подписку, чтобы играть."
-                )
+                paywall_text = i18n_get_text(language, "games.dice_paywall", "🎲 Игра в кубики только для подписчиков!\n\nПриобретите подписку, чтобы играть.")
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "main.buy"),
                         callback_data="menu_buy_vpn",
                     )],
                     [InlineKeyboardButton(
-                        text="🔙 К играм",
+                        text=i18n_get_text(language, "games.back_to_games", "🔙 К играм"),
                         callback_data="games_menu",
                     )],
                 ])
@@ -329,22 +299,14 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                 end_str = end_dt.strftime("%d.%m.%Y")
             else:
                 end_str = "—"
-            text = (
-                f"🎲 Выпало: {dice_value}!\n\n"
-                f"🎉 Вам начислено {dice_value} дней подписки!\n\n"
-                f"Ваша подписка действует до: {end_str}"
-            )
+            text = i18n_get_text(language, "games.dice_success", "🎲 Выпало: {value}!\n\n🎉 Вам начислено {value} дней подписки!\n\nВаша подписка действует до: {date}").format(value=dice_value, date=end_str)
             logger.info(
                 "GAME_DICE [user=%s] dice_value=%s grant_ok expires=%s",
                 telegram_id, dice_value, end_str,
             )
         except Exception as e:
             logger.error("GAME_DICE [user=%s] dice_value=%s grant_error=%s", telegram_id, dice_value, e)
-            text = (
-                f"🎲 Выпало: {dice_value}!\n\n"
-                f"🎉 Вам начислено {dice_value} дней подписки!\n\n"
-                "⚠️ Ошибка при начислении. Обратитесь в поддержку."
-            )
+            text = i18n_get_text(language, "games.dice_error", "🎲 Выпало: {value}!\n\n🎉 Вам начислено {value} дней подписки!\n\n⚠️ Ошибка при начислении. Обратитесь в поддержку.").format(value=dice_value)
         
         await bot.send_message(
             chat_id=chat_id,
@@ -361,7 +323,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
         )
 
 
-def create_bomber_grid_keyboard(mines: Set[int], player_bombs: Set[int], game_over: bool = False) -> InlineKeyboardMarkup:
+def create_bomber_grid_keyboard(mines: Set[int], player_bombs: Set[int], language: str = "ru", game_over: bool = False) -> InlineKeyboardMarkup:
     """Create 5x5 grid keyboard for bomber game"""
     buttons = []
     for row in range(5):
@@ -388,7 +350,7 @@ def create_bomber_grid_keyboard(mines: Set[int], player_bombs: Set[int], game_ov
     
     if not game_over:
         buttons.append([InlineKeyboardButton(
-            text="🚩 Завершить",
+            text=i18n_get_text(language, "games.bomber_finish", "🚩 Завершить"),
             callback_data="bomber_exit"
         )])
     
@@ -416,19 +378,11 @@ async def callback_game_bomber(callback: CallbackQuery, state: FSMContext):
         player_bombs=list(player_bombs),
     )
     
-    text = (
-        "💣 Бомбер\n\n"
-        "Правила:\n"
-        "• Размещайте бомбы на поле, избегая мин бота\n"
-        "• Если наступите на свою бомбу — взрыв! 💥\n"
-        "• Если наступите на мину бота — взрыв! 💥\n"
-        "• Нажмите 'Завершить' чтобы безопасно выйти\n\n"
-        "Удачи! 🍀"
-    )
+    text = i18n_get_text(language, "games.bomber_rules", "💣 Бомбер\n\nПравила:\n• Размещайте бомбы на поле, избегая мин бота\n• Если наступите на свою бомбу — взрыв! 💥\n• Если наступите на мину бота — взрыв! 💥\n• Нажмите 'Завершить' чтобы безопасно выйти\n\nУдачи! 🍀")
     
     await callback.message.edit_text(
         text,
-        reply_markup=create_bomber_grid_keyboard(mines, player_bombs),
+        reply_markup=create_bomber_grid_keyboard(mines, player_bombs, language),
     )
 
 
@@ -451,10 +405,7 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
         if cell_idx in player_bombs:
             # Self-destruct!
             await state.clear()
-            text = (
-                "🧨 БУМ! Вы подорвались на своей бомбе!\n\n"
-                "Игра окончена. Попробуйте ещё раз!"
-            )
+            text = i18n_get_text(language, "games.bomber_self_destruct", "🧨 БУМ! Вы подорвались на своей бомбе!\n\nИгра окончена. Попробуйте ещё раз!")
             await callback.message.edit_text(
                 text,
                 reply_markup=get_games_back_keyboard(language),
@@ -466,13 +417,10 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
         if cell_idx in mines:
             # Game over!
             await state.clear()
-            text = (
-                "💥 БУМ! Вы подорвались на мине бота!\n\n"
-                "Игра окончена. Попробуйте ещё раз!"
-            )
+            text = i18n_get_text(language, "games.bomber_mine_exploded", "💥 БУМ! Вы подорвались на мине бота!\n\nИгра окончена. Попробуйте ещё раз!")
             await callback.message.edit_text(
                 text,
-                reply_markup=create_bomber_grid_keyboard(mines, player_bombs, game_over=True),
+                reply_markup=create_bomber_grid_keyboard(mines, player_bombs, language, game_over=True),
             )
             await asyncio.sleep(2)
             await callback.message.edit_text(
@@ -488,7 +436,7 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
         
         # Update grid
         await callback.message.edit_reply_markup(
-            reply_markup=create_bomber_grid_keyboard(mines, player_bombs),
+            reply_markup=create_bomber_grid_keyboard(mines, player_bombs, language),
         )
         
     except Exception as e:
@@ -515,10 +463,7 @@ async def callback_bomber_exit(callback: CallbackQuery, state: FSMContext):
         
         await state.clear()
         
-        text = (
-            f"😮‍💨 Вы вышли из игры целым!\n\n"
-            f"Выжило бомб: {bomb_count}"
-        )
+        text = i18n_get_text(language, "games.bomber_safe_exit", "😮‍💨 Вы вышли из игры целым!\n\nВыжило бомб: {count}").format(count=bomb_count)
         
         await callback.message.edit_text(
             text,
