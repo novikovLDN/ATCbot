@@ -303,7 +303,7 @@ def classify_error(exception: Exception) -> str:
         class VPNServiceError(Exception):
             pass
     from app.services.subscriptions.exceptions import SubscriptionServiceError
-    from app.services.trials.exceptions import TrialServiceError
+    # TrialServiceError: module app.services.trials.exceptions does not exist; skip to avoid ImportError
     from app.services.admin.exceptions import AdminServiceError
     from app.services.notifications.exceptions import NotificationServiceError
     
@@ -313,7 +313,6 @@ def classify_error(exception: Exception) -> str:
         ActivationServiceError,
         VPNServiceError,
         SubscriptionServiceError,
-        TrialServiceError,
         AdminServiceError,
         NotificationServiceError,
     )):
