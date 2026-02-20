@@ -588,16 +588,17 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             )])
     
     # Buy plot button
-    if plot_count < 6:
+    if plot_count < 9:
         price = 5000  # 50 RUB in kopecks
+        remaining = 9 - plot_count
         if balance >= price:
             buttons.append([InlineKeyboardButton(
-                text="➕ Купить грядку — 50 ₽",
+                text=f"➕ Купить грядку — 50 ₽ (осталось мест: {remaining})",
                 callback_data="farm_buy_plot"
             )])
         else:
             buttons.append([InlineKeyboardButton(
-                text="➕ Грядка (нужно 50 ₽)",
+                text=f"➕ Грядка (нужно 50 ₽, осталось мест: {remaining})",
                 callback_data="farm_noop"
             )])
     
@@ -976,7 +977,7 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     
-    if plot_count >= 6:
+    if plot_count >= 9:
         await callback.answer("Максимальное количество грядок достигнуто", show_alert=True)
         return
     
