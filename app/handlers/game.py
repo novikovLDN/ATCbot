@@ -257,18 +257,18 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                 language,
             )
             user_row = await conn.fetchrow(
-                "SELECT game_last_played FROM users WHERE telegram_id = $1",
+                "SELECT dice_last_played FROM users WHERE telegram_id = $1",
                 telegram_id,
             )
-            game_last_played_raw = user_row.get("game_last_played") if user_row else None
-            game_last_played = (
-                database._from_db_utc(game_last_played_raw) if game_last_played_raw else None
+            dice_last_played_raw = user_row.get("dice_last_played") if user_row else None
+            dice_last_played = (
+                database._from_db_utc(dice_last_played_raw) if dice_last_played_raw else None
             )
             now = datetime.now(timezone.utc)
             cooldown = timedelta(days=7)
 
-            if game_last_played:
-                time_since = now - game_last_played
+            if dice_last_played:
+                time_since = now - dice_last_played
                 if time_since < cooldown:
                     remaining = cooldown - time_since
                     days = remaining.days
@@ -308,7 +308,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                 return
 
             await conn.execute(
-                "UPDATE users SET game_last_played = $1 WHERE telegram_id = $2",
+                "UPDATE users SET dice_last_played = $1 WHERE telegram_id = $2",
                 database._to_db_utc(now),
                 telegram_id,
             )
