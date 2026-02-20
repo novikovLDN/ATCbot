@@ -36,7 +36,7 @@ BEGIN
         WHERE table_name = 'users' 
         AND column_name = 'farm_plot_count'
     ) THEN
-        ALTER TABLE users ADD COLUMN farm_plot_count INTEGER DEFAULT 3;
+        ALTER TABLE users ADD COLUMN farm_plot_count INTEGER DEFAULT 1;
         RAISE NOTICE 'Added farm_plot_count column to users table';
     ELSE
         RAISE NOTICE 'farm_plot_count column already exists in users table';

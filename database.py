@@ -1208,7 +1208,7 @@ async def get_farm_data(telegram_id: int) -> Tuple[List[Dict[str, Any]], int, in
         if row is None:
             # Initialize default farm data
             default_plots = []
-            for i in range(3):
+            for i in range(1):
                 default_plots.append({
                     "plot_id": i,
                     "status": "empty",
@@ -1224,9 +1224,9 @@ async def get_farm_data(telegram_id: int) -> Tuple[List[Dict[str, Any]], int, in
                 })
             await conn.execute(
                 "INSERT INTO users (telegram_id, farm_plots, farm_plot_count, balance) VALUES ($1, $2::jsonb, $3, $4) ON CONFLICT (telegram_id) DO UPDATE SET farm_plots = $2::jsonb, farm_plot_count = $3",
-                telegram_id, json.dumps(default_plots), 3, 0
+                telegram_id, json.dumps(default_plots), 1, 0
             )
-            return (default_plots, 3, 0)
+            return (default_plots, 1, 0)
         
         farm_plots = row.get("farm_plots")
         if farm_plots is None:
@@ -1234,7 +1234,7 @@ async def get_farm_data(telegram_id: int) -> Tuple[List[Dict[str, Any]], int, in
         elif isinstance(farm_plots, str):
             farm_plots = json.loads(farm_plots)
         
-        plot_count = row.get("farm_plot_count", 3)
+        plot_count = row.get("farm_plot_count", 1)
         balance = row.get("balance", 0)
         if balance is None:
             balance = 0
