@@ -79,8 +79,8 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         callback_data="menu_referral"
     )])
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.game", "Игра 🎳"),
-        callback_data="game_bowl"
+        text=i18n_get_text(language, "main.game", "Игры 🎮"),
+        callback_data="games_menu"
     )])
     buttons.append([
         InlineKeyboardButton(
