@@ -1290,6 +1290,34 @@ async def update_farm_plot_count(telegram_id: int, count: int) -> None:
         )
 
 
+async def get_users_with_active_farm() -> List[Dict[str, Any]]:
+    """
+    Returns users who have at least one growing or ready plot.
+    Follows same pattern as other database functions - calls get_pool() internally.
+    
+    Returns:
+        List of user dicts with telegram_id, farm_plots, farm_plot_count
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, get_users_with_active_farm skipped")
+        return []
+    
+    pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_users_with_active_farm skipped")
+        return []
+    
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, farm_plots, farm_plot_count 
+               FROM users 
+               WHERE farm_plots != '[]'::jsonb 
+                 AND farm_plots IS NOT NULL
+                 AND jsonb_array_length(farm_plots) > 0"""
+        )
+        return [dict(row) for row in rows]
+
+
 async def decrease_balance(telegram_id: int, amount: float, source: str = "subscription_payment", description: Optional[str] = None, conn=None) -> bool:
     """
     Уменьшить баланс пользователя (атомарно)

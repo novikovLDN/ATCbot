@@ -27,6 +27,7 @@ import auto_renewal
 import admin_notifications
 import trial_notifications
 import activation_worker
+from app.workers import farm_notifications
 try:
     import xray_sync
     XRAY_SYNC_AVAILABLE = True
@@ -225,6 +226,15 @@ async def main():
         logger.info("Trial notifications scheduler started")
     else:
         logger.warning("Trial notifications scheduler skipped (DB not ready)")
+    
+    # Запуск фоновой задачи для уведомлений о ферме (только если БД готова)
+    farm_notifications_task = None
+    if database.DB_READY:
+        farm_notifications_task = asyncio.create_task(farm_notifications.farm_notifications_task(bot))
+        background_tasks.append(farm_notifications_task)
+        logger.info("Farm notifications task started")
+    else:
+        logger.warning("Farm notifications task skipped (DB not ready)")
     
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
