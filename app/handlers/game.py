@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import StateFilter
 
 import database
 from app.i18n import get_text as i18n_get_text
@@ -811,16 +812,25 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
         )
 
 
-@router.callback_query(F.data.startswith("farm_plant_"))
-async def callback_farm_plant(callback: CallbackQuery, bot: Bot = None):
+# TEST HANDLER - Remove after confirming fix works
+@router.callback_query(F.data == "farm_plant_0")
+async def test_farm_plant(callback: CallbackQuery):
+    await callback.answer("TEST WORKS", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("farm_plant_"), StateFilter("*"))
+async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     """Plant seed on empty plot"""
-    await callback.answer()
-    
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
+    # Log callback received for debugging
+    logger.info("GAME_FARM_PLANT [user=%s] callback_data=%s", telegram_id, callback.data)
+    
     try:
+        # Extract plot_id from callback_data: "farm_plant_0" -> 0
         plot_id = int(callback.data.split("_")[2])
+        logger.info("GAME_FARM_PLANT [user=%s] extracted plot_id=%s", telegram_id, plot_id)
         
         # Get farm data
         farm_data = await database.get_farm_data(telegram_id)
@@ -871,18 +881,36 @@ async def callback_farm_plant(callback: CallbackQuery, bot: Bot = None):
         
         await database.save_farm_plots(telegram_id, farm_plots)
         
-        # Refresh farm screen
-        await callback_game_farm(callback, bot)
+        # Answer callback first to acknowledge click
+        await callback.answer("🌱 Семя посажено!")
         
-        logger.info("GAME_FARM [user=%s] planted plot=%s", telegram_id, plot_id)
+        # Refresh farm screen - get bot from callback
+        bot = callback.bot
+        try:
+            await callback_game_farm(callback, bot)
+        except Exception as refresh_error:
+            logger.exception("GAME_FARM_PLANT [user=%s] error refreshing farm screen: %s", telegram_id, refresh_error)
+            # Try to send error message
+            try:
+                await callback.message.edit_text(
+                    i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
+                    reply_markup=get_games_back_keyboard(language),
+                )
+            except Exception:
+                pass
+        
+        logger.info("GAME_FARM_PLANT [user=%s] planted plot=%s successfully", telegram_id, plot_id)
         
     except Exception as e:
         logger.exception("GAME_FARM_PLANT [user=%s] error=%s", telegram_id, e)
-        await callback.answer("Ошибка при посадке", show_alert=True)
+        try:
+            await callback.answer("Ошибка при посадке", show_alert=True)
+        except Exception:
+            pass
 
 
-@router.callback_query(F.data.startswith("farm_harvest_"))
-async def callback_farm_harvest(callback: CallbackQuery, bot: Bot = None):
+@router.callback_query(F.data.startswith("farm_harvest_"), StateFilter("*"))
+async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     """Harvest ready plot"""
     await callback.answer()  # Will show custom message based on weather
     
@@ -976,8 +1004,8 @@ async def callback_farm_harvest(callback: CallbackQuery, bot: Bot = None):
         await callback.answer("Ошибка при сборе урожая", show_alert=True)
 
 
-@router.callback_query(F.data == "farm_buy_plot")
-async def callback_farm_buy_plot(callback: CallbackQuery, bot: Bot = None):
+@router.callback_query(F.data == "farm_buy_plot", StateFilter("*"))
+async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     """Buy additional plot"""
     await callback.answer()
     
@@ -1033,7 +1061,8 @@ async def callback_farm_buy_plot(callback: CallbackQuery, bot: Bot = None):
             })
             await database.save_farm_plots(telegram_id, farm_plots)
         
-        # Refresh farm screen
+        # Refresh farm screen - get bot from callback
+        bot = callback.bot
         await callback_game_farm(callback, bot)
         
         logger.info("GAME_FARM [user=%s] bought plot count=%s", telegram_id, new_count)
@@ -1049,8 +1078,8 @@ async def callback_farm_noop(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("farm_replant_"))
-async def callback_farm_replant(callback: CallbackQuery, bot: Bot = None):
+@router.callback_query(F.data.startswith("farm_replant_"), StateFilter("*"))
+async def callback_farm_replant(callback: CallbackQuery, state: FSMContext):
     """Replant plot after bad weather"""
     await callback.answer("🌧 Урожай погиб. Можно посадить снова!")
     
@@ -1083,7 +1112,8 @@ async def callback_farm_replant(callback: CallbackQuery, bot: Bot = None):
         
         await database.save_farm_plots(telegram_id, farm_plots)
         
-        # Refresh farm screen
+        # Refresh farm screen - get bot from callback
+        bot = callback.bot
         await callback_game_farm(callback, bot)
         
         logger.info("GAME_FARM [user=%s] replanted plot=%s", telegram_id, plot_id)
