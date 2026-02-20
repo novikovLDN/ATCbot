@@ -13,8 +13,9 @@ from .game import router as game_router
 
 router = Router()
 
+# Include game_router FIRST to ensure farm callbacks are handled before catch-all handlers
+router.include_router(game_router)
 router.include_router(callbacks_router)
 router.include_router(user_router)
 router.include_router(payments_router)
 router.include_router(admin_router)
-router.include_router(game_router)

@@ -812,12 +812,6 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
         )
 
 
-# TEST HANDLER - Remove after confirming fix works
-@router.callback_query(F.data == "farm_plant_0")
-async def test_farm_plant(callback: CallbackQuery):
-    await callback.answer("TEST WORKS", show_alert=True)
-
-
 @router.callback_query(F.data.startswith("farm_plant_"), StateFilter("*"))
 async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     """Plant seed on empty plot"""
