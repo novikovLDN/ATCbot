@@ -288,6 +288,7 @@ LANG = {
     'instruction._download_android': '🤖 Download v2RayTun (Android)',
     'instruction._download_desktop': '💻 Download v2RayTun (PC)',
     'instruction._download_ios': '📱 Download v2RayTun (iOS)',
+    'instruction._download_macos': '🍎 Download v2RayTun (MacOS)',
     'instruction._text': "🔑 Step 1. Add Key\n\n1. Open v2RayTun app\n2. Tap «➕ Add Configuration»\n3. Select «Import by Link»\n4. Paste the key received from bot\n5. Confirm addition\n\n⚠️ Important:\n— Delete old key before adding new one\n— One key works only for one user\n\n━━━━━━━━━━━━━━━━━━\n🚀 Step 2. Connect\n━━━━━━━━━━━━━━━━━━\n\n1. Select the added configuration\n2. Tap «Connect» button\n3. Wait for «Connected» status\n\nAfter connection:\n— All internet traffic is protected\n—  works automatically\n\n━━━━━━━━━━━━━━━━━━\n❓ If not connecting\n━━━━━━━━━━━━━━━━━━\n\n• Check that subscription is active\n• Make sure you're using v2RayTun\n• Delete old  configurations",
     'lang.button_ar': '🇸🇦 العربية',
     'lang.button_de': '🇩🇪 Deutsch',

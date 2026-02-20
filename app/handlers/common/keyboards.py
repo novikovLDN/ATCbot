@@ -329,7 +329,11 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
             InlineKeyboardButton(
                 text=i18n_get_text(language, "instruction._download_ios", "instruction_download_ios"),
                 url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
-            )
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "instruction._download_macos", "instruction_download_macos"),
+                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
+            ),
         ])
     elif platform == "android":
         buttons.append([
@@ -353,6 +357,10 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
             InlineKeyboardButton(
                 text=i18n_get_text(language, "instruction._download_desktop", "instruction_download_desktop"),
                 url="https://www.mediafire.com/folder/lpcbgr4ox8u5x/Atlas_Secure"
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "instruction._download_macos", "instruction_download_macos"),
+                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
             ),
         ])
 
