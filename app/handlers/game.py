@@ -12,6 +12,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 
 import database
 from app.i18n import get_text as i18n_get_text
@@ -681,7 +682,8 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
         farm_data = await database.get_farm_data(telegram_id)
         farm_plots = farm_data.get("farm_plots", [])
         farm_plot_count = farm_data.get("farm_plot_count", 1)
-        bonus_balance = farm_data.get("bonus_balance", 0.0)
+        # Use real user balance (same field used throughout the bot)
+        balance = await database.get_user_balance(telegram_id)
         
         # Initialize plots if empty
         if not farm_plots:
@@ -741,21 +743,27 @@ async def callback_game_farm(callback: CallbackQuery, bot: Bot = None):
             else:
                 lines.append(f"Грядка {plot_idx + 1}: ⬜ Пусто")
         
-        lines.append(f"\n💰 Баланс: {bonus_balance:.2f} ₽")
+        lines.append(f"\n💰 Баланс: {balance:.2f} ₽")
         
         text = "\n".join(lines)
         
         # Check if can buy plot
         can_buy_plot = farm_plot_count < 5
         upgrade_price = get_upgrade_price(farm_plot_count) if can_buy_plot else 0.0
-        has_enough_balance = bonus_balance >= upgrade_price if can_buy_plot else False
+        has_enough_balance = balance >= upgrade_price if can_buy_plot else False
         
         keyboard = create_farm_keyboard(
-            farm_plots, farm_plot_count, bonus_balance,
+            farm_plots, farm_plot_count, balance,
             can_buy_plot and has_enough_balance, upgrade_price
         )
         
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        try:
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        except TelegramBadRequest as e:
+            if "message is not modified" in str(e):
+                pass  # silently ignore
+            else:
+                raise
         
     except Exception as e:
         logger.exception("GAME_FARM [user=%s] error=%s", telegram_id, e)
@@ -870,8 +878,8 @@ async def callback_farm_harvest(callback: CallbackQuery, bot: Bot = None):
                 await callback.answer("Ошибка проверки времени", show_alert=True)
                 return
             
-            # Harvest: add 10 RUB to bonus_balance
-            success = await database.increase_bonus_balance(telegram_id, 10.0, conn=conn)
+            # Harvest: add 10 RUB to balance (same field used throughout the bot)
+            success = await database.increase_balance(telegram_id, 10.0, source="farm_harvest", description="Farm harvest reward", conn=conn)
             if not success:
                 await callback.answer("Ошибка при начислении", show_alert=True)
                 return
@@ -916,7 +924,9 @@ async def callback_farm_buy_plot(callback: CallbackQuery, bot: Bot = None):
             # Get farm data
             farm_data = await database.get_farm_data(telegram_id)
             farm_plot_count = farm_data.get("farm_plot_count", 1)
-            bonus_balance = farm_data.get("bonus_balance", 0.0)
+            
+            # Get real user balance (same field used throughout the bot)
+            balance = await database.get_user_balance(telegram_id)
             
             # Check max plots
             if farm_plot_count >= 5:
@@ -927,15 +937,15 @@ async def callback_farm_buy_plot(callback: CallbackQuery, bot: Bot = None):
             upgrade_price = get_upgrade_price(farm_plot_count)
             
             # Check balance
-            if bonus_balance < upgrade_price:
+            if balance < upgrade_price:
                 await callback.answer(
                     f"Недостаточно средств! Нужно {int(upgrade_price)} ₽",
                     show_alert=True
                 )
                 return
             
-            # Deduct cost
-            success = await database.decrease_bonus_balance(telegram_id, upgrade_price, conn=conn)
+            # Deduct cost from balance (same field used throughout the bot)
+            success = await database.decrease_balance(telegram_id, upgrade_price, source="farm_plot_purchase", description=f"Farm plot {farm_plot_count + 1} purchase", conn=conn)
             if not success:
                 await callback.answer("Ошибка при списании", show_alert=True)
                 return
