@@ -674,15 +674,31 @@ def get_upgrade_price(current_count: int) -> float:
     return prices.get(current_count, 0.0)
 
 
-async def _render_farm(callback: CallbackQuery, pool) -> None:
-    """Builds farm text + keyboard and edits the message."""
+async def _render_farm(callback: CallbackQuery, pool, farm_plots=None, balance=None, plot_count=None) -> None:
+    """Builds farm text + keyboard and edits the message.
+    
+    Args:
+        callback: CallbackQuery object
+        pool: Database connection pool
+        farm_plots: Optional pre-loaded farm plots (if None, reads from DB)
+        balance: Optional balance in rubles (if None, reads from DB)
+        plot_count: Optional plot count (if None, reads from DB)
+    """
     telegram_id = callback.from_user.id
     
-    # 1. Load data
-    farm_data = await database.get_farm_data(telegram_id)
-    farm_plots = farm_data.get("farm_plots", [])
-    plot_count = farm_data.get("farm_plot_count", 1)
-    balance_rubles = await database.get_user_balance(telegram_id)
+    # 1. Load data (only if not provided)
+    if farm_plots is None or plot_count is None:
+        farm_data = await database.get_farm_data(telegram_id)
+        if farm_plots is None:
+            farm_plots = farm_data.get("farm_plots", [])
+        if plot_count is None:
+            plot_count = farm_data.get("farm_plot_count", 1)
+    
+    if balance is None:
+        balance_rubles = await database.get_user_balance(telegram_id)
+    else:
+        balance_rubles = balance
+    
     balance_kopecks = int(balance_rubles * 100)  # Convert to kopecks for comparison
     
     async with pool.acquire() as conn:
@@ -877,8 +893,15 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
         farm_plots.append(plot)
     
     await database.save_farm_plots(telegram_id, farm_plots)
+    
+    # Get current balance and plot_count for rendering
+    balance_rubles = await database.get_user_balance(telegram_id)
+    farm_data = await database.get_farm_data(telegram_id)
+    plot_count = farm_data.get("farm_plot_count", 1)
+    
     await callback.answer("🌱 Семя посажено!")
-    await _render_farm(callback, pool)
+    # Pass updated farm_plots directly - don't re-read from DB
+    await _render_farm(callback, pool, farm_plots=farm_plots, balance=balance_rubles, plot_count=plot_count)
     logger.info(f"GAME_FARM [user={telegram_id}] planted plot={plot_id} weather={weather}")
 
 
@@ -906,7 +929,17 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     plot["planted_at"] = None
     plot["weather"] = None
     
+    # Update plot in list
+    for i, p in enumerate(farm_plots):
+        if p.get("plot_id") == plot_id:
+            farm_plots[i] = plot
+            break
+    
     await database.save_farm_plots(telegram_id, farm_plots)
+    
+    # Get updated balance and plot_count
+    farm_data = await database.get_farm_data(telegram_id)
+    plot_count = farm_data.get("farm_plot_count", 1)
     
     async with pool.acquire() as conn:
         if weather == "good":
@@ -918,7 +951,11 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
             await callback.answer("🌧 Увы, урожай погиб от плохой погоды 😢", show_alert=True)
             logger.info(f"GAME_FARM [user={telegram_id}] harvested plot={plot_id} weather=bad no reward")
     
-    await _render_farm(callback, pool)
+    # Get updated balance after increase_balance
+    balance_rubles = await database.get_user_balance(telegram_id)
+    
+    # Pass updated farm_plots + new balance directly
+    await _render_farm(callback, pool, farm_plots=farm_plots, balance=balance_rubles, plot_count=plot_count)
 
 
 @router.callback_query(F.data == "farm_buy_plot", StateFilter("*"))
@@ -953,8 +990,13 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     await database.save_farm_plots(telegram_id, farm_plots)
     await database.update_farm_plot_count(telegram_id, plot_count + 1)
     
+    # Get updated balance after decrease_balance
+    balance_rubles = await database.get_user_balance(telegram_id)
+    new_plot_count = plot_count + 1
+    
     await callback.answer(f"✅ Куплена новая грядка за {price} ₽!", show_alert=True)
-    await _render_farm(callback, pool)
+    # Pass updated farm_plots + new balance + new plot_count directly
+    await _render_farm(callback, pool, farm_plots=farm_plots, balance=balance_rubles, plot_count=new_plot_count)
 
 
 @router.callback_query(F.data == "farm_noop", StateFilter("*"))
@@ -982,6 +1024,19 @@ async def callback_farm_replant(callback: CallbackQuery, state: FSMContext):
     plot["planted_at"] = None
     plot["weather"] = None
     
+    # Update plot in list
+    for i, p in enumerate(farm_plots):
+        if p.get("plot_id") == plot_id:
+            farm_plots[i] = plot
+            break
+    
     await database.save_farm_plots(telegram_id, farm_plots)
+    
+    # Get current balance and plot_count for rendering
+    balance_rubles = await database.get_user_balance(telegram_id)
+    farm_data = await database.get_farm_data(telegram_id)
+    plot_count = farm_data.get("farm_plot_count", 1)
+    
     await callback.answer("🌧 Урожай погиб. Можно посадить снова!", show_alert=True)
-    await _render_farm(callback, pool)
+    # Pass updated farm_plots directly
+    await _render_farm(callback, pool, farm_plots=farm_plots, balance=balance_rubles, plot_count=plot_count)
