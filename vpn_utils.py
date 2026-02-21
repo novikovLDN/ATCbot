@@ -301,11 +301,13 @@ async def add_vless_user(
         if api_tariff not in ("basic", "plus"):
             api_tariff = tariff_normalized
         if api_tariff == "plus":
-            vless_url = data.get("subscription_url")
+            if getattr(config, "VPN_SERVER_URL", None):
+                vless_url = f"{config.VPN_SERVER_URL}/connect/{returned_uuid}"
+            else:
+                vless_url = data.get("subscription_url")
             if not vless_url:
                 raise InvalidResponseError(
-                    "Xray API did not return subscription_url for tariff=plus. "
-                    "Local fallback generation is forbidden by architecture."
+                    "Xray API did not return subscription_url for tariff=plus and VPN_SERVER_URL is not set."
                 )
         else:
             vless_url = data.get("vless_link")
@@ -382,9 +384,12 @@ async def upgrade_to_plus(uuid: str) -> Dict[str, str]:
         data = response.json()
         if not isinstance(data, dict):
             raise InvalidResponseError(f"Invalid response type: expected dict, got {type(data)}")
-        subscription_url = data.get("subscription_url")
+        if getattr(config, "VPN_SERVER_URL", None):
+            subscription_url = f"{config.VPN_SERVER_URL}/connect/{uuid_clean}"
+        else:
+            subscription_url = data.get("subscription_url")
         if not subscription_url:
-            raise InvalidResponseError("Xray API did not return subscription_url for upgrade-to-plus")
+            raise InvalidResponseError("Xray API did not return subscription_url for upgrade-to-plus and VPN_SERVER_URL is not set")
         uuid_preview = f"{uuid_clean[:8]}..." if len(uuid_clean) > 8 else uuid_clean
         logger.info(f"XRAY_UPGRADE_TO_PLUS uuid={uuid_preview} status=200")
         return {

@@ -153,7 +153,7 @@ def get_profile_keyboard(
         callback_data="withdraw_start"
     )])
     if subscription_type == "plus" and vpn_key:
-        # vpn_key for plus is subscription_url (https://.../sub/UUID) — Telegram accepts it
+        # vpn_key for plus is subscription_url (https://.../connect/UUID) — Telegram accepts it
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "subscription.connect_button", "🔌 Подключиться"),
             url=vpn_key
