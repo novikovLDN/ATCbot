@@ -4030,11 +4030,52 @@ async def grant_access(
         # 3. expires_at > now() (не истекла)
         # 4. uuid IS NOT NULL (UUID существует)
         if subscription and status == "active" and uuid and expires_at and expires_at > now:
-            # UUID_AUDIT_DB_VALUE: Trace UUID from DB for renewal (identical across DB/Xray, no transformation)
-            logger.info(
-                f"UUID_AUDIT_DB_VALUE [telegram_id={telegram_id}, uuid_from_db={uuid[:8] if uuid else 'N/A'}..., repr={repr(uuid)}]"
-            )
-            # UUID СТАБИЛЕН - продлеваем подписку БЕЗ вызова VPN API
+            current_sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+            incoming_tariff = (tariff or "basic").strip().lower()
+
+            # Basic→Plus upgrade: same UUID, call /upgrade-to-plus, update vpn_key and subscription_type, extend dates
+            if source == "payment" and incoming_tariff == "plus" and current_sub_type == "basic":
+                logger.info(
+                    f"grant_access: UPGRADE_BASIC_TO_PLUS [user={telegram_id}, uuid={uuid[:8]}..., source={source}]"
+                )
+                try:
+                    upgrade_result = await vpn_utils.upgrade_to_plus(uuid)
+                    new_vpn_key = upgrade_result.get("vless_url")
+                    if not new_vpn_key:
+                        raise Exception("upgrade_to_plus did not return vless_url (subscription_url)")
+                    old_expires_at = expires_at
+                    subscription_end = max(expires_at, now) + duration
+                    _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
+                    subscription_start = _ensure_utc(_start_raw) if _start_raw else now
+                    if subscription_end <= old_expires_at:
+                        raise Exception(f"Invalid upgrade: new_end={subscription_end} <= old_end={old_expires_at}")
+                    await conn.execute(
+                        """UPDATE subscriptions
+                           SET expires_at = $1, vpn_key = $2, subscription_type = 'plus',
+                               status = 'active', source = $3,
+                               reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
+                               reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
+                           WHERE telegram_id = $4""",
+                        _to_db_utc(subscription_end), new_vpn_key, source, telegram_id
+                    )
+                    await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, subscription_start, subscription_end, "renewal")
+                    logger.info(
+                        f"grant_access: UPGRADE_TO_PLUS_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
+                        f"new_expires={subscription_end.isoformat()}]"
+                    )
+                    return {
+                        "uuid": uuid,
+                        "vless_url": new_vpn_key,
+                        "vpn_key": new_vpn_key,
+                        "subscription_end": subscription_end,
+                        "action": "renewal",
+                        "subscription_type": "plus",
+                    }
+                except Exception as e:
+                    logger.error(f"grant_access: UPGRADE_TO_PLUS_FAILED [user={telegram_id}, error={e}]")
+                    raise Exception(f"Basic→Plus upgrade failed: {e}") from e
+
+            # UUID СТАБИЛЕН - продлеваем подписку БЕЗ вызова VPN API (renewal same tariff)
             logger.info(
                 f"grant_access: RENEWAL_DETECTED [user={telegram_id}, current_expires={expires_at.isoformat()}, "
                 f"uuid={uuid[:8] if uuid else 'N/A'}..., source={source}] - "
@@ -4749,7 +4790,8 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
-                    "vless_url": vless_result["vless_url"]
+                    "vless_url": vless_result["vless_url"],
+                    "subscription_type": vless_result.get("subscription_type") or "basic",
                 }
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(

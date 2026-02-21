@@ -295,23 +295,25 @@ async def add_vless_user(
         returned_uuid = str(returned_uuid).strip()
         logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={returned_uuid}")
 
-        # basic: API returns vless_link; plus: API returns subscription (Base64)
-        if tariff_normalized == "plus":
-            vless_link = data.get("subscription")
-            if not vless_link:
+        # API response: { uuid, tariff, vless_link?, subscription?, subscription_url? }
+        # basic: vless_url = vless_link; plus: vless_url = subscription_url (stored in vpn_key)
+        api_tariff = (data.get("tariff") or tariff_normalized).strip().lower()
+        if api_tariff not in ("basic", "plus"):
+            api_tariff = tariff_normalized
+        if api_tariff == "plus":
+            vless_url = data.get("subscription_url")
+            if not vless_url:
                 raise InvalidResponseError(
-                    "Xray API did not return subscription for tariff=plus. "
+                    "Xray API did not return subscription_url for tariff=plus. "
                     "Local fallback generation is forbidden by architecture."
                 )
         else:
-            vless_link = data.get("vless_link")
-            if not vless_link:
+            vless_url = data.get("vless_link")
+            if not vless_url:
                 raise InvalidResponseError(
                     "Xray API did not return vless_link for tariff=basic. "
                     "Local fallback generation is forbidden by architecture."
                 )
-
-        vless_url = vless_link
 
         uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
         logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
@@ -338,7 +340,7 @@ async def add_vless_user(
         return {
             "uuid": returned_uuid,
             "vless_url": vless_url,
-            "subscription_type": tariff_normalized,
+            "subscription_type": api_tariff,
         }
 
     except (AuthError, InvalidResponseError) as e:
@@ -350,6 +352,50 @@ async def add_vless_user(
         error_msg = f"Failed to create VLESS user: {e}"
         logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
         raise VPNAPIError(error_msg) from e
+
+
+async def upgrade_to_plus(uuid: str) -> Dict[str, str]:
+    """
+    Upgrade existing basic user to plus. UUID stays the same.
+    Calls POST /upgrade-to-plus/{uuid} on VPN API (no body), x-api-key header.
+    Returns: {"uuid": uuid, "vless_url": subscription_url, "subscription_type": "plus"}
+    """
+    if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        raise ValueError("VPN API is not configured")
+    uuid_clean = str(uuid).strip()
+    if not uuid_clean:
+        raise ValueError("upgrade_to_plus requires non-empty uuid")
+    _validate_uuid_no_prefix(uuid_clean)
+    api_url = config.XRAY_API_URL.rstrip("/")
+    url = f"{api_url}/upgrade-to-plus/{uuid_clean}"
+    headers = {"x-api-key": config.XRAY_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=headers)
+        if response.status_code in (401, 403):
+            raise AuthError(f"Authentication error: status={response.status_code}")
+        if response.status_code == 404:
+            raise InvalidResponseError("User not found for upgrade")
+        if 400 <= response.status_code < 500:
+            raise InvalidResponseError(f"Client error: status={response.status_code}, response={response.text[:200]}")
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise InvalidResponseError(f"Invalid response type: expected dict, got {type(data)}")
+        subscription_url = data.get("subscription_url")
+        if not subscription_url:
+            raise InvalidResponseError("Xray API did not return subscription_url for upgrade-to-plus")
+        uuid_preview = f"{uuid_clean[:8]}..." if len(uuid_clean) > 8 else uuid_clean
+        logger.info(f"XRAY_UPGRADE_TO_PLUS uuid={uuid_preview} status=200")
+        return {
+            "uuid": uuid_clean,
+            "vless_url": subscription_url,
+            "subscription_type": "plus",
+        }
+    except (AuthError, InvalidResponseError):
+        raise
+    except Exception as e:
+        raise VPNAPIError(f"Failed to upgrade to plus: {e}") from e
 
 
 async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:

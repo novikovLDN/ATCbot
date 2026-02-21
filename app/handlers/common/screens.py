@@ -245,6 +245,12 @@ async def show_profile(message_or_query, language: str):
             # Подписка активна
             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
             text += "\n" + i18n_get_text(language, "profile.subscription_active", date=expires_str)
+            # Тариф: Basic / Plus
+            sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+            if sub_type == "plus":
+                text += "\n" + i18n_get_text(language, "subscription.tariff_plus", "⭐️ Тариф: Plus")
+            else:
+                text += "\n" + i18n_get_text(language, "subscription.tariff_basic", "📦 Тариф: Basic")
         else:
             # Подписка неактивна (истекла или отсутствует)
             text += "\n" + i18n_get_text(language, "profile.subscription_inactive")

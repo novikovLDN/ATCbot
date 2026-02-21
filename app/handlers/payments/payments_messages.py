@@ -764,16 +764,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # КРИТИЧНО: Отправляем VPN-ключ / кнопку подключения
     try:
         if subscription_type == "plus":
-            # Plus: одна кнопка «Подключиться» (v2rayTUN deep link), без сообщения с code
+            # Plus: vpn_key is subscription_url (https) — one message with button
             text = (
                 "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
-                "У вас <b>3 конфигурации</b> для переключения в приложении:\n"
-                "⚪️ Белые списки 1, 2, 3\n\n"
-                "Нажмите кнопку ниже — приложение настроится автоматически 👇"
+                "📱 Нажмите кнопку ниже — приложение настроится автоматически с 2 конфигурациями:\n"
+                "🇩🇪 Basic (Microsoft)\n⚪️ Plus (Yandex)"
             )
-            connect_keyboard = get_vpn_key_keyboard(language, subscription_type="plus", vpn_key=vpn_key)
-            await message.answer(text, reply_markup=connect_keyboard, parse_mode="HTML")
+            connect_button = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🔌 Подключиться", url=vpn_key)
+            ]])
+            await message.answer(text, reply_markup=connect_button, parse_mode="HTML")
         else:
+            # Basic: vpn_key is vless:// link — send as code
             await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
 
         logger.info(
@@ -827,12 +829,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
             if subscription_type == "plus":
                 text = (
                     "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
-                    "У вас <b>3 конфигурации</b> для переключения в приложении:\n"
-                    "⚪️ Белые списки 1, 2, 3\n\n"
-                    "Нажмите кнопку ниже — приложение настроится автоматически 👇"
+                    "📱 Нажмите кнопку ниже — приложение настроится автоматически с 2 конфигурациями:\n"
+                    "🇩🇪 Basic (Microsoft)\n⚪️ Plus (Yandex)"
                 )
-                connect_keyboard = get_vpn_key_keyboard(language, subscription_type="plus", vpn_key=vpn_key)
-                await message.answer(text, reply_markup=connect_keyboard, parse_mode="HTML")
+                connect_button = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔌 Подключиться", url=vpn_key)
+                ]])
+                await message.answer(text, reply_markup=connect_button, parse_mode="HTML")
             else:
                 await message.answer(
                     f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"

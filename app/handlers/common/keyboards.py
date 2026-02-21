@@ -153,8 +153,11 @@ def get_profile_keyboard(
         callback_data="withdraw_start"
     )])
     if subscription_type == "plus" and vpn_key:
-        deep_link = get_v2raytun_connect_deep_link(vpn_key)
-        buttons.append([InlineKeyboardButton(text="🔌 Подключиться", url=deep_link)])
+        # vpn_key for plus is subscription_url (https://.../sub/UUID) — Telegram accepts it
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "subscription.connect_button", "🔌 Подключиться"),
+            url=vpn_key
+        )])
     else:
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "profile.copy_key"),
@@ -204,11 +207,10 @@ def get_vpn_key_keyboard(
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
 ):
-    """Клавиатура для экрана выдачи VPN-ключа после оплаты. Plus: кнопка «Подключиться» (deep link)."""
+    """Клавиатура для экрана выдачи VPN-ключа после оплаты. Plus: кнопка «Подключиться» (url=vpn_key)."""
     if subscription_type == "plus" and vpn_key:
-        deep_link = get_v2raytun_connect_deep_link(vpn_key)
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔌 Подключиться", url=deep_link)],
+            [InlineKeyboardButton(text=i18n_get_text(language, "subscription.connect_button", "🔌 Подключиться"), url=vpn_key)],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.go_to_connection"),
                 callback_data="menu_instruction"
@@ -361,8 +363,10 @@ def get_instruction_keyboard(
     """
     buttons = []
     if subscription_type == "plus" and vpn_key:
-        deep_link = get_v2raytun_connect_deep_link(vpn_key)
-        buttons.append([InlineKeyboardButton(text="🔌 Подключиться", url=deep_link)])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "subscription.connect_button", "🔌 Подключиться"),
+            url=vpn_key
+        )])
 
     buttons.extend([
         [
