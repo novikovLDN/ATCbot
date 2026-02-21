@@ -105,29 +105,37 @@ async def check_xray_health() -> bool:
         return False
 
 
-async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
+async def add_vless_user(
+    telegram_id: int,
+    subscription_end: datetime,
+    uuid: Optional[str] = None,
+    tariff: str = "basic",
+) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
 
     INVARIANT: Must NEVER be called inside an active DB transaction (orphan UUID risk).
     Callers that hold a DB transaction MUST use two-phase: call add_vless_user OUTSIDE the tx,
-    then pass the returned {uuid, vless_url} as pre_provisioned_uuid to grant_access.
-    
-    Вызывает POST /add-user на локальном FastAPI VPN API сервере.
-    Передаёт telegram_id и expiry_timestamp_ms (subscription_end в мс).
-    API возвращает uuid и vless_link.
-    
+    then pass the returned {uuid, vless_url, subscription_type} as pre_provisioned_uuid to grant_access.
+
+    Вызывает POST /add-user на VPN API. Тело: {"uuid": uuid, "tariff": tariff}.
+    - tariff "basic": API возвращает {"vless_link": "vless://...", "subscription": null}
+    - tariff "plus": API возвращает {"vless_link": null, "subscription": "base64string", "links": [...]}
+    vless_url в ответе: для basic = vless_link, для plus = subscription (Base64 для v2ray).
+
     UUID is stored and sent as-is (no prefix). Stage isolation uses X-Inbound-Tag header.
-    
+
     Args:
-        telegram_id: Telegram ID пользователя
-        subscription_end: Дата окончания подписки (используется как expiryTime в Xray)
+        telegram_id: Telegram ID пользователя (для логирования)
+        subscription_end: Дата окончания подписки (для логирования; новый API не использует в теле)
         uuid: Optional. If provided, sent to API; else Xray generates. Returned UUID is canonical.
-    
+        tariff: "basic" или "plus" — тип тарифа для VPN API.
+
     Returns:
         Словарь с ключами:
         - "uuid": UUID пользователя (str, raw 36-char UUID)
-        - "vless_url": VLESS URL для подключения (str, from API only — never generated locally)
+        - "vless_url": VLESS URL или Base64 подписки (str, from API only)
+        - "subscription_type": тот же tariff (str)
     
     Raises:
         ValueError: Если XRAY_API_URL или XRAY_API_KEY не настроены
@@ -194,31 +202,32 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
 
     assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
     assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
-    expiry_ms = int(subscription_end.timestamp() * 1000)
     url = f"{api_url}/add-user"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
     }
-    
+
     # STAGE изоляция: добавляем заголовок для отдельного inbound/tag
     if config.IS_STAGE:
         headers["X-Environment"] = "stage"
         headers["X-Inbound-Tag"] = "stage"
-    
-    json_body: dict = {
-        "telegram_id": telegram_id,
-        "expiry_timestamp_ms": expiry_ms,
-    }
+
     if not uuid or not str(uuid).strip():
         raise ValueError("add_vless_user requires uuid; DB is source of truth")
-    json_body["uuid"] = str(uuid).strip()
-    logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}]")
-    
+    tariff_normalized = (tariff or "basic").strip().lower()
+    if tariff_normalized not in ("basic", "plus"):
+        tariff_normalized = "basic"
+    json_body: dict = {
+        "uuid": str(uuid).strip(),
+        "tariff": tariff_normalized,
+    }
+    logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}, tariff={tariff_normalized}]")
+
     # Логируем начало операции
     logger.info(
         f"vpn_api add_user: START [url={url}, telegram_id={telegram_id}, "
-        f"expiry_timestamp_ms={expiry_ms}, subscription_end={subscription_end.isoformat()}]"
+        f"tariff={tariff_normalized}, subscription_end={subscription_end.isoformat()}]"
     )
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
@@ -275,31 +284,31 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             error_msg = f"Invalid response type: expected dict, got {type(data)}"
             logger.error(f"vpn_api add_user: INVALID_RESPONSE_TYPE [{error_msg}]")
             raise InvalidResponseError(error_msg)
-        
-        # Strict schema: API must return uuid and vless_link (no local fallback)
-        required_fields = {"uuid", "vless_link"}
-        if not required_fields.issubset(data.keys()):
-            raise InvalidResponseError(
-                f"Invalid API response. Expected fields: {required_fields}, got: {set(data.keys())}"
-            )
 
         returned_uuid = data.get("uuid")
-        vless_link = data.get("vless_link")
-
         if not returned_uuid:
             error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
             logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
             raise InvalidResponseError(error_msg)
 
         returned_uuid = str(returned_uuid).strip()
-        # Xray is source of truth: always trust returned UUID (no mismatch assertion)
         logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={returned_uuid}")
 
-        if not vless_link:
-            raise InvalidResponseError(
-                "Xray API did not return vless_link. "
-                "Local fallback generation is forbidden by architecture."
-            )
+        # basic: API returns vless_link; plus: API returns subscription (Base64)
+        if tariff_normalized == "plus":
+            vless_link = data.get("subscription")
+            if not vless_link:
+                raise InvalidResponseError(
+                    "Xray API did not return subscription for tariff=plus. "
+                    "Local fallback generation is forbidden by architecture."
+                )
+        else:
+            vless_link = data.get("vless_link")
+            if not vless_link:
+                raise InvalidResponseError(
+                    "Xray API did not return vless_link for tariff=basic. "
+                    "Local fallback generation is forbidden by architecture."
+                )
 
         vless_url = vless_link
 
@@ -327,9 +336,10 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
 
         return {
             "uuid": returned_uuid,
-            "vless_url": vless_url
+            "vless_url": vless_url,
+            "subscription_type": tariff_normalized,
         }
-        
+
     except (AuthError, InvalidResponseError) as e:
         # Domain exceptions should NOT be retried - raise immediately
         logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=domain_error, environment={config.APP_ENV}, error={str(e)[:100]}]")

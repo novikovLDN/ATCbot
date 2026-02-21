@@ -634,6 +634,12 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS last_activation_error TEXT")
         except Exception:
             pass
+
+        # Миграция 032: subscription_type для VPN API tariff (basic / plus)
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS subscription_type TEXT DEFAULT 'basic'")
+        except Exception:
+            pass
         
         # Миграция: добавляем поле balance в users (хранится в копейках как INTEGER)
         try:
@@ -3775,13 +3781,17 @@ async def reissue_vpn_key_atomic(
             old_uuid = subscription.get("uuid")
             old_vpn_key = subscription.get("vpn_key", "")
             expires_at = _ensure_utc(subscription["expires_at"])
+            reissue_tariff = (subscription.get("subscription_type") or "basic").strip().lower()
+            if reissue_tariff not in ("basic", "plus"):
+                reissue_tariff = "basic"
 
             # PHASE 1 (outside DB transaction): add_vless_user
             new_uuid = _generate_subscription_uuid()
             vless_result = await vpn_utils.add_vless_user(
                 telegram_id=telegram_id,
                 subscription_end=expires_at,
-                uuid=new_uuid
+                uuid=new_uuid,
+                tariff=reissue_tariff,
             )
             new_vpn_key = vless_result.get("vless_url")
             uuid_from_api = vless_result.get("uuid")
@@ -3808,9 +3818,12 @@ async def reissue_vpn_key_atomic(
                     )
                     if not sub_check:
                         raise Exception("Subscription no longer active")
+                    new_subscription_type = (vless_result.get("subscription_type") or reissue_tariff).strip().lower()
+                    if new_subscription_type not in ("basic", "plus"):
+                        new_subscription_type = "basic"
                     await conn.execute(
-                        "UPDATE subscriptions SET uuid = $1, vpn_key = $2 WHERE telegram_id = $3",
-                        new_uuid, new_vpn_key, telegram_id
+                        "UPDATE subscriptions SET uuid = $1, vpn_key = $2, subscription_type = $4 WHERE telegram_id = $3",
+                        new_uuid, new_vpn_key, telegram_id, new_subscription_type
                     )
                     await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
                     old_key_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
@@ -3888,7 +3901,8 @@ async def grant_access(
     admin_grant_days: Optional[int] = None,
     conn=None,
     pre_provisioned_uuid: Optional[Dict[str, str]] = None,
-    _caller_holds_transaction: bool = False
+    _caller_holds_transaction: bool = False,
+    tariff: str = "basic",
 ) -> Dict[str, Any]:
     """
     ЕДИНАЯ ФУНКЦИЯ ВЫДАЧИ ДОСТУПА (SINGLE SOURCE OF TRUTH)
@@ -3939,8 +3953,9 @@ async def grant_access(
         admin_telegram_id: Telegram ID администратора (опционально, для admin-источников)
         admin_grant_days: Количество дней для админ-доступа (опционально)
         conn: Соединение с БД (если None, создаётся новое)
-        pre_provisioned_uuid: Опционально. При двухфазной активации: {"uuid": str, "vless_url": str}.
+        pre_provisioned_uuid: Опционально. При двухфазной активации: {"uuid": str, "vless_url": str, "subscription_type": str}.
             Если задан — add_vless_user НЕ вызывается (UUID уже создан вне транзакции).
+        tariff: "basic" или "plus" — тип тарифа для VPN API (и для subscription_type в БД при new issuance).
     
     Returns:
         Dict[str, Any] with keys:
@@ -4358,6 +4373,7 @@ async def grant_access(
                 "Caller holds transaction but did not provide pre_provisioned_uuid. "
                 "Use two-phase activation: Phase 1 add_vless_user outside tx, Phase 2 grant_access with pre_provisioned_uuid."
             )
+        vless_result = None  # set by add_vless_user path; None when using pre_provisioned_uuid
         # TWO-PHASE: If caller provided pre_provisioned_uuid, use it — NEVER call add_vless_user inside transaction.
         if pre_provisioned_uuid and pre_provisioned_uuid.get("uuid") and pre_provisioned_uuid.get("vless_url"):
             new_uuid = pre_provisioned_uuid["uuid"].strip()
@@ -4399,7 +4415,8 @@ async def grant_access(
                     vless_result = await vpn_utils.add_vless_user(
                         telegram_id=telegram_id,
                         subscription_end=subscription_end,
-                        uuid=new_uuid
+                        uuid=new_uuid,
+                        tariff=tariff,
                     )
                     vless_url = vless_result.get("vless_url")
                     uuid_from_api = vless_result.get("uuid")
@@ -4457,10 +4474,21 @@ async def grant_access(
                         pass
                     raise Exception(error_msg) from e
 
+        # subscription_type for DB: from vless_result, pre_provisioned_uuid, or tariff
+        subscription_type_value = "basic"
+        if vless_result:
+            subscription_type_value = (vless_result.get("subscription_type") or tariff or "basic").strip().lower()
+        elif pre_provisioned_uuid:
+            subscription_type_value = (pre_provisioned_uuid.get("subscription_type") or tariff or "basic").strip().lower()
+        else:
+            subscription_type_value = (tariff or "basic").strip().lower()
+        if subscription_type_value not in ("basic", "plus"):
+            subscription_type_value = "basic"
+
         # Defensive: UUID must be resolved after successful provisioning
         if not new_uuid:
             raise RuntimeError("UUID resolution failed after VPN provisioning")
-        
+
         # PART D.7: Handle case where VPN API is disabled (no vless_url)
         # If VPN API is disabled, set activation_status to 'pending' instead of raising error
         if not new_uuid or not vless_url:
@@ -4509,13 +4537,13 @@ async def grant_access(
         try:
             # DEBUG: Валидация количества аргументов
             activation_status_value = 'pending' if pending_activation else 'active'
-            args = (telegram_id, new_uuid, vless_url, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), activation_status_value)
+            args = (telegram_id, new_uuid, vless_url, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), activation_status_value, subscription_type_value)
             logger.debug(
                 f"grant_access: SQL_ARGS_COUNT [user={telegram_id}, "
-                f"placeholders=8, args_count={len(args)}, "
-                f"activation_status={activation_status_value}]"
+                f"placeholders=9, args_count={len(args)}, "
+                f"activation_status={activation_status_value}, subscription_type={subscription_type_value}]"
             )
-            
+
             await conn.execute(
                 """INSERT INTO subscriptions (
                        telegram_id, uuid, vpn_key, expires_at, status, source,
@@ -4525,13 +4553,14 @@ async def grant_access(
                        trial_notif_6h_sent, trial_notif_18h_sent, trial_notif_30h_sent,
                        trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
                        trial_notif_71h_sent,
-                       activation_status, activation_attempts, last_activation_error
+                       activation_status, activation_attempts, last_activation_error,
+                       subscription_type
                    )
                    VALUES ($1, $2, $3, $4, 'active', $5, FALSE, FALSE, FALSE, FALSE, FALSE, $6, $7, 0,
                            FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
-                           $8, 0, NULL)
-                   ON CONFLICT (telegram_id) 
-                   DO UPDATE SET 
+                           $8, 0, NULL, $9)
+                   ON CONFLICT (telegram_id)
+                   DO UPDATE SET
                        uuid = COALESCE($2, subscriptions.uuid),
                        vpn_key = COALESCE($3, subscriptions.vpn_key),
                        expires_at = $4,
@@ -4554,7 +4583,8 @@ async def grant_access(
                        trial_notif_71h_sent = FALSE,
                        activation_status = $8,
                        activation_attempts = 0,
-                       last_activation_error = NULL""",
+                       last_activation_error = NULL,
+                       subscription_type = COALESCE($9, subscriptions.subscription_type)""",
                 *args
             )
             
@@ -4622,6 +4652,7 @@ async def grant_access(
             "vless_url": vless_url,  # VLESS ссылка готова к выдаче пользователю (новый UUID)
             "subscription_end": subscription_end,
             "action": "new_issuance",
+            "subscription_type": subscription_type_value,
             "old_uuid_to_remove_after_commit": old_uuid_to_remove_after_commit
         }
         
@@ -6629,11 +6660,13 @@ async def finalize_purchase(
                     vless_result = await vpn_utils.add_vless_user(
                         telegram_id=telegram_id,
                         subscription_end=subscription_end_pre,
-                        uuid=new_uuid_pre
+                        uuid=new_uuid_pre,
+                        tariff=tariff_type or "basic",
                     )
                     pre_provisioned_uuid = {
                         "uuid": vless_result["uuid"].strip(),
-                        "vless_url": vless_result["vless_url"]
+                        "vless_url": vless_result["vless_url"],
+                        "subscription_type": vless_result.get("subscription_type") or tariff_type or "basic",
                     }
                     uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                     logger.info(
@@ -6778,7 +6811,8 @@ async def finalize_purchase(
                     admin_grant_days=None,
                     conn=conn,
                     pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=True
+                    _caller_holds_transaction=True,
+                    tariff=tariff_type or "basic",
                 )
                 if not grant_result:
                     error_msg = f"grant_access returned None: purchase_id={purchase_id}, user={telegram_id}"
@@ -6904,13 +6938,25 @@ async def finalize_purchase(
                     f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
                     f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}, subscription_activated=True, vpn_key_issued=True]"
                 )
-                
+
+                subscription_type_ret = (grant_result.get("subscription_type") or "basic").strip().lower()
+                if subscription_type_ret not in ("basic", "plus"):
+                    subscription_type_ret = "basic"
+                if is_renewal:
+                    sub_row = await conn.fetchrow(
+                        "SELECT subscription_type FROM subscriptions WHERE telegram_id = $1",
+                        telegram_id
+                    )
+                    if sub_row and sub_row.get("subscription_type"):
+                        subscription_type_ret = (sub_row["subscription_type"] or "basic").strip().lower()
+
                 ret_val = {
                     "success": True,
                     "payment_id": payment_id,
                     "expires_at": expires_at,
                     "vpn_key": vpn_key,
                     "is_renewal": is_renewal,
+                    "subscription_type": subscription_type_ret,
                     "referral_reward": referral_reward_result  # Добавляем результат реферального кешбэка
                 }
         except Exception as tx_err:

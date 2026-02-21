@@ -513,6 +513,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
         expires_at = result.expires_at
         vpn_key = result.vpn_key
         is_renewal = result.is_renewal
+        subscription_type = (getattr(result, "subscription_type", None) or "basic").strip().lower()
+        if subscription_type not in ("basic", "plus"):
+            subscription_type = "basic"
         
         # Проверяем статус активации подписки
         activation_status = result.activation_status
@@ -760,11 +763,22 @@ async def process_successful_payment(message: Message, state: FSMContext):
     
     # КРИТИЧНО: Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
     try:
-        await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        
+        if subscription_type == "plus":
+            # Plus: vpn_key is Base64 subscription string; send as sub:// URL for v2ray
+            text = (
+                "🔑 <b>Ваш доступ Plus активирован!</b>\n\n"
+                "У вас <b>3 конфигурации</b> для переключения внутри приложения:\n"
+                "⚪️ Белые списки 1, 2, 3\n\n"
+                "Скопируйте ссылку-подписку и добавьте в v2rayTUN:"
+            )
+            await message.answer(text, parse_mode="HTML")
+            await message.answer(f"<code>sub://{vpn_key}</code>", parse_mode="HTML")
+        else:
+            await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+
         logger.info(
             f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
-            f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_length={len(vpn_key)}]"
+            f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_length={len(vpn_key)}, subscription_type={subscription_type}]"
         )
         
         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки VPN ключа)
@@ -810,11 +824,21 @@ async def process_successful_payment(message: Message, state: FSMContext):
         
         # Пытаемся отправить ключ повторно
         try:
-            await message.answer(
-                f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"
-                f"<code>{vpn_key}</code>",
-                parse_mode="HTML"
-            )
+            if subscription_type == "plus":
+                text = (
+                    "🔑 <b>Ваш доступ Plus активирован!</b>\n\n"
+                    "У вас <b>3 конфигурации</b> для переключения внутри приложения:\n"
+                    "⚪️ Белые списки 1, 2, 3\n\n"
+                    "Скопируйте ссылку-подписку и добавьте в v2rayTUN:"
+                )
+                await message.answer(text, parse_mode="HTML")
+                await message.answer(f"<code>sub://{vpn_key}</code>", parse_mode="HTML")
+            else:
+                await message.answer(
+                    f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"
+                    f"<code>{vpn_key}</code>",
+                    parse_mode="HTML"
+                )
             logger.info(f"VPN key sent on retry: user={telegram_id}, payment_id={payment_id}")
         except Exception as retry_error:
             logger.error(f"VPN key send retry also failed: user={telegram_id}, error={retry_error}")

@@ -40,6 +40,7 @@ class PaymentResult:
     vpn_key: Optional[str]
     is_renewal: bool
     activation_status: Optional[str]  # "active" or "pending"
+    subscription_type: Optional[str]  # "basic" or "plus" for message formatting
     referral_reward: Optional[Dict[str, Any]]
 
 
@@ -588,6 +589,7 @@ async def finalize_subscription_payment(
                     vpn_key=vpn_key,
                     is_renewal=existing_subscription.get("is_renewal", False),
                     activation_status=existing_subscription.get("activation_status"),
+                    subscription_type=(existing_subscription.get("subscription_type") or "basic").strip().lower(),
                     referral_reward=None
                 )
         
@@ -618,6 +620,7 @@ async def finalize_subscription_payment(
             vpn_key=result.get("vpn_key"),
             is_renewal=result["is_renewal"],
             activation_status=result.get("activation_status"),
+            subscription_type=(result.get("subscription_type") or "basic").strip().lower(),
             referral_reward=referral_reward
         )
         
