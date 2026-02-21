@@ -180,25 +180,26 @@ async def add_vless_user(
     else:
         logger.info("XRAY_CALL_START [operation=add_user, environment=local]")
     
-    # Проверяем что URL правильный и не является private IP
+    # Проверяем что URL правильный и не является private IP (PROD only; allow HTTP/private IP for STAGE)
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('https://'):
+    if not api_url.startswith('https://') and config.IS_PROD:
         error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
-    # КРИТИЧЕСКАЯ ПРОВЕРКА: Запрещаем использование private IP адресов
-    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
-    api_url_lower = api_url.lower()
-    for pattern in forbidden_patterns:
-        if pattern in api_url_lower:
-            error_msg = (
-                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
-                f"not private IP. Got: {api_url}. "
-                f"Expected format: https://api.mynewllcw.com"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+    # Allow HTTP for STAGE environment (test server may use HTTP, no SSL)
+
+    if config.IS_PROD:
+        forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+        api_url_lower = api_url.lower()
+        for pattern in forbidden_patterns:
+            if pattern in api_url_lower:
+                error_msg = (
+                    f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                    f"not private IP. Got: {api_url}. "
+                    f"Expected format: https://api.mynewllcw.com"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
 
     assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
     assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
@@ -427,23 +428,24 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     uuid_clean = str(uuid).strip()
     logger.info(f"UUID_AUDIT_UPDATE_REQUEST [uuid={repr(uuid_clean)}]")
     
-    # SECURITY: XRAY_API_URL must be HTTPS, no private IP
+    # SECURITY: XRAY_API_URL must be HTTPS, no private IP (PROD only; allow HTTP/private IP for STAGE)
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('https://'):
+    if not api_url.startswith('https://') and config.IS_PROD:
         error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
-    api_url_lower = api_url.lower()
-    for pattern in forbidden_patterns:
-        if pattern in api_url_lower:
-            error_msg = (
-                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
-                f"not private IP. Got: {api_url}. Expected format: https://api.mynewllcw.com"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
+    if config.IS_PROD:
+        forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+        api_url_lower = api_url.lower()
+        for pattern in forbidden_patterns:
+            if pattern in api_url_lower:
+                error_msg = (
+                    f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                    f"not private IP. Got: {api_url}. Expected format: https://api.mynewllcw.com"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
     expiry_ms = int(subscription_end.timestamp() * 1000)
     url = f"{api_url}/update-user"
     headers = {
@@ -539,25 +541,25 @@ async def remove_vless_user(uuid: str) -> None:
     else:
         logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=local]")
     
-    # SECURITY: XRAY_API_URL must be HTTPS, no private IP
+    # SECURITY: XRAY_API_URL must be HTTPS, no private IP (PROD only; allow HTTP/private IP for STAGE)
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('https://'):
+    if not api_url.startswith('https://') and config.IS_PROD:
         error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
-    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
-    api_url_lower = api_url.lower()
-    for pattern in forbidden_patterns:
-        if pattern in api_url_lower:
-            error_msg = (
-                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
-                f"not private IP. Got: {api_url}. "
-                f"Expected format: https://api.mynewllcw.com"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
+    if config.IS_PROD:
+        forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+        api_url_lower = api_url.lower()
+        for pattern in forbidden_patterns:
+            if pattern in api_url_lower:
+                error_msg = (
+                    f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                    f"not private IP. Got: {api_url}. "
+                    f"Expected format: https://api.mynewllcw.com"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
     url = f"{api_url}/remove-user/{uuid_clean}"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,

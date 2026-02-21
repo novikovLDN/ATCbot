@@ -6803,15 +6803,19 @@ async def finalize_purchase(
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
                 duration = timedelta(days=period_days)
+                # When Phase 1 succeeded we have pre_provisioned_uuid → use caller's conn and two-phase.
+                # When Phase 1 failed (pre_provisioned_uuid is None) → grant_access must run add_vless_user
+                # outside any transaction: pass conn=None and _caller_holds_transaction=False to avoid
+                # INVARIANT_VIOLATION; grant_access will acquire its own conn and call add_vless_user outside tx.
                 grant_result_for_removal = grant_result = await grant_access(
                     telegram_id=telegram_id,
                     duration=duration,
                     source="payment",
                     admin_telegram_id=None,
                     admin_grant_days=None,
-                    conn=conn,
+                    conn=conn if pre_provisioned_uuid else None,
                     pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=True,
+                    _caller_holds_transaction=bool(pre_provisioned_uuid),
                     tariff=tariff_type or "basic",
                 )
                 if not grant_result:
