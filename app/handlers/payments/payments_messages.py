@@ -516,6 +516,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         subscription_type = (getattr(result, "subscription_type", None) or "basic").strip().lower()
         if subscription_type not in ("basic", "plus"):
             subscription_type = "basic"
+        vpn_key_plus = getattr(result, "vpn_key_plus", None)
         
         # Проверяем статус активации подписки
         activation_status = result.activation_status
@@ -761,21 +762,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
             logger.error(f"Failed to send fallback payment approval message: user={telegram_id}, error={fallback_error}")
         # Не критично - продолжаем отправку ключа
     
-    # КРИТИЧНО: Отправляем VPN-ключ / кнопку подключения
+    # КРИТИЧНО: Отправляем VPN-ключ (basic: один ключ; plus: два ключа)
     try:
         if subscription_type == "plus":
-            # Plus: vpn_key is subscription_url (https) — one message with button
             text = (
                 "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
-                "📱 Нажмите кнопку ниже — приложение настроится автоматически с 2 конфигурациями:\n"
-                "🇩🇪 Basic (Microsoft)\n⚪️ Plus (Yandex)"
+                "🔑 Ваши ключи доступа:"
             )
-            connect_button = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🔌 Подключиться", url=vpn_key)
-            ]])
-            await message.answer(text, reply_markup=connect_button, parse_mode="HTML")
+            await message.answer(text, parse_mode="HTML")
+            await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+            if vpn_key_plus:
+                await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
         else:
-            # Basic: vpn_key is vless:// link — send as code
             await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
 
         logger.info(
@@ -829,13 +827,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
             if subscription_type == "plus":
                 text = (
                     "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
-                    "📱 Нажмите кнопку ниже — приложение настроится автоматически с 2 конфигурациями:\n"
-                    "🇩🇪 Basic (Microsoft)\n⚪️ Plus (Yandex)"
+                    "🔑 Ваши ключи доступа:"
                 )
-                connect_button = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="🔌 Подключиться", url=vpn_key)
-                ]])
-                await message.answer(text, reply_markup=connect_button, parse_mode="HTML")
+                await message.answer(text, parse_mode="HTML")
+                await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+                if vpn_key_plus:
+                    await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
             else:
                 await message.answer(
                     f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"

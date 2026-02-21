@@ -38,6 +38,7 @@ class PaymentResult:
     payment_id: int
     expires_at: Any  # datetime
     vpn_key: Optional[str]
+    vpn_key_plus: Optional[str]  # second vless link for plus only
     is_renewal: bool
     activation_status: Optional[str]  # "active" or "pending"
     subscription_type: Optional[str]  # "basic" or "plus" for message formatting
@@ -587,6 +588,7 @@ async def finalize_subscription_payment(
                     payment_id=payment_id or 0,
                     expires_at=expires_at,
                     vpn_key=vpn_key,
+                    vpn_key_plus=existing_subscription.get("vpn_key_plus"),
                     is_renewal=existing_subscription.get("is_renewal", False),
                     activation_status=existing_subscription.get("activation_status"),
                     subscription_type=(existing_subscription.get("subscription_type") or "basic").strip().lower(),
@@ -618,6 +620,7 @@ async def finalize_subscription_payment(
             payment_id=result["payment_id"],
             expires_at=result["expires_at"],
             vpn_key=result.get("vpn_key"),
+            vpn_key_plus=result.get("vpn_key_plus"),
             is_renewal=result["is_renewal"],
             activation_status=result.get("activation_status"),
             subscription_type=(result.get("subscription_type") or "basic").strip().lower(),

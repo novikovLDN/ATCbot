@@ -133,7 +133,7 @@ XRAY_API_KEY = env("XRAY_API_KEY")
 # Timeout для XRAY API запросов (в секундах, default 5s)
 XRAY_API_TIMEOUT = float(env("XRAY_API_TIMEOUT", default="5.0"))
 
-# Public URL of VPN server for Plus subscription links (HTTPS). Used for "Подключиться" button.
+# Optional: public URL of VPN server (e.g. for future subscription link features).
 VPN_SERVER_URL = env("VPN_SERVER_URL", default="").rstrip("/")
 
 # Флаг доступности VPN API

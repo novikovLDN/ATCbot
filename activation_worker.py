@@ -202,7 +202,8 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             if sub_type not in ("basic", "plus"):
                                 sub_type = "basic"
                             vpn_key = result.vpn_key
-                            keyboard = get_vpn_key_keyboard(language, subscription_type=sub_type, vpn_key=vpn_key)
+                            vpn_key_plus = getattr(result, "vpn_key_plus", None)
+                            keyboard = get_vpn_key_keyboard(language)
                             text = i18n.get_text(
                                 language,
                                 "payment.approved",
@@ -214,12 +215,18 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             )
                             if sent1 is None:
                                 pass  # continue to next sub after block
-                            elif vpn_key and sub_type != "plus":
+                            elif vpn_key:
                                 await safe_send_message(
                                     bot, telegram_id,
                                     f"<code>{vpn_key}</code>",
                                     parse_mode="HTML"
                                 )
+                                if sub_type == "plus" and vpn_key_plus:
+                                    await safe_send_message(
+                                        bot, telegram_id,
+                                        f"<code>{vpn_key_plus}</code>",
+                                        parse_mode="HTML"
+                                    )
                             logger.info(
                                 f"ACTIVATION_NOTIFICATION_SENT [subscription_id={subscription_id}, user={telegram_id}]"
                             )

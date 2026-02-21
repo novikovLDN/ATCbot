@@ -43,7 +43,7 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
 
 
 async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bot):
-    """Инструкция. Reusable for callback and /instruction command. Plus: добавляет кнопку «Подключиться»."""
+    """Инструкция. Reusable for callback and /instruction command."""
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -281,14 +281,15 @@ async def show_profile(message_or_query, language: str):
         if not has_any_subscription:
             text += "\n\n" + i18n_get_text(language, "profile.buy_hint")
 
-        # Показываем кнопку "Продлить доступ" если есть подписка (активная или истекшая) - по требованиям
+        # Показываем кнопку "Продлить доступ" и ключи (basic: один; plus: два)
         subscription_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
         vpn_key = subscription.get("vpn_key") if subscription else None
+        vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         if subscription_type not in ("basic", "plus"):
             subscription_type = "basic"
         keyboard = get_profile_keyboard(
             language, has_any_subscription, auto_renew,
-            subscription_type=subscription_type, vpn_key=vpn_key
+            subscription_type=subscription_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
         )
 
         # Отправляем сообщение

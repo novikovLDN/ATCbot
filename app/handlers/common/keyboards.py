@@ -5,7 +5,6 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
-from urllib.parse import quote
 
 import config
 import database
@@ -118,8 +117,9 @@ def get_profile_keyboard(
     auto_renew: bool = False,
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
+    vpn_key_plus: Optional[str] = None,
 ):
-    """Клавиатура профиля. Plus: кнопка «Подключиться» (deep link), иначе «Скопировать ключ»."""
+    """Клавиатура профиля. Basic: один «Скопировать ключ». Plus: два ключа — Atlas Secure, White List."""
     buttons = []
 
     if has_active_subscription:
@@ -152,12 +152,16 @@ def get_profile_keyboard(
         text=i18n_get_text(language, "profile.withdraw_funds"),
         callback_data="withdraw_start"
     )])
-    if subscription_type == "plus" and vpn_key:
-        # vpn_key for plus is subscription_url (https://.../connect/UUID) — Telegram accepts it
+    if subscription_type == "plus" and (vpn_key or vpn_key_plus):
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "subscription.connect_button", "🔌 Подключиться"),
-            url=vpn_key
+            text=i18n_get_text(language, "profile.key_atlas", "🇩🇪 Atlas Secure"),
+            callback_data="copy_key"
         )])
+        if vpn_key_plus:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "profile.key_whitelist", "⚪️ White List"),
+                callback_data="copy_key_plus"
+            )])
     else:
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "profile.copy_key"),
@@ -196,30 +200,12 @@ def get_profile_keyboard_old(language: str):
     ])
 
 
-def get_v2raytun_connect_deep_link(vpn_key: str) -> str:
-    """Deep link for v2rayTUN auto-import. Plus tariff: vpn_key is Base64 subscription."""
-    sub_url = f"sub://{vpn_key}"
-    return f"v2rayTUN://install-sub?url={quote(sub_url, safe='')}"
-
-
 def get_vpn_key_keyboard(
     language: str,
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
 ):
-    """Клавиатура для экрана выдачи VPN-ключа после оплаты. Plus: кнопка «Подключиться» (url=vpn_key)."""
-    if subscription_type == "plus" and vpn_key:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "subscription.connect_button", "🔌 Подключиться"), url=vpn_key)],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.go_to_connection"),
-                callback_data="menu_instruction"
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "main.profile"),
-                callback_data="go_profile"
-            )],
-        ])
+    """Клавиатура для экрана выдачи VPN-ключа после оплаты (инструкция, скопировать ключ, профиль)."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.go_to_connection"),
@@ -357,18 +343,8 @@ def get_instruction_keyboard(
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
 ):
-    """
-    Клавиатура экрана 'Инструкция' для v2RayTun.
-    Plus: первая строка — «Подключиться» (deep link). Иначе — кнопки платформ и «Скопировать ключ».
-    """
-    buttons = []
-    if subscription_type == "plus" and vpn_key:
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "subscription.connect_button", "🔌 Подключиться"),
-            url=vpn_key
-        )])
-
-    buttons.extend([
+    """Клавиатура экрана 'Инструкция': платформы и «Скопировать ключ»."""
+    buttons = [
         [
             InlineKeyboardButton(
                 text=i18n_get_text(language, "instruction._download_android", "🤖 Android"),
@@ -395,17 +371,13 @@ def get_instruction_keyboard(
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
         ],
-    ])
-
-    if subscription_type == "plus" and vpn_key:
-        pass  # connect button already at top
-    else:
-        buttons.append([
+        [
             InlineKeyboardButton(
                 text=i18n_get_text(language, "profile.copy_key", "copy_key"),
                 callback_data="copy_vpn_key"
             ),
-        ])
+        ],
+    ]
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
