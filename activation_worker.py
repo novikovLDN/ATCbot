@@ -181,7 +181,7 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                     try:
                         async with acquire_connection(pool, "activation_notification_check") as conn:
                             subscription_check = await conn.fetchrow(
-                                "SELECT activation_status, uuid FROM subscriptions WHERE id = $1",
+                                "SELECT activation_status, uuid, subscription_type FROM subscriptions WHERE id = $1",
                                 subscription_id
                             )
                         if not subscription_check or subscription_check["activation_status"] != "active":
@@ -195,25 +195,29 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"user={telegram_id}, reason=already_notified]"
                             )
                         else:
+                            from app.handlers.common.keyboards import get_vpn_key_keyboard
                             language = await resolve_user_language(telegram_id)
                             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
+                            sub_type = (subscription_check.get("subscription_type") or "basic").strip().lower()
+                            if sub_type not in ("basic", "plus"):
+                                sub_type = "basic"
+                            vpn_key = result.vpn_key
+                            keyboard = get_vpn_key_keyboard(language, subscription_type=sub_type, vpn_key=vpn_key)
                             text = i18n.get_text(
                                 language,
                                 "payment.approved",
                                 date=expires_str
                             )
-                            import handlers
-                            keyboard = handlers.get_vpn_key_keyboard(language)
                             sent1 = await safe_send_message(
                                 bot, telegram_id, text,
                                 reply_markup=keyboard, parse_mode="HTML"
                             )
                             if sent1 is None:
                                 pass  # continue to next sub after block
-                            elif result.vpn_key:
+                            elif vpn_key and sub_type != "plus":
                                 await safe_send_message(
                                     bot, telegram_id,
-                                    f"<code>{result.vpn_key}</code>",
+                                    f"<code>{vpn_key}</code>",
                                     parse_mode="HTML"
                                 )
                             logger.info(

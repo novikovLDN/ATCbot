@@ -4,6 +4,8 @@ InlineKeyboardMarkup and ReplyKeyboardMarkup builders. Shared across all handler
 import asyncio
 import logging
 from datetime import datetime
+from typing import Optional
+from urllib.parse import quote
 
 import config
 import database
@@ -110,8 +112,14 @@ def get_back_keyboard(language: str):
     ])
 
 
-def get_profile_keyboard(language: str, has_active_subscription: bool = False, auto_renew: bool = False):
-    """Клавиатура профиля (обновленная версия)"""
+def get_profile_keyboard(
+    language: str,
+    has_active_subscription: bool = False,
+    auto_renew: bool = False,
+    subscription_type: str = "basic",
+    vpn_key: Optional[str] = None,
+):
+    """Клавиатура профиля. Plus: кнопка «Подключиться» (deep link), иначе «Скопировать ключ»."""
     buttons = []
 
     if has_active_subscription:
@@ -144,10 +152,14 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
         text=i18n_get_text(language, "profile.withdraw_funds"),
         callback_data="withdraw_start"
     )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "profile.copy_key"),
-        callback_data="copy_key"
-    )])
+    if subscription_type == "plus" and vpn_key:
+        deep_link = get_v2raytun_connect_deep_link(vpn_key)
+        buttons.append([InlineKeyboardButton(text="🔌 Подключиться", url=deep_link)])
+    else:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "profile.copy_key"),
+            callback_data="copy_key"
+        )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main"
@@ -181,8 +193,31 @@ def get_profile_keyboard_old(language: str):
     ])
 
 
-def get_vpn_key_keyboard(language: str):
-    """Клавиатура для экрана выдачи VPN-ключа после оплаты"""
+def get_v2raytun_connect_deep_link(vpn_key: str) -> str:
+    """Deep link for v2rayTUN auto-import. Plus tariff: vpn_key is Base64 subscription."""
+    sub_url = f"sub://{vpn_key}"
+    return f"v2rayTUN://install-sub?url={quote(sub_url, safe='')}"
+
+
+def get_vpn_key_keyboard(
+    language: str,
+    subscription_type: str = "basic",
+    vpn_key: Optional[str] = None,
+):
+    """Клавиатура для экрана выдачи VPN-ключа после оплаты. Plus: кнопка «Подключиться» (deep link)."""
+    if subscription_type == "plus" and vpn_key:
+        deep_link = get_v2raytun_connect_deep_link(vpn_key)
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔌 Подключиться", url=deep_link)],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.go_to_connection"),
+                callback_data="menu_instruction"
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "main.profile"),
+                callback_data="go_profile"
+            )],
+        ])
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.go_to_connection"),
@@ -314,12 +349,22 @@ def get_support_keyboard(language: str):
     ])
 
 
-def get_instruction_keyboard(language: str, platform: str = "unknown"):
+def get_instruction_keyboard(
+    language: str,
+    platform: str = "unknown",
+    subscription_type: str = "basic",
+    vpn_key: Optional[str] = None,
+):
     """
     Клавиатура экрана 'Инструкция' для v2RayTun.
-    Всегда показываем 5 кнопок: Android, Windows, iOS, MacOS, TV.
+    Plus: первая строка — «Подключиться» (deep link). Иначе — кнопки платформ и «Скопировать ключ».
     """
-    buttons = [
+    buttons = []
+    if subscription_type == "plus" and vpn_key:
+        deep_link = get_v2raytun_connect_deep_link(vpn_key)
+        buttons.append([InlineKeyboardButton(text="🔌 Подключиться", url=deep_link)])
+
+    buttons.extend([
         [
             InlineKeyboardButton(
                 text=i18n_get_text(language, "instruction._download_android", "🤖 Android"),
@@ -346,14 +391,17 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
         ],
-    ]
-
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key", "copy_key"),
-            callback_data="copy_vpn_key"
-        ),
     ])
+
+    if subscription_type == "plus" and vpn_key:
+        pass  # connect button already at top
+    else:
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "profile.copy_key", "copy_key"),
+                callback_data="copy_vpn_key"
+            ),
+        ])
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),

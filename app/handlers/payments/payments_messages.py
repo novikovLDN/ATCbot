@@ -761,18 +761,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
             logger.error(f"Failed to send fallback payment approval message: user={telegram_id}, error={fallback_error}")
         # Не критично - продолжаем отправку ключа
     
-    # КРИТИЧНО: Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
+    # КРИТИЧНО: Отправляем VPN-ключ / кнопку подключения
     try:
         if subscription_type == "plus":
-            # Plus: vpn_key is Base64 subscription string; send as sub:// URL for v2ray
+            # Plus: одна кнопка «Подключиться» (v2rayTUN deep link), без сообщения с code
             text = (
-                "🔑 <b>Ваш доступ Plus активирован!</b>\n\n"
-                "У вас <b>3 конфигурации</b> для переключения внутри приложения:\n"
+                "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
+                "У вас <b>3 конфигурации</b> для переключения в приложении:\n"
                 "⚪️ Белые списки 1, 2, 3\n\n"
-                "Скопируйте ссылку-подписку и добавьте в v2rayTUN:"
+                "Нажмите кнопку ниже — приложение настроится автоматически 👇"
             )
-            await message.answer(text, parse_mode="HTML")
-            await message.answer(f"<code>sub://{vpn_key}</code>", parse_mode="HTML")
+            connect_keyboard = get_vpn_key_keyboard(language, subscription_type="plus", vpn_key=vpn_key)
+            await message.answer(text, reply_markup=connect_keyboard, parse_mode="HTML")
         else:
             await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
 
@@ -826,13 +826,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
         try:
             if subscription_type == "plus":
                 text = (
-                    "🔑 <b>Ваш доступ Plus активирован!</b>\n\n"
-                    "У вас <b>3 конфигурации</b> для переключения внутри приложения:\n"
+                    "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
+                    "У вас <b>3 конфигурации</b> для переключения в приложении:\n"
                     "⚪️ Белые списки 1, 2, 3\n\n"
-                    "Скопируйте ссылку-подписку и добавьте в v2rayTUN:"
+                    "Нажмите кнопку ниже — приложение настроится автоматически 👇"
                 )
-                await message.answer(text, parse_mode="HTML")
-                await message.answer(f"<code>sub://{vpn_key}</code>", parse_mode="HTML")
+                connect_keyboard = get_vpn_key_keyboard(language, subscription_type="plus", vpn_key=vpn_key)
+                await message.answer(text, reply_markup=connect_keyboard, parse_mode="HTML")
             else:
                 await message.answer(
                     f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"

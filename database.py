@@ -7891,19 +7891,24 @@ async def finalize_balance_purchase(
         if is_new_issuance and config.VPN_ENABLED:
             try:
                 new_uuid_pre = _generate_subscription_uuid()
+                tariff_for_api = (tariff_type or "basic").strip().lower()
+                if tariff_for_api not in ("basic", "plus"):
+                    tariff_for_api = "basic"
                 vless_result = await vpn_utils.add_vless_user(
                     telegram_id=telegram_id,
                     subscription_end=subscription_end_pre,
-                    uuid=new_uuid_pre
+                    uuid=new_uuid_pre,
+                    tariff=tariff_for_api,
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
-                    "vless_url": vless_result["vless_url"]
+                    "vless_url": vless_result["vless_url"],
+                    "subscription_type": vless_result.get("subscription_type") or tariff_for_api,
                 }
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(
                     f"finalize_balance_purchase: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                    f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}..., tariff={tariff_for_api}]"
                 )
             except Exception as phase1_err:
                 logger.warning(
@@ -7966,9 +7971,10 @@ async def finalize_balance_purchase(
                     admin_grant_days=None,
                     conn=conn,
                     pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=True
+                    _caller_holds_transaction=True,
+                    tariff=tariff_type or "basic",
                 )
-                
+
                 expires_at = grant_result["subscription_end"]
                 vpn_key = grant_result.get("vless_url") or grant_result.get("vpn_key") or ""
                 action = grant_result.get("action")
