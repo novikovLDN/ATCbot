@@ -61,9 +61,9 @@ class ActivationResult:
     success: bool
     uuid: Optional[str]
     vpn_key: Optional[str]
-    vpn_key_plus: Optional[str] = None  # second key for plus only
     activation_status: str  # "active" or "failed"
     attempts: int
+    vpn_key_plus: Optional[str] = None  # second key for plus only
     error: Optional[str] = None
 
 
