@@ -46,8 +46,8 @@ def get_admin_export_keyboard(language: str = "ru"):
     return keyboard
 
 
-def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False, is_vip: bool = False, language: str = "ru"):
-    """Клавиатура для раздела пользователя"""
+def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False, is_vip: bool = False, subscription_type: str = "basic", language: str = "ru"):
+    """Клавиатура для раздела пользователя. subscription_type нужен для кнопки «Заменить подписку»."""
     buttons = []
     if has_active_subscription:
         callback_data = f"admin:user_reissue:{user_id}" if user_id else "admin:user_reissue"
@@ -59,6 +59,13 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             InlineKeyboardButton(text="📦 Выдать Basic", callback_data=f"admin_grant_basic:{user_id}"),
             InlineKeyboardButton(text="⭐️ Выдать Plus", callback_data=f"admin_grant_plus:{user_id}"),
         ])
+        # Заменить подписку (Basic↔Plus) только при активной подписке
+        sub_type = (subscription_type or "basic").strip().lower()
+        if has_active_subscription and sub_type in ("basic", "plus"):
+            if sub_type == "basic":
+                buttons.append([InlineKeyboardButton(text="⭐️ Перевести на Plus", callback_data=f"admin_switch_plus:{user_id}")])
+            else:
+                buttons.append([InlineKeyboardButton(text="📦 Перевести на Basic", callback_data=f"admin_switch_basic:{user_id}")])
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")])
         # Кнопки управления скидками
         if has_discount:

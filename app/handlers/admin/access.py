@@ -14,6 +14,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 import config
 import database
+import vpn_utils
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.admin import service as admin_service
@@ -419,13 +420,17 @@ async def process_admin_user_id(message: Message, state: FSMContext):
             text += f"\n👑 VIP-статус: активен\n"
         
         # Используем actions для определения доступных действий
+        sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
+        if sub_type not in ("basic", "plus"):
+            sub_type = "basic"
         await message.answer(
             text,
             reply_markup=get_admin_user_keyboard(
                 has_active_subscription=overview.subscription_status.is_active,
                 user_id=overview.user["telegram_id"],
                 has_discount=overview.user_discount is not None,
-                is_vip=overview.is_vip
+                is_vip=overview.is_vip,
+                subscription_type=sub_type,
             ),
             parse_mode="HTML"
         )
@@ -440,6 +445,21 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         logging.exception(f"Error in process_admin_user_id: {e}")
         await message.answer("Ошибка при получении информации о пользователе. Проверь логи.")
         await state.clear()
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:show_user:"))
+async def callback_admin_show_user(callback: CallbackQuery):
+    """Вернуться к карточке пользователя (например после отмены смены тарифа)."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer()
+        return
+    await callback.answer()
+    try:
+        user_id = int(callback.data.split(":")[2])
+        await _show_admin_user_card(callback.message, user_id, callback.from_user.id)
+    except (ValueError, IndexError) as e:
+        logger.warning(f"Invalid admin:show_user callback: {callback.data}, error={e}")
+        await callback.answer("Ошибка", show_alert=True)
 
 
 @admin_access_router.callback_query(F.data.startswith("admin:user_history:"))
@@ -726,6 +746,142 @@ async def callback_admin_grant_flex_cancel(callback: CallbackQuery, state: FSMCo
     await state.clear()
     language = await resolve_user_language(callback.from_user.id)
     await safe_edit_text(callback.message, "Отменено.", reply_markup=get_admin_back_keyboard(language))
+
+
+# ----- Admin switch tariff (Basic ↔ Plus) -----
+
+def _admin_switch_confirm_keyboard(user_id: int, tariff: str, language: str = "ru"):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"admin_switch_confirm:{tariff}:{user_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin:show_user:{user_id}"),
+        ],
+    ])
+
+
+def _admin_switch_notify_keyboard(user_id: int, tariff: str, language: str = "ru"):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да", callback_data=f"admin_switch_notify:yes:{user_id}:{tariff}")],
+        [InlineKeyboardButton(text="🔕 Нет", callback_data=f"admin_switch_notify:no:{user_id}:{tariff}")],
+    ])
+
+
+@admin_access_router.callback_query(F.data.startswith("admin_switch_plus:"))
+async def callback_admin_switch_plus(callback: CallbackQuery):
+    """Перевести пользователя с Basic на Plus — показать подтверждение."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text("ru", "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        user_id = int(callback.data.split(":")[1])
+        text = (
+            f"Перевести пользователя {user_id} с Basic на Plus?\n"
+            "📅 Срок подписки не изменится.\n\n"
+            "✅ Подтвердить   ❌ Отмена"
+        )
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.message.edit_text(text, reply_markup=_admin_switch_confirm_keyboard(user_id, "plus", language))
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_switch_plus: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin_switch_basic:"))
+async def callback_admin_switch_basic(callback: CallbackQuery):
+    """Перевести пользователя с Plus на Basic — показать подтверждение."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text("ru", "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        user_id = int(callback.data.split(":")[1])
+        text = (
+            f"Перевести пользователя {user_id} с Plus на Basic?\n"
+            "📅 Срок подписки не изменится.\n"
+            "⚠️ Ключ White List будет удалён.\n\n"
+            "✅ Подтвердить   ❌ Отмена"
+        )
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.message.edit_text(text, reply_markup=_admin_switch_confirm_keyboard(user_id, "basic", language))
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_switch_basic: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin_switch_confirm:"))
+async def callback_admin_switch_confirm(callback: CallbackQuery, bot: Bot):
+    """Выполнить смену тарифа: VPN API + БД, затем спросить про уведомление."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text("ru", "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        parts = callback.data.split(":")
+        tariff = parts[1]
+        user_id = int(parts[2])
+        subscription = await database.get_subscription(user_id)
+        if not subscription or not subscription.get("uuid"):
+            await callback.answer("Нет активной подписки или UUID", show_alert=True)
+            return
+        uuid_val = subscription["uuid"].strip()
+        language = await resolve_user_language(callback.from_user.id)
+        if tariff == "plus":
+            upgrade_result = await vpn_utils.upgrade_vless_user(uuid_val)
+            vpn_key_plus = upgrade_result.get("vless_url_plus")
+            await database.admin_switch_tariff(user_id, "plus", vpn_key_plus=vpn_key_plus)
+            await database._log_audit_event_atomic_standalone("ADMIN_SWITCH_TO_PLUS", callback.from_user.id, user_id, "Tariff switched to Plus")
+        else:
+            await vpn_utils.remove_plus_inbound(uuid_val)
+            await database.admin_switch_tariff(user_id, "basic", vpn_key_plus=None)
+            await database._log_audit_event_atomic_standalone("ADMIN_SWITCH_TO_BASIC", callback.from_user.id, user_id, "Tariff switched to Basic")
+        tariff_label = "Plus" if tariff == "plus" else "Basic"
+        text = f"✅ Готово. Тариф изменён на {tariff_label}\n\nУведомить пользователя?"
+        await callback.message.edit_text(text, reply_markup=_admin_switch_notify_keyboard(user_id, tariff, language))
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_switch_confirm: {e}")
+        await callback.answer("Ошибка смены тарифа", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin_switch_notify:"))
+async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
+    """После смены тарифа: уведомить пользователя или нет, затем вернуть к карточке."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer()
+        return
+    await callback.answer()
+    try:
+        parts = callback.data.split(":")
+        notify_yes = parts[2].lower() == "yes"
+        user_id = int(parts[3])
+        tariff = parts[4]
+        tariff_label = "Plus" if tariff == "plus" else "Basic"
+        if notify_yes:
+            sub = await database.get_subscription(user_id)
+            msg = f"🔄 Ваш тариф изменён на {tariff_label}\n📅 Срок подписки не изменился."
+            try:
+                await bot.send_message(user_id, msg)
+                if tariff == "plus" and sub and sub.get("vpn_key_plus"):
+                    await bot.send_message(user_id, f"<code>{sub['vpn_key_plus']}</code>", parse_mode="HTML")
+            except Exception as e:
+                logger.exception(f"Error sending switch notify to user {user_id}: {e}")
+        overview = await admin_service.get_admin_user_overview(user_id)
+        sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
+        if sub_type not in ("basic", "plus"):
+            sub_type = "basic"
+        keyboard = get_admin_user_keyboard(
+            has_active_subscription=overview.subscription_status.is_active,
+            user_id=user_id,
+            has_discount=overview.user_discount is not None,
+            is_vip=overview.is_vip,
+            subscription_type=sub_type,
+            language=await resolve_user_language(callback.from_user.id),
+        )
+        text = f"✅ Тариф изменён на {tariff_label}."
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_switch_notify: {e}")
+        await callback.answer("Ошибка", show_alert=True)
 
 
 @admin_access_router.callback_query(F.data.startswith("admin:grant:") & ~F.data.startswith("admin:grant_custom:") & ~F.data.startswith("admin:grant_days:") & ~F.data.startswith("admin:grant_minutes:") & ~F.data.startswith("admin:grant_1_year:") & ~F.data.startswith("admin:grant_unit:") & ~F.data.startswith("admin:grant:notify:") & ~F.data.startswith("admin:notify:") & ~F.data.startswith("admin:grant_flex"))
@@ -1668,11 +1824,15 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
         text += f"\n👑 VIP-статус: активен\n"
     
     # Отображаем карточку
+    sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
+    if sub_type not in ("basic", "plus"):
+        sub_type = "basic"
     keyboard = get_admin_user_keyboard(
         has_active_subscription=overview.subscription_status.is_active,
         user_id=overview.user["telegram_id"],
         has_discount=overview.user_discount is not None,
         is_vip=overview.is_vip,
+        subscription_type=sub_type,
         language=language
     )
     
@@ -1843,6 +2003,10 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
             text += f"VPN-ключ: <code>{new_vpn_key}</code>\n"
             text += f"\n✅ Ключ перевыпущен!\nСтарый ключ: {old_vpn_key[:20]}..."
 
+        sub = await database.get_subscription(target_user_id)
+        sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
+        if sub_type not in ("basic", "plus"):
+            sub_type = "basic"
         await callback.message.edit_text(
             text,
             reply_markup=get_admin_user_keyboard(
@@ -1850,6 +2014,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
                 user_id=target_user_id,
                 has_discount=has_discount,
                 is_vip=is_vip,
+                subscription_type=sub_type,
                 language=language,
             ),
             parse_mode="HTML",
