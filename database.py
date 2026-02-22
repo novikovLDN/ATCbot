@@ -7792,7 +7792,7 @@ async def get_ab_test_stats(broadcast_id: int) -> Optional[Dict[str, Any]]:
         }
 
 
-async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_id: int) -> Tuple[datetime, str]:
+async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_id: int, tariff: str = "basic") -> Tuple[datetime, str]:
     """Атомарно выдать доступ пользователю на N дней (админ)
     
     Two-phase activation: Phase 1 add_vless_user outside tx, Phase 2 grant_access inside tx.
@@ -7802,6 +7802,7 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
         telegram_id: Telegram ID пользователя
         days: Количество дней доступа (1, 7 или 14)
         admin_telegram_id: Telegram ID администратора
+        tariff: "basic" или "plus" — тип тарифа для VPN API и подписки
     
     Returns:
         Tuple[datetime, str]: (expires_at, vpn_key)
@@ -7830,22 +7831,29 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
             is_new_issuance = (
                 sub.get("status") != "active" or not exp or exp <= now_pre or not sub.get("uuid")
             )
+        tariff_normalized = (tariff or "basic").strip().lower()
+        if tariff_normalized not in ("basic", "plus"):
+            tariff_normalized = "basic"
         if is_new_issuance and config.VPN_ENABLED:
             try:
                 new_uuid_pre = _generate_subscription_uuid()
                 vless_result = await vpn_utils.add_vless_user(
                     telegram_id=telegram_id,
                     subscription_end=subscription_end_pre,
-                    uuid=new_uuid_pre
+                    uuid=new_uuid_pre,
+                    tariff=tariff_normalized,
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
-                    "vless_url": vless_result["vless_url"]
+                    "vless_url": vless_result["vless_url"],
+                    "subscription_type": vless_result.get("subscription_type") or tariff_normalized,
                 }
+                if vless_result.get("vless_url_plus"):
+                    pre_provisioned_uuid["vless_url_plus"] = vless_result["vless_url_plus"]
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(
                     f"admin_grant_access_atomic: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                    f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}..., tariff={tariff_normalized}]"
                 )
             except Exception as phase1_err:
                 logger.warning(
@@ -7867,7 +7875,8 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                     admin_grant_days=days,
                     conn=conn,
                     pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=True
+                    _caller_holds_transaction=True,
+                    tariff=tariff_normalized,
                 )
                 expires_at = result["subscription_end"]
                 if result.get("vless_url"):

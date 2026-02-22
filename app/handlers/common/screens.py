@@ -25,6 +25,7 @@ from app.handlers.common.keyboards import (
 )
 from app.handlers.common.states import PurchaseState
 from app.constants.loyalty import get_loyalty_screen_attachment
+from app.utils.date_utils import format_date_ru
 
 logger = logging.getLogger(__name__)
 
@@ -214,86 +215,44 @@ async def show_profile(message_or_query, language: str):
             await send_func(error_text)
             return
 
-        username = user.get("username") if user else None
-        if not username:
-            username = f"ID: {telegram_id}"
+        from_user = message_or_query.from_user
+        display_name = f"@{user['username']}" if user.get("username") else (getattr(from_user, "first_name", None) or user.get("first_name") or f"ID: {telegram_id}")
 
         # Получаем баланс
         balance_rubles = await database.get_user_balance(telegram_id)
+        balance_str = f"{balance_rubles:.2f}"
 
         # Получаем информацию о подписке (активной или истекшей)
         subscription = await database.get_subscription_any(telegram_id)
-
-        # Формируем текст профиля
-        text = i18n_get_text(language, "profile.welcome_full", username=username, balance=round(balance_rubles, 2))
-
-        # Определяем статус подписки используя subscription service
         subscription_status = get_subscription_status(subscription)
         has_active_subscription = subscription_status.is_active
-        has_any_subscription = subscription_status.has_subscription
-        activation_status = subscription_status.activation_status
         expires_at = subscription_status.expires_at
 
-        # PART E.8: Profile logic - active + pending → show "Activation in progress"
-        # PART E.8: NEVER show "no subscription" if activation_status=pending
-        # PART E.9: Clear explanation, no contradictions
-        if activation_status == "pending" or (has_any_subscription and activation_status == "pending"):
-            # PART E.8: Show "Activation in progress" for pending activations
-            expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-            text += "\n" + i18n_get_text(language, "profile.subscription_pending", date=expires_str)
-        elif has_active_subscription:
-            # Подписка активна
-            expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-            text += "\n" + i18n_get_text(language, "profile.subscription_active", date=expires_str)
-            # Тариф: Basic / Plus
+        # Карточка профиля: компактный текст
+        if has_active_subscription and expires_at:
+            date_str = format_date_ru(expires_at)
             sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+            if sub_type not in ("basic", "plus"):
+                sub_type = "basic"
             if sub_type == "plus":
-                text += "\n" + i18n_get_text(language, "subscription.tariff_plus", "⭐️ Тариф: Plus")
+                text = f"👤 {display_name}\n\n⭐️ Plus · до {date_str}\n💳 Баланс: {balance_str} ₽"
             else:
-                text += "\n" + i18n_get_text(language, "subscription.tariff_basic", "📦 Тариф: Basic")
+                text = f"👤 {display_name}\n\n📦 Basic · до {date_str}\n💳 Баланс: {balance_str} ₽"
         else:
-            # Подписка неактивна (истекла или отсутствует)
-            text += "\n" + i18n_get_text(language, "profile.subscription_inactive")
+            text = f"👤 {display_name}\n\n❌ Подписка не активна\n💳 Баланс: {balance_str} ₽"
 
-        # Получаем статус автопродления и добавляем информацию
-        auto_renew = False
-        if subscription:
-            auto_renew = subscription.get("auto_renew", False)
-
-        # Добавляем информацию об автопродлении (только для активных подписок)
-        if subscription_status.is_active:
-            if auto_renew:
-                # Автопродление включено - next_billing_date = expires_at
-                if subscription_status.expires_at:
-                    next_billing_str = subscription_status.expires_at.strftime("%d.%m.%Y")
-                else:
-                    next_billing_str = "N/A"
-                text += "\n" + i18n_get_text(language, "profile.auto_renew_enabled", next_billing_date=next_billing_str)
-            else:
-                # Автопродление выключено
-                text += "\n" + i18n_get_text(language, "profile.auto_renew_disabled")
-
-        # Добавляем подсказку о продлении (для активных и истекших подписок - по требованиям)
-        if has_any_subscription:
-            text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
-
-        # Добавляем подсказку о покупке, если подписки нет
-        if not has_any_subscription:
-            text += "\n\n" + i18n_get_text(language, "profile.buy_hint")
-
-        # Показываем кнопку "Продлить доступ" и ключи (basic: один; plus: два)
+        auto_renew = bool(subscription and subscription.get("auto_renew"))
         subscription_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
-        vpn_key = subscription.get("vpn_key") if subscription else None
-        vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         if subscription_type not in ("basic", "plus"):
             subscription_type = "basic"
+        vpn_key = subscription.get("vpn_key") if subscription else None
+        vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
             subscription_type=subscription_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
         )
 
-        # Отправляем сообщение
-        await send_func(text, reply_markup=keyboard)
+        await send_func(text, reply_markup=keyboard, parse_mode="HTML")
 
     except Exception as e:
         logger.exception(f"Error in show_profile for user {telegram_id}: {e}")

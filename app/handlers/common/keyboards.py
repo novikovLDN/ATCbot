@@ -118,58 +118,34 @@ def get_profile_keyboard(
     vpn_key: Optional[str] = None,
     vpn_key_plus: Optional[str] = None,
 ):
-    """Клавиатура профиля. Basic: один «Скопировать ключ». Plus: два ключа — Atlas Secure, White List."""
+    """Карточка профиля: компактная раскладка кнопок (Продлить/Купить, баланс, ключи, автопродление, назад)."""
     buttons = []
 
     if has_active_subscription:
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "subscription.renew"),
-            callback_data="menu_buy_vpn"
-        )])
-
-        if auto_renew:
-            buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "subscription.auto_renew_disable"),
-                callback_data="toggle_auto_renew:off"
-            )])
-        else:
-            buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "subscription.auto_renew_enable"),
-                callback_data="toggle_auto_renew:on"
-            )])
+        buttons.append([InlineKeyboardButton(text="🔄 Продлить доступ", callback_data="menu_buy_vpn")])
     else:
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.buy"),
-            callback_data="menu_buy_vpn"
-        )])
+        buttons.append([InlineKeyboardButton(text="🔄 Купить подписку", callback_data="menu_buy_vpn")])
 
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "profile.topup_balance"),
-        callback_data="topup_balance"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "profile.withdraw_funds"),
-        callback_data="withdraw_start"
-    )])
-    # Key copy buttons only when subscription is active (not expired)
+    buttons.append([
+        InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="topup_balance"),
+        InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw_start"),
+    ])
+
     if has_active_subscription:
         if subscription_type == "plus" and (vpn_key or vpn_key_plus):
-            buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "profile.key_atlas", "🇩🇪 Atlas Secure"),
-                callback_data="copy_key"
-            )])
-            if vpn_key_plus:
-                buttons.append([InlineKeyboardButton(
-                    text=i18n_get_text(language, "profile.key_whitelist", "⚪️ White List"),
-                    callback_data="copy_key_plus"
-                )])
+            buttons.append([
+                InlineKeyboardButton(text="🇩🇪 Atlas Secure", callback_data="copy_key"),
+                InlineKeyboardButton(text="⚪️ White List", callback_data="copy_key_plus"),
+            ])
         else:
-            buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "profile.copy_key"),
-                callback_data="copy_key"
-            )])
+            buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать ключ", callback_data="copy_key")])
+        buttons.append([InlineKeyboardButton(
+            text="⚙️ Автопродление: вкл ✅" if auto_renew else "⚙️ Автопродление: выкл",
+            callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
+        )])
+
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
+        text=i18n_get_text(language, "common.back", "← Назад"),
         callback_data="menu_main"
     )])
 

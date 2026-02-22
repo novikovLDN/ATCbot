@@ -507,7 +507,133 @@ async def callback_admin_user_history(callback: CallbackQuery):
         await callback.answer("Ошибка при получении истории подписок", show_alert=True)
 
 
-@admin_access_router.callback_query(F.data.startswith("admin:grant:") & ~F.data.startswith("admin:grant_custom:") & ~F.data.startswith("admin:grant_days:") & ~F.data.startswith("admin:grant_minutes:") & ~F.data.startswith("admin:grant_1_year:") & ~F.data.startswith("admin:grant_unit:") & ~F.data.startswith("admin:grant:notify:") & ~F.data.startswith("admin:notify:"))
+@admin_access_router.callback_query(F.data.startswith("admin_grant_basic:"))
+async def callback_admin_grant_basic(callback: CallbackQuery, state: FSMContext):
+    """Entry: Admin selects «Выдать Basic». Show confirm (30 days, notify yes/no)."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        user_id = int(callback.data.split(":")[1])
+        language = await resolve_user_language(callback.from_user.id)
+        text = "📦 Выдать Basic на 30 дней\n\nУведомить пользователя?"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data=f"admin:grant_basic_confirm:{user_id}:yes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data=f"admin:grant_basic_confirm:{user_id}:no")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:user")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_basic: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin_grant_plus:"))
+async def callback_admin_grant_plus(callback: CallbackQuery, state: FSMContext):
+    """Entry: Admin selects «Выдать Plus». Show confirm (30 days, notify yes/no)."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        user_id = int(callback.data.split(":")[1])
+        language = await resolve_user_language(callback.from_user.id)
+        text = "⭐️ Выдать Plus на 30 дней\n\nУведомить пользователя?"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_yes"), callback_data=f"admin:grant_plus_confirm:{user_id}:yes")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data=f"admin:grant_plus_confirm:{user_id}:no")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:user")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_plus: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:grant_basic_confirm:"))
+async def callback_admin_grant_basic_confirm(callback: CallbackQuery, bot: Bot):
+    """Execute grant Basic 30 days, then confirm to admin and optionally notify user."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        notify = parts[3].lower() == "yes"
+        language = await resolve_user_language(callback.from_user.id)
+        expires_at, _ = await database.admin_grant_access_atomic(
+            telegram_id=user_id,
+            days=30,
+            admin_telegram_id=callback.from_user.id,
+            tariff="basic",
+        )
+        date_str = expires_at.strftime("%d.%m.%Y")
+        text = f"✅ Выдан Basic доступ пользователю {user_id} до {date_str}"
+        if notify:
+            try:
+                await bot.send_message(user_id, f"🎁 Вам выдан доступ Basic до {date_str}")
+                text += "\nПользователь уведомлён."
+            except Exception as e:
+                logger.exception(f"Error sending grant notification: {e}")
+                text += "\nОшибка отправки уведомления."
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        await database._log_audit_event_atomic_standalone(
+            "admin_grant_access_basic",
+            callback.from_user.id,
+            user_id,
+            f"Admin granted Basic 30 days, notify_user={notify}",
+        )
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_basic_confirm: {e}")
+        await callback.answer("Ошибка выдачи доступа", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:grant_plus_confirm:"))
+async def callback_admin_grant_plus_confirm(callback: CallbackQuery, bot: Bot):
+    """Execute grant Plus 30 days, then confirm to admin and optionally notify user."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        notify = parts[3].lower() == "yes"
+        language = await resolve_user_language(callback.from_user.id)
+        expires_at, _ = await database.admin_grant_access_atomic(
+            telegram_id=user_id,
+            days=30,
+            admin_telegram_id=callback.from_user.id,
+            tariff="plus",
+        )
+        date_str = expires_at.strftime("%d.%m.%Y")
+        text = f"✅ Выдан Plus доступ пользователю {user_id} до {date_str}"
+        if notify:
+            try:
+                await bot.send_message(user_id, f"🎁 Вам выдан доступ Plus до {date_str}")
+                text += "\nПользователь уведомлён."
+            except Exception as e:
+                logger.exception(f"Error sending grant notification: {e}")
+                text += "\nОшибка отправки уведомления."
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        await database._log_audit_event_atomic_standalone(
+            "admin_grant_access_plus",
+            callback.from_user.id,
+            user_id,
+            f"Admin granted Plus 30 days, notify_user={notify}",
+        )
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_plus_confirm: {e}")
+        await callback.answer("Ошибка выдачи доступа", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:grant:") & ~F.data.startswith("admin:grant_custom:") & ~F.data.startswith("admin:grant_days:") & ~F.data.startswith("admin:grant_minutes:") & ~F.data.startswith("admin:grant_1_year:") & ~F.data.startswith("admin:grant_unit:") & ~F.data.startswith("admin:grant:notify:") & ~F.data.startswith("admin:notify:") & ~F.data.startswith("admin:grant_basic_confirm:") & ~F.data.startswith("admin:grant_plus_confirm:"))
 async def callback_admin_grant(callback: CallbackQuery, state: FSMContext):
     """
     Entry point: Admin selects "Выдать доступ" for a user.
