@@ -184,6 +184,39 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
+@router.callback_query(F.data == "copy_key_menu")
+async def callback_copy_key_menu(callback: CallbackQuery):
+    """Скопировать ключ: Basic — сразу ключ; Plus — подменю выбора ключа."""
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    await check_subscription_expiry(telegram_id)
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription or not subscription.get("vpn_key"):
+        error_text = i18n_get_text(language, "errors.no_active_subscription")
+        await callback.answer(error_text, show_alert=True)
+        return
+    if subscription.get("activation_status") == "pending":
+        error_text = i18n_get_text(language, "main.error_activation_pending")
+        await callback.answer(error_text, show_alert=True)
+        return
+    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+    vpn_key_plus = subscription.get("vpn_key_plus")
+    if sub_type == "plus" and vpn_key_plus:
+        text = "Выберите ключ для копирования:"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")],
+            [InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_profile")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard)
+    else:
+        vpn_key = subscription["vpn_key"]
+        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+    await callback.answer()
+
+
 @router.callback_query(F.data == "copy_key")
 async def callback_copy_key(callback: CallbackQuery):
     """Копировать VPN-ключ - отправляет ключ как отдельное сообщение"""
