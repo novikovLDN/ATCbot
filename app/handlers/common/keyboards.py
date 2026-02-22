@@ -1,7 +1,6 @@
 """
 InlineKeyboardMarkup and ReplyKeyboardMarkup builders. Shared across all handler domains.
 """
-import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -152,21 +151,23 @@ def get_profile_keyboard(
         text=i18n_get_text(language, "profile.withdraw_funds"),
         callback_data="withdraw_start"
     )])
-    if subscription_type == "plus" and (vpn_key or vpn_key_plus):
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.key_atlas", "🇩🇪 Atlas Secure"),
-            callback_data="copy_key"
-        )])
-        if vpn_key_plus:
+    # Key copy buttons only when subscription is active (not expired)
+    if has_active_subscription:
+        if subscription_type == "plus" and (vpn_key or vpn_key_plus):
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "profile.key_whitelist", "⚪️ White List"),
-                callback_data="copy_key_plus"
+                text=i18n_get_text(language, "profile.key_atlas", "🇩🇪 Atlas Secure"),
+                callback_data="copy_key"
             )])
-    else:
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key"),
-            callback_data="copy_key"
-        )])
+            if vpn_key_plus:
+                buttons.append([InlineKeyboardButton(
+                    text=i18n_get_text(language, "profile.key_whitelist", "⚪️ White List"),
+                    callback_data="copy_key_plus"
+                )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "profile.copy_key"),
+                callback_data="copy_key"
+            )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main"

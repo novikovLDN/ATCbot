@@ -4,7 +4,6 @@ Payment message handlers: successful_payment, photo
 VPN key: Primary path via grant_access → vpn_utils.add_vless_user (Xray API).
 Architecture invariant: Bot never generates VLESS locally. vpn_key must come from API only.
 """
-import asyncio
 import logging
 import time
 from datetime import datetime, timezone

@@ -288,7 +288,7 @@ async def show_profile(message_or_query, language: str):
         if subscription_type not in ("basic", "plus"):
             subscription_type = "basic"
         keyboard = get_profile_keyboard(
-            language, has_any_subscription, auto_renew,
+            language, has_active_subscription, auto_renew,
             subscription_type=subscription_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
         )
 
