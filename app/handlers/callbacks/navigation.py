@@ -132,8 +132,9 @@ async def callback_privacy(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "menu_instruction")
+@router.callback_query(F.data == "instruction")
 async def callback_instruction(callback: CallbackQuery):
-    """Инструкция. Entry from inline button."""
+    """Инструкция. Entry from main menu (menu_instruction) or profile (instruction)."""
     from app.handlers.common.screens import _open_instruction_screen
     await _open_instruction_screen(callback, callback.bot)
 

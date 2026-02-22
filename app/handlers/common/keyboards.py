@@ -118,7 +118,7 @@ def get_profile_keyboard(
     vpn_key: Optional[str] = None,
     vpn_key_plus: Optional[str] = None,
 ):
-    """Карточка профиля: компактная раскладка кнопок (Продлить/Купить, баланс, ключи, автопродление, назад)."""
+    """Карточка профиля: безопасная раскладка для малых экранов (без двух длинных кнопок в одном ряду)."""
     buttons = []
 
     if has_active_subscription:
@@ -127,20 +127,17 @@ def get_profile_keyboard(
         buttons.append([InlineKeyboardButton(text="🔄 Купить подписку", callback_data="menu_buy_vpn")])
 
     buttons.append([
-        InlineKeyboardButton(text="💳 Пополнить баланс", callback_data="topup_balance"),
+        InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"),
         InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw_start"),
     ])
 
     if has_active_subscription:
+        buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")])
         if subscription_type == "plus" and (vpn_key or vpn_key_plus):
-            buttons.append([
-                InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key"),
-                InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus"),
-            ])
-        else:
-            buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")])
+            buttons.append([InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")])
+        buttons.append([InlineKeyboardButton(text="📖 Инструкция", callback_data="instruction")])
         buttons.append([InlineKeyboardButton(
-            text="⚙️ Автопродление: вкл ✅" if auto_renew else "⚙️ Автопродление: выкл",
+            text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
         )])
 
@@ -341,6 +338,27 @@ def get_support_keyboard(language: str):
             callback_data="menu_main"
         )],
     ])
+
+
+def get_instruction_screen_keyboard(language: str, subscription_type: str = "basic"):
+    """Клавиатура экрана «Инструкция»: кнопки копирования ключа по тарифу + Назад."""
+    subscription_type = (subscription_type or "basic").strip().lower()
+    if subscription_type not in ("basic", "plus"):
+        subscription_type = "basic"
+
+    if subscription_type == "plus":
+        buttons = [
+            [InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")],
+            [InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")],
+        ]
+    else:
+        buttons = [
+            [InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")],
+        ]
+    buttons.append([
+        InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_profile")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_instruction_keyboard(
