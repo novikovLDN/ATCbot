@@ -201,6 +201,14 @@ def get_admin_grant_flex_confirm_keyboard(language: str = "ru"):
     ])
 
 
+def get_admin_grant_flex_notify_keyboard(language: str = "ru"):
+    """Клавиатура выбора: уведомить пользователя о выдаче доступа или нет."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, уведомить", callback_data="admin:grant_flex_notify:yes")],
+        [InlineKeyboardButton(text="🔕 Нет, тихо", callback_data="admin:grant_flex_notify:no")],
+    ])
+
+
 def get_admin_grant_days_keyboard(user_id: int, language: str = "ru"):
     """
     5. ADVANCED ACCESS CONTROL (GRANT / REVOKE)

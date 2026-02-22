@@ -26,6 +26,7 @@ from app.handlers.admin.keyboards import (
     get_admin_grant_days_keyboard,
     get_admin_grant_flex_unit_keyboard,
     get_admin_grant_flex_confirm_keyboard,
+    get_admin_grant_flex_notify_keyboard,
 )
 from app.handlers.common.utils import safe_edit_text, get_reissue_lock, get_reissue_notification_text
 from app.handlers.common.keyboards import get_reissue_notification_keyboard
@@ -594,7 +595,9 @@ async def callback_admin_grant_flex_unit(callback: CallbackQuery, state: FSMCont
         return
     await callback.answer()
     try:
-        unit = callback.data.split(":")[3]
+        # callback_data format: "admin:grant_flex_unit:minutes" → parts[2] = unit
+        parts = callback.data.split(":")
+        unit = parts[2] if len(parts) > 2 else ""
         if unit not in GRANT_FLEX_UNIT_LABELS:
             await callback.answer("Неизвестная единица", show_alert=True)
             return
@@ -631,14 +634,41 @@ async def callback_admin_grant_flex_unit(callback: CallbackQuery, state: FSMCont
 
 
 @admin_access_router.callback_query(F.data == "admin:grant_flex_confirm", StateFilter(AdminGrantState.waiting_confirm))
-async def callback_admin_grant_flex_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Execute grant, then success message to admin and notify user."""
+async def callback_admin_grant_flex_confirm(callback: CallbackQuery, state: FSMContext):
+    """After confirm: show notify user choice, then execute grant in next step."""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     await callback.answer()
     try:
+        data = await state.get_data()
+        if not all([data.get("grant_user_id"), data.get("grant_tariff"), data.get("grant_calculated_days") is not None]):
+            await callback.answer("Данные сессии потеряны.", show_alert=True)
+            await state.clear()
+            return
+        await state.set_state(AdminGrantState.waiting_notify)
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.message.edit_text(
+            "Уведомить пользователя о выдаче доступа?",
+            reply_markup=get_admin_grant_flex_notify_keyboard(language),
+        )
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_grant_flex_confirm: {e}")
+        await callback.answer("Ошибка", show_alert=True)
+        await state.clear()
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:grant_flex_notify:"), StateFilter(AdminGrantState.waiting_notify))
+async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    """Execute grant; if notify=yes send user message, then show admin confirmation."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        notify = callback.data.split(":")[-1].lower() == "yes"
         data = await state.get_data()
         user_id = data.get("grant_user_id")
         tariff = data.get("grant_tariff", "basic")
@@ -664,30 +694,31 @@ async def callback_admin_grant_flex_confirm(callback: CallbackQuery, state: FSMC
             f"⏱ Срок: {int(amount) if amount == int(amount) else amount} {unit_label}\n"
             f"📅 До: {expires_date}"
         )
+        if notify:
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"🎁 Вам выдан доступ {tariff_label}\n📅 Действует до: {expires_date}",
+                )
+            except Exception as e:
+                logger.exception(f"Error sending grant notification to user {user_id}: {e}")
         language = await resolve_user_language(callback.from_user.id)
         await safe_edit_text(callback.message, text_admin, reply_markup=get_admin_back_keyboard(language))
-        try:
-            await bot.send_message(
-                user_id,
-                f"🎁 Вам выдан доступ {tariff_label}\n📅 Действует до: {expires_date}",
-            )
-        except Exception as e:
-            logger.exception(f"Error sending grant notification to user {user_id}: {e}")
         await database._log_audit_event_atomic_standalone(
             "admin_grant_access_flex",
             callback.from_user.id,
             user_id,
-            f"Admin granted {tariff_label} {amount} {unit_label}, expires={expires_date}",
+            f"Admin granted {tariff_label} {amount} {unit_label}, notify={notify}, expires={expires_date}",
         )
     except Exception as e:
-        logger.exception(f"Error in callback_admin_grant_flex_confirm: {e}")
+        logger.exception(f"Error in callback_admin_grant_flex_notify: {e}")
         await callback.answer("Ошибка выдачи доступа", show_alert=True)
     await state.clear()
 
 
 @admin_access_router.callback_query(F.data == "admin:grant_flex_cancel")
 async def callback_admin_grant_flex_cancel(callback: CallbackQuery, state: FSMContext):
-    """Cancel flexible grant flow (from unit or confirm step)."""
+    """Cancel flexible grant flow (from unit, confirm or notify step)."""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer()
         return

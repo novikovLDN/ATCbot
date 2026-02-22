@@ -41,10 +41,11 @@ class AdminGrantAccess(StatesGroup):
 
 
 class AdminGrantState(StatesGroup):
-    """Flexible duration flow for «Выдать Basic» / «Выдать Plus»: amount → unit → confirm."""
+    """Flexible duration flow for «Выдать Basic» / «Выдать Plus»: amount → unit → confirm → notify."""
     waiting_amount = State()
     waiting_unit = State()
     waiting_confirm = State()
+    waiting_notify = State()
 
 
 class AdminRevokeAccess(StatesGroup):
