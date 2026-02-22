@@ -428,13 +428,17 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
             await bot.send_message(telegram_id, text, parse_mode="HTML")
             logger.info(f"Crypto Bot payment processed (balance topup): user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, amount={topup_amount} RUB")
         else:
-            logger.info(f"Crypto Bot webhook: purchase_finalized: purchase_id={purchase_id}, payment_id={payment_id}, expires_at={expires_at.isoformat() if expires_at else None}, vpn_key_length={len(vpn_key) if vpn_key else 0}")
+            logger.info(f"Crypto Bot webhook: purchase_finalized: purchase_id={purchase_id}, payment_id={payment_id}, expires_at={expires_at.isoformat() if expires_at else None}")
             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-            text = i18n_get_text(language, "payment.approved", date=expires_str)
-            from app.handlers.common.keyboards import get_vpn_key_keyboard
-            await bot.send_message(telegram_id, text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
-            if vpn_key:
-                await bot.send_message(telegram_id, f"<code>{vpn_key}</code>", parse_mode="HTML")
+            subscription_type = (result.get("subscription_type") or "basic").strip().lower()
+            if subscription_type not in ("basic", "plus"):
+                subscription_type = "basic"
+            if subscription_type == "plus":
+                text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
+            else:
+                text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+            from app.handlers.common.keyboards import get_connect_keyboard
+            await bot.send_message(telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML")
             logger.info(f"Crypto Bot payment processed successfully: user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, purchase_id={purchase_id}, subscription_activated=True")
         
     except ValueError as e:

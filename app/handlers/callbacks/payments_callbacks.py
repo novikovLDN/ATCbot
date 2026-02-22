@@ -541,46 +541,20 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
 
         if is_upgrade:
-            text = (
-                "⭐️ Апгрейд до Plus!\n"
-                f"📅 До: {expires_str}\n\n"
-                "Новый ключ White List добавлен:"
-            )
+            text = f"⭐️ Апгрейд до Plus!\n📅 До: {expires_str}"
             try:
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-                if vpn_key_plus:
-                    await callback.message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
         else:
             if is_renewal:
-                if subscription_type == "plus":
-                    text = (
-                        "✅ Подписка продлена\n"
-                        "⭐️ Тариф: Plus\n"
-                        f"📅 До: {expires_str}\n\n"
-                        "Ключи не изменились — доступны в профиле."
-                    )
-                else:
-                    text = (
-                        "✅ Подписка продлена\n"
-                        "📦 Тариф: Basic\n"
-                        f"📅 До: {expires_str}\n\n"
-                        "Ключ не изменился — доступен в профиле."
-                    )
+                tariff_label = "Plus" if subscription_type == "plus" else "Basic"
+                text = f"✅ Подписка продлена\n📦/⭐️ Тариф: {tariff_label}\n📅 До: {expires_str}"
             else:
                 if subscription_type == "plus":
-                    text = (
-                        "🎉 Добро пожаловать в Atlas Secure!\n"
-                        "⭐️ Тариф: Plus\n"
-                        f"📅 До: {expires_str}"
-                    )
+                    text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
                 else:
-                    text = (
-                        "🎉 Добро пожаловать в Atlas Secure!\n"
-                        "📦 Тариф: Basic\n"
-                        f"📅 До: {expires_str}"
-                    )
+                    text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
             try:
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
             except Exception as e:

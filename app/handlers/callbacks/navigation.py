@@ -13,7 +13,6 @@ import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
-from app.services.subscriptions.service import check_and_disable_expired_subscription as check_subscription_expiry
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
 from app.handlers.common.screens import show_profile
@@ -21,6 +20,7 @@ from app.handlers.common.keyboards import (
     get_main_menu_keyboard,
     get_about_keyboard,
     get_service_status_keyboard,
+    get_connect_keyboard,
 )
 router = Router()
 logger = logging.getLogger(__name__)
@@ -184,214 +184,13 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
 
-@router.callback_query(F.data == "copy_key_menu")
-async def callback_copy_key_menu(callback: CallbackQuery):
-    """Скопировать ключ: Basic — сразу ключ; Plus — подменю выбора ключа."""
+@router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
+async def callback_connect_instead_of_copy(callback: CallbackQuery):
+    """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    await check_subscription_expiry(telegram_id)
-    subscription = await database.get_subscription(telegram_id)
-    if not subscription or not subscription.get("vpn_key"):
-        error_text = i18n_get_text(language, "errors.no_active_subscription")
-        await callback.answer(error_text, show_alert=True)
-        return
-    if subscription.get("activation_status") == "pending":
-        error_text = i18n_get_text(language, "main.error_activation_pending")
-        await callback.answer(error_text, show_alert=True)
-        return
-    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-    vpn_key_plus = subscription.get("vpn_key_plus")
-    if sub_type == "plus" and vpn_key_plus:
-        text = "Выберите ключ для копирования:"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")],
-            [InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_profile")],
-        ])
-        await callback.message.answer(text, reply_markup=keyboard)
-    else:
-        vpn_key = subscription["vpn_key"]
-        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+    await callback.message.answer(
+        "🚀 Нажмите кнопку ниже чтобы подключиться:",
+        reply_markup=get_connect_keyboard(),
+    )
     await callback.answer()
-
-
-@router.callback_query(F.data == "copy_key")
-async def callback_copy_key(callback: CallbackQuery):
-    """Копировать VPN-ключ - отправляет ключ как отдельное сообщение"""
-    # B3.1 - SOFT DEGRADATION: Read-only awareness (informational only, does not affect flow)
-    try:
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        db_ready = database.DB_READY
-        import config
-        
-        # Build SystemState for awareness (read-only)
-        if db_ready:
-            db_component = healthy_component(last_checked_at=now)
-        else:
-            db_component = unavailable_component(
-                error="DB not ready (degraded mode)",
-                last_checked_at=now
-            )
-        
-        # VPN API component
-        if config.VPN_ENABLED and config.XRAY_API_URL:
-            vpn_component = healthy_component(last_checked_at=now)
-        else:
-            vpn_component = degraded_component(
-                error="VPN API not configured",
-                last_checked_at=now
-            )
-        
-        # Payments component (always healthy)
-        payments_component = healthy_component(last_checked_at=now)
-        
-        system_state = SystemState(
-            database=db_component,
-            vpn_api=vpn_component,
-            payments=payments_component,
-        )
-        
-        # PART D.5: Handlers log DEGRADED for VPN-related actions
-        # PART D.5: NEVER block payments or DB flows
-        if system_state.is_degraded:
-            logger.info(
-                f"[DEGRADED] system_state detected during callback_copy_key "
-                f"(user={callback.from_user.id}, optional components degraded)"
-            )
-    except Exception:
-        # Ignore system state errors - must not affect key copy flow
-        pass
-    
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    
-    # Дополнительная защита: проверка истечения подписки
-    await check_subscription_expiry(telegram_id)
-    
-    # Получаем активную подписку (проверка через subscriptions)
-    subscription = await database.get_subscription(telegram_id)
-    
-    # PART 8: Fix pending activation UX - disable copy key button until active
-    if subscription:
-        activation_status = subscription.get("activation_status", "active")
-        if activation_status == "pending":
-            error_text = i18n_get_text(language, "main.error_activation_pending")
-            logging.info(f"copy_key: Activation pending for user {telegram_id}")
-            await callback.answer(error_text, show_alert=True)
-            return
-    
-    if not subscription or not subscription.get("vpn_key"):
-        error_text = i18n_get_text(language, "errors.no_active_subscription")
-        logging.warning(f"copy_key: No active subscription or vpn_key for user {telegram_id}")
-        await callback.answer(error_text, show_alert=True)
-        return
-    
-    # Получаем VPN-ключ (from API only — no local validation)
-    vpn_key = subscription["vpn_key"]
-    
-    # Отправляем VPN-ключ как отдельное сообщение (позволяет одно нажатие для копирования в Telegram)
-    await callback.message.answer(
-        f"<code>{vpn_key}</code>",
-        parse_mode="HTML"
-    )
-    
-    # Показываем toast уведомление о копировании
-    success_text = i18n_get_text(language, "profile.vpn_key_copied_toast")
-    await callback.answer(success_text, show_alert=False)
-
-
-@router.callback_query(F.data == "copy_key_plus")
-async def callback_copy_key_plus(callback: CallbackQuery):
-    """Скопировать второй ключ (Plus / White List) — отправляет vpn_key_plus как сообщение."""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    await check_subscription_expiry(telegram_id)
-    subscription = await database.get_subscription(telegram_id)
-    if not subscription or not subscription.get("vpn_key_plus"):
-        error_text = i18n_get_text(language, "errors.no_active_subscription")
-        await callback.answer(error_text, show_alert=True)
-        return
-    vpn_key_plus = subscription["vpn_key_plus"]
-    await callback.message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
-    success_text = i18n_get_text(language, "profile.vpn_key_copied_toast")
-    await callback.answer(success_text, show_alert=False)
-
-
-@router.callback_query(F.data == "copy_vpn_key")
-async def callback_copy_vpn_key(callback: CallbackQuery):
-    """Скопировать VPN-ключ - отправляет ключ как отдельное сообщение"""
-    # B3.1 - SOFT DEGRADATION: Read-only awareness (informational only, does not affect flow)
-    try:
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
-        db_ready = database.DB_READY
-        import config
-        
-        # Build SystemState for awareness (read-only)
-        if db_ready:
-            db_component = healthy_component(last_checked_at=now)
-        else:
-            db_component = unavailable_component(
-                error="DB not ready (degraded mode)",
-                last_checked_at=now
-            )
-        
-        # VPN API component
-        if config.VPN_ENABLED and config.XRAY_API_URL:
-            vpn_component = healthy_component(last_checked_at=now)
-        else:
-            vpn_component = degraded_component(
-                error="VPN API not configured",
-                last_checked_at=now
-            )
-        
-        # Payments component (always healthy)
-        payments_component = healthy_component(last_checked_at=now)
-        
-        system_state = SystemState(
-            database=db_component,
-            vpn_api=vpn_component,
-            payments=payments_component,
-        )
-        
-        # PART D.5: Handlers log DEGRADED for VPN-related actions
-        # PART D.5: NEVER block payments or DB flows
-        if system_state.is_degraded:
-            logger.info(
-                f"[DEGRADED] system_state detected during callback_copy_vpn_key "
-                f"(user={callback.from_user.id}, optional components degraded)"
-            )
-    except Exception:
-        # Ignore system state errors - must not affect key copy flow
-        pass
-    
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    
-    # Дополнительная защита: проверка истечения подписки
-    await check_subscription_expiry(telegram_id)
-    
-    # Получаем VPN-ключ из активной подписки (проверка через subscriptions)
-    subscription = await database.get_subscription(telegram_id)
-    
-    if not subscription or not subscription.get("vpn_key"):
-        error_text = i18n_get_text(language, "errors.no_active_subscription")
-        logging.warning(f"copy_vpn_key: No active subscription or vpn_key for user {telegram_id}")
-        await callback.answer(error_text, show_alert=True)
-        return
-    
-    # Получаем VPN-ключ (from API only — no local validation)
-    vpn_key = subscription["vpn_key"]
-    
-    # Отправляем VPN-ключ как отдельное сообщение (позволяет одно нажатие для копирования в Telegram)
-    await callback.message.answer(
-        f"<code>{vpn_key}</code>",
-        parse_mode="HTML"
-    )
-    
-    # Показываем toast уведомление о копировании
-    success_text = i18n_get_text(language, "profile.vpn_key_copied_toast")
-    await callback.answer(success_text, show_alert=False)

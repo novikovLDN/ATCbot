@@ -18,7 +18,8 @@ from app.services.subscriptions import service as subscription_service
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.screens import _open_buy_screen, show_tariffs_main_screen
 from handlers import show_payment_method_selection
-from app.handlers.common.utils import safe_edit_text, get_promo_session
+from app.handlers.common.utils import safe_edit_text, safe_edit_reply_markup, get_promo_session
+from app.handlers.common.keyboards import get_connect_keyboard
 from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
 from app.core.structured_logger import log_event
 
@@ -748,29 +749,25 @@ async def approve_payment(callback: CallbackQuery):
         else:
             logging.info(f"New subscription created for user {telegram_id}, payment_id={payment_id}, expires_at={expires_at}")
         
-        # Уведомляем пользователя
+        # Уведомляем пользователя: сообщение + кнопка «Подключиться» (Mini App)
         language = await resolve_user_language(telegram_id)
-        
         expires_str = expires_at.strftime("%d.%m.%Y")
-        # Отправляем сообщение об успешной активации (без ключа)
-        text = i18n_get_text(language, "payment.approved", date=expires_str)
-        
+        tariff_label = "Plus" if tariff_type == "plus" else "Basic"
+        if is_renewal:
+            text = f"✅ Подписка продлена\n📦/⭐️ Тариф: {tariff_label}\n📅 До: {expires_str}"
+        elif tariff_type == "plus":
+            text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
+        else:
+            text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+        keyboard = get_connect_keyboard()
         try:
             await callback.bot.send_message(
-                telegram_id, 
-                text, 
-                reply_markup=get_vpn_key_keyboard(language),
-                parse_mode="HTML"
-            )
-            
-            # Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
-            await callback.bot.send_message(
                 telegram_id,
-                f"<code>{vpn_key}</code>",
+                text,
+                reply_markup=keyboard,
                 parse_mode="HTML"
             )
-            
-            logging.info(f"Approval message and VPN key sent to user {telegram_id} for payment {payment_id}")
+            logging.info(f"Approval message (connect button) sent to user {telegram_id} for payment {payment_id}")
         except Exception as e:
             logging.error(f"Error sending approval message to user {telegram_id}: {e}")
         

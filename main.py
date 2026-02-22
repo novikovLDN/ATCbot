@@ -475,12 +475,14 @@ async def main():
     # 4️⃣ Register bot slash commands (runs once on startup)
     try:
         await bot.set_my_commands([
-            BotCommand(command="start", description="Запустить бота"),
+            BotCommand(command="start", description="Главное меню"),
             BotCommand(command="profile", description="Мой профиль"),
+            BotCommand(command="connect", description="Подключиться"),
             BotCommand(command="buy", description="Купить доступ"),
             BotCommand(command="referral", description="Программа лояльности"),
             BotCommand(command="info", description="О сервисе"),
-            BotCommand(command="help", description="Поддержка"),
+            BotCommand(command="support", description="Поддержка"),
+            BotCommand(command="help", description="Помощь"),
             BotCommand(command="instruction", description="Инструкция"),
             BotCommand(command="language", description="Изменить язык"),
         ])

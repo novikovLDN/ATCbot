@@ -197,26 +197,24 @@ async def check_crypto_payments(bot: Bot) -> tuple[int, str]:
                                 f"invoice_id={invoice_id}, amount={amount} RUB"
                             )
                     else:
-                        # Отправляем подтверждение покупки подписки
+                        # Отправляем подтверждение покупки подписки (кнопка «Подключиться» — ключ в Mini App)
                         payment_id = result["payment_id"]
                         expires_at = result["expires_at"]
-                        vpn_key = result["vpn_key"]
-                        
+                        subscription_type = (result.get("subscription_type") or "basic").strip().lower()
+                        if subscription_type not in ("basic", "plus"):
+                            subscription_type = "basic"
                         expires_str = expires_at.strftime("%d.%m.%Y")
-                        text = i18n_get_text(language, "payment.approved", date=expires_str)
-                        
-                        # Импорт здесь для избежания circular import
-                        import handlers
+                        if subscription_type == "plus":
+                            text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
+                        else:
+                            text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+                        from app.handlers.common.keyboards import get_connect_keyboard
                         sent1 = await safe_send_message(
                             bot, telegram_id, text,
-                            reply_markup=handlers.get_vpn_key_keyboard(language),
+                            reply_markup=get_connect_keyboard(),
                             parse_mode="HTML"
                         )
                         if sent1:
-                            await safe_send_message(
-                                bot, telegram_id, f"<code>{vpn_key}</code>",
-                                parse_mode="HTML"
-                            )
                             logger.info(
                                 f"Crypto payment auto-confirmed: user={telegram_id}, purchase_id={purchase_id}, "
                                 f"invoice_id={invoice_id}, payment_id={payment_id}"
