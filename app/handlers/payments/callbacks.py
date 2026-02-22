@@ -328,8 +328,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
                 "Подтвердить переход?"
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton("✅ Да, перейти на Basic", callback_data="downgrade_confirm_basic")],
-                [InlineKeyboardButton("❌ Отмена", callback_data="tariff:basic")]
+                [InlineKeyboardButton(text="✅ Да, перейти на Basic", callback_data="downgrade_confirm_basic")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="tariff:basic")]
             ])
             await safe_edit_text(callback.message, downgrade_text, reply_markup=keyboard)
             await callback.answer()
