@@ -230,33 +230,36 @@ async def show_profile(message_or_query, language: str):
         expires_at = subscription_status.expires_at
 
         auto_renew = bool(subscription and subscription.get("auto_renew"))
-        # Карточка профиля: компактный текст + строка автопродления
+        sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
+        if sub_type not in ("basic", "plus"):
+            sub_type = "basic"
+
+        # Карточка профиля: единый формат
+        text = (
+            "Добро пожаловать в Atlas Secure!\n\n"
+            f"👤 {display_name}\n\n"
+            f"💰 Баланс: {balance_str} ₽\n"
+        )
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
-            sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-            if sub_type not in ("basic", "plus"):
-                sub_type = "basic"
-            if sub_type == "plus":
-                text = f"👋 Привет, {display_name}!\n\n⭐️ Plus · до {date_str}\n💳 Баланс: {balance_str} ₽"
-            else:
-                text = f"👋 Привет, {display_name}!\n\n📦 Basic · до {date_str}\n💳 Баланс: {balance_str} ₽"
-            # Строка автопродления: дата следующего списания (expires_at − 6 ч) или «выкл»
+            text += f"📆 Подписка: активна до {date_str}\n"
+            text += f"⭐️ Тариф: {'Plus' if sub_type == 'plus' else 'Basic'}\n"
             if auto_renew and expires_at:
                 renewal_window = timedelta(hours=6)
                 next_renewal = expires_at - renewal_window
-                text += f"\n🔄 Автопродление: {format_date_ru(next_renewal)}"
+                text += f"🔁 Автопродление: {format_date_ru(next_renewal)}"
             else:
-                text += "\n🔄 Автопродление: выкл"
+                text += "🔁 Автопродление: выкл"
         else:
-            text = f"👋 Привет, {display_name}!\n\n❌ Подписка не активна\n💳 Баланс: {balance_str} ₽"
-        subscription_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
-        if subscription_type not in ("basic", "plus"):
-            subscription_type = "basic"
+            text += "📆 Подписка: не активна\n"
+            text += "⭐️ Тариф: —\n"
+            text += "🔁 Автопродление: —"
+        text += "\n\nПри продлении выбранный срок\nдобавляется к текущему автоматически"
         vpn_key = subscription.get("vpn_key") if subscription else None
         vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
-            subscription_type=subscription_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
+            subscription_type=sub_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
         )
 
         await send_func(text, reply_markup=keyboard, parse_mode="HTML")
