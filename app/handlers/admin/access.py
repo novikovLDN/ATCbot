@@ -852,9 +852,10 @@ async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
     await callback.answer()
     try:
         parts = callback.data.split(":")
-        notify_yes = parts[2].lower() == "yes"
-        user_id = int(parts[3])
-        tariff = parts[4]
+        # admin_switch_notify:yes:{user_id}:{tariff} → parts[1]=yes/no, parts[2]=user_id, parts[3]=tariff
+        notify_yes = parts[1].lower() == "yes"
+        user_id = int(parts[2])
+        tariff = parts[3]
         tariff_label = "Plus" if tariff == "plus" else "Basic"
         if notify_yes:
             sub = await database.get_subscription(user_id)
