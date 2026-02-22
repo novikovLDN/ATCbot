@@ -41,7 +41,7 @@ from app.utils.security import (
 )
 from app.core.feature_flags import get_feature_flags
 from app.handlers.notifications import send_referral_cashback_notification
-from app.handlers.common.keyboards import get_vpn_key_keyboard
+from app.handlers.common.keyboards import get_payment_success_keyboard
 from app.handlers.common.utils import clear_promo_session
 
 payments_router = Router()
@@ -741,114 +741,98 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         return
     
-    # Отправляем сообщение об успешной активации с гарантированным fallback
-    try:
-        text = i18n_get_text(language, "payment.approved", date=expires_str)
-        # B3.1 - SOFT DEGRADATION: Add soft UX notice if degraded (only where messages are sent)
-        try:
-            if _degradation_notice:
-                text += "\n\n⏳ Возможны небольшие задержки"
-        except NameError:
-            pass  # _degradation_notice not set - ignore
-        await message.answer(text, reply_markup=get_vpn_key_keyboard(language), parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Failed to send payment approval message with localization: user={telegram_id}, error={e}")
-        # КРИТИЧНО: Fallback на русский текст если локализация не работает
-        try:
-            fallback_text = f"✅ Оплата подтверждена! Доступ до {expires_str}"
-            await message.answer(fallback_text, reply_markup=get_vpn_key_keyboard("ru"), parse_mode="HTML")
-        except Exception as fallback_error:
-            logger.error(f"Failed to send fallback payment approval message: user={telegram_id}, error={fallback_error}")
-        # Не критично - продолжаем отправку ключа
-    
-    # КРИТИЧНО: Отправляем VPN-ключ (basic: один ключ; plus: два ключа)
-    try:
-        if subscription_type == "plus":
-            text = (
-                "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
-                "🔑 Ваши ключи доступа:"
-            )
-            await message.answer(text, parse_mode="HTML")
-            await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
-            await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-            if vpn_key_plus:
-                await message.answer("⚪️ <b>Atlas Secure - White List</b>", parse_mode="HTML")
-                await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
-        else:
-            await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
-            await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-
-        logger.info(
-            f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
-            f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_length={len(vpn_key)}, subscription_type={subscription_type}]"
+    # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
+    is_upgrade = getattr(result, "is_basic_to_plus_upgrade", False)
+    if is_upgrade:
+        text = (
+            "⭐️ Апгрейд до Plus!\n"
+            f"📅 До: {expires_str}\n\n"
+            "Новый ключ White List добавлен:"
         )
-        
-        # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки VPN ключа)
+        keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True)
         try:
-            sent = await database.mark_payment_notification_sent(payment_id)
-            if sent:
-                logger.info(
-                    f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
-                    f"purchase_id={purchase_id}]"
-                )
-            else:
-                logger.warning(
-                    f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
-                )
+            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            if vpn_key_plus:
+                await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
         except Exception as e:
-            logger.error(
-                f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
-            )
-        
-        # КРИТИЧНО: Очищаем FSM state после успешной активации подписки
-        try:
-            current_state = await state.get_state()
-            if current_state is not None:
-                await state.clear()
-                logger.debug(f"FSM state cleared after successful payment: user={telegram_id}, was_state={current_state}")
-        except Exception as e:
-            logger.debug(f"FSM state clear failed (may be already clear): {e}")
-        
-    except Exception as e:
-        # КРИТИЧНО: Если не удалось отправить ключ - это критическая ошибка
-        error_msg = f"CRITICAL: Failed to send VPN key to user: user={telegram_id}, payment_id={payment_id}, purchase_id={purchase_id}, error={e}"
-        logger.error(error_msg)
-        # Логируем для админа
-        try:
-            await database._log_audit_event_atomic_standalone(
-                "vpn_key_send_failed",
-                config.ADMIN_TELEGRAM_ID,
-                telegram_id,
-                f"Payment finalized but VPN key send failed: payment_id={payment_id}, purchase_id={purchase_id}, key={vpn_key[:50]}..."
-            )
-        except Exception:
-            pass
-        
-        # Пытаемся отправить ключ повторно
-        try:
+            logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
+            try:
+                await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
+            except Exception:
+                pass
+    else:
+        if is_renewal:
             if subscription_type == "plus":
                 text = (
-                    "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
-                    "🔑 Ваши ключи доступа:"
+                    "✅ Подписка продлена\n"
+                    "⭐️ Тариф: Plus\n"
+                    f"📅 До: {expires_str}\n\n"
+                    "Ключи не изменились — доступны в профиле."
                 )
-                await message.answer(text, parse_mode="HTML")
-                await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
-                await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-                if vpn_key_plus:
-                    await message.answer("⚪️ <b>Atlas Secure - White List</b>", parse_mode="HTML")
-                    await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
             else:
-                await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
-                await message.answer(
-                    f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"
-                    f"<code>{vpn_key}</code>",
-                    parse_mode="HTML"
+                text = (
+                    "✅ Подписка продлена\n"
+                    "📦 Тариф: Basic\n"
+                    f"📅 До: {expires_str}\n\n"
+                    "Ключ не изменился — доступен в профиле."
                 )
-            logger.info(f"VPN key sent on retry: user={telegram_id}, payment_id={payment_id}")
-        except Exception as retry_error:
-            logger.error(f"VPN key send retry also failed: user={telegram_id}, error={retry_error}")
-            # Ключ есть в БД, пользователь может получить через профиль
-    
+        else:
+            if subscription_type == "plus":
+                text = (
+                    "🎉 Добро пожаловать в Atlas Secure!\n"
+                    "⭐️ Тариф: Plus\n"
+                    f"📅 До: {expires_str}"
+                )
+            else:
+                text = (
+                    "🎉 Добро пожаловать в Atlas Secure!\n"
+                    "📦 Тариф: Basic\n"
+                    f"📅 До: {expires_str}"
+                )
+        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
+        try:
+            degradation = ""
+            try:
+                if _degradation_notice:
+                    degradation = "\n\n⏳ Возможны небольшие задержки"
+            except NameError:
+                pass
+            await message.answer(text + degradation, reply_markup=keyboard, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Failed to send payment success message: user={telegram_id}, error={e}")
+            try:
+                await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            except Exception as fallback_err:
+                logger.error(f"Fallback also failed: user={telegram_id}, error={fallback_err}")
+
+    try:
+        sent = await database.mark_payment_notification_sent(payment_id)
+        if sent:
+            logger.info(
+                f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
+                f"purchase_id={purchase_id}]"
+            )
+        else:
+            logger.warning(
+                f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
+            )
+    except Exception as e:
+        logger.error(
+            f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+        )
+    try:
+        current_state = await state.get_state()
+        if current_state is not None:
+            await state.clear()
+            logger.debug(f"FSM state cleared after successful payment: user={telegram_id}, was_state={current_state}")
+    except Exception as e:
+        logger.debug(f"FSM state clear failed (may be already clear): {e}")
+
+    logger.info(
+        f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
+        f"purchase_id={purchase_id}, expires_at={expires_str}, subscription_type={subscription_type}]"
+    )
+
     # КРИТИЧНО: pending_purchase уже помечен как paid в finalize_purchase
     # Реферальный кешбэк уже обработан в finalize_purchase через process_referral_reward
     # Отправляем уведомление рефереру (если кешбэк был начислен)

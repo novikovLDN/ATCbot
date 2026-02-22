@@ -54,11 +54,12 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_key"), callback_data=callback_data)])
     if user_id:
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
-        # Кнопки выдачи и лишения доступа (всегда доступны)
+        # Кнопки выдачи доступа (Basic / Plus) и лишения доступа
         buttons.append([
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_access"), callback_data=f"admin:grant:{user_id}"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")
+            InlineKeyboardButton(text="📦 Выдать Basic", callback_data=f"admin_grant_basic:{user_id}"),
+            InlineKeyboardButton(text="⭐️ Выдать Plus", callback_data=f"admin_grant_plus:{user_id}"),
         ])
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")])
         # Кнопки управления скидками
         if has_discount:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
@@ -83,9 +84,10 @@ def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False,
     if user_id:
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
         buttons.append([
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_access"), callback_data=f"admin:grant:{user_id}"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")
+            InlineKeyboardButton(text="📦 Выдать Basic", callback_data=f"admin_grant_basic:{user_id}"),
+            InlineKeyboardButton(text="⭐️ Выдать Plus", callback_data=f"admin_grant_plus:{user_id}"),
         ])
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")])
         if has_discount:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
         else:
@@ -172,6 +174,39 @@ def get_ab_test_list_keyboard(ab_tests: list, language: str = "ru") -> InlineKey
     
     buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:broadcast")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_admin_grant_flex_unit_keyboard(language: str = "ru"):
+    """Клавиатура выбора единицы срока для выдачи Basic/Plus (гибкий срок)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⏱ Минуты", callback_data="admin:grant_flex_unit:minutes"),
+            InlineKeyboardButton(text="🕐 Часы", callback_data="admin:grant_flex_unit:hours"),
+        ],
+        [
+            InlineKeyboardButton(text="📅 Дни", callback_data="admin:grant_flex_unit:days"),
+            InlineKeyboardButton(text="🗓 Месяцы", callback_data="admin:grant_flex_unit:months"),
+        ],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:grant_flex_cancel")],
+    ])
+
+
+def get_admin_grant_flex_confirm_keyboard(language: str = "ru"):
+    """Клавиатура подтверждения выдачи доступа (гибкий срок)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin:grant_flex_confirm"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin:grant_flex_cancel"),
+        ],
+    ])
+
+
+def get_admin_grant_flex_notify_keyboard(language: str = "ru"):
+    """Клавиатура выбора: уведомить пользователя о выдаче доступа или нет."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, уведомить", callback_data="admin:grant_flex_notify:yes")],
+        [InlineKeyboardButton(text="🔕 Нет, тихо", callback_data="admin:grant_flex_notify:no")],
+    ])
 
 
 def get_admin_grant_days_keyboard(user_id: int, language: str = "ru"):

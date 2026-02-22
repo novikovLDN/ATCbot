@@ -43,6 +43,7 @@ class PaymentResult:
     activation_status: Optional[str]  # "active" or "pending"
     subscription_type: Optional[str]  # "basic" or "plus" for message formatting
     referral_reward: Optional[Dict[str, Any]]
+    is_basic_to_plus_upgrade: bool = False  # True when renewal was basic→plus upgrade
 
 
 @dataclass
@@ -592,7 +593,8 @@ async def finalize_subscription_payment(
                     is_renewal=existing_subscription.get("is_renewal", False),
                     activation_status=existing_subscription.get("activation_status"),
                     subscription_type=(existing_subscription.get("subscription_type") or "basic").strip().lower(),
-                    referral_reward=None
+                    referral_reward=None,
+                    is_basic_to_plus_upgrade=False,
                 )
         
         # Payment processed but subscription not found or inactive - this is an error
@@ -624,7 +626,8 @@ async def finalize_subscription_payment(
             is_renewal=result["is_renewal"],
             activation_status=result.get("activation_status"),
             subscription_type=(result.get("subscription_type") or "basic").strip().lower(),
-            referral_reward=referral_reward
+            referral_reward=referral_reward,
+            is_basic_to_plus_upgrade=result.get("is_basic_to_plus_upgrade", False),
         )
         
     except subscription_service.PaymentFinalizationError as e:
