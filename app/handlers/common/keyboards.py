@@ -134,11 +134,11 @@ def get_profile_keyboard(
     if has_active_subscription:
         if subscription_type == "plus" and (vpn_key or vpn_key_plus):
             buttons.append([
-                InlineKeyboardButton(text="🇩🇪 Atlas Secure", callback_data="copy_key"),
-                InlineKeyboardButton(text="⚪️ White List", callback_data="copy_key_plus"),
+                InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key"),
+                InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus"),
             ])
         else:
-            buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать ключ", callback_data="copy_key")])
+            buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")])
         buttons.append([InlineKeyboardButton(
             text="⚙️ Автопродление: вкл ✅" if auto_renew else "⚙️ Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"

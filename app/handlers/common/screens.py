@@ -3,6 +3,7 @@ Pure presentation screen helpers. Reusable for callbacks and message commands.
 No router decorators, no handler-level logic — only rendering and keyboard building.
 """
 import logging
+from datetime import timedelta
 from typing import Union
 
 import database
@@ -216,7 +217,7 @@ async def show_profile(message_or_query, language: str):
             return
 
         from_user = message_or_query.from_user
-        display_name = f"@{user['username']}" if user.get("username") else (getattr(from_user, "first_name", None) or user.get("first_name") or f"ID: {telegram_id}")
+        display_name = (getattr(from_user, "first_name", None) or from_user.username or user.get("first_name") or user.get("username") or "Пользователь")
 
         # Получаем баланс
         balance_rubles = await database.get_user_balance(telegram_id)
@@ -228,7 +229,8 @@ async def show_profile(message_or_query, language: str):
         has_active_subscription = subscription_status.is_active
         expires_at = subscription_status.expires_at
 
-        # Карточка профиля: компактный текст
+        auto_renew = bool(subscription and subscription.get("auto_renew"))
+        # Карточка профиля: компактный текст + строка автопродления
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
             sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
@@ -238,10 +240,15 @@ async def show_profile(message_or_query, language: str):
                 text = f"👤 {display_name}\n\n⭐️ Plus · до {date_str}\n💳 Баланс: {balance_str} ₽"
             else:
                 text = f"👤 {display_name}\n\n📦 Basic · до {date_str}\n💳 Баланс: {balance_str} ₽"
+            # Строка автопродления: дата следующего списания (expires_at − 6 ч) или «выкл»
+            if auto_renew and expires_at:
+                renewal_window = timedelta(hours=6)
+                next_renewal = expires_at - renewal_window
+                text += f"\n🔄 Автопродление: {format_date_ru(next_renewal)}"
+            else:
+                text += "\n🔄 Автопродление: выкл"
         else:
             text = f"👤 {display_name}\n\n❌ Подписка не активна\n💳 Баланс: {balance_str} ₽"
-
-        auto_renew = bool(subscription and subscription.get("auto_renew"))
         subscription_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
         if subscription_type not in ("basic", "plus"):
             subscription_type = "basic"
