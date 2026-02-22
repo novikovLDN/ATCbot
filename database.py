@@ -3200,6 +3200,46 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
         return _normalize_subscription_row(row) if row else None
 
 
+async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Заменить тариф подписки (Basic↔Plus) без изменения срока. Только для активной подписки.
+
+    Args:
+        telegram_id: ID пользователя
+        new_tariff: 'basic' или 'plus'
+        vpn_key_plus: для plus — ссылка White List; для basic — None (очищается)
+
+    Returns:
+        Обновлённая строка подписки или None, если активной подписки нет.
+    """
+    if not DB_READY:
+        logger.warning("DB not ready, admin_switch_tariff skipped")
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    tariff = (new_tariff or "basic").strip().lower()
+    if tariff not in ("basic", "plus"):
+        tariff = "basic"
+    async with pool.acquire() as conn:
+        if vpn_key_plus is not None:
+            await conn.execute(
+                """UPDATE subscriptions SET subscription_type = $1, vpn_key_plus = $2
+                   WHERE telegram_id = $3 AND status = 'active'""",
+                tariff, vpn_key_plus, telegram_id
+            )
+        else:
+            await conn.execute(
+                """UPDATE subscriptions SET subscription_type = $1, vpn_key_plus = NULL
+                   WHERE telegram_id = $2 AND status = 'active'""",
+                tariff, telegram_id
+            )
+        row = await conn.fetchrow(
+            "SELECT * FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id
+        )
+        return _normalize_subscription_row(row) if row else None
+
+
 async def has_any_subscription(telegram_id: int) -> bool:
     """Проверить, есть ли у пользователя хотя бы одна подписка (любого статуса)
     
