@@ -7,9 +7,32 @@ from typing import Optional
 
 import config
 import database
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 from app.i18n import get_text as i18n_get_text
+
+MINI_APP_URL = "https://atlas-miniapp-production.up.railway.app"
+
+
+def get_connect_button():
+    """Одна кнопка WebApp «Подключиться» (Mini App)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🚀 Подключиться",
+            web_app=WebAppInfo(url=MINI_APP_URL),
+        )
+    ]])
+
+
+def get_connect_keyboard():
+    """Клавиатура: Подключиться (WebApp) + Профиль. Для замены отправки ключа кодом."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🚀 Подключиться",
+            web_app=WebAppInfo(url=MINI_APP_URL),
+        )],
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile")],
+    ])
 from app.services.trials import service as trial_service
 
 logger = logging.getLogger(__name__)
@@ -132,7 +155,10 @@ def get_profile_keyboard(
     ])
 
     if has_active_subscription:
-        buttons.append([InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key_menu")])
+        buttons.append([InlineKeyboardButton(
+            text="🚀 Подключиться",
+            web_app=WebAppInfo(url=MINI_APP_URL),
+        )])
         buttons.append([InlineKeyboardButton(
             text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
@@ -176,21 +202,8 @@ def get_vpn_key_keyboard(
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
 ):
-    """Клавиатура для экрана выдачи VPN-ключа после оплаты (инструкция, скопировать ключ, профиль)."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.go_to_connection"),
-            callback_data="menu_instruction"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key"),
-            callback_data="copy_vpn_key"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.profile"),
-            callback_data="go_profile"
-        )],
-    ])
+    """Клавиатура после активации/оплаты: Подключиться (WebApp) + Профиль."""
+    return get_connect_keyboard()
 
 
 def get_payment_success_keyboard(
@@ -198,28 +211,8 @@ def get_payment_success_keyboard(
     subscription_type: str = "basic",
     is_renewal: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура после успешной оплаты: копирование ключа(ей) и профиль. Один компактный экран."""
-    sub = (subscription_type or "basic").strip().lower()
-    if sub not in ("basic", "plus"):
-        sub = "basic"
-    profile_btn = InlineKeyboardButton(
-        text=i18n_get_text(language, "main.profile", "👤 Профиль"),
-        callback_data="menu_profile"
-    )
-    if sub == "plus":
-        row1 = [
-            InlineKeyboardButton(text="🇩🇪 Скопировать Basic", callback_data="copy_key"),
-            InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus"),
-        ]
-        return InlineKeyboardMarkup(inline_keyboard=[row1, [profile_btn]])
-    # basic
-    copy_btn = InlineKeyboardButton(
-        text=i18n_get_text(language, "profile.copy_key", "🇩🇪 Скопировать ключ"),
-        callback_data="copy_key"
-    )
-    if is_renewal:
-        return InlineKeyboardMarkup(inline_keyboard=[[copy_btn, profile_btn]])
-    return InlineKeyboardMarkup(inline_keyboard=[[copy_btn], [profile_btn]])
+    """Клавиатура после успешной оплаты: Подключиться (WebApp) + Профиль."""
+    return get_connect_keyboard()
 
 
 async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):
@@ -393,14 +386,10 @@ def get_instruction_keyboard(
             ),
         ],
     ]
-    subscription_type = (subscription_type or "basic").strip().lower()
-    if subscription_type not in ("basic", "plus"):
-        subscription_type = "basic"
-    if subscription_type == "plus":
-        buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")])
-        buttons.append([InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")])
-    else:
-        buttons.append([InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")])
+    buttons.append([InlineKeyboardButton(
+        text="🚀 Подключиться",
+        web_app=WebAppInfo(url=MINI_APP_URL),
+    )])
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),

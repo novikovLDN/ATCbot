@@ -195,48 +195,29 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"user={telegram_id}, reason=already_notified]"
                             )
                         else:
-                            from app.handlers.common.keyboards import get_vpn_key_keyboard
+                            from app.handlers.common.keyboards import get_connect_keyboard
                             language = await resolve_user_language(telegram_id)
                             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
                             sub_type = (subscription_check.get("subscription_type") or "basic").strip().lower()
                             if sub_type not in ("basic", "plus"):
                                 sub_type = "basic"
-                            vpn_key = result.vpn_key
-                            vpn_key_plus = getattr(result, "vpn_key_plus", None)
-                            keyboard = get_vpn_key_keyboard(language)
-                            text = i18n.get_text(
-                                language,
-                                "payment.approved",
-                                date=expires_str
-                            )
-                            sent1 = await safe_send_message(
+                            if sub_type == "plus":
+                                text = (
+                                    "🎉 Добро пожаловать в Atlas Secure!\n"
+                                    "⭐️ Тариф: Plus\n"
+                                    f"📅 До: {expires_str}"
+                                )
+                            else:
+                                text = (
+                                    "🎉 Добро пожаловать в Atlas Secure!\n"
+                                    "📦 Тариф: Basic\n"
+                                    f"📅 До: {expires_str}"
+                                )
+                            keyboard = get_connect_keyboard()
+                            await safe_send_message(
                                 bot, telegram_id, text,
                                 reply_markup=keyboard, parse_mode="HTML"
                             )
-                            if sent1 is None:
-                                pass  # continue to next sub after block
-                            elif vpn_key:
-                                await safe_send_message(
-                                    bot, telegram_id,
-                                    "🇩🇪 <b>Atlas Secure</b>",
-                                    parse_mode="HTML"
-                                )
-                                await safe_send_message(
-                                    bot, telegram_id,
-                                    f"<code>{vpn_key}</code>",
-                                    parse_mode="HTML"
-                                )
-                                if sub_type == "plus" and vpn_key_plus:
-                                    await safe_send_message(
-                                        bot, telegram_id,
-                                        "⚪️ <b>Atlas Secure - White List</b>",
-                                        parse_mode="HTML"
-                                    )
-                                    await safe_send_message(
-                                        bot, telegram_id,
-                                        f"<code>{vpn_key_plus}</code>",
-                                        parse_mode="HTML"
-                                    )
                             logger.info(
                                 f"ACTIVATION_NOTIFICATION_SENT [subscription_id={subscription_id}, user={telegram_id}]"
                             )

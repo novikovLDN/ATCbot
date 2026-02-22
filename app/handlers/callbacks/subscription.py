@@ -221,25 +221,20 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
             f"uuid={uuid[:8]}..."
         )
 
-        success_text = i18n_get_text(
-            language, "main.trial_activated_text",
-            vpn_key=vpn_key,
-            expires_date=subscription_end.strftime("%d.%m.%Y %H:%M")
+        expires_str = subscription_end.strftime("%d.%m.%Y")
+        success_text = (
+            "🎉 Добро пожаловать в Atlas Secure!\n"
+            "📦 Тариф: Basic (пробный)\n"
+            f"📅 До: {expires_str}"
         )
-
         try:
             if _degradation_notice:
                 success_text += "\n\n⏳ Возможны небольшие задержки"
         except NameError:
             pass
 
-        await callback.message.answer(success_text, parse_mode="HTML")
-
-        try:
-            await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        except Exception as e:
-            logger.warning(f"Failed to send VPN key with HTML tags: {e}. Sending plain text.")
-            await callback.message.answer(f"🔑 {vpn_key}")
+        from app.handlers.common.keyboards import get_connect_keyboard
+        await callback.message.answer(success_text, parse_mode="HTML", reply_markup=get_connect_keyboard())
 
         # Обновляем главное меню (кнопка trial должна исчезнуть)
         text = i18n_get_text(language, "main.welcome")

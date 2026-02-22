@@ -334,23 +334,14 @@ async def process_auto_renewals(bot: Bot):
             # PHASE B: после commit — только отправка уведомлений и пометка (без финансовых мутаций)
             for item in notifications_to_send:
                 try:
-                    text = i18n.get_text(
-                        item["language"],
-                        "subscription.auto_renew_success",
-                        days=item["duration_days"],
-                        expires_date=item["expires_str"],
-                        amount=item["amount_rubles"]
+                    tariff_label = "Plus" if item.get("tariff_type") == "plus" else "Basic"
+                    text = (
+                        "✅ Подписка продлена\n"
+                        f"📦/⭐️ Тариф: {tariff_label}\n"
+                        f"📅 До: {item['expires_str']}"
                     )
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text=i18n.get_text(item["language"], "main.profile"),
-                            callback_data="menu_profile"
-                        )],
-                        [InlineKeyboardButton(
-                            text=i18n.get_text(item["language"], "main.buy"),
-                            callback_data="menu_buy_vpn"
-                        )]
-                    ])
+                    from app.handlers.common.keyboards import get_connect_keyboard
+                    keyboard = get_connect_keyboard()
                     sent = await safe_send_message(bot, item["telegram_id"], text, reply_markup=keyboard)
                     if sent is None:
                         continue
