@@ -399,6 +399,41 @@ async def upgrade_vless_user(uuid: str) -> Dict[str, str]:
         raise VPNAPIError(f"Failed to upgrade to plus: {e}") from e
 
 
+async def remove_plus_inbound(uuid: str) -> bool:
+    """
+    Remove user from plus (White List) inbound only. Basic inbound unchanged.
+    POST {XRAY_API_URL}/remove-plus/{uuid}, headers: x-api-key.
+    Returns True on success (2xx or 404 not_found).
+    """
+    if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        raise ValueError("VPN API is not configured")
+    uuid_clean = str(uuid).strip()
+    if not uuid_clean:
+        raise ValueError("remove_plus_inbound requires non-empty uuid")
+    _validate_uuid_no_prefix(uuid_clean)
+    api_url = config.XRAY_API_URL.rstrip("/")
+    url = f"{api_url}/remove-plus/{uuid_clean}"
+    headers = {"x-api-key": config.XRAY_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=headers)
+        if response.status_code in (401, 403):
+            raise AuthError(f"Authentication error: status={response.status_code}")
+        if response.status_code == 404:
+            # Idempotent: already removed
+            logger.info(f"XRAY_REMOVE_PLUS uuid={uuid_clean[:8]}... status=404 (not_found)")
+            return True
+        if 400 <= response.status_code < 500:
+            raise InvalidResponseError(f"Client error: status={response.status_code}, response={response.text[:200]}")
+        response.raise_for_status()
+        logger.info(f"XRAY_REMOVE_PLUS uuid={uuid_clean[:8]}... status={response.status_code}")
+        return True
+    except (AuthError, InvalidResponseError):
+        raise
+    except Exception as e:
+        raise VPNAPIError(f"Failed to remove plus inbound: {e}") from e
+
+
 async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
     """
     Sync user to Xray. DB is source of truth for UUID.

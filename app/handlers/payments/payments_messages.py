@@ -770,10 +770,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 "🔑 Ваши ключи доступа:"
             )
             await message.answer(text, parse_mode="HTML")
+            await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
             await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
             if vpn_key_plus:
+                await message.answer("⚪️ <b>Atlas Secure - White List</b>", parse_mode="HTML")
                 await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
         else:
+            await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
             await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
 
         logger.info(
@@ -830,10 +833,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     "🔑 Ваши ключи доступа:"
                 )
                 await message.answer(text, parse_mode="HTML")
+                await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
                 await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
                 if vpn_key_plus:
+                    await message.answer("⚪️ <b>Atlas Secure - White List</b>", parse_mode="HTML")
                     await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
             else:
+                await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
                 await message.answer(
                     f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"
                     f"<code>{vpn_key}</code>",

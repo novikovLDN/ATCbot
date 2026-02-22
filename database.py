@@ -4083,6 +4083,47 @@ async def grant_access(
                     logger.error(f"grant_access: BASIC_TO_PLUS_UPGRADE_FAILED [user={telegram_id}, error={e}]")
                     raise Exception(f"Basic→Plus upgrade failed: {e}") from e
 
+            # Plus→Basic downgrade: remove from plus inbound, set vpn_key_plus=NULL, subscription_type=basic, extend dates
+            if source == "payment" and incoming_tariff == "basic" and current_sub_type == "plus":
+                logger.info(
+                    f"grant_access: PLUS_TO_BASIC_DOWNGRADE [user={telegram_id}, uuid={uuid[:8]}..., source={source}]"
+                )
+                try:
+                    await vpn_utils.remove_plus_inbound(uuid)
+                except Exception as e:
+                    logger.error(f"grant_access: PLUS_TO_BASIC_DOWNGRADE remove_plus_inbound failed [user={telegram_id}, error={e}]")
+                    raise Exception(f"Plus→Basic downgrade (remove plus) failed: {e}") from e
+                old_expires_at = expires_at
+                subscription_end = max(expires_at, now) + duration
+                _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
+                subscription_start = _ensure_utc(_start_raw) if _start_raw else now
+                if subscription_end <= old_expires_at:
+                    raise Exception(f"Invalid downgrade: new_end={subscription_end} <= old_end={old_expires_at}")
+                vpn_key_basic = subscription.get("vpn_key")
+                await conn.execute(
+                    """UPDATE subscriptions
+                       SET expires_at = $1, vpn_key_plus = NULL, subscription_type = 'basic',
+                           status = 'active', source = $2,
+                           reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
+                           reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
+                       WHERE telegram_id = $3""",
+                    _to_db_utc(subscription_end), source, telegram_id
+                )
+                await _log_subscription_history_atomic(conn, telegram_id, vpn_key_basic or uuid, subscription_start, subscription_end, "renewal")
+                logger.info(
+                    f"grant_access: PLUS_TO_BASIC_DOWNGRADE_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
+                    f"new_expires={subscription_end.isoformat()}]"
+                )
+                return {
+                    "uuid": uuid,
+                    "vless_url": vpn_key_basic,
+                    "vpn_key": vpn_key_basic,
+                    "vpn_key_plus": None,
+                    "subscription_end": subscription_end,
+                    "action": "renewal",
+                    "subscription_type": "basic",
+                }
+
             # UUID СТАБИЛЕН - продлеваем подписку БЕЗ вызова VPN API (renewal same tariff)
             logger.info(
                 f"grant_access: RENEWAL_DETECTED [user={telegram_id}, current_expires={expires_at.isoformat()}, "

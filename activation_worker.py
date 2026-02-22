@@ -218,10 +218,20 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             elif vpn_key:
                                 await safe_send_message(
                                     bot, telegram_id,
+                                    "🇩🇪 <b>Atlas Secure</b>",
+                                    parse_mode="HTML"
+                                )
+                                await safe_send_message(
+                                    bot, telegram_id,
                                     f"<code>{vpn_key}</code>",
                                     parse_mode="HTML"
                                 )
                                 if sub_type == "plus" and vpn_key_plus:
+                                    await safe_send_message(
+                                        bot, telegram_id,
+                                        "⚪️ <b>Atlas Secure - White List</b>",
+                                        parse_mode="HTML"
+                                    )
                                     await safe_send_message(
                                         bot, telegram_id,
                                         f"<code>{vpn_key_plus}</code>",
