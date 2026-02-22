@@ -176,6 +176,31 @@ def get_ab_test_list_keyboard(ab_tests: list, language: str = "ru") -> InlineKey
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def get_admin_grant_flex_unit_keyboard(language: str = "ru"):
+    """Клавиатура выбора единицы срока для выдачи Basic/Plus (гибкий срок)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⏱ Минуты", callback_data="admin:grant_flex_unit:minutes"),
+            InlineKeyboardButton(text="🕐 Часы", callback_data="admin:grant_flex_unit:hours"),
+        ],
+        [
+            InlineKeyboardButton(text="📅 Дни", callback_data="admin:grant_flex_unit:days"),
+            InlineKeyboardButton(text="🗓 Месяцы", callback_data="admin:grant_flex_unit:months"),
+        ],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:grant_flex_cancel")],
+    ])
+
+
+def get_admin_grant_flex_confirm_keyboard(language: str = "ru"):
+    """Клавиатура подтверждения выдачи доступа (гибкий срок)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data="admin:grant_flex_confirm"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin:grant_flex_cancel"),
+        ],
+    ])
+
+
 def get_admin_grant_days_keyboard(user_id: int, language: str = "ru"):
     """
     5. ADVANCED ACCESS CONTROL (GRANT / REVOKE)
