@@ -237,9 +237,9 @@ async def show_profile(message_or_query, language: str):
             if sub_type not in ("basic", "plus"):
                 sub_type = "basic"
             if sub_type == "plus":
-                text = f"👤 {display_name}\n\n⭐️ Plus · до {date_str}\n💳 Баланс: {balance_str} ₽"
+                text = f"👋 Привет, {display_name}!\n\n⭐️ Plus · до {date_str}\n💳 Баланс: {balance_str} ₽"
             else:
-                text = f"👤 {display_name}\n\n📦 Basic · до {date_str}\n💳 Баланс: {balance_str} ₽"
+                text = f"👋 Привет, {display_name}!\n\n📦 Basic · до {date_str}\n💳 Баланс: {balance_str} ₽"
             # Строка автопродления: дата следующего списания (expires_at − 6 ч) или «выкл»
             if auto_renew and expires_at:
                 renewal_window = timedelta(hours=6)
@@ -248,7 +248,7 @@ async def show_profile(message_or_query, language: str):
             else:
                 text += "\n🔄 Автопродление: выкл"
         else:
-            text = f"👤 {display_name}\n\n❌ Подписка не активна\n💳 Баланс: {balance_str} ₽"
+            text = f"👋 Привет, {display_name}!\n\n❌ Подписка не активна\n💳 Баланс: {balance_str} ₽"
         subscription_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
         if subscription_type not in ("basic", "plus"):
             subscription_type = "basic"
