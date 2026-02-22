@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 from app.i18n import get_text as i18n_get_text
 
-MINI_APP_URL = "https://atlas-miniapp-production.up.railway.app"
+MINI_APP_URL = "https://atlas-miniapp-production-3495.up.railway.app"
 
 
 def get_connect_button():
