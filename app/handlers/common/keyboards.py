@@ -135,7 +135,6 @@ def get_profile_keyboard(
         buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")])
         if subscription_type == "plus" and (vpn_key or vpn_key_plus):
             buttons.append([InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")])
-        buttons.append([InlineKeyboardButton(text="📖 Инструкция", callback_data="instruction")])
         buttons.append([InlineKeyboardButton(
             text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
@@ -395,13 +394,15 @@ def get_instruction_keyboard(
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
         ],
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "profile.copy_key", "copy_key"),
-                callback_data="copy_vpn_key"
-            ),
-        ],
     ]
+    subscription_type = (subscription_type or "basic").strip().lower()
+    if subscription_type not in ("basic", "plus"):
+        subscription_type = "basic"
+    if subscription_type == "plus":
+        buttons.append([InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")])
+        buttons.append([InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")])
+    else:
+        buttons.append([InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")])
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
