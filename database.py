@@ -4078,6 +4078,7 @@ async def grant_access(
                         "subscription_end": subscription_end,
                         "action": "renewal",
                         "subscription_type": "plus",
+                        "is_basic_to_plus_upgrade": True,
                     }
                 except Exception as e:
                     logger.error(f"grant_access: BASIC_TO_PLUS_UPGRADE_FAILED [user={telegram_id}, error={e}]")
@@ -7063,7 +7064,8 @@ async def finalize_purchase(
                     "vpn_key_plus": vpn_key_plus_ret,
                     "is_renewal": is_renewal,
                     "subscription_type": subscription_type_ret,
-                    "referral_reward": referral_reward_result
+                    "referral_reward": referral_reward_result,
+                    "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                 }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
@@ -8135,14 +8137,21 @@ async def finalize_balance_purchase(
                     f"new_balance={new_balance:.2f} RUB, referral_reward_success={referral_reward_result.get('success') if referral_reward_result else False}]"
                 )
                 
+                subscription_type_ret = (grant_result.get("subscription_type") or "basic").strip().lower()
+                if subscription_type_ret not in ("basic", "plus"):
+                    subscription_type_ret = "basic"
+                vpn_key_plus_ret = grant_result.get("vpn_key_plus") or grant_result.get("vless_url_plus")
                 ret_val = {
                     "success": True,
                     "payment_id": payment_id,
                     "expires_at": expires_at,
                     "vpn_key": vpn_key,
+                    "vpn_key_plus": vpn_key_plus_ret,
                     "is_renewal": is_renewal,
+                    "subscription_type": subscription_type_ret,
                     "new_balance": new_balance,
-                    "referral_reward": referral_reward_result
+                    "referral_reward": referral_reward_result,
+                    "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                 }
         except Exception as e:
             if uuid_to_cleanup_on_failure:

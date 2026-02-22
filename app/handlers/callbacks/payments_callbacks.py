@@ -26,7 +26,7 @@ from app.handlers.common.utils import (
 )
 from app.handlers.common.keyboards import (
     get_profile_keyboard,
-    get_vpn_key_keyboard,
+    get_payment_success_keyboard,
 )
 from app.handlers.common.screens import show_profile
 from app.handlers.common.states import TopUpStates, WithdrawStates, PurchaseState
@@ -423,7 +423,12 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         payment_id = result["payment_id"]
         expires_at = result["expires_at"]
         vpn_key = result["vpn_key"]
+        vpn_key_plus = result.get("vpn_key_plus")
         is_renewal = result["is_renewal"]
+        subscription_type = (result.get("subscription_type") or "basic").strip().lower()
+        if subscription_type not in ("basic", "plus"):
+            subscription_type = "basic"
+        is_upgrade = result.get("is_basic_to_plus_upgrade", False)
         referral_reward_result = result.get("referral_reward")
         
         # Отправляем уведомление о кешбэке (если начислен)
@@ -531,65 +536,56 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
         await state.clear()
         
-        # Формируем сообщение в зависимости от сценария: первая покупка vs продление
+        # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
         expires_str = expires_at.strftime("%d.%m.%Y")
-        
-        if is_renewal:
-            success_text = i18n_get_text(language, "payment.success_renewal", date=expires_str, vpn_key=vpn_key)
+        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
+
+        if is_upgrade:
+            text = (
+                "⭐️ Апгрейд до Plus!\n"
+                f"📅 До: {expires_str}\n\n"
+                "Новый ключ White List добавлен:"
+            )
+            try:
+                await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                if vpn_key_plus:
+                    await callback.message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
         else:
-            success_text = i18n_get_text(language, "payment.success_first", date=expires_str, vpn_key=vpn_key)
-        
-        # КРИТИЧНО: Отправляем сообщение с обработкой ошибок HTML parsing
-        try:
-            await callback.message.answer(
-                success_text,
-                reply_markup=get_vpn_key_keyboard(language),
-                parse_mode="HTML"
-            )
-            logger.info(
-                f"Success message sent for balance payment: user={telegram_id}, "
-                f"scenario={'renewal' if is_renewal else 'first_purchase'}, "
-                f"expires_at={expires_str}"
-            )
-        except Exception as e:
-            # Если HTML parsing упал - отправляем простой текст без HTML
-            logger.error(
-                f"Failed to send success message with HTML for user {telegram_id}: {e}. "
-                f"Falling back to plain text."
-            )
-            
-            # Fallback: отправляем простой текст без HTML
             if is_renewal:
-                fallback_text = i18n_get_text(language, "payment.fallback_renewal", date=expires_str)
+                if subscription_type == "plus":
+                    text = (
+                        "✅ Подписка продлена\n"
+                        "⭐️ Тариф: Plus\n"
+                        f"📅 До: {expires_str}\n\n"
+                        "Ключи не изменились — доступны в профиле."
+                    )
+                else:
+                    text = (
+                        "✅ Подписка продлена\n"
+                        "📦 Тариф: Basic\n"
+                        f"📅 До: {expires_str}\n\n"
+                        "Ключ не изменился — доступен в профиле."
+                    )
             else:
-                fallback_text = i18n_get_text(language, "payment.fallback_first", date=expires_str)
-            
+                if subscription_type == "plus":
+                    text = (
+                        "🎉 Добро пожаловать в Atlas Secure!\n"
+                        "⭐️ Тариф: Plus\n"
+                        f"📅 До: {expires_str}"
+                    )
+                else:
+                    text = (
+                        "🎉 Добро пожаловать в Atlas Secure!\n"
+                        "📦 Тариф: Basic\n"
+                        f"📅 До: {expires_str}"
+                    )
             try:
-                await callback.message.answer(
-                    fallback_text,
-                    reply_markup=get_vpn_key_keyboard(language)
-                    # Без parse_mode="HTML" - обычный текст
-                )
-                logger.info(f"Fallback success message sent (plain text): user={telegram_id}")
-            except Exception as fallback_error:
-                logger.exception(f"CRITICAL: Failed to send even fallback success message: {fallback_error}")
-        
-        # Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
-        try:
-            await callback.message.answer(
-                f"<code>{vpn_key}</code>",
-                parse_mode="HTML"
-            )
-            logger.info(f"VPN key sent separately: user={telegram_id}, key_length={len(vpn_key)}")
-        except Exception as e:
-            # Если HTML parsing упал - отправляем ключ без тегов
-            logger.error(f"Failed to send VPN key with HTML tags: {e}. Sending as plain text.")
-            try:
-                await callback.message.answer(f"🔑 {vpn_key}")
-                logger.info(f"VPN key sent as plain text: user={telegram_id}")
-            except Exception as key_error:
-                logger.exception(f"CRITICAL: Failed to send VPN key even as plain text: {key_error}")
-        
+                await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to send success message: user={telegram_id}, error={e}")
+
         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
         try:
             sent = await database.mark_payment_notification_sent(payment_id)

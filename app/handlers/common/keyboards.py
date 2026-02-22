@@ -223,6 +223,35 @@ def get_vpn_key_keyboard(
     ])
 
 
+def get_payment_success_keyboard(
+    language: str,
+    subscription_type: str = "basic",
+    is_renewal: bool = False,
+) -> InlineKeyboardMarkup:
+    """Клавиатура после успешной оплаты: копирование ключа(ей) и профиль. Один компактный экран."""
+    sub = (subscription_type or "basic").strip().lower()
+    if sub not in ("basic", "plus"):
+        sub = "basic"
+    profile_btn = InlineKeyboardButton(
+        text=i18n_get_text(language, "main.profile", "👤 Профиль"),
+        callback_data="menu_profile"
+    )
+    if sub == "plus":
+        row1 = [
+            InlineKeyboardButton(text="🇩🇪 Скопировать Basic", callback_data="copy_key"),
+            InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus"),
+        ]
+        return InlineKeyboardMarkup(inline_keyboard=[row1, [profile_btn]])
+    # basic
+    copy_btn = InlineKeyboardButton(
+        text=i18n_get_text(language, "profile.copy_key", "🇩🇪 Скопировать ключ"),
+        callback_data="copy_key"
+    )
+    if is_renewal:
+        return InlineKeyboardMarkup(inline_keyboard=[[copy_btn, profile_btn]])
+    return InlineKeyboardMarkup(inline_keyboard=[[copy_btn], [profile_btn]])
+
+
 async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):
     """Клавиатура выбора тарифа с учетом скидок
 
