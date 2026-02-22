@@ -63,6 +63,7 @@ class ActivationResult:
     vpn_key: Optional[str]
     activation_status: str  # "active" or "failed"
     attempts: int
+    vpn_key_plus: Optional[str] = None  # second key for plus only
     error: Optional[str] = None
 
 
@@ -344,7 +345,7 @@ async def _attempt_activation_no_conn_hold(
     # Phase 1: Pre-fetch subscription with short-lived conn; release immediately.
     async with acquire_connection(pool, "activation_phase1_fetch") as conn:
         subscription_row = await conn.fetchrow(
-            """SELECT activation_status, uuid, vpn_key, activation_attempts, expires_at
+            """SELECT activation_status, uuid, vpn_key, vpn_key_plus, activation_attempts, expires_at, subscription_type
                FROM subscriptions WHERE id = $1""",
             subscription_id
         )
@@ -356,6 +357,7 @@ async def _attempt_activation_no_conn_hold(
             success=True,
             uuid=subscription_row.get("uuid"),
             vpn_key=subscription_row.get("vpn_key"),
+            vpn_key_plus=subscription_row.get("vpn_key_plus"),
             activation_status="active",
             attempts=subscription_row.get("activation_attempts", current_attempts)
         )
@@ -371,14 +373,19 @@ async def _attempt_activation_no_conn_hold(
     subscription_end = database._from_db_utc(subscription_end_raw)
 
     # Phase 2: HTTP call with NO DB connection held.
+    tariff = (subscription_row.get("subscription_type") or "basic").strip().lower()
+    if tariff not in ("basic", "plus"):
+        tariff = "basic"
     new_uuid = database._generate_subscription_uuid()
     try:
         vless_result = await vpn_utils.add_vless_user(
             telegram_id=telegram_id,
             subscription_end=subscription_end,
-            uuid=new_uuid
+            uuid=new_uuid,
+            tariff=tariff,
         )
         vless_url = vless_result.get("vless_url")
+        vless_url_plus = vless_result.get("vless_url_plus")
         uuid_from_api = vless_result.get("uuid")
         if not uuid_from_api:
             raise VPNActivationError("Xray API returned empty UUID")
@@ -401,7 +408,7 @@ async def _attempt_activation_no_conn_hold(
         try:
             # Idempotency: re-fetch in case state changed during HTTP window.
             recheck_row = await conn.fetchrow(
-                """SELECT activation_status, uuid, vpn_key, activation_attempts
+                """SELECT activation_status, uuid, vpn_key, vpn_key_plus, activation_attempts
                    FROM subscriptions WHERE id = $1""",
                 subscription_id
             )
@@ -420,6 +427,7 @@ async def _attempt_activation_no_conn_hold(
                     success=True,
                     uuid=recheck_row.get("uuid"),
                     vpn_key=recheck_row.get("vpn_key"),
+                    vpn_key_plus=recheck_row.get("vpn_key_plus"),
                     activation_status="active",
                     attempts=recheck_row.get("activation_attempts", current_attempts)
                 )
@@ -441,10 +449,10 @@ async def _attempt_activation_no_conn_hold(
                 async with conn.transaction():
                     result = await conn.execute(
                         """UPDATE subscriptions
-                           SET uuid = $1, vpn_key = $2, activation_status = 'active',
-                               activation_attempts = $3, last_activation_error = NULL
-                           WHERE id = $4 AND activation_status = 'pending'""",
-                        new_uuid, vless_url, current_attempts + 1, subscription_id
+                           SET uuid = $1, vpn_key = $2, vpn_key_plus = $3, activation_status = 'active',
+                               activation_attempts = $4, last_activation_error = NULL
+                           WHERE id = $5 AND activation_status = 'pending'""",
+                        new_uuid, vless_url, vless_url_plus, current_attempts + 1, subscription_id
                     )
                 logger.info(
                     "ACTIVATION_PHASE2_DB_COMMIT",
@@ -467,7 +475,7 @@ async def _attempt_activation_no_conn_hold(
             rows_affected = int(result.split()[-1]) if result else 0
             if rows_affected == 0:
                 updated_row = await conn.fetchrow(
-                    "SELECT uuid, vpn_key, activation_status, activation_attempts FROM subscriptions WHERE id = $1",
+                    "SELECT uuid, vpn_key, vpn_key_plus, activation_status, activation_attempts FROM subscriptions WHERE id = $1",
                     subscription_id
                 )
                 if updated_row and updated_row["activation_status"] == "active":
@@ -475,6 +483,7 @@ async def _attempt_activation_no_conn_hold(
                         success=True,
                         uuid=updated_row.get("uuid"),
                         vpn_key=updated_row.get("vpn_key"),
+                        vpn_key_plus=updated_row.get("vpn_key_plus"),
                         activation_status="active",
                         attempts=updated_row.get("activation_attempts", current_attempts + 1)
                     )
@@ -491,6 +500,7 @@ async def _attempt_activation_no_conn_hold(
                 success=True,
                 uuid=new_uuid,
                 vpn_key=vless_url,
+                vpn_key_plus=vless_url_plus,
                 activation_status="active",
                 attempts=current_attempts + 1
             )

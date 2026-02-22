@@ -4,7 +4,6 @@ Payment message handlers: successful_payment, photo
 VPN key: Primary path via grant_access → vpn_utils.add_vless_user (Xray API).
 Architecture invariant: Bot never generates VLESS locally. vpn_key must come from API only.
 """
-import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -513,6 +512,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
         expires_at = result.expires_at
         vpn_key = result.vpn_key
         is_renewal = result.is_renewal
+        subscription_type = (getattr(result, "subscription_type", None) or "basic").strip().lower()
+        if subscription_type not in ("basic", "plus"):
+            subscription_type = "basic"
+        vpn_key_plus = getattr(result, "vpn_key_plus", None)
         
         # Проверяем статус активации подписки
         activation_status = result.activation_status
@@ -758,13 +761,26 @@ async def process_successful_payment(message: Message, state: FSMContext):
             logger.error(f"Failed to send fallback payment approval message: user={telegram_id}, error={fallback_error}")
         # Не критично - продолжаем отправку ключа
     
-    # КРИТИЧНО: Отправляем VPN-ключ отдельным сообщением (позволяет одно нажатие для копирования)
+    # КРИТИЧНО: Отправляем VPN-ключ (basic: один ключ; plus: два ключа)
     try:
-        await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
-        
+        if subscription_type == "plus":
+            text = (
+                "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
+                "🔑 Ваши ключи доступа:"
+            )
+            await message.answer(text, parse_mode="HTML")
+            await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
+            await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+            if vpn_key_plus:
+                await message.answer("⚪️ <b>Atlas Secure - White List</b>", parse_mode="HTML")
+                await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
+        else:
+            await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
+            await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+
         logger.info(
             f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "
-            f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_length={len(vpn_key)}]"
+            f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_length={len(vpn_key)}, subscription_type={subscription_type}]"
         )
         
         # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки VPN ключа)
@@ -810,11 +826,24 @@ async def process_successful_payment(message: Message, state: FSMContext):
         
         # Пытаемся отправить ключ повторно
         try:
-            await message.answer(
-                f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"
-                f"<code>{vpn_key}</code>",
-                parse_mode="HTML"
-            )
+            if subscription_type == "plus":
+                text = (
+                    "✅ <b>Atlas Secure Plus активирован!</b>\n\n"
+                    "🔑 Ваши ключи доступа:"
+                )
+                await message.answer(text, parse_mode="HTML")
+                await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
+                await message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+                if vpn_key_plus:
+                    await message.answer("⚪️ <b>Atlas Secure - White List</b>", parse_mode="HTML")
+                    await message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
+            else:
+                await message.answer("🇩🇪 <b>Atlas Secure</b>", parse_mode="HTML")
+                await message.answer(
+                    f"✅ Оплата подтверждена! Доступ до {expires_str}\n\n"
+                    f"<code>{vpn_key}</code>",
+                    parse_mode="HTML"
+                )
             logger.info(f"VPN key sent on retry: user={telegram_id}, payment_id={payment_id}")
         except Exception as retry_error:
             logger.error(f"VPN key send retry also failed: user={telegram_id}, error={retry_error}")

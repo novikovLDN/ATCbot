@@ -105,29 +105,37 @@ async def check_xray_health() -> bool:
         return False
 
 
-async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Optional[str] = None) -> Dict[str, str]:
+async def add_vless_user(
+    telegram_id: int,
+    subscription_end: datetime,
+    uuid: Optional[str] = None,
+    tariff: str = "basic",
+) -> Dict[str, str]:
     """
     Создать нового пользователя VLESS в Xray Core.
 
     INVARIANT: Must NEVER be called inside an active DB transaction (orphan UUID risk).
     Callers that hold a DB transaction MUST use two-phase: call add_vless_user OUTSIDE the tx,
-    then pass the returned {uuid, vless_url} as pre_provisioned_uuid to grant_access.
-    
-    Вызывает POST /add-user на локальном FastAPI VPN API сервере.
-    Передаёт telegram_id и expiry_timestamp_ms (subscription_end в мс).
-    API возвращает uuid и vless_link.
-    
+    then pass the returned {uuid, vless_url, subscription_type} as pre_provisioned_uuid to grant_access.
+
+    Вызывает POST /add-user на VPN API. Тело: {"uuid": uuid, "tariff": tariff}.
+    - tariff "basic": API возвращает {"vless_link": "vless://...", "subscription": null}
+    - tariff "plus": API возвращает {"vless_link": null, "subscription": "base64string", "links": [...]}
+    vless_url в ответе: для basic = vless_link, для plus = subscription (Base64 для v2ray).
+
     UUID is stored and sent as-is (no prefix). Stage isolation uses X-Inbound-Tag header.
-    
+
     Args:
-        telegram_id: Telegram ID пользователя
-        subscription_end: Дата окончания подписки (используется как expiryTime в Xray)
+        telegram_id: Telegram ID пользователя (для логирования)
+        subscription_end: Дата окончания подписки (для логирования; новый API не использует в теле)
         uuid: Optional. If provided, sent to API; else Xray generates. Returned UUID is canonical.
-    
+        tariff: "basic" или "plus" — тип тарифа для VPN API.
+
     Returns:
         Словарь с ключами:
         - "uuid": UUID пользователя (str, raw 36-char UUID)
-        - "vless_url": VLESS URL для подключения (str, from API only — never generated locally)
+        - "vless_url": VLESS URL или Base64 подписки (str, from API only)
+        - "subscription_type": тот же tariff (str)
     
     Raises:
         ValueError: Если XRAY_API_URL или XRAY_API_KEY не настроены
@@ -172,53 +180,55 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
     else:
         logger.info("XRAY_CALL_START [operation=add_user, environment=local]")
     
-    # Проверяем что URL правильный и не является private IP
+    # Проверяем что URL правильный и не является private IP (PROD only; allow HTTP/private IP for STAGE)
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('https://'):
+    if not api_url.startswith('https://') and config.IS_PROD:
         error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
-    # КРИТИЧЕСКАЯ ПРОВЕРКА: Запрещаем использование private IP адресов
-    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
-    api_url_lower = api_url.lower()
-    for pattern in forbidden_patterns:
-        if pattern in api_url_lower:
-            error_msg = (
-                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
-                f"not private IP. Got: {api_url}. "
-                f"Expected format: https://api.mynewllcw.com"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+    # Allow HTTP for STAGE environment (test server may use HTTP, no SSL)
+
+    if config.IS_PROD:
+        forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+        api_url_lower = api_url.lower()
+        for pattern in forbidden_patterns:
+            if pattern in api_url_lower:
+                error_msg = (
+                    f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                    f"not private IP. Got: {api_url}. "
+                    f"Expected format: https://api.mynewllcw.com"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
 
     assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
     assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
-    expiry_ms = int(subscription_end.timestamp() * 1000)
     url = f"{api_url}/add-user"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
         "Content-Type": "application/json"
     }
-    
+
     # STAGE изоляция: добавляем заголовок для отдельного inbound/tag
     if config.IS_STAGE:
         headers["X-Environment"] = "stage"
         headers["X-Inbound-Tag"] = "stage"
-    
-    json_body: dict = {
-        "telegram_id": telegram_id,
-        "expiry_timestamp_ms": expiry_ms,
-    }
+
     if not uuid or not str(uuid).strip():
         raise ValueError("add_vless_user requires uuid; DB is source of truth")
-    json_body["uuid"] = str(uuid).strip()
-    logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}]")
-    
+    tariff_normalized = (tariff or "basic").strip().lower()
+    if tariff_normalized not in ("basic", "plus"):
+        tariff_normalized = "basic"
+    json_body: dict = {
+        "uuid": str(uuid).strip(),
+        "tariff": tariff_normalized,
+    }
+    logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}, tariff={tariff_normalized}]")
+
     # Логируем начало операции
     logger.info(
         f"vpn_api add_user: START [url={url}, telegram_id={telegram_id}, "
-        f"expiry_timestamp_ms={expiry_ms}, subscription_end={subscription_end.isoformat()}]"
+        f"tariff={tariff_normalized}, subscription_end={subscription_end.isoformat()}]"
     )
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
@@ -275,33 +285,33 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
             error_msg = f"Invalid response type: expected dict, got {type(data)}"
             logger.error(f"vpn_api add_user: INVALID_RESPONSE_TYPE [{error_msg}]")
             raise InvalidResponseError(error_msg)
-        
-        # Strict schema: API must return uuid and vless_link (no local fallback)
-        required_fields = {"uuid", "vless_link"}
-        if not required_fields.issubset(data.keys()):
-            raise InvalidResponseError(
-                f"Invalid API response. Expected fields: {required_fields}, got: {set(data.keys())}"
-            )
 
         returned_uuid = data.get("uuid")
-        vless_link = data.get("vless_link")
-
         if not returned_uuid:
             error_msg = f"Invalid response from Xray API: missing 'uuid'. Response: {data}"
             logger.error(f"vpn_api add_user: INVALID_RESPONSE [{error_msg}]")
             raise InvalidResponseError(error_msg)
 
         returned_uuid = str(returned_uuid).strip()
-        # Xray is source of truth: always trust returned UUID (no mismatch assertion)
         logger.info(f"XRAY_SOURCE_OF_TRUTH uuid={returned_uuid}")
 
-        if not vless_link:
+        # API response: { uuid, tariff, basic_link, plus_link? }
+        # basic_link = vpn_key (always), plus_link = vpn_key_plus (only for plus)
+        api_tariff = (data.get("tariff") or tariff_normalized).strip().lower()
+        if api_tariff not in ("basic", "plus"):
+            api_tariff = tariff_normalized
+        basic_link = data.get("basic_link")
+        plus_link = data.get("plus_link")  # None for basic
+        if not basic_link:
             raise InvalidResponseError(
-                "Xray API did not return vless_link. "
-                "Local fallback generation is forbidden by architecture."
+                "Xray API did not return basic_link. Local fallback is forbidden."
             )
-
-        vless_url = vless_link
+        if api_tariff == "plus" and not plus_link:
+            raise InvalidResponseError(
+                "Xray API did not return plus_link for tariff=plus."
+            )
+        vless_url = basic_link
+        vless_url_plus = plus_link if api_tariff == "plus" else None
 
         uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
         logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
@@ -327,9 +337,11 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
 
         return {
             "uuid": returned_uuid,
-            "vless_url": vless_url
+            "vless_url": vless_url,
+            "vless_url_plus": vless_url_plus,
+            "subscription_type": api_tariff,
         }
-        
+
     except (AuthError, InvalidResponseError) as e:
         # Domain exceptions should NOT be retried - raise immediately
         logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=domain_error, environment={config.APP_ENV}, error={str(e)[:100]}]")
@@ -339,6 +351,87 @@ async def add_vless_user(telegram_id: int, subscription_end: datetime, uuid: Opt
         error_msg = f"Failed to create VLESS user: {e}"
         logger.error(f"XRAY_CALL_FAILED [operation=add_user, error_type=transient_error, environment={config.APP_ENV}, error={error_msg[:100]}]")
         raise VPNAPIError(error_msg) from e
+
+
+async def upgrade_vless_user(uuid: str) -> Dict[str, str]:
+    """
+    Upgrade existing basic user to plus. UUID stays the same.
+    POST /upgrade-to-plus/{uuid}, headers: x-api-key. No body.
+    Returns same format as add_vless_user: uuid, vless_url (basic_link), vless_url_plus (plus_link), subscription_type.
+    """
+    if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        raise ValueError("VPN API is not configured")
+    uuid_clean = str(uuid).strip()
+    if not uuid_clean:
+        raise ValueError("upgrade_vless_user requires non-empty uuid")
+    _validate_uuid_no_prefix(uuid_clean)
+    api_url = config.XRAY_API_URL.rstrip("/")
+    url = f"{api_url}/upgrade-to-plus/{uuid_clean}"
+    headers = {"x-api-key": config.XRAY_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=headers)
+        if response.status_code in (401, 403):
+            raise AuthError(f"Authentication error: status={response.status_code}")
+        if response.status_code == 404:
+            raise InvalidResponseError("User not found for upgrade")
+        if 400 <= response.status_code < 500:
+            raise InvalidResponseError(f"Client error: status={response.status_code}, response={response.text[:200]}")
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise InvalidResponseError(f"Invalid response type: expected dict, got {type(data)}")
+        basic_link = data.get("basic_link")
+        plus_link = data.get("plus_link")
+        if not basic_link or not plus_link:
+            raise InvalidResponseError("Xray API did not return basic_link and plus_link for upgrade-to-plus")
+        uuid_preview = f"{uuid_clean[:8]}..." if len(uuid_clean) > 8 else uuid_clean
+        logger.info(f"XRAY_UPGRADE_TO_PLUS uuid={uuid_preview} status=200")
+        return {
+            "uuid": uuid_clean,
+            "vless_url": basic_link,
+            "vless_url_plus": plus_link,
+            "subscription_type": "plus",
+        }
+    except (AuthError, InvalidResponseError):
+        raise
+    except Exception as e:
+        raise VPNAPIError(f"Failed to upgrade to plus: {e}") from e
+
+
+async def remove_plus_inbound(uuid: str) -> bool:
+    """
+    Remove user from plus (White List) inbound only. Basic inbound unchanged.
+    POST {XRAY_API_URL}/remove-plus/{uuid}, headers: x-api-key.
+    Returns True on success (2xx or 404 not_found).
+    """
+    if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
+        raise ValueError("VPN API is not configured")
+    uuid_clean = str(uuid).strip()
+    if not uuid_clean:
+        raise ValueError("remove_plus_inbound requires non-empty uuid")
+    _validate_uuid_no_prefix(uuid_clean)
+    api_url = config.XRAY_API_URL.rstrip("/")
+    url = f"{api_url}/remove-plus/{uuid_clean}"
+    headers = {"x-api-key": config.XRAY_API_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+            response = await client.post(url, headers=headers)
+        if response.status_code in (401, 403):
+            raise AuthError(f"Authentication error: status={response.status_code}")
+        if response.status_code == 404:
+            # Idempotent: already removed
+            logger.info(f"XRAY_REMOVE_PLUS uuid={uuid_clean[:8]}... status=404 (not_found)")
+            return True
+        if 400 <= response.status_code < 500:
+            raise InvalidResponseError(f"Client error: status={response.status_code}, response={response.text[:200]}")
+        response.raise_for_status()
+        logger.info(f"XRAY_REMOVE_PLUS uuid={uuid_clean[:8]}... status={response.status_code}")
+        return True
+    except (AuthError, InvalidResponseError):
+        raise
+    except Exception as e:
+        raise VPNAPIError(f"Failed to remove plus inbound: {e}") from e
 
 
 async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
@@ -417,23 +510,24 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     uuid_clean = str(uuid).strip()
     logger.info(f"UUID_AUDIT_UPDATE_REQUEST [uuid={repr(uuid_clean)}]")
     
-    # SECURITY: XRAY_API_URL must be HTTPS, no private IP
+    # SECURITY: XRAY_API_URL must be HTTPS, no private IP (PROD only; allow HTTP/private IP for STAGE)
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('https://'):
+    if not api_url.startswith('https://') and config.IS_PROD:
         error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
-    api_url_lower = api_url.lower()
-    for pattern in forbidden_patterns:
-        if pattern in api_url_lower:
-            error_msg = (
-                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
-                f"not private IP. Got: {api_url}. Expected format: https://api.mynewllcw.com"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
+    if config.IS_PROD:
+        forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+        api_url_lower = api_url.lower()
+        for pattern in forbidden_patterns:
+            if pattern in api_url_lower:
+                error_msg = (
+                    f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                    f"not private IP. Got: {api_url}. Expected format: https://api.mynewllcw.com"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
     expiry_ms = int(subscription_end.timestamp() * 1000)
     url = f"{api_url}/update-user"
     headers = {
@@ -529,25 +623,25 @@ async def remove_vless_user(uuid: str) -> None:
     else:
         logger.info(f"XRAY_CALL_START [operation=remove_user, uuid={uuid_clean[:8]}..., environment=local]")
     
-    # SECURITY: XRAY_API_URL must be HTTPS, no private IP
+    # SECURITY: XRAY_API_URL must be HTTPS, no private IP (PROD only; allow HTTP/private IP for STAGE)
     api_url = config.XRAY_API_URL.rstrip('/')
-    if not api_url.startswith('https://'):
+    if not api_url.startswith('https://') and config.IS_PROD:
         error_msg = f"SECURITY: XRAY_API_URL must use HTTPS. Got: {api_url}"
         logger.error(error_msg)
         raise ValueError(error_msg)
-    
-    forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
-    api_url_lower = api_url.lower()
-    for pattern in forbidden_patterns:
-        if pattern in api_url_lower:
-            error_msg = (
-                f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
-                f"not private IP. Got: {api_url}. "
-                f"Expected format: https://api.mynewllcw.com"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
+    if config.IS_PROD:
+        forbidden_patterns = ['127.0.0.1', 'localhost', '0.0.0.0', '172.', '192.168.', '10.']
+        api_url_lower = api_url.lower()
+        for pattern in forbidden_patterns:
+            if pattern in api_url_lower:
+                error_msg = (
+                    f"SECURITY: XRAY_API_URL must use public HTTPS URL (Cloudflare Tunnel), "
+                    f"not private IP. Got: {api_url}. "
+                    f"Expected format: https://api.mynewllcw.com"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+
     url = f"{api_url}/remove-user/{uuid_clean}"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,

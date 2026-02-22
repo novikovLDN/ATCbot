@@ -1,9 +1,9 @@
 """
 InlineKeyboardMarkup and ReplyKeyboardMarkup builders. Shared across all handler domains.
 """
-import asyncio
 import logging
 from datetime import datetime
+from typing import Optional
 
 import config
 import database
@@ -110,8 +110,15 @@ def get_back_keyboard(language: str):
     ])
 
 
-def get_profile_keyboard(language: str, has_active_subscription: bool = False, auto_renew: bool = False):
-    """Клавиатура профиля (обновленная версия)"""
+def get_profile_keyboard(
+    language: str,
+    has_active_subscription: bool = False,
+    auto_renew: bool = False,
+    subscription_type: str = "basic",
+    vpn_key: Optional[str] = None,
+    vpn_key_plus: Optional[str] = None,
+):
+    """Клавиатура профиля. Basic: один «Скопировать ключ». Plus: два ключа — Atlas Secure, White List."""
     buttons = []
 
     if has_active_subscription:
@@ -144,10 +151,23 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
         text=i18n_get_text(language, "profile.withdraw_funds"),
         callback_data="withdraw_start"
     )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "profile.copy_key"),
-        callback_data="copy_key"
-    )])
+    # Key copy buttons only when subscription is active (not expired)
+    if has_active_subscription:
+        if subscription_type == "plus" and (vpn_key or vpn_key_plus):
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "profile.key_atlas", "🇩🇪 Atlas Secure"),
+                callback_data="copy_key"
+            )])
+            if vpn_key_plus:
+                buttons.append([InlineKeyboardButton(
+                    text=i18n_get_text(language, "profile.key_whitelist", "⚪️ White List"),
+                    callback_data="copy_key_plus"
+                )])
+        else:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "profile.copy_key"),
+                callback_data="copy_key"
+            )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main"
@@ -181,8 +201,12 @@ def get_profile_keyboard_old(language: str):
     ])
 
 
-def get_vpn_key_keyboard(language: str):
-    """Клавиатура для экрана выдачи VPN-ключа после оплаты"""
+def get_vpn_key_keyboard(
+    language: str,
+    subscription_type: str = "basic",
+    vpn_key: Optional[str] = None,
+):
+    """Клавиатура для экрана выдачи VPN-ключа после оплаты (инструкция, скопировать ключ, профиль)."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.go_to_connection"),
@@ -314,54 +338,47 @@ def get_support_keyboard(language: str):
     ])
 
 
-def get_instruction_keyboard(language: str, platform: str = "unknown"):
-    """
-    Клавиатура экрана 'Инструкция' для v2RayTun
-
-    Args:
-        language: Язык пользователя
-        platform: Платформа пользователя ("ios", "android", или "unknown")
-    """
-    buttons = []
-
-    if platform == "ios":
-        buttons.append([
+def get_instruction_keyboard(
+    language: str,
+    platform: str = "unknown",
+    subscription_type: str = "basic",
+    vpn_key: Optional[str] = None,
+):
+    """Клавиатура экрана 'Инструкция': платформы и «Скопировать ключ»."""
+    buttons = [
+        [
             InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_ios", "instruction_download_ios"),
-                url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
-            )
-        ])
-    elif platform == "android":
-        buttons.append([
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_android", "instruction_download_android"),
-                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
-            )
-        ])
-    else:
-        buttons.append([
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_ios", "instruction_download_ios"),
-                url="https://apps.apple.com/ua/app/v2raytun/id6476628951"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_android", "instruction_download_android"),
+                text=i18n_get_text(language, "instruction._download_android", "🤖 Android"),
                 url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
             ),
-        ])
-        buttons.append([
             InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_desktop", "instruction_download_desktop"),
-                url="https://v2raytun.com"
+                text=i18n_get_text(language, "instruction._download_desktop", "💻 Windows"),
+                url="https://www.mediafire.com/folder/lpcbgr4ox8u5x/Atlas_Secure"
             ),
-        ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key", "copy_key"),
-            callback_data="copy_vpn_key"
-        ),
-    ])
+        ],
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "instruction._download_ios", "📱 iOS"),
+                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "instruction._download_macos", "🍎 MacOS"),
+                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "instruction._download_tv", "📺 TV"),
+                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "profile.copy_key", "copy_key"),
+                callback_data="copy_vpn_key"
+            ),
+        ],
+    ]
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),

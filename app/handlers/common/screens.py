@@ -48,8 +48,20 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
     platform = detect_platform(event)
+    subscription = await database.get_subscription(telegram_id)
+    subscription_type = "basic"
+    vpn_key = None
+    if subscription:
+        subscription_type = (subscription.get("subscription_type") or "basic").strip().lower()
+        vpn_key = subscription.get("vpn_key")
+    if subscription_type not in ("basic", "plus"):
+        subscription_type = "basic"
     text = i18n_get_text(language, "instruction._text", "instruction_text")
-    await safe_edit_text(msg, text, reply_markup=get_instruction_keyboard(language, platform), bot=bot)
+    await safe_edit_text(
+        msg, text,
+        reply_markup=get_instruction_keyboard(language, platform, subscription_type=subscription_type, vpn_key=vpn_key),
+        bot=bot
+    )
     if isinstance(event, CallbackQuery):
         await event.answer()
 
@@ -233,6 +245,12 @@ async def show_profile(message_or_query, language: str):
             # Подписка активна
             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
             text += "\n" + i18n_get_text(language, "profile.subscription_active", date=expires_str)
+            # Тариф: Basic / Plus
+            sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+            if sub_type == "plus":
+                text += "\n" + i18n_get_text(language, "subscription.tariff_plus", "⭐️ Тариф: Plus")
+            else:
+                text += "\n" + i18n_get_text(language, "subscription.tariff_basic", "📦 Тариф: Basic")
         else:
             # Подписка неактивна (истекла или отсутствует)
             text += "\n" + i18n_get_text(language, "profile.subscription_inactive")
@@ -263,8 +281,16 @@ async def show_profile(message_or_query, language: str):
         if not has_any_subscription:
             text += "\n\n" + i18n_get_text(language, "profile.buy_hint")
 
-        # Показываем кнопку "Продлить доступ" если есть подписка (активная или истекшая) - по требованиям
-        keyboard = get_profile_keyboard(language, has_any_subscription, auto_renew)
+        # Показываем кнопку "Продлить доступ" и ключи (basic: один; plus: два)
+        subscription_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
+        vpn_key = subscription.get("vpn_key") if subscription else None
+        vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
+        if subscription_type not in ("basic", "plus"):
+            subscription_type = "basic"
+        keyboard = get_profile_keyboard(
+            language, has_active_subscription, auto_renew,
+            subscription_type=subscription_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
+        )
 
         # Отправляем сообщение
         await send_func(text, reply_markup=keyboard)

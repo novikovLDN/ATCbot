@@ -269,6 +269,23 @@ async def callback_copy_key(callback: CallbackQuery):
     await callback.answer(success_text, show_alert=False)
 
 
+@router.callback_query(F.data == "copy_key_plus")
+async def callback_copy_key_plus(callback: CallbackQuery):
+    """Скопировать второй ключ (Plus / White List) — отправляет vpn_key_plus как сообщение."""
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    await check_subscription_expiry(telegram_id)
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription or not subscription.get("vpn_key_plus"):
+        error_text = i18n_get_text(language, "errors.no_active_subscription")
+        await callback.answer(error_text, show_alert=True)
+        return
+    vpn_key_plus = subscription["vpn_key_plus"]
+    await callback.message.answer(f"<code>{vpn_key_plus}</code>", parse_mode="HTML")
+    success_text = i18n_get_text(language, "profile.vpn_key_copied_toast")
+    await callback.answer(success_text, show_alert=False)
+
+
 @router.callback_query(F.data == "copy_vpn_key")
 async def callback_copy_vpn_key(callback: CallbackQuery):
     """Скопировать VPN-ключ - отправляет ключ как отдельное сообщение"""

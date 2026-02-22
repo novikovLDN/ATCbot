@@ -311,6 +311,30 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         logger.error(f"Invalid tariff/period in calculate_price: user={telegram_id}, tariff={tariff_type}, period={period_days}, error={e}")
         return
     
+    # Plus→Basic downgrade: show confirmation before proceeding
+    if tariff_type == "basic":
+        sub = await database.get_subscription(telegram_id)
+        current_sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
+        if sub and current_sub_type == "plus":
+            await state.update_data(
+                tariff_type=tariff_type,
+                period_days=period_days,
+                final_price_kopecks=price_info["final_price_kopecks"],
+                discount_percent=price_info["discount_percent"]
+            )
+            downgrade_text = (
+                "⚠️ Вы переходите с Plus на Basic.\n\n"
+                "Ключ White List будет удалён, останется только основной ключ.\n\n"
+                "Подтвердить переход?"
+            )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Да, перейти на Basic", callback_data="downgrade_confirm_basic")],
+                [InlineKeyboardButton(text="❌ Отмена", callback_data="tariff:basic")]
+            ])
+            await safe_edit_text(callback.message, downgrade_text, reply_markup=keyboard)
+            await callback.answer()
+            return
+    
     # КРИТИЧНО: Сохраняем данные в FSM state (БЕЗ создания pending_purchase)
     # Промо-сессия НЕ сохраняется здесь - она уже в FSM и независима от покупки
     await state.update_data(
@@ -338,6 +362,29 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Переходим к выбору способа оплаты (НЕ создаем pending_purchase и invoice)
     await state.set_state(PurchaseState.choose_payment_method)
     await show_payment_method_selection(callback, tariff_type, period_days, price_info["final_price_kopecks"])
+
+
+@payments_callbacks_router.callback_query(
+    F.data == "downgrade_confirm_basic",
+    StateFilter(PurchaseState.choose_period),
+)
+async def callback_downgrade_confirm_basic(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение перехода Plus→Basic: продолжаем поток оплаты Basic."""
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type", "basic")
+    period_days = fsm_data.get("period_days")
+    final_price_kopecks = fsm_data.get("final_price_kopecks")
+    if period_days is None or final_price_kopecks is None:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        await show_tariffs_main_screen(callback, state)
+        return
+    await state.update_data(confirmed_downgrade=True)
+    await state.set_state(PurchaseState.choose_payment_method)
+    await show_payment_method_selection(callback, tariff_type, period_days, final_price_kopecks)
+    await callback.answer()
 
 
 @payments_callbacks_router.callback_query(F.data == "enter_promo")
