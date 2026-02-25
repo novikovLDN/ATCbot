@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, stage]
+  pull_request:
+    branches: [main, stage]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: atcs_test
+          POSTGRES_USER: atcs
+          POSTGRES_PASSWORD: test_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atcs -d atcs_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      APP_ENV: local
+      LOCAL_BOT_TOKEN: "0000000000:fake-token-for-ci"
+      LOCAL_ADMIN_TELEGRAM_ID: "123456789"
+      LOCAL_DATABASE_URL: "postgresql://atcs:test_pass@localhost:5432/atcs_test"
+      LOCAL_WEBHOOK_URL: "https://fake.ci/webhook/telegram"
+      LOCAL_WEBHOOK_SECRET: "ci-secret"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Syntax check (compile all .py files)
+        run: python -m compileall . -q -x '.venv|__pycache__'
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker build (verify Dockerfile works)
+        run: docker build -t atcs-test .
