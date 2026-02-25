@@ -5104,13 +5104,30 @@ async def mark_reminder_sent(telegram_id: int):
         )
 
 
+# Whitelist допустимых flag_name для mark_reminder_flag_sent (SQL injection protection)
+_ALLOWED_REMINDER_FLAGS = frozenset({
+    "reminder_3d_sent",
+    "reminder_24h_sent",
+    "reminder_3h_sent",
+    "reminder_6h_sent",
+})
+
+
 async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
     """Отметить, что конкретное напоминание отправлено пользователю
-    
+
     Args:
         telegram_id: Telegram ID пользователя
         flag_name: Имя флага ('reminder_3d_sent', 'reminder_24h_sent', 'reminder_3h_sent', 'reminder_6h_sent')
+
+    Raises:
+        ValueError: если flag_name не в whitelist
     """
+    if flag_name not in _ALLOWED_REMINDER_FLAGS:
+        raise ValueError(
+            f"Invalid flag_name '{flag_name}'. "
+            f"Allowed: {sorted(_ALLOWED_REMINDER_FLAGS)}"
+        )
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
