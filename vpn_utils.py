@@ -881,39 +881,3 @@ async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: 
         # КРИТИЧНО: Если не удалось создать новый UUID - старый уже удалён
         # Это критическая ситуация, но мы не можем восстановить старый UUID
         raise VPNAPIError(error_msg) from e
-
-
-# ============================================================================
-# DEPRECATED: Legacy file-based functions (kept for backward compatibility)
-# ============================================================================
-
-def has_free_vpn_keys() -> bool:
-    """
-    DEPRECATED: Функция проверки наличия VPN-ключей в файле.
-    
-    Больше не используется. VPN-ключи создаются динамически через Xray API.
-    Всегда возвращает True для обратной совместимости.
-    
-    Returns:
-        True (для обратной совместимости)
-    """
-    logger.warning("has_free_vpn_keys() is deprecated. VPN keys are created dynamically via Xray API.")
-    return True
-
-
-def get_free_vpn_key() -> str:
-    """
-    DEPRECATED: Функция получения VPN-ключа из файла.
-    
-    Больше не используется. VPN-ключи создаются динамически через Xray API.
-    Вызывает исключение при вызове.
-    
-    Raises:
-        ValueError: Всегда, так как эта функция устарела
-    """
-    error_msg = (
-        "get_free_vpn_key() is deprecated. "
-        "Use add_vless_user() to create VPN keys dynamically via Xray API."
-    )
-    logger.error(error_msg)
-    raise ValueError(error_msg)
