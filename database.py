@@ -7489,8 +7489,11 @@ async def check_user_still_eligible_for_no_sub_broadcast(conn, telegram_id: int,
     if not row:
         return False
     trial_expires_at = row.get("trial_expires_at")
-    if trial_expires_at and trial_expires_at > now:
-        return False
+    if trial_expires_at:
+        trial_expires_at_utc = _from_db_utc(trial_expires_at)
+        now_utc = now if (getattr(now, "tzinfo", None) is not None) else datetime.now(timezone.utc)
+        if trial_expires_at_utc > now_utc:
+            return False
     is_reachable = row.get("is_reachable")
     if is_reachable is False:
         return False
