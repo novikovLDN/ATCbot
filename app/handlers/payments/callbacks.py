@@ -49,6 +49,11 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     - Переводит в choose_period
     - Показывает экран выбора периода
     """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
@@ -201,7 +206,6 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     
     # КРИТИЧНО: Переходим в состояние choose_period
     await state.set_state(PurchaseState.choose_period)
-    await callback.answer()
 
 
 @payments_callbacks_router.callback_query(
@@ -218,6 +222,11 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
     - Переводит в choose_payment_method
     - Открывает экран выбора способа оплаты
     """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     telegram_id = callback.from_user.id
     
     # CRITICAL FIX: Очищаем PromoCodeInput state при переходе к выбору периода
@@ -333,7 +342,6 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
                 [InlineKeyboardButton(text="❌ Отмена", callback_data="tariff:basic")]
             ])
             await safe_edit_text(callback.message, downgrade_text, reply_markup=keyboard)
-            await callback.answer()
             return
     
     # КРИТИЧНО: Сохраняем данные в FSM state (БЕЗ создания pending_purchase)
@@ -371,6 +379,11 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
 )
 async def callback_downgrade_confirm_basic(callback: CallbackQuery, state: FSMContext):
     """Подтверждение перехода Plus→Basic: продолжаем поток оплаты Basic."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     fsm_data = await state.get_data()
@@ -379,23 +392,28 @@ async def callback_downgrade_confirm_basic(callback: CallbackQuery, state: FSMCo
     final_price_kopecks = fsm_data.get("final_price_kopecks")
     if period_days is None or final_price_kopecks is None:
         error_text = i18n_get_text(language, "errors.session_expired")
-        await callback.answer(error_text, show_alert=True)
+        try:
+            await callback.answer(error_text, show_alert=True)
+        except Exception:
+            pass
         await show_tariffs_main_screen(callback, state)
         return
     await state.update_data(confirmed_downgrade=True)
     await state.set_state(PurchaseState.choose_payment_method)
     await show_payment_method_selection(callback, tariff_type, period_days, final_price_kopecks)
-    await callback.answer()
 
 
 @payments_callbacks_router.callback_query(F.data == "enter_promo")
 async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     """Обработчик кнопки ввода промокода"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
-    
-    await callback.answer()
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -459,6 +477,11 @@ async def callback_payment_test(callback: CallbackQuery):
 @payments_callbacks_router.callback_query(F.data == "payment_sbp")
 async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     """Оплата через СБП"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
@@ -505,12 +528,16 @@ async def callback_payment_sbp(callback: CallbackQuery, state: FSMContext):
     text = i18n_get_text(language, "main.sbp_payment_text", amount=amount)
     
     await safe_edit_text(callback.message, text, reply_markup=get_sbp_payment_keyboard(language))
-    await callback.answer()
 
 
 @payments_callbacks_router.callback_query(F.data == "payment_paid")
 async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     """Пользователь нажал 'Я оплатил'"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     
@@ -553,7 +580,6 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     # Отправляем сообщение пользователю
     text = i18n_get_text(language, "payment.pending", "payment_pending")
     await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
-    await callback.answer()
     
     # Safe username extraction: can be None
     user_lang = await resolve_user_language(telegram_id)
@@ -584,8 +610,11 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
 @payments_callbacks_router.callback_query(F.data.startswith("approve_payment:"))
 async def approve_payment(callback: CallbackQuery):
     """Админ подтвердил платеж"""
-    await callback.answer()  # ОБЯЗАТЕЛЬНО
-    
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized approve attempt by user {callback.from_user.id}")
         await callback.answer("Нет доступа", show_alert=True)
@@ -783,8 +812,11 @@ async def approve_payment(callback: CallbackQuery):
 @payments_callbacks_router.callback_query(F.data.startswith("reject_payment:"))
 async def reject_payment(callback: CallbackQuery):
     """Админ отклонил платеж"""
-    await callback.answer()  # ОБЯЗАТЕЛЬНО
-    
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized reject attempt by user {callback.from_user.id}")
         await callback.answer("Нет доступа", show_alert=True)
@@ -859,6 +891,11 @@ async def callback_corporate_access_request(callback: CallbackQuery, state: FSMC
     Entry point: User taps "Корпоративный доступ" button.
     Shows confirmation screen with consent text.
     """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
@@ -884,7 +921,6 @@ async def callback_corporate_access_request(callback: CallbackQuery, state: FSMC
     ])
     
     await safe_edit_text(callback.message, consent_text, reply_markup=keyboard)
-    await callback.answer()
     
     logger.debug(f"FSM: CorporateAccessRequest.waiting_for_confirmation set for user {telegram_id}")
 
@@ -896,6 +932,11 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
     
     On confirmation: Send admin notification and user confirmation.
     """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if not await ensure_db_ready_callback(callback):
         return
     
@@ -975,8 +1016,6 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
         # Clear FSM
         await state.clear()
         logger.debug(f"FSM: CorporateAccessRequest cleared after confirmation for user {telegram_id}")
-        
-        await callback.answer()
         
     except Exception as e:
         logger.exception(f"Error in callback_corporate_access_confirm: {e}")
