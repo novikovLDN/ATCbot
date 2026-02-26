@@ -219,9 +219,12 @@ async def add_vless_user(
     tariff_normalized = (tariff or "basic").strip().lower()
     if tariff_normalized not in ("basic", "plus"):
         tariff_normalized = "basic"
+    expiry_ms = int(subscription_end.timestamp() * 1000) if subscription_end else 0
     json_body: dict = {
         "uuid": str(uuid).strip(),
         "tariff": tariff_normalized,
+        "telegram_id": telegram_id,
+        "expiry_timestamp_ms": expiry_ms,
     }
     logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}, tariff={tariff_normalized}]")
 
@@ -314,7 +317,9 @@ async def add_vless_user(
         vless_url_plus = plus_link if api_tariff == "plus" else None
 
         uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
-        logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
+        basic_links_count = len(data.get("basic_links", []))
+        plus_links_count = len(data.get("plus_links", []))
+        logger.info(f"XRAY_ADD uuid={uuid_preview} status=200 tariff={api_tariff} basic_links={basic_links_count} plus_links={plus_links_count}")
         logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
 
         try:
