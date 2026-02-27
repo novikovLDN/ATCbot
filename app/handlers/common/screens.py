@@ -259,7 +259,7 @@ async def show_profile(message_or_query, language: str):
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
             text += f"📆 Подписка: активна до {date_str}\n"
-            text += f"⭐️ Тариф: {'Plus' if sub_type == 'plus' else 'Basic'}\n"
+            text += f"⭐️ Тариф: {'Platinum' if sub_type == 'plus' else 'Premium'}\n"
             if auto_renew and expires_at:
                 renewal_window = timedelta(hours=6)
                 next_renewal = expires_at - renewal_window
