@@ -195,6 +195,7 @@ class AddUserRequest(BaseModel):
     uuid: str
     telegram_id: int
     expiry_timestamp_ms: int
+    tariff: str = "basic"
 
 
 class UpdateUserRequest(BaseModel):
@@ -413,6 +414,93 @@ def find_client_in_config(config: dict, target_uuid: str) -> Optional[int]:
         return None
 
 
+def _get_inbound_group(tag: str) -> str:
+    """Determine inbound group from tag. Returns 'basic' or 'plus'."""
+    if tag.startswith("plus"):
+        return "plus"
+    return "basic"
+
+
+def _get_inbound_transport(inbound: dict) -> str:
+    """Get transport type from inbound config."""
+    return inbound.get("streamSettings", {}).get("network", "tcp")
+
+
+def _get_inbounds_by_group(config: dict, group: str) -> list[dict]:
+    """Get all VLESS inbounds belonging to a group ('basic' or 'plus')."""
+    result = []
+    for inbound in config.get("inbounds", []):
+        if inbound.get("protocol") != "vless":
+            continue
+        tag = inbound.get("tag", "")
+        if _get_inbound_group(tag) == group:
+            result.append(inbound)
+    return result
+
+
+def _build_client_entry(uuid_str: str, email: str, expiry_ms: int, inbound: dict) -> dict:
+    """Build a client entry dict appropriate for the inbound's transport type."""
+    entry = {
+        "id": uuid_str,
+        "email": email,
+        "expiryTime": expiry_ms,
+    }
+    # TCP requires flow; XHTTP must NOT have flow
+    transport = _get_inbound_transport(inbound)
+    if transport == "tcp":
+        entry["flow"] = "xtls-rprx-vision"
+    return entry
+
+
+def _add_client_to_inbounds(config: dict, inbounds: list[dict], uuid_str: str, email: str, expiry_ms: int) -> int:
+    """
+    Add client to all specified inbounds. Idempotent: updates expiry if exists.
+    Returns number of inbounds modified.
+    """
+    modified = 0
+    for inbound in inbounds:
+        if "settings" not in inbound:
+            inbound["settings"] = {}
+        if "clients" not in inbound["settings"]:
+            inbound["settings"]["clients"] = []
+        
+        clients = inbound["settings"]["clients"]
+        existing = None
+        for c in clients:
+            if c.get("id") == uuid_str:
+                existing = c
+                break
+        
+        if existing:
+            existing["expiryTime"] = expiry_ms
+            if "email" not in existing:
+                existing["email"] = email
+            # Fix flow: ensure correct based on transport
+            transport = _get_inbound_transport(inbound)
+            if transport == "tcp":
+                existing["flow"] = "xtls-rprx-vision"
+            elif "flow" in existing:
+                del existing["flow"]  # Remove flow from xhttp
+        else:
+            new_client = _build_client_entry(uuid_str, email, expiry_ms, inbound)
+            clients.append(new_client)
+        modified += 1
+    
+    return modified
+
+
+def _remove_client_from_inbounds(inbounds: list[dict], uuid_str: str) -> int:
+    """Remove client from all specified inbounds. Returns number of inbounds modified."""
+    modified = 0
+    for inbound in inbounds:
+        clients = inbound.get("settings", {}).get("clients", [])
+        original_count = len(clients)
+        clients[:] = [c for c in clients if c.get("id") != uuid_str]
+        if len(clients) < original_count:
+            modified += 1
+    return modified
+
+
 # ============================================================================
 # Lifecycle: start/stop flusher
 # ============================================================================
@@ -527,53 +615,40 @@ async def add_user(request: AddUserRequest):
         client_uuid = uuid_from_request
         logger.info(f"XRAY_ADD_CONTRACT uuid_request={uuid_from_request}")
         
+        # Determine tariff from request (default basic)
+        tariff = getattr(request, "tariff", "basic") or "basic"
+        tariff = tariff.strip().lower()
+        if tariff not in ("basic", "plus"):
+            tariff = "basic"
+        
+        email = f"user_{request.telegram_id}"
+        expiry_ms = request.expiry_timestamp_ms
+        
         # Atomic read-modify-write: lock covers load + modify + save (fixes race under concurrent add-user)
         async with _config_file_lock:
             config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
             
-            # Находим первый VLESS inbound
-            inbounds = config.get("inbounds", [])
-            vless_inbound = None
+            # Get inbounds for this tariff group
+            # basic tariff → basic inbounds only
+            # plus tariff → basic + plus inbounds
+            groups_to_add = ["basic"]
+            if tariff == "plus":
+                groups_to_add.append("plus")
             
-            for inbound in inbounds:
-                if inbound.get("protocol") == "vless":
-                    vless_inbound = inbound
-                    break
+            total_modified = 0
+            for group in groups_to_add:
+                group_inbounds = _get_inbounds_by_group(config, group)
+                modified = _add_client_to_inbounds(config, group_inbounds, client_uuid, email, expiry_ms)
+                total_modified += modified
+                logger.info(f"ADD_USER group={group} inbounds_modified={modified}")
             
-            if not vless_inbound:
+            if total_modified == 0:
                 raise HTTPException(
                     status_code=500,
-                    detail="VLESS inbound not found in Xray config"
+                    detail="No VLESS inbounds found in Xray config"
                 )
             
-            # Получаем список клиентов
-            if "settings" not in vless_inbound:
-                vless_inbound["settings"] = {}
-            settings = vless_inbound["settings"]
-            
-            if "clients" not in settings:
-                settings["clients"] = []
-            clients = settings["clients"]
-            
-            existing_uuids = [client.get("id") for client in clients if client.get("id")]
-            client_already_exists = client_uuid in existing_uuids
-            if client_already_exists:
-                logger.info(f"XRAY_CLIENT_ALREADY_EXISTS uuid={client_uuid[:8]}...")
-                for client in clients:
-                    if client.get("id") == client_uuid:
-                        client["expiryTime"] = request.expiry_timestamp_ms
-                        if "email" not in client:
-                            client["email"] = f"user_{request.telegram_id}"
-                        break
-            else:
-                new_client = {
-                    "id": client_uuid,
-                    "email": f"user_{request.telegram_id}",
-                    "expiryTime": request.expiry_timestamp_ms
-                }
-                clients.append(new_client)
-            
-            logger.info(f"Adding client to config: uuid={client_uuid[:8]}...")
+            logger.info(f"Adding client to {total_modified} inbounds: uuid={client_uuid[:8]}...")
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
         _mark_restart_pending("add_user")
@@ -623,29 +698,15 @@ async def remove_user(uuid: str):
         async with _config_file_lock:
             config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
             
-            # Находим клиента в конфигурации
-            inbounds = config.get("inbounds", [])
-            client_found = False
+            # Remove from ALL inbounds (both basic and plus)
+            all_vless = [ib for ib in config.get("inbounds", []) if ib.get("protocol") == "vless"]
+            modified = _remove_client_from_inbounds(all_vless, target_uuid)
             
-            for inbound in inbounds:
-                if inbound.get("protocol") != "vless":
-                    continue
-                
-                clients = inbound.get("settings", {}).get("clients", [])
-                
-                # Удаляем клиента с указанным UUID
-                original_count = len(clients)
-                clients[:] = [client for client in clients if client.get("id") != target_uuid]
-                
-                if len(clients) < original_count:
-                    client_found = True
-                    logger.info(f"Client removed from inbound: uuid={target_uuid}")
-                    break
-            
-            if not client_found:
-                logger.warning(f"Client not found in config: uuid={target_uuid}")
+            if modified == 0:
+                logger.warning(f"Client not found in any inbound: uuid={target_uuid}")
                 return RemoveUserResponse(status="ok")
             
+            logger.info(f"Client removed from {modified} inbounds: uuid={target_uuid}")
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
         _mark_restart_pending("remove_user")
@@ -689,64 +750,36 @@ async def update_user(request: UpdateUserRequest):
         async with _config_file_lock:
             config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
             
-            inbounds = config.get("inbounds", [])
+            # Update expiry in ALL inbounds where this client exists
+            all_vless = [ib for ib in config.get("inbounds", []) if ib.get("protocol") == "vless"]
             client_found = False
             old_expiry = None
-            # UUID_AUDIT_LOOKUP: Collect existing client UUIDs for comparison
-            existing_uuids = []
-            for inbound in inbounds:
-                if inbound.get("protocol") != "vless":
-                    continue
-                for client in inbound.get("settings", {}).get("clients", []):
-                    cid = client.get("id")
-                    if cid:
-                        existing_uuids.append(cid)
-            logger.info(
-                f"UUID_AUDIT_LOOKUP [uuid_sought={repr(target_uuid)}, existing_count={len(existing_uuids)}, "
-                f"first_5_full={[repr(u) for u in existing_uuids[:5]]}, match={target_uuid in existing_uuids}]"
-            )
             
-            for inbound in inbounds:
-                if inbound.get("protocol") != "vless":
-                    continue
-                
+            for inbound in all_vless:
                 clients = inbound.get("settings", {}).get("clients", [])
                 for client in clients:
                     if client.get("id") == target_uuid:
-                        old_expiry = client.get("expiryTime")
+                        if old_expiry is None:
+                            old_expiry = client.get("expiryTime")
                         client["expiryTime"] = request.expiry_timestamp_ms
                         if "email" not in client:
                             client["email"] = f"uuid_{target_uuid[:8]}"
+                        # Fix flow if needed
+                        transport = _get_inbound_transport(inbound)
+                        if transport == "tcp" and "flow" not in client:
+                            client["flow"] = "xtls-rprx-vision"
+                        elif transport != "tcp" and "flow" in client:
+                            del client["flow"]
                         client_found = True
-                        break
-                if client_found:
-                    break
             
             if not client_found:
-                logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={target_uuid[:8]}... (client missing, recreating with SAME uuid)")
-                vless_inbound = None
-                for ib in inbounds:
-                    if ib.get("protocol") == "vless":
-                        vless_inbound = ib
-                        break
-                if vless_inbound:
-                    if "settings" not in vless_inbound:
-                        vless_inbound["settings"] = {}
-                    if "clients" not in vless_inbound["settings"]:
-                        vless_inbound["settings"]["clients"] = []
-                    vless_inbound["settings"]["clients"].append({
-                        "id": target_uuid,
-                        "email": f"user_recovered_{target_uuid[:8]}",
-                        "expiryTime": request.expiry_timestamp_ms
-                    })
-                    logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={target_uuid[:8]}... success")
-                else:
-                    raise HTTPException(status_code=500, detail="VLESS inbound not found")
+                # Fallback: add to basic inbounds
+                logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={target_uuid[:8]}... (client missing, recreating)")
+                basic_inbounds = _get_inbounds_by_group(config, "basic")
+                email = f"user_recovered_{target_uuid[:8]}"
+                _add_client_to_inbounds(config, basic_inbounds, target_uuid, email, request.expiry_timestamp_ms)
             else:
-                logger.info(
-                    f"XRAY_UPDATE uuid={target_uuid[:8]}... success "
-                    f"old_expiry={old_expiry} new_expiry={request.expiry_timestamp_ms}"
-                )
+                logger.info(f"XRAY_UPDATE uuid={target_uuid[:8]}... old_expiry={old_expiry} new_expiry={request.expiry_timestamp_ms}")
             
             await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
         
@@ -761,6 +794,108 @@ async def update_user(request: UpdateUserRequest):
         raise HTTPException(status_code=500, detail="internal_error")
 
 
+@app.post("/upgrade-to-plus/{uuid}")
+async def upgrade_to_plus(uuid: str):
+    """
+    Upgrade user from basic to plus: add to all plus inbounds.
+    Basic inbounds are NOT touched (user stays there).
+    Returns basic_link and plus_link.
+    """
+    try:
+        target_uuid = uuid.strip()
+        if not validate_uuid(target_uuid):
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {target_uuid}")
+        
+        logger.info(f"Upgrading user to plus: uuid={target_uuid[:8]}...")
+        
+        async with _config_file_lock:
+            config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
+            
+            # Check user exists in at least one basic inbound
+            basic_inbounds = _get_inbounds_by_group(config, "basic")
+            user_exists = False
+            expiry_ms = 0
+            email = f"user_{target_uuid[:8]}"
+            
+            for inbound in basic_inbounds:
+                for client in inbound.get("settings", {}).get("clients", []):
+                    if client.get("id") == target_uuid:
+                        user_exists = True
+                        expiry_ms = client.get("expiryTime", 0)
+                        email = client.get("email", email)
+                        break
+                if user_exists:
+                    break
+            
+            if not user_exists:
+                raise HTTPException(status_code=404, detail="User not found in basic inbounds")
+            
+            # Add to all plus inbounds
+            plus_inbounds = _get_inbounds_by_group(config, "plus")
+            modified = _add_client_to_inbounds(config, plus_inbounds, target_uuid, email, expiry_ms)
+            logger.info(f"UPGRADE_TO_PLUS uuid={target_uuid[:8]}... plus_inbounds_modified={modified}")
+            
+            await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
+        
+        _mark_restart_pending("upgrade_to_plus")
+        
+        basic_link = generate_vless_link(target_uuid)
+        # For plus_link, generate link using first plus inbound's settings
+        # Bot uses subscription URL from mini app anyway, so this is just a reference
+        plus_link = basic_link.replace(f":{XRAY_PORT}", ":4445").replace("#AtlasSecure", "#AtlasPlus")
+        
+        return {
+            "uuid": target_uuid,
+            "tariff": "plus",
+            "basic_link": basic_link,
+            "plus_link": plus_link,
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("XRAY_API_ERROR upgrade_to_plus")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
+@app.post("/remove-plus/{uuid}")
+async def remove_plus(uuid: str):
+    """
+    Remove user from all plus inbounds only. Basic inbounds are NOT touched.
+    Used when downgrading from plus to basic.
+    Idempotent: returns ok even if user was not in plus inbounds.
+    """
+    try:
+        target_uuid = uuid.strip()
+        if not validate_uuid(target_uuid):
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {target_uuid}")
+        
+        logger.info(f"Removing user from plus inbounds: uuid={target_uuid[:8]}...")
+        
+        async with _config_file_lock:
+            config = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
+            
+            plus_inbounds = _get_inbounds_by_group(config, "plus")
+            modified = _remove_client_from_inbounds(plus_inbounds, target_uuid)
+            
+            if modified > 0:
+                logger.info(f"REMOVE_PLUS uuid={target_uuid[:8]}... inbounds_modified={modified}")
+                await asyncio.to_thread(_save_xray_config_file, config, XRAY_CONFIG_PATH)
+            else:
+                logger.info(f"REMOVE_PLUS uuid={target_uuid[:8]}... not found in plus inbounds")
+        
+        if modified > 0:
+            _mark_restart_pending("remove_plus")
+        
+        return {"status": "ok", "inbounds_modified": modified}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("XRAY_API_ERROR remove_plus")
+        raise HTTPException(status_code=500, detail="internal_error")
+
+
 @app.get("/list-users", response_model=ListUsersResponse)
 async def list_users():
     """
@@ -769,13 +904,15 @@ async def list_users():
     """
     try:
         config_data = await asyncio.to_thread(_load_xray_config_file, XRAY_CONFIG_PATH)
+        seen: set[str] = set()
         uuids: list[str] = []
         for inbound in config_data.get("inbounds", []):
             if inbound.get("protocol") != "vless":
                 continue
             for client in inbound.get("settings", {}).get("clients", []):
                 cid = client.get("id")
-                if cid and validate_uuid(cid):
+                if cid and validate_uuid(cid) and cid not in seen:
+                    seen.add(cid)
                     uuids.append(cid)
         return ListUsersResponse(uuids=uuids)
     except Exception as e:
