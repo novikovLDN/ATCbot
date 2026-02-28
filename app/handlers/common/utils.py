@@ -38,6 +38,81 @@ _DANGEROUS_UNICODE_RE = re.compile(
     r"]"
 )
 
+# Запрещённые слова/подстроки в username и first_name
+# Проверяется в lowercase. Включает: CSAM, порно, насилие, экстремизм, наркотики
+_BANNED_WORDS = frozenset({
+    # CSAM / child exploitation (EN)
+    "childporn", "child_porn", "cp_links", "cplinks", "kidporn", "kid_porn",
+    "pedo", "pedoph", "preteen", "lolita", "jailbait", "underage",
+    "csam", "childabuse", "child_abuse", "minor_sex", "minorsex",
+    "youngporn", "young_porn", "toddler", "infantporn",
+    # CSAM (RU)
+    "детскоепорно", "дп_ссылки", "малолетк", "педофил", "цп_",
+    "детпорно", "школьниц", "несовершеннолетн",
+    # Porn (EN)
+    "porn", "p0rn", "p0rno", "xxx_", "_xxx", "xvideos", "pornhub",
+    "xhamster", "redtube", "youporn", "brazzers", "onlyfans",
+    "hentai", "rule34", "r34_", "nsfw_", "fap_",
+    # Porn (RU)
+    "порно", "порн_", "порнух", "порнуш",
+    # Violence / gore
+    "snuff", "gore_", "_gore", "killin", "murder_", "beheading",
+    "execution_", "torture_",
+    # Extremism / terrorism
+    "isis_", "_isis", "jihad", "alqaeda", "terrorist",
+    "nazism", "nazi_", "_nazi", "hitler", "heil_",
+    "whitepow", "whitepower", "race_war", "racewar",
+    "swastika",
+    # Drugs
+    "buydrugs", "buy_drugs", "drugdealer", "drug_dealer",
+    "cocain", "heroin_", "meth_lab", "methlab",
+    "buyweed", "buy_weed",
+    "закладк", "купитьнарк", "наркоторг",
+    # Scam / phishing
+    "freebitcoin", "free_bitcoin", "cryptoscam", "crypto_scam",
+    "sendmoney", "send_money", "freemoney", "free_money",
+    "hackaccount", "hack_account", "stolencards", "stolen_cards",
+    "carding_", "carder_", "cvv_shop", "cvvshop",
+    "обнал", "кардинг",
+    # Нецензурная лексика (RU) — основные корни
+    "хуй", "хуя", "хуе", "хуё", "пизд", "ёб_", "еба",
+    "ебат", "ебан", "ебну", "ебал", "ебла",
+    "блядь", "бляд", "блят", "сука_", "суки_",
+    "пидор", "пидар", "пидр",
+    "залуп", "муда", "шлюх",
+    # Нецензурная лексика (EN)
+    "fuck_", "_fuck", "fucker", "motherfuck",
+    "nigger", "nigg3r", "n1gger", "faggot", "f4ggot",
+    # Spam patterns
+    "t.me/", "http://", "https://", "bit.ly", "tinyurl",
+    "@everyone", "@here",
+})
+
+# Дополнительные паттерны (regex) для обхода фильтров
+_BANNED_PATTERNS_RE = re.compile(
+    r"(?:c[\s._-]*p[\s._-]*l[\s._-]*i[\s._-]*n[\s._-]*k)|"  # c.p.l.i.n.k
+    r"(?:п[\s._-]*о[\s._-]*р[\s._-]*н)|"  # п.о.р.н
+    r"(?:п[\s._-]*е[\s._-]*д[\s._-]*о)|"  # п.е.д.о
+    r"(?:p[\s._-]*e[\s._-]*d[\s._-]*o)",  # p.e.d.o
+    re.IGNORECASE,
+)
+
+
+def _contains_banned_word(text: str) -> bool:
+    """Проверяет содержит ли текст запрещённые слова."""
+    if not text:
+        return False
+    lower = text.lower().replace(" ", "")
+
+    for word in _BANNED_WORDS:
+        if word in lower:
+            return True
+
+    if _BANNED_PATTERNS_RE.search(text):
+        return True
+
+    return False
+
 
 def sanitize_display_name(name: str) -> str:
     """
@@ -46,7 +121,7 @@ def sanitize_display_name(name: str) -> str:
     - Удаляет опасные Unicode символы (RTL override, zero-width, control chars)
     - Обрезает до MAX_DISPLAY_NAME_LENGTH символов
     - Удаляет ведущие/завершающие пробелы
-    - Возвращает пустую строку если после фильтрации ничего не осталось
+    - Если содержит запрещённые слова — возвращает пустую строку (вызывающий подставит fallback)
     """
     if not name:
         return ""
@@ -55,6 +130,10 @@ def sanitize_display_name(name: str) -> str:
     name = name.strip()
     if len(name) > MAX_DISPLAY_NAME_LENGTH:
         name = name[:MAX_DISPLAY_NAME_LENGTH].rstrip()
+
+    if _contains_banned_word(name):
+        return ""
+
     return name
 
 
