@@ -243,7 +243,6 @@ LANG = {
     'buy.tariff_plus_selected': '🔐 Plus tariff selected\nWhat period are you interested in?',
     'buy.tariff_select_basic_button': '✅ Select Basic',
     'buy.tariff_select_plus_button': '🔑 Select Plus',
-    'buy.upgrade_credit': "💰 Шумо {days} рӯзи Premium доред — ба апгрейд {credit} ₽ тахфиф",
     'buy.vpn': '🔐 Дастрасиро харед',
     'common.back': '← Back',
     'common.cancel': '❌ Cancel',

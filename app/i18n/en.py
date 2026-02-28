@@ -250,7 +250,6 @@ LANG = {
     'buy.tariff_plus_selected': "🔐 Plus tariff selected\nWhat period are you interested in?",
     'buy.tariff_select_basic_button': "✅ Select Basic",
     'buy.tariff_select_plus_button': "🔑 Select Plus",
-    'buy.upgrade_credit': "💰 You have {days} days of Premium left — {credit} ₽ discount on upgrade",
     'buy.vpn': "🔐 Buy Access",
     'common.back': "← Back",
     'common.cancel': "❌ Cancel",

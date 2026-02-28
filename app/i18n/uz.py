@@ -243,7 +243,6 @@ LANG = {
     'buy.tariff_plus_selected': '🔐 Plus tariff selected\nWhat period are you interested in?',
     'buy.tariff_select_basic_button': '✅ Select Basic',
     'buy.tariff_select_plus_button': '🔑 Select Plus',
-    'buy.upgrade_credit': "💰 Sizda Premium {days} kun qoldi — apgreyd uchun {credit} ₽ chegirma",
     'buy.vpn': '🔐 Kirishni sotib olish',
     'common.back': '← Orqaga',
     'common.cancel': '❌ Bekor qilish',
