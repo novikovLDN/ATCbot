@@ -1,0 +1,44 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.venv
+venv
+env
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+__MACOSX
+
+# Documentation and audit files (not needed in runtime)
+docs/
+*.md
+!README.md
+
+# Tests and load tests (not needed in production)
+tests/
+load_tests/
+pytest.ini
+
+# Translation patches (applied at build time, not runtime)
+translation_patch_*.json
+translation_tasks.json
+apply_*_patch.py
+
+# Scripts (dev/migration tools, not runtime)
+scripts/
+
+# Audit reports
+*_AUDIT.md
+*_PLAN.md

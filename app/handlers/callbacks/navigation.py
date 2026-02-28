@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 @router.callback_query(F.data == "menu_main")
 async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     """Главное меню. Delete + answer to support navigation from photo message (loyalty screen)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
 
@@ -49,12 +54,16 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     text = await format_text_with_incident(text, language)
     keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
     await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
-    await callback.answer()
 
 
 @router.callback_query(F.data == "back_to_main")
 async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню с экрана выдачи ключа"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     await state.clear()
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -63,12 +72,16 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
     text = await format_text_with_incident(text, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
-    await callback.answer()
 
 
 @router.callback_query(F.data == "menu_ecosystem")
 async def callback_ecosystem(callback: CallbackQuery):
     """⚪️ Наша экосистема"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     language = await resolve_user_language(callback.from_user.id)
     title = i18n_get_text(language, "main.ecosystem_title", "main.ecosystem_title")
     text = i18n_get_text(language, "main.ecosystem_text", "main.ecosystem_text")
@@ -79,12 +92,16 @@ async def callback_ecosystem(callback: CallbackQuery):
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
-    await callback.answer()
 
 
 @router.callback_query(F.data == "menu_settings")
 async def callback_settings(callback: CallbackQuery):
     """⚙️ Настройки"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     language = await resolve_user_language(callback.from_user.id)
     title = i18n_get_text(language, "main.settings_title", "main.settings_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -92,7 +109,6 @@ async def callback_settings(callback: CallbackQuery):
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     await safe_edit_text(callback.message, title, reply_markup=keyboard, bot=callback.bot)
-    await callback.answer()
 
 
 @router.callback_query(F.data == "menu_about")
@@ -105,6 +121,11 @@ async def callback_about(callback: CallbackQuery):
 @router.callback_query(F.data == "menu_service_status")
 async def callback_service_status(callback: CallbackQuery):
     """Статус сервиса"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
@@ -117,18 +138,21 @@ async def callback_service_status(callback: CallbackQuery):
         text = text + warning
 
     await safe_edit_text(callback.message, text, reply_markup=get_service_status_keyboard(language), bot=callback.bot)
-    await callback.answer()
 
 
 @router.callback_query(F.data == "about_privacy")
 async def callback_privacy(callback: CallbackQuery):
     """Политика конфиденциальности"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
     await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=callback.bot)
-    await callback.answer()
 
 
 @router.callback_query(F.data == "menu_instruction")
@@ -187,10 +211,14 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
 async def callback_connect_instead_of_copy(callback: CallbackQuery):
     """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
     await callback.message.answer(
         "🚀 Нажмите кнопку ниже чтобы подключиться:",
         reply_markup=get_connect_keyboard(),
     )
-    await callback.answer()

@@ -219,9 +219,12 @@ async def add_vless_user(
     tariff_normalized = (tariff or "basic").strip().lower()
     if tariff_normalized not in ("basic", "plus"):
         tariff_normalized = "basic"
+    expiry_ms = int(subscription_end.timestamp() * 1000) if subscription_end else 0
     json_body: dict = {
         "uuid": str(uuid).strip(),
         "tariff": tariff_normalized,
+        "telegram_id": telegram_id,
+        "expiry_timestamp_ms": expiry_ms,
     }
     logger.info(f"UUID_AUDIT_ADD_REQUEST [uuid_sent_to_api={repr(json_body['uuid'])}, tariff={tariff_normalized}]")
 
@@ -314,7 +317,9 @@ async def add_vless_user(
         vless_url_plus = plus_link if api_tariff == "plus" else None
 
         uuid_preview = f"{returned_uuid[:8]}..." if len(returned_uuid) > 8 else returned_uuid
-        logger.info(f"XRAY_ADD uuid={uuid_preview} status=200")
+        basic_links_count = len(data.get("basic_links", []))
+        plus_links_count = len(data.get("plus_links", []))
+        logger.info(f"XRAY_ADD uuid={uuid_preview} status=200 tariff={api_tariff} basic_links={basic_links_count} plus_links={plus_links_count}")
         logger.info(f"XRAY_CALL_SUCCESS [operation=add_user, uuid={uuid_preview}, environment={config.APP_ENV}]")
 
         try:
@@ -881,39 +886,3 @@ async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: 
         # КРИТИЧНО: Если не удалось создать новый UUID - старый уже удалён
         # Это критическая ситуация, но мы не можем восстановить старый UUID
         raise VPNAPIError(error_msg) from e
-
-
-# ============================================================================
-# DEPRECATED: Legacy file-based functions (kept for backward compatibility)
-# ============================================================================
-
-def has_free_vpn_keys() -> bool:
-    """
-    DEPRECATED: Функция проверки наличия VPN-ключей в файле.
-    
-    Больше не используется. VPN-ключи создаются динамически через Xray API.
-    Всегда возвращает True для обратной совместимости.
-    
-    Returns:
-        True (для обратной совместимости)
-    """
-    logger.warning("has_free_vpn_keys() is deprecated. VPN keys are created dynamically via Xray API.")
-    return True
-
-
-def get_free_vpn_key() -> str:
-    """
-    DEPRECATED: Функция получения VPN-ключа из файла.
-    
-    Больше не используется. VPN-ключи создаются динамически через Xray API.
-    Вызывает исключение при вызове.
-    
-    Raises:
-        ValueError: Всегда, так как эта функция устарела
-    """
-    error_msg = (
-        "get_free_vpn_key() is deprecated. "
-        "Use add_vless_user() to create VPN keys dynamically via Xray API."
-    )
-    logger.error(error_msg)
-    raise ValueError(error_msg)

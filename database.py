@@ -1473,133 +1473,6 @@ async def log_balance_transaction(telegram_id: int, amount: float, transaction_t
             return False
 
 
-# Старые функции для совместимости
-async def add_balance(telegram_id: int, amount: int, transaction_type: str, description: Optional[str] = None) -> bool:
-    """
-    Добавить средства на баланс пользователя (атомарно)
-    
-    DEPRECATED: Используйте increase_balance() вместо этой функции.
-    Эта функция оставлена для обратной совместимости и защищена advisory lock + FOR UPDATE.
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-        amount: Сумма в копейках (положительное число)
-        transaction_type: Тип транзакции ('topup', 'bonus', 'refund')
-        description: Описание транзакции
-    
-    Returns:
-        True если успешно, False при ошибке
-    """
-    if amount <= 0:
-        logger.error(f"Invalid amount for add_balance: {amount}")
-        return False
-    
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            try:
-                # CRITICAL: advisory lock per user для защиты от race conditions
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock($1)",
-                    telegram_id
-                )
-                
-                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
-                row = await conn.fetchrow(
-                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
-                    telegram_id
-                )
-                
-                if not row:
-                    logger.error(f"User {telegram_id} not found")
-                    return False
-                
-                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
-                await conn.execute(
-                    "UPDATE users SET balance = balance + $1 WHERE telegram_id = $2",
-                    amount, telegram_id
-                )
-                
-                # Записываем транзакцию
-                await conn.execute(
-                    """INSERT INTO balance_transactions (user_id, amount, type, description)
-                       VALUES ($1, $2, $3, $4)""",
-                    telegram_id, amount, transaction_type, description
-                )
-                
-                logger.info(f"Added {amount} kopecks to balance for user {telegram_id}, type={transaction_type}")
-                return True
-            except Exception as e:
-                logger.exception(f"Error adding balance for user {telegram_id}")
-                return False
-
-
-async def subtract_balance(telegram_id: int, amount: int, transaction_type: str, description: Optional[str] = None) -> bool:
-    """
-    Списать средства с баланса пользователя (атомарно)
-    
-    DEPRECATED: Используйте decrease_balance() вместо этой функции.
-    Эта функция оставлена для обратной совместимости и защищена advisory lock + FOR UPDATE.
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-        amount: Сумма в копейках (положительное число)
-        transaction_type: Тип транзакции ('spend')
-        description: Описание транзакции
-    
-    Returns:
-        True если успешно, False при ошибке или недостатке средств
-    """
-    if amount <= 0:
-        logger.error(f"Invalid amount for subtract_balance: {amount}")
-        return False
-    
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            try:
-                # CRITICAL: advisory lock per user для защиты от race conditions
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock($1)",
-                    telegram_id
-                )
-                
-                # CRITICAL: SELECT FOR UPDATE для блокировки строки до конца транзакции
-                row = await conn.fetchrow(
-                    "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
-                    telegram_id
-                )
-                
-                if not row:
-                    logger.error(f"User {telegram_id} not found")
-                    return False
-                
-                current_balance = row["balance"]
-                
-                if current_balance < amount:
-                    logger.warning(f"Insufficient balance for user {telegram_id}: {current_balance} < {amount}")
-                    return False
-                
-                # Обновляем баланс (строка уже заблокирована FOR UPDATE)
-                await conn.execute(
-                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
-                    amount, telegram_id
-                )
-                
-                # Записываем транзакцию (amount отрицательный для списания)
-                await conn.execute(
-                    """INSERT INTO balance_transactions (user_id, amount, type, description)
-                       VALUES ($1, $2, $3, $4)""",
-                    telegram_id, -amount, transaction_type, description
-                )
-                
-                logger.info(f"Subtracted {amount} kopecks from balance for user {telegram_id}, type={transaction_type}")
-                return True
-            except Exception as e:
-                logger.exception(f"Error subtracting balance for user {telegram_id}")
-                return False
-
-
 # ====================================================================================
 # WITHDRAWAL REQUESTS (Atlas Secure balance withdrawal system)
 # ====================================================================================
@@ -2563,36 +2436,6 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "next_level_name": "Gold Access",
             "remaining_connections": 5
         }
-
-
-async def process_referral_reward_cashback(referred_user_id: int, payment_amount_rubles: float) -> bool:
-    """
-    DEPRECATED: Используйте process_referral_reward вместо этой функции.
-    Оставлена для обратной совместимости.
-    
-    ВНИМАНИЕ: Эта функция больше не работает, так как process_referral_reward
-    теперь требует conn и purchase_id. Используйте process_referral_reward напрямую.
-    """
-    raise NotImplementedError(
-        "process_referral_reward_cashback is deprecated and no longer functional. "
-        "Use process_referral_reward directly with conn and purchase_id parameters."
-    )
-
-
-async def _process_referral_reward_cashback_OLD(referred_user_id: int, payment_amount_rubles: float) -> bool:
-    """
-    Начислить кешбэк партнёру при КАЖДОЙ оплате приглашенного пользователя
-    
-    DEPRECATED: Используйте process_referral_reward вместо этой функции.
-    Оставлена для обратной совместимости.
-    
-    ВНИМАНИЕ: Эта функция больше не работает, так как process_referral_reward
-    теперь требует conn и purchase_id. Используйте process_referral_reward напрямую.
-    """
-    raise NotImplementedError(
-        "_process_referral_reward_cashback_OLD is deprecated and no longer functional. "
-        "Use process_referral_reward directly with conn and purchase_id parameters."
-    )
 
 
 async def process_referral_reward(
@@ -3569,28 +3412,6 @@ async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
     )
 
     return new_uuid, vless_url
-
-
-async def create_subscription(telegram_id: int, vpn_key: str, months: int) -> Tuple[datetime, bool]:
-    """
-    DEPRECATED: Эта функция обходит grant_access() и НЕ должна использоваться.
-    
-    Используйте grant_access() вместо этой функции.
-    Эта функция оставлена только для обратной совместимости и будет удалена.
-    
-    Raises:
-        Exception: Всегда, так как эта функция устарела
-    """
-    error_msg = (
-        "create_subscription() is DEPRECATED and should not be used. "
-        "Use grant_access() instead. This function bypasses VPN API and UUID management."
-    )
-    logger.error(f"DEPRECATED create_subscription() called for user {telegram_id}: {error_msg}")
-    raise Exception(error_msg)
-
-
-# Функция get_free_vpn_keys_count удалена - больше не используется
-# VPN-ключи теперь создаются динамически через Outline API, лимита нет
 
 
 async def _log_audit_event_atomic(
@@ -5104,13 +4925,30 @@ async def mark_reminder_sent(telegram_id: int):
         )
 
 
+# Whitelist допустимых flag_name для mark_reminder_flag_sent (SQL injection protection)
+_ALLOWED_REMINDER_FLAGS = frozenset({
+    "reminder_3d_sent",
+    "reminder_24h_sent",
+    "reminder_3h_sent",
+    "reminder_6h_sent",
+})
+
+
 async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
     """Отметить, что конкретное напоминание отправлено пользователю
-    
+
     Args:
         telegram_id: Telegram ID пользователя
         flag_name: Имя флага ('reminder_3d_sent', 'reminder_24h_sent', 'reminder_3h_sent', 'reminder_6h_sent')
+
+    Raises:
+        ValueError: если flag_name не в whitelist
     """
+    if flag_name not in _ALLOWED_REMINDER_FLAGS:
+        raise ValueError(
+            f"Invalid flag_name '{flag_name}'. "
+            f"Allowed: {sorted(_ALLOWED_REMINDER_FLAGS)}"
+        )
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -5218,65 +5056,6 @@ async def check_promo_code_valid(code: str) -> Optional[Dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await get_active_promo_by_code(conn, code)
-
-
-async def increment_promo_code_use(code: str):
-    """
-    Увеличить счетчик использований промокода.
-    
-    DEPRECATED: Используйте apply_promocode_atomic для атомарного применения промокода.
-    Эта функция оставлена для обратной совместимости.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # CRITICAL: Advisory lock для защиты от race conditions
-            await conn.execute(
-                "SELECT pg_advisory_xact_lock(hashtext($1))",
-                code.upper()
-            )
-            
-            # Получаем текущее значение used_count и max_uses с FOR UPDATE
-            row = await conn.fetchrow(
-                "SELECT used_count, max_uses, expires_at, is_active FROM promo_codes WHERE UPPER(code) = UPPER($1) FOR UPDATE",
-                code
-            )
-            if not row:
-                return
-            
-            # Проверяем срок действия
-            expires_at = row.get("expires_at")
-            if expires_at and _from_db_utc(expires_at) < datetime.now(timezone.utc):
-                # Деактивируем промокод при истечении срока
-                await conn.execute(
-                    "UPDATE promo_codes SET is_active = FALSE WHERE UPPER(code) = UPPER($1)",
-                    code
-                )
-                return
-            
-            # Проверяем активность
-            if not row.get("is_active", False):
-                return
-            
-            used_count = row["used_count"]
-            max_uses = row["max_uses"]
-            
-            # Увеличиваем счетчик
-            new_count = used_count + 1
-            
-            # Если достигли лимита, деактивируем промокод
-            if max_uses is not None and new_count >= max_uses:
-                await conn.execute("""
-                    UPDATE promo_codes 
-                    SET used_count = $1, is_active = FALSE 
-                    WHERE UPPER(code) = UPPER($2)
-                """, new_count, code)
-            else:
-                await conn.execute("""
-                    UPDATE promo_codes 
-                    SET used_count = $1 
-                    WHERE UPPER(code) = UPPER($2)
-                """, new_count, code)
 
 
 async def log_promo_code_usage(
@@ -7613,74 +7392,6 @@ async def get_broadcast_stats(broadcast_id: int) -> Dict[str, int]:
             broadcast_id
         )
         return {"sent": sent_count or 0, "failed": failed_count or 0}
-
-
-async def get_incident_settings() -> Dict[str, Any]:
-    """Получить настройки инцидента
-    
-    Returns:
-        Словарь с is_active и incident_text
-    """
-    if not DB_READY:
-        logger.warning("DB not ready (degraded mode), get_incident_settings skipped")
-        return {"is_active": False, "incident_text": None}
-    
-    pool = await get_pool()
-    if pool is None:
-        return {"is_active": False, "incident_text": None}
-    
-    try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT is_active, incident_text FROM incident_settings ORDER BY id LIMIT 1"
-            )
-            if row:
-                return {"is_active": row["is_active"], "incident_text": row["incident_text"]}
-            return {"is_active": False, "incident_text": None}
-    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
-        logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
-        return {"is_active": False, "incident_text": None}
-    except Exception as e:
-        logger.warning(f"Error getting incident settings: {e}")
-        return {"is_active": False, "incident_text": None}
-
-
-async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None):
-    """Установить режим инцидента
-    
-    Args:
-        is_active: Активен ли режим инцидента
-        incident_text: Текст инцидента (опционально)
-    """
-    if not DB_READY:
-        logger.warning("DB not ready (degraded mode), set_incident_mode skipped")
-        return
-    
-    pool = await get_pool()
-    if pool is None:
-        logger.warning("Pool is None, set_incident_mode skipped")
-        return
-    
-    try:
-        async with pool.acquire() as conn:
-            if incident_text is not None:
-                await conn.execute(
-                    """UPDATE incident_settings 
-                       SET is_active = $1, incident_text = $2, updated_at = CURRENT_TIMESTAMP
-                       WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
-                    is_active, incident_text
-                )
-            else:
-                await conn.execute(
-                    """UPDATE incident_settings 
-                       SET is_active = $1, updated_at = CURRENT_TIMESTAMP
-                       WHERE id = (SELECT id FROM incident_settings ORDER BY id LIMIT 1)""",
-                    is_active
-                )
-    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
-        logger.warning(f"incident_settings table missing or inaccessible — skipping: {e}")
-    except Exception as e:
-        logger.warning(f"Error setting incident mode: {e}")
 
 
 async def get_ab_test_broadcasts() -> list:

@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """О сервисе. Reusable for callback and /info command."""
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -40,12 +46,16 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
     text = i18n_get_text(language, "main.about_text", "about_text")
     full_text = f"{title}\n\n{text}"
     await safe_edit_text(msg, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=bot)
-    if isinstance(event, CallbackQuery):
-        await event.answer()
 
 
 async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """Инструкция. Reusable for callback and /instruction command. Uses platform buttons and tariff-based copy keys."""
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -64,19 +74,21 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
         reply_markup=get_instruction_keyboard(language, platform, subscription_type=subscription_type, vpn_key=vpn_key),
         bot=bot
     )
-    if isinstance(event, CallbackQuery):
-        await event.answer()
 
 
 async def _open_support_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """Поддержка. Reusable for callback and /help command."""
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
     text = i18n_get_text(language, "main.support_text", "support_text")
     await safe_edit_text(msg, text, reply_markup=get_support_keyboard(language), bot=bot)
-    if isinstance(event, CallbackQuery):
-        await event.answer()
 
 
 async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
@@ -84,6 +96,12 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
     Экран «Программа лояльности». Reusable for callback and /referral command.
     Sends new message (photo or text), does not edit.
     """
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
     from datetime import datetime
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
@@ -171,8 +189,6 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
                 text=text,
                 reply_markup=keyboard,
             )
-        if isinstance(event, CallbackQuery):
-            await event.answer()
         logger.debug(
             f"Referral screen opened: user={telegram_id}, "
             f"total_invited={total_invited}, active_paid={active_paid_referrals}, "
@@ -295,6 +311,12 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     CANONICAL TARIFF SCREEN BUILDER - единственный источник правды для экрана тарифов.
     Используется везде: после промокода, при нажатии "Купить доступ", и т.д.
     """
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -334,8 +356,6 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     ])
     
     await safe_edit_text(msg, text, reply_markup=keyboard, bot=bot)
-    if isinstance(event, CallbackQuery):
-        await event.answer()
 
 
 async def show_tariffs_main_screen(event: Union[Message, CallbackQuery], state: FSMContext):
