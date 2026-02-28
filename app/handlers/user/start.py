@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 @user_router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
+    # SECURITY: Бот работает ТОЛЬКО в личных сообщениях
+    if message.chat.type != "private":
+        return
+
     await state.clear()
     # SAFE STARTUP GUARD: Проверка готовности БД
     # /start может работать в деградированном режиме (только показ меню),
@@ -44,7 +48,10 @@ async def cmd_start(message: Message, state: FSMContext):
     user = await database.get_user(telegram_id)
     start_language = await resolve_user_language(telegram_id)
     username = safe_resolve_username(message.from_user, start_language, telegram_id)
-    
+    # Ограничиваем длину для БД
+    if username and len(username) > 64:
+        username = username[:64]
+
     # Создаем пользователя если его нет (user already fetched above)
     if not user:
         await database.create_user(telegram_id, username, start_language)

@@ -541,7 +541,13 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
 
         if is_upgrade:
-            text = f"⭐️ Апгрейд до Plus!\n📅 До: {expires_str}"
+            text = (
+                f"⭐️ Апгрейд до Platinum!\n"
+                f"📅 До: {expires_str}\n\n"
+                f"📲 Чтобы новые конфигурации появились в приложении:\n"
+                f"V2rayTUN — нажмите 🔄 (обновить подписку)\n"
+                f"Streisand — потяните экран вниз для обновления"
+            )
             try:
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
             except Exception as e:

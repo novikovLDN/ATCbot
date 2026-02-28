@@ -744,7 +744,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
     is_upgrade = getattr(result, "is_basic_to_plus_upgrade", False)
     if is_upgrade:
-        text = f"⭐️ Апгрейд до Plus!\n📅 До: {expires_str}"
+        text = (
+            f"⭐️ Апгрейд до Platinum!\n"
+            f"📅 До: {expires_str}\n\n"
+            f"📲 Чтобы новые конфигурации появились в приложении:\n"
+            f"V2rayTUN — нажмите 🔄 (обновить подписку)\n"
+            f"Streisand — потяните экран вниз для обновления"
+        )
         keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True)
         try:
             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")

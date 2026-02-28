@@ -18,7 +18,12 @@ from app.services.subscriptions import service as subscription_service
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.screens import _open_buy_screen, show_tariffs_main_screen
 from handlers import show_payment_method_selection
-from app.handlers.common.utils import safe_edit_text, safe_edit_reply_markup, get_promo_session
+from app.handlers.common.utils import (
+    safe_edit_text,
+    safe_edit_reply_markup,
+    get_promo_session,
+    validate_callback_data,
+)
 from app.handlers.common.keyboards import get_connect_keyboard
 from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
 from app.core.structured_logger import log_event
@@ -53,6 +58,14 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
     except Exception:
         pass
+
+    if not validate_callback_data(callback.data):
+        logger.warning(
+            "Invalid callback_data from user %s: %s",
+            callback.from_user.id,
+            (callback.data or "")[:50],
+        )
+        return
 
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -226,6 +239,14 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
     except Exception:
         pass
+
+    if not validate_callback_data(callback.data):
+        logger.warning(
+            "Invalid callback_data from user %s: %s",
+            callback.from_user.id,
+            (callback.data or "")[:50],
+        )
+        return
 
     telegram_id = callback.from_user.id
     

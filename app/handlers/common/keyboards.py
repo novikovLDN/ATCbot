@@ -89,8 +89,21 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=i18n_get_text(language, "main.profile"),
         callback_data="menu_profile"
     )])
+    # Динамическая кнопка покупки
+    if telegram_id and database.DB_READY:
+        try:
+            subscription = await database.get_subscription(telegram_id)
+            if subscription and subscription.get("subscription_type"):
+                buy_text = i18n_get_text(language, "main.buy_renew")
+            else:
+                buy_text = i18n_get_text(language, "main.buy_new")
+        except Exception as e:
+            logger.warning(f"Error getting subscription for buy button: {e}")
+            buy_text = i18n_get_text(language, "main.buy_new")
+    else:
+        buy_text = i18n_get_text(language, "main.buy_new")
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.buy"),
+        text=buy_text,
         callback_data="menu_buy_vpn"
     )])
     buttons.append([InlineKeyboardButton(
@@ -145,9 +158,10 @@ def get_profile_keyboard(
     buttons = []
 
     if has_active_subscription:
-        buttons.append([InlineKeyboardButton(text="🔄 Продлить доступ", callback_data="menu_buy_vpn")])
+        btn_text = i18n_get_text(language, "main.buy_renew")
     else:
-        buttons.append([InlineKeyboardButton(text="🔄 Купить подписку", callback_data="menu_buy_vpn")])
+        btn_text = i18n_get_text(language, "main.buy_new")
+    buttons.append([InlineKeyboardButton(text=btn_text, callback_data="menu_buy_vpn")])
 
     buttons.append([
         InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"),

@@ -332,13 +332,31 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         f"{i18n_get_text(language, 'buy.tariff_corporate')}"
     )
     
+    # Получаем текущую подписку для динамических кнопок
+    subscription = await database.get_subscription(telegram_id)
+    current_tariff = subscription.get("subscription_type") if subscription else None
+
+    if current_tariff == "basic":
+        basic_btn_key = "buy.select_basic_renew"
+    elif current_tariff == "plus":
+        basic_btn_key = "buy.select_basic_switch"
+    else:
+        basic_btn_key = "buy.select_basic_new"
+
+    if current_tariff == "plus":
+        plus_btn_key = "buy.select_plus_renew"
+    elif current_tariff == "basic":
+        plus_btn_key = "buy.select_plus_switch"
+    else:
+        plus_btn_key = "buy.select_plus_new"
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.select_basic_button"),
+            text=i18n_get_text(language, basic_btn_key),
             callback_data="tariff:basic"
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.select_plus_button"),
+            text=i18n_get_text(language, plus_btn_key),
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
