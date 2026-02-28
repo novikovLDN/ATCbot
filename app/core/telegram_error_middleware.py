@@ -3,12 +3,14 @@ Global Telegram update error boundary middleware.
 
 Ensures no handler exception can crash webhook processing.
 Never swallows CancelledError.
+Handles TelegramForbiddenError and TelegramBadRequest (message not modified, query too old) silently.
 """
 import asyncio
 import logging
 from typing import Callable, Awaitable, Dict, Any
 
 from aiogram import BaseMiddleware
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from app.core.structured_logger import log_event
 
@@ -20,7 +22,9 @@ class TelegramErrorBoundaryMiddleware(BaseMiddleware):
     Middleware that wraps handler execution in a strict error boundary.
 
     Catches all exceptions except CancelledError.
-    On exception: logs, attempts graceful callback answer, returns None.
+    TelegramForbiddenError (user blocked bot / removed from chat) — debug log, return.
+    TelegramBadRequest (message not modified, query too old) — silent return.
+    On other exception: logs, attempts graceful callback answer, returns None.
     Never raises; never swallows CancelledError.
     """
 
@@ -34,6 +38,20 @@ class TelegramErrorBoundaryMiddleware(BaseMiddleware):
             return await handler(event, data)
         except asyncio.CancelledError:
             raise
+        except TelegramForbiddenError as e:
+            logger.debug(
+                "TelegramForbiddenError (user blocked bot or removed from chat): %s",
+                e,
+            )
+            return None
+        except TelegramBadRequest as e:
+            error_msg = str(e).lower()
+            if "message is not modified" in error_msg:
+                return None
+            if "query is too old" in error_msg:
+                return None
+            logger.warning("TelegramBadRequest: %s", e)
+            return None
         except Exception as e:
             user_id = None
             correlation_id = None

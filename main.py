@@ -140,9 +140,18 @@ async def main():
     
     from app.core.concurrency_middleware import ConcurrencyLimiterMiddleware
     from app.core.telegram_error_middleware import TelegramErrorBoundaryMiddleware
+    from app.core.chat_filter_middleware import PrivateChatOnlyMiddleware
+    from app.core.rate_limit_middleware import GlobalRateLimitMiddleware
+
     dp.update.middleware(ConcurrencyLimiterMiddleware(update_semaphore))
     dp.update.middleware(TelegramErrorBoundaryMiddleware())
-    
+    # 1. Фильтр приватных чатов (отсекает группы до любой обработки)
+    dp.message.middleware(PrivateChatOnlyMiddleware())
+    dp.callback_query.middleware(PrivateChatOnlyMiddleware())
+    # 2. Rate limiting
+    dp.message.middleware(GlobalRateLimitMiddleware())
+    dp.callback_query.middleware(GlobalRateLimitMiddleware())
+
     # Регистрация handlers
     dp.include_router(root_router)
     

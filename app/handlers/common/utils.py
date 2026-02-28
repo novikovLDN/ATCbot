@@ -3,6 +3,7 @@ Shared handler utilities: safe edits, formatting, validation, message builders.
 """
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Dict, Optional
 
@@ -16,14 +17,61 @@ from app.i18n import get_text as i18n_get_text
 
 logger = logging.getLogger(__name__)
 
+# Максимальная длина отображаемого имени
+MAX_DISPLAY_NAME_LENGTH = 64
+
+# Допустимые символы в callback_data
+_CALLBACK_DATA_RE = re.compile(r"^[a-zA-Z0-9_:.\-]+$")
+MAX_CALLBACK_DATA_LENGTH = 64
+
+# Regex для удаления опасных Unicode символов
+_DANGEROUS_UNICODE_RE = re.compile(
+    r"[\u0000-\u001f"
+    r"\u007f-\u009f"
+    r"\u200b-\u200f"
+    r"\u2028-\u202f"
+    r"\u2060-\u2069"
+    r"\u206a-\u206f"
+    r"\ufeff"
+    r"\ufff0-\uffff"
+    r"\U000e0000-\U000e007f"
+    r"]"
+)
+
+
+def sanitize_display_name(name: str) -> str:
+    """
+    Санитизация имени пользователя для безопасного отображения.
+
+    - Удаляет опасные Unicode символы (RTL override, zero-width, control chars)
+    - Обрезает до MAX_DISPLAY_NAME_LENGTH символов
+    - Удаляет ведущие/завершающие пробелы
+    - Возвращает пустую строку если после фильтрации ничего не осталось
+    """
+    if not name:
+        return ""
+
+    name = _DANGEROUS_UNICODE_RE.sub("", name)
+    name = name.strip()
+    if len(name) > MAX_DISPLAY_NAME_LENGTH:
+        name = name[:MAX_DISPLAY_NAME_LENGTH].rstrip()
+    return name
+
+
+def validate_callback_data(data: str) -> bool:
+    """Валидация callback_data: длина и символы."""
+    if not data or len(data) > MAX_CALLBACK_DATA_LENGTH:
+        return False
+    return bool(_CALLBACK_DATA_RE.match(data))
+
 
 def safe_resolve_username(user_obj, language: str, telegram_id: int = None) -> str:
     """
     Безопасное разрешение username для отображения.
 
     Priority:
-    1. user_obj.username (Telegram username)
-    2. user_obj.first_name (имя пользователя)
+    1. user_obj.username (Telegram username) — санитизируется
+    2. user_obj.first_name (имя пользователя) — санитизируется
     3. localized fallback (user_fallback key)
 
     Args:
@@ -37,32 +85,31 @@ def safe_resolve_username(user_obj, language: str, telegram_id: int = None) -> s
     if not user_obj:
         return i18n_get_text(language, "common.user")
 
-    if hasattr(user_obj, 'username') and user_obj.username:
-        return user_obj.username
+    if hasattr(user_obj, "username") and user_obj.username:
+        sanitized = sanitize_display_name(user_obj.username)
+        if sanitized:
+            return sanitized
 
-    if hasattr(user_obj, 'first_name') and user_obj.first_name:
-        return user_obj.first_name
+    if hasattr(user_obj, "first_name") and user_obj.first_name:
+        sanitized = sanitize_display_name(user_obj.first_name)
+        if sanitized:
+            return sanitized
 
     return i18n_get_text(language, "common.user")
 
 
-def safe_resolve_username_from_db(user_dict: Optional[Dict], language: str, telegram_id: int = None) -> str:
+def safe_resolve_username_from_db(
+    user_dict: Optional[Dict], language: str, telegram_id: int = None
+) -> str:
     """
     Безопасное разрешение username из словаря пользователя из БД.
+    Все поля санитизируются через sanitize_display_name().
 
     Priority:
     1. user_dict.get("username")
     2. user_dict.get("first_name")
     3. "ID: <telegram_id>" if telegram_id provided
     4. localized fallback (user_fallback key)
-
-    Args:
-        user_dict: Словарь пользователя из БД
-        language: User language for fallback text (from DB)
-        telegram_id: Optional telegram ID for fallback
-
-    Returns:
-        Строка для отображения (никогда не None)
     """
     if not user_dict:
         if telegram_id:
@@ -71,11 +118,15 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], language: str, tele
 
     username = user_dict.get("username")
     if username:
-        return username
+        sanitized = sanitize_display_name(username)
+        if sanitized:
+            return sanitized
 
     first_name = user_dict.get("first_name")
     if first_name:
-        return first_name
+        sanitized = sanitize_display_name(first_name)
+        if sanitized:
+            return sanitized
 
     if telegram_id:
         return f"ID: {telegram_id}"
