@@ -237,6 +237,7 @@ LANG = {
     'buy.tariff_plus_selected': '🔐 Plus-Tarif gewählt\nWelcher Zeitraum interessiert Sie?',
     'buy.tariff_select_basic_button': '✅ Basic wählen',
     'buy.tariff_select_plus_button': '🔑 Plus wählen',
+    'buy.upgrade_credit': "💰 Sie haben noch {days} Tage Premium — {credit} ₽ Rabatt beim Upgrade",
     'buy.vpn': '🔐 Zugang kaufen',
     'common.back': '← Zurück',
     'common.cancel': '❌ Abbrechen',

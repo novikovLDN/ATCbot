@@ -259,6 +259,7 @@ LANG = {
     'buy.tariff_plus_selected': "🔐 Выбран тариф Plus\nНа какой срок интересно?",
     'buy.tariff_select_basic_button': "✅ Выбрать Basic",
     'buy.tariff_select_plus_button': "🔑 Выбрать Plus",
+    'buy.upgrade_credit': "💰 У вас осталось {days} дн. Premium — скидка {credit} ₽ на апгрейд",
     'buy.vpn': "🔐 Купить доступ",
     'common.back': "← Назад",
     'common.cancel': "❌ Отмена",

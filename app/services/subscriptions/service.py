@@ -31,6 +31,66 @@ from app.services.subscriptions.exceptions import (
 )
 
 # ====================================================================================
+# Upgrade Credit (Basic → Plus proration)
+# ====================================================================================
+
+async def calculate_upgrade_credit(telegram_id: int) -> Dict[str, Any]:
+    """
+    Рассчитать кредит за оставшиеся дни Basic подписки при апгрейде на Plus.
+
+    Returns:
+        {
+            "has_credit": bool,
+            "credit_kopecks": int,
+            "remaining_days": int,
+            "original_period": int,
+            "subscription_type": str
+        }
+    """
+    subscription = await database.get_subscription(telegram_id)
+
+    if not subscription:
+        return {"has_credit": False, "credit_kopecks": 0, "remaining_days": 0, "original_period": 0, "subscription_type": "none"}
+
+    sub_type = subscription.get("subscription_type", "basic")
+    if sub_type != "basic":
+        return {"has_credit": False, "credit_kopecks": 0, "remaining_days": 0, "original_period": 0, "subscription_type": sub_type}
+
+    expires_at = parse_expires_at(subscription.get("expires_at"))
+    if not expires_at:
+        return {"has_credit": False, "credit_kopecks": 0, "remaining_days": 0, "original_period": 0, "subscription_type": sub_type}
+
+    now = datetime.now(timezone.utc)
+    remaining_days = max(0, (expires_at - now).days)
+
+    if remaining_days <= 0:
+        return {"has_credit": False, "credit_kopecks": 0, "remaining_days": 0, "original_period": 0, "subscription_type": sub_type}
+
+    period_days = subscription.get("period_days")
+    if not period_days or period_days not in config.TARIFFS.get("basic", {}):
+        created_dt = parse_expires_at(subscription.get("created_at"))
+        if created_dt and expires_at:
+            total_days = (expires_at - created_dt).days
+            standard_periods = sorted(config.TARIFFS.get("basic", {}).keys())
+            period_days = min(standard_periods, key=lambda p: abs(p - total_days)) if standard_periods else 30
+        else:
+            period_days = 30
+
+    basic_price_rubles = config.TARIFFS.get("basic", {}).get(period_days, {}).get("price", 149)
+    basic_price_kopecks = int(basic_price_rubles * 100)
+    daily_rate = basic_price_kopecks / period_days
+    credit_kopecks = int(daily_rate * remaining_days)
+
+    return {
+        "has_credit": True,
+        "credit_kopecks": credit_kopecks,
+        "remaining_days": remaining_days,
+        "original_period": period_days,
+        "subscription_type": sub_type,
+    }
+
+
+# ====================================================================================
 # Price Calculation
 # ====================================================================================
 
@@ -38,31 +98,36 @@ async def calculate_price(
     telegram_id: int,
     tariff: str,
     period_days: int,
-    promo_code: Optional[str] = None
+    promo_code: Optional[str] = None,
+    upgrade_credit_kopecks: int = 0,
 ) -> Dict[str, Any]:
     """
     Calculate final price for a subscription with all discounts applied.
-    
+
+    Order of application: base price → personal/VIP/promo discounts → upgrade credit (Basic→Plus only).
+
     This is a wrapper around database.calculate_final_price() that provides
-    domain-specific error handling.
-    
+    domain-specific error handling and applies upgrade credit after other discounts.
+
     Args:
         telegram_id: Telegram ID of the user
         tariff: Tariff type ("basic" or "plus")
         period_days: Subscription period in days (30, 90, 180, 365)
         promo_code: Optional promo code
-        
+        upgrade_credit_kopecks: Credit for remaining Basic days when upgrading to Plus (0 if not applicable)
+
     Returns:
         {
             "base_price_kopecks": int,
             "discount_amount_kopecks": int,
             "final_price_kopecks": int,
             "discount_percent": int,
-            "discount_type": str,  # "promo", "vip", "personal", None
+            "discount_type": str,
             "promo_code": Optional[str],
-            "is_valid": bool
+            "is_valid": bool,
+            "upgrade_credit_kopecks": int
         }
-        
+
     Raises:
         InvalidTariffError: If tariff or period is invalid
         PriceCalculationError: If price calculation fails
@@ -71,19 +136,27 @@ async def calculate_price(
         # Validate tariff exists
         if tariff not in config.TARIFFS:
             raise InvalidTariffError(f"Invalid tariff: {tariff}")
-        
+
         # Validate period exists for tariff
         if period_days not in config.TARIFFS[tariff]:
             raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
-        
-        # Delegate to database layer
+
+        # Delegate to database layer (no upgrade credit there)
         result = await database.calculate_final_price(
             telegram_id=telegram_id,
             tariff=tariff,
             period_days=period_days,
             promo_code=promo_code
         )
-        
+
+        # Apply upgrade credit after all other discounts (Basic→Plus only)
+        if upgrade_credit_kopecks > 0:
+            result["final_price_kopecks"] = max(
+                result["final_price_kopecks"] - upgrade_credit_kopecks,
+                100  # minimum 1 RUB
+            )
+        result["upgrade_credit_kopecks"] = upgrade_credit_kopecks
+
         return result
         
     except ValueError as e:

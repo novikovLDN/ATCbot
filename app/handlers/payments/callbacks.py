@@ -117,6 +117,22 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     # КРИТИЧНО: Сохраняем tariff_type в FSM state
     # Промо-сессия НЕ сбрасывается при выборе тарифа - она независима от покупки
     await state.update_data(tariff_type=tariff_type)
+
+    # Рассчитываем кредит за апгрейд если юзер на Basic и выбирает Plus
+    upgrade_credit = {"has_credit": False, "credit_kopecks": 0}
+    if tariff_type == "plus":
+        upgrade_credit = await subscription_service.calculate_upgrade_credit(telegram_id)
+        if upgrade_credit.get("has_credit"):
+            await state.update_data(upgrade_credit_kopecks=upgrade_credit["credit_kopecks"])
+            logger.info(
+                f"Upgrade credit: user={telegram_id}, "
+                f"remaining_days={upgrade_credit.get('remaining_days')}, "
+                f"credit={upgrade_credit.get('credit_kopecks')}kop"
+            )
+        else:
+            await state.update_data(upgrade_credit_kopecks=0)
+    else:
+        await state.update_data(upgrade_credit_kopecks=0)
     
     # КРИТИЧНО: Получаем промо-сессию (проверяет срок действия автоматически)
     promo_session = await get_promo_session(state)
@@ -128,6 +144,11 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         text = i18n_get_text(language, "buy.tariff_basic_desc")
     else:
         text = i18n_get_text(language, "buy.tariff_plus_desc")
+
+    if tariff_type == "plus" and upgrade_credit.get("has_credit"):
+        credit_rubles = upgrade_credit["credit_kopecks"] / 100
+        remaining = upgrade_credit["remaining_days"]
+        text += "\n\n" + i18n_get_text(language, "buy.upgrade_credit", days=remaining, credit=int(credit_rubles))
     
     buttons = []
     
@@ -151,7 +172,8 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
                 telegram_id=telegram_id,
                 tariff=tariff_type,
                 period_days=period_days,
-                promo_code=promo_code
+                promo_code=promo_code,
+                upgrade_credit_kopecks=upgrade_credit.get("credit_kopecks", 0) if tariff_type == "plus" else 0
             )
         except (subscription_service.InvalidTariffError, subscription_service.PriceCalculationError) as e:
             logger.error(f"Error calculating price: tariff={tariff_type}, period={period_days}, error={e}")
@@ -291,6 +313,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         logger.warning(f"Tariff mismatch: FSM={stored_tariff}, callback={tariff_type}, user={telegram_id}")
         # Обновляем tariff_type в FSM
         await state.update_data(tariff_type=tariff_type)
+
+    upgrade_credit_kopecks = fsm_data.get("upgrade_credit_kopecks", 0)
     
     # КРИТИЧНО: Получаем промо-сессию (проверяет срок действия автоматически)
     promo_session = await get_promo_session(state)
@@ -313,7 +337,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
-            promo_code=promo_code
+            promo_code=promo_code,
+            upgrade_credit_kopecks=upgrade_credit_kopecks if tariff_type == "plus" else 0
         )
     except (subscription_service.InvalidTariffError, subscription_service.PriceCalculationError) as e:
         error_text = i18n_get_text(language, "errors.tariff")
@@ -350,7 +375,8 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
         tariff_type=tariff_type,
         period_days=period_days,
         final_price_kopecks=price_info["final_price_kopecks"],
-        discount_percent=price_info["discount_percent"]
+        discount_percent=price_info["discount_percent"],
+        upgrade_credit_kopecks=upgrade_credit_kopecks
     )
     
     log_event(
