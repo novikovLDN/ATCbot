@@ -24,9 +24,26 @@ logger = logging.getLogger(__name__)
 
 @user_router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
-    # SECURITY: Бот работает ТОЛЬКО в личных сообщениях
+    # SECURITY: Только private chat
     if message.chat.type != "private":
         return
+
+    # SECURITY: Проверка что /start не содержит подозрительный payload
+    # Допускаем только /start и /start <referral_code> (alphanumeric, max 64 символов)
+    if message.text:
+        text = message.text.strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) > 1:
+            payload = parts[1]
+            if len(payload) > 64 or not payload.replace("_", "").replace(
+                "-", ""
+            ).isalnum():
+                logger.warning(
+                    "INVALID_START_PAYLOAD user=%s payload=%s",
+                    message.from_user.id,
+                    payload[:30],
+                )
+                message.text = "/start"
 
     await state.clear()
     # SAFE STARTUP GUARD: Проверка готовности БД
