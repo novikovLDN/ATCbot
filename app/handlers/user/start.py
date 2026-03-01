@@ -43,7 +43,7 @@ async def cmd_start(message: Message, state: FSMContext):
                     message.from_user.id,
                     payload[:30],
                 )
-                message.text = "/start"
+                pass  # Невалидный payload — обрабатываем как обычный /start без реферала
 
     await state.clear()
     # SAFE STARTUP GUARD: Проверка готовности БД
