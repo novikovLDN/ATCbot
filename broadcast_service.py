@@ -13,7 +13,7 @@ import database
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 15
+BATCH_SIZE = 10
 ADMIN_BROADCAST_TYPE = "no_subscription"
 CONCURRENCY_LIMIT = 10
 
