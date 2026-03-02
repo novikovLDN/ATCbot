@@ -16,7 +16,7 @@ import database
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 25
-SLEEP_BETWEEN_MESSAGES = 0.05
+SLEEP_BETWEEN_MESSAGES = 0.035
 ADMIN_BROADCAST_TYPE = "no_subscription"
 
 
@@ -82,16 +82,19 @@ async def run_no_subscription_broadcast(
         logger.warning("ADMIN_BROADCAST_SKIP [reason=pool_unavailable]")
         return {"success": 0, "failed": 0, "skipped": total}
 
+    try:
+        current_eligible = await database.get_eligible_no_subscription_broadcast_users()
+        eligible_set = {u["telegram_id"] for u in current_eligible}
+    except Exception as e:
+        logger.exception(f"ADMIN_BROADCAST_ELIGIBLE_FETCH_ERROR [correlation_id={correlation_id}]")
+        return {"success": 0, "failed": 0, "skipped": total}
+
     for i, user_row in enumerate(users):
         telegram_id = user_row["telegram_id"]
         try:
-            async with pool.acquire() as conn:
-                now = datetime.now(timezone.utc)
-                if not await database.check_user_still_eligible_for_no_sub_broadcast(
-                    conn, telegram_id, now
-                ):
-                    skipped_count += 1
-                    continue
+            if telegram_id not in eligible_set:
+                skipped_count += 1
+                continue
 
             sent = await safe_send_message(bot, telegram_id, text)
             if sent is not None:
