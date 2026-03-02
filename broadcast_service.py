@@ -5,8 +5,6 @@ Runs as background task, batched, with race-condition re-check and defensive err
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
-
 from aiogram import Bot
 from app.utils.telegram_safe import safe_send_message
 from app.utils.logging_helpers import generate_correlation_id, set_correlation_id
@@ -16,8 +14,8 @@ import database
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 25
-SLEEP_BETWEEN_MESSAGES = 0.035
 ADMIN_BROADCAST_TYPE = "no_subscription"
+CONCURRENCY_LIMIT = 15
 
 
 def _format_completion_message(result: dict) -> str:
@@ -89,35 +87,56 @@ async def run_no_subscription_broadcast(
         logger.exception(f"ADMIN_BROADCAST_ELIGIBLE_FETCH_ERROR [correlation_id={correlation_id}]")
         return {"success": 0, "failed": 0, "skipped": total}
 
-    for i, user_row in enumerate(users):
+    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+    counters = {"success": 0, "failed": 0, "skipped": 0}
+    counters_lock = asyncio.Lock()
+
+    async def send_one(i: int, user_row: dict) -> None:
         telegram_id = user_row["telegram_id"]
-        try:
+        async with semaphore:
             if telegram_id not in eligible_set:
-                skipped_count += 1
-                continue
-
-            sent = await safe_send_message(bot, telegram_id, text)
-            if sent is not None:
-                success_count += 1
-            else:
-                failed_count += 1
-
-            if (i + 1) % BATCH_SIZE == 0:
-                logger.info(
-                    f"ADMIN_BROADCAST_PROGRESS [correlation_id={correlation_id}, "
-                    f"processed={i + 1}, success={success_count}, failed={failed_count}, skipped={skipped_count}]"
+                async with counters_lock:
+                    counters["skipped"] += 1
+                    done = counters["success"] + counters["failed"] + counters["skipped"]
+                    s, f, sk = counters["success"], counters["failed"], counters["skipped"]
+                if done % BATCH_SIZE == 0:
+                    logger.info(
+                        f"ADMIN_BROADCAST_PROGRESS [correlation_id={correlation_id}, "
+                        f"processed={done}, success={s}, failed={f}, skipped={sk}]"
+                    )
+                return
+            try:
+                sent = await safe_send_message(bot, telegram_id, text)
+                async with counters_lock:
+                    if sent is not None:
+                        counters["success"] += 1
+                    else:
+                        counters["failed"] += 1
+                    done = counters["success"] + counters["failed"] + counters["skipped"]
+                    s, f, sk = counters["success"], counters["failed"], counters["skipped"]
+                if done % BATCH_SIZE == 0:
+                    logger.info(
+                        f"ADMIN_BROADCAST_PROGRESS [correlation_id={correlation_id}, "
+                        f"processed={done}, success={s}, failed={f}, skipped={sk}]"
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                async with counters_lock:
+                    counters["failed"] += 1
+                logger.exception(
+                    f"ADMIN_BROADCAST_SEND_ERROR [correlation_id={correlation_id}, user={telegram_id}]"
                 )
 
-            await asyncio.sleep(SLEEP_BETWEEN_MESSAGES)
+    try:
+        await asyncio.gather(*[send_one(i, row) for i, row in enumerate(users)])
+    except asyncio.CancelledError:
+        logger.info(f"ADMIN_BROADCAST_CANCELLED [correlation_id={correlation_id}]")
+        raise
 
-        except asyncio.CancelledError:
-            logger.info(f"ADMIN_BROADCAST_CANCELLED [correlation_id={correlation_id}]")
-            raise
-        except Exception as e:
-            failed_count += 1
-            logger.exception(
-                f"ADMIN_BROADCAST_SEND_ERROR [correlation_id={correlation_id}, user={telegram_id}]"
-            )
+    success_count = counters["success"]
+    failed_count = counters["failed"]
+    skipped_count = counters["skipped"]
 
     duration_ms = (time.time() - start_time) * 1000
 
