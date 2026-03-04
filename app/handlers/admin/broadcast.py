@@ -487,7 +487,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     try:
         # Создаем уведомление в БД
         broadcast_id = await database.create_broadcast(
-            title, message_text, broadcast_type, segment, callback.from_user.id,
+            title, caption if has_photo else message_text, broadcast_type, segment, callback.from_user.id,
             is_ab_test=is_ab_test, message_a=message_a, message_b=message_b
         )
         
