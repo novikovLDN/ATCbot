@@ -286,7 +286,7 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     )
 
 
-@admin_broadcast_router.message(BroadcastCreate.waiting_for_message)
+@admin_broadcast_router.message(BroadcastCreate.waiting_for_message, F.text | F.photo)
 async def process_broadcast_message(message: Message, state: FSMContext):
     """Обработка текста/фото уведомления"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
