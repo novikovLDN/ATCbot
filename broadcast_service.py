@@ -107,7 +107,7 @@ async def run_no_subscription_broadcast(
                 return
             try:
                 sent = await safe_send_message(bot, telegram_id, text)
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.07)
                 async with counters_lock:
                     if sent is not None:
                         counters["success"] += 1
