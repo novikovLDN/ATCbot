@@ -37,12 +37,27 @@ BROADCAST_BATCH_PAUSE = 2           # Seconds between batches
 BROADCAST_RETRY_LIMIT = 3           # Retry per user
 
 
-async def _safe_send(bot: Bot, user_id: int, text: str, semaphore: asyncio.Semaphore) -> bool:
-    """Send message with concurrency limit and TelegramRetryAfter respect."""
+async def _safe_send(
+    bot: Bot,
+    user_id: int,
+    text: str,
+    semaphore: asyncio.Semaphore,
+    photo_file_id: str | None = None,
+    caption: str | None = None,
+) -> bool:
+    """Send message or photo with concurrency limit and TelegramRetryAfter respect."""
     async with semaphore:
         for attempt in range(BROADCAST_RETRY_LIMIT):
             try:
-                await bot.send_message(user_id, text)
+                if photo_file_id:
+                    # Если есть фото — отправляем фото с подписью
+                    await bot.send_photo(
+                        user_id,
+                        photo=photo_file_id,
+                        caption=caption or text,
+                    )
+                else:
+                    await bot.send_message(user_id, text)
                 return True
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)
@@ -271,14 +286,40 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     )
 
 
-@admin_broadcast_router.message(BroadcastCreate.waiting_for_message)
+@admin_broadcast_router.message(BroadcastCreate.waiting_for_message, F.text | F.photo)
 async def process_broadcast_message(message: Message, state: FSMContext):
-    """Обработка текста уведомления"""
+    """Обработка текста/фото уведомления"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
     language = await resolve_user_language(message.from_user.id)
-    
-    await state.update_data(message=message.text)
+
+    # Поддержка отмены только для текстовых сообщений
+    if message.text and message.text.strip().lower() in ("/cancel", "cancel", "отмена"):
+        await state.clear()
+        await message.answer(i18n_get_text(language, "admin.operation_cancelled"))
+        return
+
+    # Принимаем либо фото (с подписью), либо текст
+    if message.photo:
+        photo_file_id = message.photo[-1].file_id
+        caption = message.caption or ""
+        await state.update_data(
+            message=None,
+            has_photo=True,
+            photo_file_id=photo_file_id,
+            caption=caption,
+        )
+    elif message.text and message.text.strip():
+        await state.update_data(
+            message=message.text,
+            has_photo=False,
+            photo_file_id=None,
+            caption=None,
+        )
+    else:
+        await message.answer(i18n_get_text(language, "broadcast._enter_message"))
+        return
+
     await state.set_state(BroadcastCreate.waiting_for_type)
     await message.answer(
         i18n_get_text(language, "broadcast._select_type"),
@@ -362,6 +403,8 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
     
     data_for_preview = await state.get_data()
     is_ab_test = data_for_preview.get("is_ab_test", False)
+    has_photo = data_for_preview.get("has_photo", False)
+    caption = data_for_preview.get("caption", "") if has_photo else ""
     
     if is_ab_test:
         message_a = data_for_preview.get("message_a", "")
@@ -376,9 +419,13 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
         )
     else:
         message_text = data_for_preview.get("message", "")
+        if has_photo:
+            body = f"[📷 Фото]\n{caption}".strip()
+        else:
+            body = message_text
         preview_text = (
             f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n"
-            f"{message_text}\n\n"
+            f"{body}\n\n"
             f"Тип: {type_name.get(broadcast_type, broadcast_type)}\n"
             f"Сегмент: {segment_name.get(segment, segment)}"
         )
@@ -413,6 +460,9 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     message_a = data.get("message_a")
     message_b = data.get("message_b")
     is_ab_test = data.get("is_ab_test", False)
+    has_photo = data.get("has_photo", False)
+    photo_file_id = data.get("photo_file_id")
+    caption = data.get("caption") or ""
     broadcast_type = data.get("type")
     segment = data.get("segment")
     
@@ -428,7 +478,8 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             await state.clear()
             return
     else:
-        if not message_text:
+        # Для обычной рассылки должен быть либо текст, либо фото
+        if not (message_text or has_photo):
             await callback.message.answer("Ошибка: не заполнен текст уведомления. Начните заново.")
             await state.clear()
             return
@@ -436,7 +487,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     try:
         # Создаем уведомление в БД
         broadcast_id = await database.create_broadcast(
-            title, message_text, broadcast_type, segment, callback.from_user.id,
+            title, caption if has_photo else message_text, broadcast_type, segment, callback.from_user.id,
             is_ab_test=is_ab_test, message_a=message_a, message_b=message_b
         )
         
@@ -453,7 +504,10 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             final_message_a = f"{emoji} {title}\n\n{message_a}"
             final_message_b = f"{emoji} {title}\n\n{message_b}"
         else:
-            final_message = f"{emoji} {title}\n\n{message_text}"
+            if has_photo:
+                final_message = f"{emoji} {title}\n\n{caption}".strip()
+            else:
+                final_message = f"{emoji} {title}\n\n{message_text}"
         
         # Получаем список пользователей по сегменту
         user_ids = await database.get_users_by_segment(segment)
@@ -473,8 +527,14 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         failed_list = []  # [{"telegram_id": int, "error": str}, ...]
         processed = 0
         
-        async def _send_one(user_id: int, msg: str, variant):
-            ok = await _safe_send(bot, user_id, msg, semaphore)
+        async def _send_one(
+            user_id: int,
+            msg: str,
+            variant,
+            photo_file_id: str | None = None,
+            caption: str | None = None,
+        ):
+            ok = await _safe_send(bot, user_id, msg, semaphore, photo_file_id=photo_file_id, caption=caption)
             return (user_id, variant, ok)
         
         for i in range(0, total, BROADCAST_BATCH_SIZE):
@@ -484,12 +544,20 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                 if is_ab_test:
                     variant = "A" if random.random() < 0.5 else "B"
                     msg = final_message_a if variant == "A" else final_message_b
+                    batch_items.append((user_id, msg, variant, None, None))
                 else:
                     variant = None
-                    msg = final_message
-                batch_items.append((user_id, msg, variant))
+                    if has_photo:
+                        msg = final_message  # caption text
+                        batch_items.append((user_id, msg, variant, photo_file_id, final_message))
+                    else:
+                        msg = final_message
+                        batch_items.append((user_id, msg, variant, None, None))
             
-            tasks = [_send_one(uid, msg, variant) for uid, msg, variant in batch_items]
+            tasks = [
+                _send_one(uid, msg, variant, p_file_id, cap)
+                for uid, msg, variant, p_file_id, cap in batch_items
+            ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
             for r in results:

@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 
 from aiogram import Router, F
+from aiogram.filters import StateFilter
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery
 from aiogram.fsm.context import FSMContext
 
@@ -42,6 +43,7 @@ from app.utils.security import (
 from app.core.feature_flags import get_feature_flags
 from app.handlers.notifications import send_referral_cashback_notification
 from app.handlers.common.keyboards import get_payment_success_keyboard
+from app.handlers.common.states import BroadcastCreate
 from app.handlers.common.utils import clear_promo_session
 
 payments_router = Router()
@@ -64,7 +66,7 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
     )
 
 
-@payments_router.message(F.photo)
+@payments_router.message(F.photo, ~StateFilter(BroadcastCreate.waiting_for_message))
 async def log_incoming_photo_file_id(message: Message):
     """Log file_id of incoming photos for later use (e.g. loyalty images). Does not send reply."""
     try:
