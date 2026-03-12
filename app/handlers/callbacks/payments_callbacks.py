@@ -542,11 +542,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
 
         if is_upgrade:
             text = (
-                f"⭐️ Апгрейд до Platinum!\n"
+                f"⭐️ Апгрейд до Plus!\n"
                 f"📅 До: {expires_str}\n\n"
-                f"📲 Чтобы новые конфигурации появились в приложении:\n"
-                f"V2rayTUN — нажмите 🔄 (обновить подписку)\n"
-                f"Streisand — потяните экран вниз для обновления"
+                f"📲 Чтобы конфигурации обновились в приложении:\n"
+                f"V2rayTUN — нажмите 🔄 (обновить подписку)"
             )
             try:
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")

@@ -747,11 +747,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
     is_upgrade = getattr(result, "is_basic_to_plus_upgrade", False)
     if is_upgrade:
         text = (
-            f"⭐️ Апгрейд до Platinum!\n"
+            f"⭐️ Апгрейд до Plus!\n"
             f"📅 До: {expires_str}\n\n"
-            f"📲 Чтобы новые конфигурации появились в приложении:\n"
-            f"V2rayTUN — нажмите 🔄 (обновить подписку)\n"
-            f"Streisand — потяните экран вниз для обновления"
+            f"📲 Чтобы конфигурации обновились в приложении:\n"
+            f"V2rayTUN — нажмите 🔄 (обновить подписку)"
         )
         keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True)
         try:

@@ -553,7 +553,7 @@ LANG = {
     'referral.share_link_button': "📤 Share link",
     'referral.stats_button': "More",
     'referral.stats_next_level_line': "🚀 To level {next_status_name}:\n{remaining_invites} connections left",
-    'referral.stats_screen': "🔐 Atlas Secure Loyalty Program\n\n💎 Your status unlocks more benefits.\nEarn rewards for participating in the Atlas Secure ecosystem — no limits.\n\n⸻\n\n🏆 Access levels\n\nSilver Access\n— up to 24 invited\n— 10% cashback to balance\n\nGold Access\n— 25–49 invited\n— 25% cashback\n— extended privileges\n\nPlatinum Access\n— 50+ invited\n— 45% cashback\n— maximum access level\n\n⸻\n\n🔗 Your personal link:\n{referral_link}\n\n🪙 Rewards are credited to your account balance automatically.\n\n⸻\n\n📊 Current status: {current_status_name}\n{status_footer}",
+    'referral.stats_screen': "🔐 Atlas Secure Loyalty Program\n\n💎 Your status unlocks more benefits.\nEarn rewards for participating in the Atlas Secure ecosystem — no limits.\n\n⸻\n\n🏆 Access levels\n\nSilver Access\n— up to 24 invited\n— 10% cashback to balance\n\nGold Access\n— 25–49 invited\n— 25% cashback\n— extended privileges\n\nPlus Access\n— 50+ invited\n— 45% cashback\n— maximum access level\n\n⸻\n\n🔗 Your personal link:\n{referral_link}\n\n🪙 Rewards are credited to your account balance automatically.\n\n⸻\n\n📊 Current status: {current_status_name}\n{status_footer}",
     'referral.status_footer': "🚀 To next level: {remaining_invites} invites left",
     'referral.total_invited': "👤 Total invited: {count}",
     'referral.trial_activated_notification': "🎉 Your referral activated trial period!\n\n👤 User: {user}\n⏰ Trial period: 3 days\n\n{first_payment_msg}",

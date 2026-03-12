@@ -355,7 +355,7 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
             )
             downgrade_text = (
                 "⚠️ Вы переходите с Plus на Basic.\n\n"
-                "Ключ White List будет удалён, останется только основной ключ.\n\n"
+                "Ключ будет ротирован с выделенного сервера на базовый.\n\n"
                 "Подтвердить переход?"
             )
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
