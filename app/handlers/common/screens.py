@@ -233,7 +233,8 @@ async def show_profile(message_or_query, language: str):
             return
 
         from_user = message_or_query.from_user
-        display_name = (getattr(from_user, "first_name", None) or from_user.username or user.get("first_name") or user.get("username") or "Пользователь")
+        raw_name = getattr(from_user, "first_name", None) or from_user.username or user.get("first_name") or user.get("username")
+        display_name = raw_name or i18n_get_text(language, "profile.default_name")
 
         # Получаем баланс
         balance_rubles = await database.get_user_balance(telegram_id)
@@ -252,25 +253,26 @@ async def show_profile(message_or_query, language: str):
 
         # Карточка профиля: единый формат
         text = (
-            "Добро пожаловать в Atlas Secure!\n\n"
+            f"{i18n_get_text(language, 'profile.welcome')}\n\n"
             f"👤 {display_name}\n\n"
-            f"💰 Баланс: {balance_str} ₽\n"
+            f"{i18n_get_text(language, 'profile.balance', amount=balance_str)}\n"
         )
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
-            text += f"📆 Подписка: активна до {date_str}\n"
-            text += f"⭐️ Тариф: {'Plus' if sub_type == 'plus' else 'Basic'}\n"
+            text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
+            tariff_label = "Plus" if sub_type == "plus" else "Basic"
+            text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
             if auto_renew and expires_at:
                 renewal_window = timedelta(hours=6)
                 next_renewal = expires_at - renewal_window
-                text += f"🔁 Автопродление: {format_date_ru(next_renewal)}"
+                text += i18n_get_text(language, "profile.auto_renew_on", date=format_date_ru(next_renewal))
             else:
-                text += "🔁 Автопродление: выкл"
+                text += i18n_get_text(language, "profile.auto_renew_off")
         else:
-            text += "📆 Подписка: не активна\n"
-            text += "⭐️ Тариф: —\n"
-            text += "🔁 Автопродление: —"
-        text += "\n\nПри продлении выбранный срок\nдобавляется к текущему автоматически"
+            text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
+            text += i18n_get_text(language, "profile.tariff_none") + "\n"
+            text += i18n_get_text(language, "profile.auto_renew_none")
+        text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
         vpn_key = subscription.get("vpn_key") if subscription else None
         vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         keyboard = get_profile_keyboard(

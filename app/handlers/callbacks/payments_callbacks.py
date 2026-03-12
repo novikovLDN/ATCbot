@@ -207,7 +207,7 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         balance = await database.get_user_balance(telegram_id)
         subscription = await database.get_subscription(telegram_id)
         has_active = is_subscription_active(subscription) if subscription else False
-        sub_text = "активна" if has_active else "нет"
+        sub_text = i18n_get_text(language, "profile.status_active") if has_active else i18n_get_text(language, "profile.status_inactive")
         admin_text = (
             f"💸 Новая заявка на вывод #{wid}\n\n"
             f"👤 Пользователь: @{username or '—'} (ID: {telegram_id})\n"
@@ -542,11 +542,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
 
         if is_upgrade:
             text = (
-                f"⭐️ Апгрейд до Platinum!\n"
+                f"⭐️ Апгрейд до Plus!\n"
                 f"📅 До: {expires_str}\n\n"
-                f"📲 Чтобы новые конфигурации появились в приложении:\n"
-                f"V2rayTUN — нажмите 🔄 (обновить подписку)\n"
-                f"Streisand — потяните экран вниз для обновления"
+                f"📲 Чтобы конфигурации обновились в приложении:\n"
+                f"V2rayTUN — нажмите 🔄 (обновить подписку)"
             )
             try:
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
@@ -555,12 +554,19 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         else:
             if is_renewal:
                 tariff_label = "Plus" if subscription_type == "plus" else "Basic"
-                text = f"✅ Подписка продлена\n📦/⭐️ Тариф: {tariff_label}\n📅 До: {expires_str}"
+                tariff_icon = "⭐️" if subscription_type == "plus" else "📦"
+                text = i18n_get_text(
+                    language,
+                    "payment.success_renewal_compact",
+                    tariff_icon=tariff_icon,
+                    tariff=tariff_label,
+                    date=expires_str,
+                )
             else:
                 if subscription_type == "plus":
-                    text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
+                    text = i18n_get_text(language, "payment.success_welcome_plus", date=expires_str)
                 else:
-                    text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+                    text = i18n_get_text(language, "payment.success_welcome_basic", date=expires_str)
             try:
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
             except Exception as e:

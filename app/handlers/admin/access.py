@@ -799,7 +799,7 @@ async def callback_admin_switch_basic(callback: CallbackQuery):
         text = (
             f"Перевести пользователя {user_id} с Plus на Basic?\n"
             "📅 Срок подписки не изменится.\n"
-            "⚠️ Ключ White List будет удалён.\n\n"
+            "⚠️ Ключ будет ротирован с выделенного сервера на базовый.\n\n"
             "✅ Подтвердить   ❌ Отмена"
         )
         language = await resolve_user_language(callback.from_user.id)
