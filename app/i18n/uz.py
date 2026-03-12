@@ -239,7 +239,7 @@ LANG = {
     'buy.tariff_label_plus': '🔑 Plus',
     'buy.tariff_plus': "👑 Plus\nBoshqa VPN ishlamay qolganda ham doim onlayn\nHar qanday blokni ustuvor tezlik bilan chetlab o‘tadi ⚡️",
     'buy.tariff_plus_desc': "👑 Tarif: Plus\n\nBoshqa VPN ishlamay qolganda ham doim onlayn\n\n⚡ Strim va o‘yinlar uchun ustuvor tezlik\n🛡 Oq ro‘yxatlar (white‑list) ham bo‘lsa, har qanday blokni chetlab o‘tadi\n🇪🇺 Bir nechta mamlakatlarda ajratilgan serverlar\n🔄 Zaxira yo‘llar — yuklama katta bo‘lganda ham VPN ishlashda davom etadi\n\n👉 Maksimal ishonchlilik va erkinlik, hech qanday murosa qilmasdan",
-    'buy.tariff_plus_description': "👑 Tarif: Plus\n\nBoshqa VPN ishlamay qolganda ham doim onlayn\n\n⚡ Strim va o‘yinlar uchun ustuvor tezlik\n🛡 Oq ro‘yxatlar (white‑list) ham bo‘lsa, har qanday blokni chetlab o‘tadi\n🇪🇺 Bir nechta mamlakatlarda ajratilgan serverlar\n🔄 Zaxira yo‘llar — yuklama katta bo‘lganda ham VPN ishlashda davom etadi\n\n👉 Maksimal ishonchlilik va erkinlik, hech qanday murosa qilмасдан",
+    'buy.tariff_plus_description': "👑 Tarif: Plus\n\nBoshqa VPN ishlamay qolganda ham doim onlayn\n\n⚡ Strim va o‘yinlar uchun ustuvor tezlik\n🛡 Oq ro‘yxatlar (white‑list) ham bo‘lsa, har qanday blokni chetlab o‘tadi\n🇪🇺 Bir nechta mamlakatlarda ajratilgan serverlar\n🔄 Zaxira yo‘llar — yuklama katta bo‘lganda ham VPN ishlashda davom etadi\n\n👉 Maksimal ishonchlilik va erkinlik, hech qanday murosa qilmasdan",
     'buy.tariff_plus_selected': '🔐 Plus tariff selected\nWhat period are you interested in?',
     'buy.tariff_select_basic_button': '✅ Select Basic',
     'buy.tariff_select_plus_button': '🔑 Select Plus',
