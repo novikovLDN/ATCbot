@@ -23,6 +23,7 @@ from app.handlers.common.utils import (
     safe_edit_reply_markup,
     get_promo_session,
     validate_callback_data,
+    sanitize_display_name,
 )
 from app.handlers.common.keyboards import get_connect_keyboard
 from app.handlers.common.states import PromoCodeInput, CorporateAccessRequest, PurchaseState
@@ -602,9 +603,14 @@ async def callback_payment_paid(callback: CallbackQuery, state: FSMContext):
     text = i18n_get_text(language, "payment.pending", "payment_pending")
     await safe_edit_text(callback.message, text, reply_markup=get_pending_payment_keyboard(language))
     
-    # Safe username extraction: can be None
+    # Safe username extraction with sanitization
     user_lang = await resolve_user_language(telegram_id)
-    username = (callback.from_user.username if callback.from_user else None) or i18n_get_text(user_lang, "common.username_not_set")
+    raw_username = (callback.from_user.username if callback.from_user else None)
+    if raw_username:
+        sanitized = sanitize_display_name(raw_username)
+        username = sanitized if sanitized else i18n_get_text(user_lang, "common.user")
+    else:
+        username = i18n_get_text(user_lang, "common.username_not_set")
 
     # Admin notification: admin always sees Russian (ADMIN RU ALLOWED)
     admin_text = i18n_get_text(
@@ -966,9 +972,13 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
     user = await database.get_user(telegram_id)
 
     try:
-        # Get user data (safe: username can be None)
-        username = callback.from_user.username if callback.from_user else None
-        username_display = f"@{username}" if username else i18n_get_text(language, "common.username_not_set")
+        # Get user data with sanitization
+        raw_username = callback.from_user.username if callback.from_user else None
+        if raw_username:
+            sanitized = sanitize_display_name(raw_username)
+            username_display = f"@{sanitized}" if sanitized else i18n_get_text(language, "common.user")
+        else:
+            username_display = i18n_get_text(language, "common.username_not_set")
         
         # Get subscription status
         subscription = await database.get_subscription(telegram_id)

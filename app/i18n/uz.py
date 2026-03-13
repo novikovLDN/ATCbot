@@ -248,7 +248,7 @@ LANG = {
     'common.cancel': '❌ Bekor qilish',
     'common.go_to_connection': "🔌 Ulanishga o'tish",
     'common.rate_limit_message': "Juda ko'p so'rovlar. Keyinroq qayta urinib ko'ring.",
-    'common.user': 'foydalanuvchi',
+    'common.user': 'Foydalanuvchi',
     'common.username_not_set': "ko'rsatilmagan",
     'errors.access_denied': 'Kirish rad etildi.',
     'errors.analytics': 'Analitikani yuklashda xato',

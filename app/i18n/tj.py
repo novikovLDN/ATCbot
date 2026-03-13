@@ -248,7 +248,7 @@ LANG = {
     'common.cancel': '❌ Cancel',
     'common.go_to_connection': '🔌 Go to Connection',
     'common.rate_limit_message': 'Бисёр дархост. Лутфан дертар кӯшиш кунед.',
-    'common.user': 'user',
+    'common.user': 'Корбар',
     'common.username_not_set': 'таъин нашудааст',
     'errors.access_denied': 'Дастрасӣ рад карда шуд.',
     'errors.analytics': 'Хато ҳангоми бор кардани аналитика',

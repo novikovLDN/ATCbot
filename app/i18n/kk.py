@@ -248,7 +248,7 @@ LANG = {
     'common.cancel': '❌ Cancel',
     'common.go_to_connection': '🔌 Go to Connection',
     'common.rate_limit_message': 'Тым көп сұраныс. Кейінірек қайта көріңіз.',
-    'common.user': 'user',
+    'common.user': 'Пайдаланушы',
     'common.username_not_set': 'орнатылмаған',
     'errors.access_denied': 'Қатысу қабылданбады.',
     'errors.analytics': 'Аналитиканы жүктеу қатесі',

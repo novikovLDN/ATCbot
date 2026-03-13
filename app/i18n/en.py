@@ -255,7 +255,7 @@ LANG = {
     'common.cancel': "❌ Cancel",
     'common.go_to_connection': "🔌 Go to Connection",
     'common.rate_limit_message': "Too many requests. Please try again later.",
-    'common.user': "user",
+    'common.user': "User",
     'common.username_not_set': "not set",
     'errors.access_denied': "Access denied.",
     'errors.analytics': "Error loading analytics",

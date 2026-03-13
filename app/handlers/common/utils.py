@@ -39,75 +39,231 @@ _DANGEROUS_UNICODE_RE = re.compile(
 )
 
 # Запрещённые слова/подстроки в username и first_name
-# Проверяется в lowercase. Включает: CSAM, порно, насилие, экстремизм, наркотики
+# Проверяется в lowercase, пробелы удаляются. Покрывает: CSAM, порно, насилие,
+# экстремизм, терроризм, наркотики, мошенничество, нецензурщину (RU/EN/транслит).
+# Если хотя бы одна подстрока найдена — имя заменяется на «Пользователь».
 _BANNED_WORDS = frozenset({
-    # CSAM / child exploitation (EN)
+    # ── CSAM / child exploitation (EN) ──
     "childporn", "child_porn", "cp_links", "cplinks", "kidporn", "kid_porn",
     "pedo", "pedoph", "preteen", "lolita", "jailbait", "underage",
     "csam", "childabuse", "child_abuse", "minor_sex", "minorsex",
-    "youngporn", "young_porn", "toddler", "infantporn",
-    # CSAM (RU)
+    "youngporn", "young_porn", "toddler", "infantporn", "kiddie",
+    "childmodel", "child_model", "teenmodel", "teen_model",
+    "babyj", "babysex", "baby_sex", "childsex", "child_sex",
+    "boylove", "boy_love", "girllove", "girl_love",
+    "shotacon", "shotakon", "shota_", "loli_",
+    # ── CSAM (RU / транслит) ──
     "детскоепорно", "дп_ссылки", "малолетк", "педофил", "цп_",
-    "детпорно", "школьниц", "несовершеннолетн",
-    # Porn (EN)
-    "porn", "p0rn", "p0rno", "xxx_", "_xxx", "xvideos", "pornhub",
-    "xhamster", "redtube", "youporn", "brazzers", "onlyfans",
+    "детпорно", "школьниц", "несовершеннолетн", "детскийсекс",
+    "детскоетело", "маленькийребен", "pedofil", "detiporno",
+    "малолетка", "малолеток",
+    # ── Porn (EN) ──
+    "porn", "p0rn", "p0rno", "pr0n", "xxx_", "_xxx",
+    "xvideos", "pornhub", "xhamster", "redtube", "youporn",
+    "brazzers", "onlyfans", "chaturbate", "livejasmin",
     "hentai", "rule34", "r34_", "nsfw_", "fap_",
-    # Porn (RU)
-    "порно", "порн_", "порнух", "порнуш",
-    # Violence / gore
+    "blowjob", "blow_job", "handjob", "hand_job",
+    "cumshot", "cum_shot", "creampie", "cream_pie",
+    "gangbang", "gang_bang", "deepthroat", "deep_throat",
+    "milf_", "_milf", "dildo", "vibrator",
+    "anal_", "_anal", "analsex", "anal_sex",
+    "oralsex", "oral_sex", "hardcore_", "_hardcore",
+    "softcore", "stripper", "escort_", "_escort",
+    "sexchat", "sex_chat", "sextape", "sex_tape",
+    "camgirl", "cam_girl", "camboy", "cam_boy",
+    "sexting", "nudes_", "_nudes", "dickpic", "dick_pic",
+    "pussy_", "_pussy", "vagina_", "penis_",
+    "erotic_", "_erotic", "fetish_", "_fetish",
+    "bondage", "bdsm_", "_bdsm",
+    "orgasm", "orgazm", "masturbat",
+    "bukkake", "tentacle", "futanari",
+    "incest", "stepmom", "stepdad", "stepsist",
+    "zoophil", "bestial",
+    # ── Porn (RU / транслит) ──
+    "порно", "порн_", "порнух", "порнуш", "порнограф",
+    "секс_", "_секс", "сиськ", "сисек", "письк",
+    "вагин", "пенис", "минет", "миньет", "кунилинг",
+    "анал_", "анальн", "оральн", "оргазм", "мастурб",
+    "эротик", "эскорт", "стриптиз", "проститу",
+    "шлюха", "шалав", "давалк", "потаскух",
+    "интим_", "интимус", "интимфото", "интимвидео",
+    "seks_", "siski", "porno_", "intim_",
+    # ── Violence / gore / murder ──
     "snuff", "gore_", "_gore", "killin", "murder_", "beheading",
-    "execution_", "torture_",
-    # Extremism / terrorism
+    "execution_", "torture_", "dismember", "bloodbath",
+    "massacre", "genocide_", "massmurd", "mass_murd",
+    "skinning", "cannibal", "necrophil", "corpse_",
+    "убийств", "убийца", "расчленен", "пытк", "казн",
+    "кровав", "живодёр", "живодер", "некрофил",
+    # ── Extremism / terrorism ──
     "isis_", "_isis", "jihad", "alqaeda", "terrorist",
     "nazism", "nazi_", "_nazi", "hitler", "heil_",
     "whitepow", "whitepower", "race_war", "racewar",
-    "swastika",
-    # Drugs
+    "swastika", "sieg_heil", "siegheil", "neonazi",
+    "aryanrace", "aryan_race", "whitesupr", "kkk_",
+    "skinhead_", "88_hh", "1488_", "_1488",
+    "fascis", "tercell", "terrorcell",
+    "blackpower", "jihadi", "mujahid", "shahid",
+    "калифат", "халифат", "джихад", "терроризм",
+    "террорист", "фашиз", "фашист", "нацизм", "нацист",
+    "зигхайл", "свастик", "рейхс", "расоваявойна",
+    "белоесупремас", "скинхед",
+    # ── Suicide / self-harm ──
+    "killmyself", "kill_myself", "suicide_", "_suicide",
+    "selfharm", "self_harm", "cutmyself", "cut_myself",
+    "wanttodie", "want_to_die", "howtodie", "how_to_die",
+    "суицид", "самоубийств", "покончитьссобой", "повеситьс",
+    "синийкит", "тихийдом",
+    # ── Drugs / narcotics ──
     "buydrugs", "buy_drugs", "drugdealer", "drug_dealer",
     "cocain", "heroin_", "meth_lab", "methlab",
-    "buyweed", "buy_weed",
-    "закладк", "купитьнарк", "наркоторг",
-    # Scam / phishing
+    "buyweed", "buy_weed", "marijuana", "cannabis_",
+    "amphetamin", "ecstasy", "mdma_", "_mdma",
+    "lsd_", "_lsd", "fentanyl", "opioid",
+    "ketamin", "morphin", "crackcocain",
+    "drugshop", "drug_shop", "darkmarket", "dark_market",
+    "silkroad", "silk_road", "darknet_", "_darknet",
+    "закладк", "купитьнарк", "наркоторг", "наркотик",
+    "амфетамин", "метамфетамин", "героин", "кокаин",
+    "марихуан", "гашиш", "экстази", "фентанил",
+    "спайс_", "мефедрон", "наркоман", "наркобар",
+    "наркодил", "наркомаг", "наркошоп", "соль_наркот",
+    "кристалл_нарк", "купитьсоль", "купитьмеф",
+    "купитькристалл", "купитьгашиш", "купитьтраву",
+    "narkotik", "zakladk", "kupit_mef",
+    # ── Weapons / illegal trade ──
+    "buygun", "buy_gun", "buypistol", "buy_pistol",
+    "buyrifle", "buy_rifle", "sellgun", "sell_gun",
+    "illegal_weapon", "illegalweapon", "blackmarket",
+    "black_market", "hitman_", "_hitman", "killforh",
+    "купитьоруж", "купитьпистол", "чёрныйрынок", "черныйрынок",
+    "оружие_прод", "заказатьубийств", "киллер_",
+    # ── Scam / phishing / fraud ──
     "freebitcoin", "free_bitcoin", "cryptoscam", "crypto_scam",
     "sendmoney", "send_money", "freemoney", "free_money",
     "hackaccount", "hack_account", "stolencards", "stolen_cards",
     "carding_", "carder_", "cvv_shop", "cvvshop",
-    "обнал", "кардинг",
-    # Нецензурная лексика (RU) — основные корни
-    "хуй", "хуя", "хуе", "хуё", "пизд", "ёб_", "еба",
-    "ебат", "ебан", "ебну", "ебал", "ебла",
-    "блядь", "бляд", "блят", "сука_", "суки_",
-    "пидор", "пидар", "пидр",
-    "залуп", "муда", "шлюх",
-    # Нецензурная лексика (EN)
-    "fuck_", "_fuck", "fucker", "motherfuck",
-    "nigger", "nigg3r", "n1gger", "faggot", "f4ggot",
-    # Spam patterns
+    "phishing", "scam_", "_scam", "frauder",
+    "stolen_data", "stolendata", "dumpshop", "dump_shop",
+    "fakeid", "fake_id", "fakepassport", "fake_passport",
+    "обнал", "кардинг", "фишинг", "мошенник",
+    "поддельныйпасп", "фальшивыедок", "взломаккаунт",
+    "украстьданн", "слитьданн", "пробивлюд",
+    "пробитьномер", "пробитьчелов",
+    # ── Нецензурная лексика (RU) — все корни и вариации ──
+    "хуй", "хуя", "хуе", "хуё", "хуи", "хуёв", "хуев",
+    "пизд", "пизж",
+    "ёб_", "еба", "ебат", "ебан", "ебну", "ебал", "ебла",
+    "ёбан", "ёбат", "ёбну", "ёбал", "ёбла",
+    "блядь", "бляд", "блят", "блядин", "блядищ",
+    "сука_", "суки_", "сучк", "сучар",
+    "пидор", "пидар", "пидр", "пидорас", "пидарас",
+    "залуп", "муда", "мудак", "мудил",
+    "шлюх", "шлюш",
+    "гандон", "гондон",
+    "дрочи", "дрочк", "дрочер",
+    "манда", "манды",
+    "елда", "елдак",
+    "хер_", "_хер", "херов", "херня",
+    "жопа_", "жоп_", "жопу", "жопе", "засранец", "засранк",
+    "говно", "говня", "говнюк", "говнюш",
+    "срать", "сруть", "насрать", "обосра",
+    "целка", "целк_",
+    "даун_", "дебил", "идиот", "кретин", "имбецил",
+    "уёбок", "уебок", "уёбищ", "уебищ",
+    "выблядок", "выблядк",
+    "шалава", "потаскуха", "подстилк",
+    # ── Нецензурная лексика (RU транслит) ──
+    "huy_", "hui_", "pizd", "blyad", "blyat", "suka_",
+    "pidor", "pidar", "pidr", "ebat", "eban", "ebal",
+    "gandon", "gondon", "mudak", "nahui", "nahuy",
+    "nahren", "zaebis", "zaebal", "otebis",
+    "ebanuy", "pizdec", "pizdez",
+    # ── Нецензурная лексика (EN) ──
+    "fuck_", "_fuck", "fucker", "fuckin", "motherfuck",
+    "nigger", "nigg3r", "n1gger", "nigga", "n1gga",
+    "faggot", "f4ggot", "fag_", "_fag",
+    "retard", "r3tard",
+    "cunt_", "_cunt", "twat_",
+    "asshole", "a$$hole", "arsehole",
+    "shit_", "_shit", "bullshit", "horseshit",
+    "bitch_", "_bitch", "son_of_a_bitch",
+    "whore_", "_whore", "slut_", "_slut",
+    "cock_", "_cock", "cocksucker",
+    "wanker", "tosser", "bellend",
+    "dickhead", "dick_head", "shithead", "shit_head",
+    # ── Discrimination / hate speech ──
+    "homophob", "transphob", "xenophob",
+    "antisemit", "islamophob", "racist_",
+    "гомофоб", "трансфоб", "ксенофоб", "антисемит", "расист",
+    # ── Spam patterns ──
     "t.me/", "http://", "https://", "bit.ly", "tinyurl",
     "@everyone", "@here",
+    "t.ly/", "goo.gl/", "is.gd/", "v.gd/", "cutt.ly",
+    "telegra.ph/", "tg://", "telegram.me/",
 })
 
-# Дополнительные паттерны (regex) для обхода фильтров
+# Дополнительные паттерны (regex) для обхода фильтров через разделители (p.o.r.n и т.д.)
+_SEP = r"[\s._\-*|/\\,;:!?0]*"  # разделитель между буквами
 _BANNED_PATTERNS_RE = re.compile(
-    r"(?:c[\s._-]*p[\s._-]*l[\s._-]*i[\s._-]*n[\s._-]*k)|"  # c.p.l.i.n.k
-    r"(?:п[\s._-]*о[\s._-]*р[\s._-]*н)|"  # п.о.р.н
-    r"(?:п[\s._-]*е[\s._-]*д[\s._-]*о)|"  # п.е.д.о
-    r"(?:p[\s._-]*e[\s._-]*d[\s._-]*o)",  # p.e.d.o
+    r"(?:c{sep}p{sep}l{sep}i{sep}n{sep}k)|"  # c.p.l.i.n.k
+    r"(?:п{sep}о{sep}р{sep}н)|"  # п.о.р.н
+    r"(?:п{sep}е{sep}д{sep}о)|"  # п.е.д.о
+    r"(?:p{sep}e{sep}d{sep}o)|"  # p.e.d.o
+    r"(?:p{sep}o{sep}r{sep}n)|"  # p.o.r.n
+    r"(?:х{sep}у{sep}[йяеё])|"  # х.у.й / х.у.я
+    r"(?:п{sep}и{sep}з{sep}д)|"  # п.и.з.д
+    r"(?:б{sep}л{sep}я{sep}[дт])|"  # б.л.я.д / б.л.я.т
+    r"(?:е{sep}б{sep}а{sep}[тнл])|"  # е.б.а.т / е.б.а.н
+    r"(?:n{sep}i{sep}g{sep}g)|"  # n.i.g.g
+    r"(?:f{sep}u{sep}c{sep}k)|"  # f.u.c.k
+    r"(?:s{sep}u{sep}i{sep}c{sep}i{sep}d)|"  # s.u.i.c.i.d
+    r"(?:н{sep}а{sep}р{sep}к)|"  # н.а.р.к
+    r"(?:с{sep}у{sep}и{sep}ц{sep}и{sep}д)"  # с.у.и.ц.и.д
+    .format(sep=_SEP),
     re.IGNORECASE,
 )
 
+# Leetspeak / замена символов: а→@/4, о→0, е→3, и→1, s→$, a→@ и т.д.
+_LEET_MAP = str.maketrans({
+    "@": "a", "4": "a", "$": "s", "3": "e", "1": "i", "!": "i",
+    "0": "o", "+": "t", "¥": "y",
+    # Кириллица: визуально похожие латинские → кириллические
+    "a": "а", "e": "е", "o": "о", "p": "р", "c": "с",
+    "x": "х", "y": "у", "k": "к", "m": "м", "t": "т",
+    "b": "б", "h": "н",
+})
+
+
+def _normalize_text(text: str) -> str:
+    """Нормализация текста: lowercase, удаление пробелов/разделителей, лит-спик."""
+    if not text:
+        return ""
+    text = text.lower()
+    # Удалить пробелы и типичные разделители
+    text = re.sub(r"[\s._\-*|/\\,;:!?]+", "", text)
+    return text
+
 
 def _contains_banned_word(text: str) -> bool:
-    """Проверяет содержит ли текст запрещённые слова."""
+    """Проверяет содержит ли текст запрещённые слова (с нормализацией и anti-bypass)."""
     if not text:
         return False
-    lower = text.lower().replace(" ", "")
 
+    # 1. Прямая проверка (lowercase без пробелов)
+    normalized = _normalize_text(text)
     for word in _BANNED_WORDS:
-        if word in lower:
+        if word in normalized:
             return True
 
+    # 2. Leetspeak-нормализация
+    leet_normalized = normalized.translate(_LEET_MAP)
+    if leet_normalized != normalized:
+        for word in _BANNED_WORDS:
+            if word in leet_normalized:
+                return True
+
+    # 3. Regex для обхода через разделители
     if _BANNED_PATTERNS_RE.search(text):
         return True
 
