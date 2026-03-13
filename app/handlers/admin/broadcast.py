@@ -845,10 +845,11 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         return
     
     await callback.answer()
-    
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         broadcast_id = int(callback.data.split(":")[2])
-        
+
         # Получаем информацию об уведомлении
         broadcast = await database.get_broadcast(broadcast_id)
         if not broadcast:

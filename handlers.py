@@ -1066,11 +1066,18 @@ def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False,
 
 
 # In-memory async lock per user for reissue (prevents parallel execution in single process)
+# Bounded to prevent memory leaks — oldest entries evicted when limit reached
 _REISSUE_LOCKS: dict[int, asyncio.Lock] = {}
+_REISSUE_LOCKS_MAX = 10000
 
 
 def get_reissue_lock(user_id: int) -> asyncio.Lock:
     if user_id not in _REISSUE_LOCKS:
+        if len(_REISSUE_LOCKS) >= _REISSUE_LOCKS_MAX:
+            # Evict oldest unlocked entries
+            to_remove = [k for k, v in list(_REISSUE_LOCKS.items()) if not v.locked()][:1000]
+            for k in to_remove:
+                del _REISSUE_LOCKS[k]
         _REISSUE_LOCKS[user_id] = asyncio.Lock()
     return _REISSUE_LOCKS[user_id]
 

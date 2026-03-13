@@ -13,7 +13,6 @@ from app.services.language_service import resolve_user_language
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.screens import _open_referral_screen
 import database
-import logging
 
 user_router = Router()
 logger = logging.getLogger(__name__)
@@ -22,6 +21,8 @@ logger = logging.getLogger(__name__)
 @user_router.message(Command("referral"))
 async def cmd_referral(message: Message, bot: Bot):
     """Обработчик команды /referral — открывает экран программы лояльности"""
+    if message.chat.type != "private":
+        return
     if not await ensure_db_ready_message(message):
         return
     await _open_referral_screen(message, bot)

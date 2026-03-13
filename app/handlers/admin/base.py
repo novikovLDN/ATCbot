@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.errors import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command, StateFilter
 
@@ -191,7 +192,8 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         return
     
     await callback.answer("Начинаю массовый перевыпуск...")
-    
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         admin_telegram_id = callback.from_user.id
         
@@ -497,7 +499,7 @@ async def callback_admin_system(callback: CallbackQuery):
             "admin_view_system", 
             callback.from_user.id, 
             None, 
-            f"Admin viewed system status: severity={severity.value}, errors={len(errors)}"
+            "Admin viewed system status"
         )
         
     except Exception as e:
@@ -515,12 +517,14 @@ async def callback_admin_test_menu(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
+    language = await resolve_user_language(callback.from_user.id)
+
     text = "🧪 Тестовое меню\n\n"
     text += "Выберите тест для выполнения:\n"
     text += "• Тесты выполняются без реальных платежей\n"
     text += "• VPN API не вызывается\n"
     text += "• Все действия логируются в audit_log(type=test)"
-    
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_trial"), callback_data="admin:test:trial_activation")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_first_purchase"), callback_data="admin:test:first_purchase")],

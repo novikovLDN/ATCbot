@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 @user_router.message(Command("help"))
 async def cmd_help(message: Message, bot: Bot):
     """Обработчик команды /help — открывает экран поддержки"""
+    if message.chat.type != "private":
+        return
     if not await ensure_db_ready_message(message):
         return
     await _open_support_screen(message, bot)
@@ -29,6 +31,8 @@ async def cmd_help(message: Message, bot: Bot):
 @user_router.message(Command("instruction"))
 async def cmd_instruction(message: Message, bot: Bot):
     """Обработчик команды /instruction — открывает экран инструкции"""
+    if message.chat.type != "private":
+        return
     if not await ensure_db_ready_message(message):
         return
     await _open_instruction_screen(message, bot)
@@ -37,6 +41,8 @@ async def cmd_instruction(message: Message, bot: Bot):
 @user_router.message(Command("info"))
 async def cmd_info(message: Message, bot: Bot):
     """Обработчик команды /info — открывает экран «О сервисе»"""
+    if message.chat.type != "private":
+        return
     if not await ensure_db_ready_message(message):
         return
     await _open_about_screen(message, bot)

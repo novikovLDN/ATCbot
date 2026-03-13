@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Singleton guard: предотвращает повторный запуск scheduler
 _TRIAL_SCHEDULER_STARTED = False
+_TRIAL_SCHEDULER_LOCK = asyncio.Lock()
 
 # SECURITY: Whitelist of allowed trial notification DB flag names.
 # Prevents SQL injection via f-string column name interpolation.
@@ -181,6 +182,7 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 notification_flags = {
                     "trial_notif_6h_sent": row.get("trial_notif_6h_sent", False),
                     "trial_notif_60h_sent": row.get("trial_notif_60h_sent", False),
+                    "trial_notif_71h_sent": row.get("trial_notif_71h_sent", False),
                 }
                 for notification in TRIAL_NOTIFICATION_SCHEDULE:
                     try:
@@ -581,14 +583,13 @@ async def run_trial_scheduler(bot: Bot):
     Если scheduler уже запущен, повторные вызовы игнорируются.
     """
     global _TRIAL_SCHEDULER_STARTED
-    
-    # Singleton guard: предотвращаем повторный запуск
-    if _TRIAL_SCHEDULER_STARTED:
-        logger.warning("Trial notifications scheduler already running, skipping duplicate start")
-        return
-    
-    # Устанавливаем флаг перед запуском
-    _TRIAL_SCHEDULER_STARTED = True
+
+    # Singleton guard: предотвращаем повторный запуск (task-safe via lock)
+    async with _TRIAL_SCHEDULER_LOCK:
+        if _TRIAL_SCHEDULER_STARTED:
+            logger.warning("Trial notifications scheduler already running, skipping duplicate start")
+            return
+        _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
     
     # Prevent worker burst at startup

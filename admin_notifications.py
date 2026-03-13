@@ -6,6 +6,7 @@ All messages use admin's language from DB.
 """
 from app.i18n import get_text
 from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -186,6 +187,8 @@ async def notify_admin_pending_activations(bot: Bot, pending_count: int, oldest_
             # Обновляем время последнего уведомления только при успешной отправке
             _last_pending_notification_time = current_time
         
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.exception(f"Error in notify_admin_pending_activations (non-fatal): {e}")
         # Не пробрасываем исключение - это не критично

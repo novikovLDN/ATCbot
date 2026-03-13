@@ -184,7 +184,7 @@ XRAY_SYNC_ENABLED = env("XRAY_SYNC_ENABLED", default="false").lower() == "true"
 
 # Platega (SBP) Configuration
 # СБП оплата через Platega.io — наценка +11%
-PLATEGA_MERCHANT_ID = env("PLATEGA_MERCHANT_ID") or "aa5f5d2d-162e-4dad-a58d-c6dedd89360f"
+PLATEGA_MERCHANT_ID = env("PLATEGA_MERCHANT_ID", default="")
 PLATEGA_SECRET = env("PLATEGA_SECRET")
 PLATEGA_API_URL = env("PLATEGA_API_URL") or "https://app.platega.io"
 # Процент наценки для СБП (11%)

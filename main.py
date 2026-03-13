@@ -123,7 +123,7 @@ async def main():
     bot = Bot(token=config.BOT_TOKEN)
     if config.REDIS_URL:
         storage = RedisStorage.from_url(config.REDIS_URL)
-        logger.info("FSM_STORAGE=redis url_prefix=%s", config.REDIS_URL[:20])
+        logger.info("FSM_STORAGE=redis (configured)")
     else:
         storage = MemoryStorage()
         logger.warning("FSM_STORAGE=memory — states will be lost on restart")
