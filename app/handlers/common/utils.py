@@ -679,35 +679,8 @@ async def format_text_with_incident(text: str, language: str) -> str:
 
 
 def detect_platform(callback_or_message) -> str:
-    """
-    Определить платформу пользователя (iOS, Android, или unknown)
-
-    Args:
-        callback_or_message: CallbackQuery или Message объект из aiogram
-
-    Returns:
-        "ios", "android", или "unknown"
-    """
-    try:
-        if hasattr(callback_or_message, 'from_user'):
-            user = callback_or_message.from_user
-        elif hasattr(callback_or_message, 'user'):
-            user = callback_or_message.user
-        else:
-            return "unknown"
-
-        language_code = getattr(user, 'language_code', None)
-
-        if language_code:
-            lang_lower = language_code.lower()
-            if '-' in language_code:
-                pass
-
-        return "unknown"
-
-    except Exception as e:
-        logger.debug(f"Platform detection error: {e}")
-        return "unknown"
+    """Stub — Telegram Bot API does not expose client platform. Always returns 'unknown'."""
+    return "unknown"
 
 
 def format_promo_stats_text(stats: list) -> str:

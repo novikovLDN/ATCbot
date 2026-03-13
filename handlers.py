@@ -9,96 +9,27 @@
 #  - rollback plan
 # ==========================================
 
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, LabeledPrice, PreCheckoutQuery
+from aiogram import Router, Bot
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup, default_state
-from aiogram.filters import StateFilter
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 import database
 import config
 import time
-import csv
-import tempfile
-import os
 import asyncio
-import random
-import uuid as uuid_module
 from typing import Optional, Dict, Any, Union
-from app.services.subscriptions import service as subscription_service
 from app.services.subscriptions.service import (
-    is_subscription_active,
-    get_subscription_status,
     check_and_disable_expired_subscription as check_subscription_expiry_service,
 )
-from app.services.payments import service as payment_service
-from app.services.payments.exceptions import (
-    PaymentServiceError,
-    InvalidPaymentPayloadError,
-    PaymentAmountMismatchError,
-    PaymentAlreadyProcessedError,
-    PaymentFinalizationError,
-)
-from app.core.system_state import (
-    SystemState,
-    healthy_component,
-    degraded_component,
-    unavailable_component,
-)
-from app.services.activation import service as activation_service
 from app.services.trials import service as trial_service
-from app.services.admin import service as admin_service
-from app.services.admin.exceptions import (
-    AdminServiceError,
-    UserNotFoundError,
-    InvalidAdminActionError,
-)
-from app.utils.referral_middleware import process_referral_on_first_interaction
-from app.services.referrals import activate_referral, ReferralState
 from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
 from app.i18n import get_text as i18n_get_text
-from app.utils.security import (
-    validate_telegram_id,
-    validate_message_text,
-    validate_callback_data,
-    validate_payment_payload,
-    validate_promo_code,
-    require_admin,
-    require_ownership,
-    log_security_warning,
-    log_security_error,
-    log_audit_event,
-    sanitize_for_logging,
-)
 from app.core.feature_flags import get_feature_flags
 from app.constants.loyalty import get_loyalty_status_names, get_loyalty_screen_attachment
-from app.core.rate_limit import check_rate_limit
-from app.handlers.common.states import (
-    AdminUserSearch,
-    AdminReferralSearch,
-    BroadcastCreate,
-    AdminBroadcastNoSubscription,
-    IncidentEdit,
-    AdminGrantAccess,
-    AdminRevokeAccess,
-    AdminDiscountCreate,
-    CorporateAccessRequest,
-    PromoCodeInput,
-    TopUpStates,
-    AdminCreditBalance,
-    AdminDebitBalance,
-    AdminBalanceManagement,
-    WithdrawStates,
-    AdminCreatePromocode,
-    PurchaseState,
-)
 
 
-# Время запуска бота (для uptime)
-_bot_start_time = time.time()
 
 
 # ====================================================================================
@@ -275,6 +206,45 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], language: str, tele
 # SAFE STARTUP GUARD: Helper функции для проверки готовности БД
 # ====================================================================================
 
+def _is_inaccessible_error(error_msg: str) -> bool:
+    """Check if Telegram error indicates an inaccessible/deleted message."""
+    patterns = (
+        "message to edit not found",
+        "message can't be edited",
+        "message is not accessible",
+        "chat not found",
+        "message to delete not found",
+    )
+    return any(p in error_msg for p in patterns)
+
+
+async def _send_fallback(
+    bot: Optional[Bot],
+    message: Message,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup],
+    parse_mode: Optional[str],
+    context: str,
+) -> None:
+    """Send a new message as fallback when edit is impossible."""
+    if bot is None:
+        logger.warning("Cannot send fallback (%s): bot not provided", context)
+        return
+    chat_id = None
+    if hasattr(message, "chat") and message.chat:
+        chat_id = message.chat.id
+    elif hasattr(message, "from_user") and message.from_user:
+        chat_id = message.from_user.id
+    if not chat_id:
+        logger.warning("Cannot send fallback (%s): no chat_id", context)
+        return
+    try:
+        await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+        logger.info("Sent fallback message (%s): chat_id=%s", context, chat_id)
+    except Exception as e:
+        logger.error("Failed to send fallback (%s): %s", context, e)
+
+
 async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = None, bot: Bot = None):
     """
     Безопасное редактирование текста сообщения с обработкой ошибок
@@ -308,55 +278,26 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
             
             if chat_id:
                 await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-                logger.info(f"Message inaccessible (no chat attr), sent new message instead: chat_id={chat_id}")
+                logger.info("Message inaccessible (no chat attr), sent new message instead: chat_id=%s", chat_id)
             else:
                 logger.warning("Message inaccessible (no chat attr) and cannot determine chat_id")
         except Exception as send_error:
-            logger.error(f"Failed to send fallback message after inaccessible check: {send_error}")
+            logger.error("Failed to send fallback message after inaccessible check: %s", send_error)
         return
     
-    # Безопасная проверка атрибутов сообщения (никогда не обращаемся напрямую без hasattr)
-    current_text = None
-    try:
-        if hasattr(message, 'text'):
-            text_attr = getattr(message, 'text', None)
-            if text_attr:
-                current_text = text_attr
-        if not current_text and hasattr(message, 'caption'):
-            caption_attr = getattr(message, 'caption', None)
-            if caption_attr:
-                current_text = caption_attr
-    except AttributeError:
-        # Защита от AttributeError - сообщение может быть недоступно
-        logger.debug("AttributeError while checking message text/caption, treating as inaccessible")
-        current_text = None
-    
-    # Сравниваем текущий текст с новым (безопасно)
+    # Безопасная проверка текущего текста сообщения
+    current_text = getattr(message, 'text', None) or getattr(message, 'caption', None)
+
+    # Сравниваем текущий текст с новым — skip edit if identical
     if current_text and current_text == text:
-        # Текст совпадает - проверяем клавиатуру (безопасно)
-        current_markup = None
-        try:
-            if hasattr(message, 'reply_markup'):
-                markup_attr = getattr(message, 'reply_markup', None)
-                if markup_attr:
-                    current_markup = markup_attr
-        except AttributeError:
-            # Защита от AttributeError
-            current_markup = None
-        
+        current_markup = getattr(message, 'reply_markup', None)
         if reply_markup is None:
-            # Удаление клавиатуры - проверяем, есть ли она
             if current_markup is None:
-                # Контент идентичен - не вызываем edit
                 return
-        else:
-            # Сравниваем клавиатуры (упрощённая проверка)
-            if current_markup and _markups_equal(current_markup, reply_markup):
-                # Контент идентичен - не вызываем edit
-                return
-    
-    # Photo message: edit caption instead of text (e.g. loyalty screen sent as send_photo).
-    # Prevents TelegramBadRequest "there is no text in the message to edit".
+        elif current_markup and _markups_equal(current_markup, reply_markup):
+            return
+
+    # Photo message: edit caption instead of text
     has_photo = getattr(message, "photo", None) and len(message.photo) > 0
     if has_photo:
         try:
@@ -365,14 +306,9 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
         except TelegramBadRequest as e:
             err = str(e).lower()
             if "message is not modified" in err:
-                logger.debug(f"Caption not modified (expected): {e}")
                 return
-            if any(k in err for k in ["message to edit not found", "message can't be edited", "chat not found", "message is inaccessible"]):
-                if bot is not None:
-                    chat_id = getattr(getattr(message, "chat", None), "id", None) or (getattr(getattr(message, "from_user", None), "id", None) if getattr(message, "from_user", None) else None)
-                    if chat_id:
-                        await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-                        logger.info(f"Photo message inaccessible, sent new message instead: chat_id={chat_id}")
+            if _is_inaccessible_error(err):
+                await _send_fallback(bot, message, text, reply_markup, parse_mode, "photo inaccessible")
                 return
             raise
 
@@ -381,77 +317,14 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
     except TelegramBadRequest as e:
         error_msg = str(e).lower()
         if "message is not modified" in error_msg:
-            # Игнорируем ошибку "message is not modified" - сообщение уже имеет нужное содержимое
-            logger.debug(f"Message not modified (expected): {e}")
             return
-        elif any(keyword in error_msg for keyword in ["message to edit not found", "message can't be edited", "chat not found", "message is inaccessible"]):
-            # Сообщение недоступно - используем send_message как fallback
-            if bot is None:
-                logger.warning(f"Message inaccessible and bot not provided, cannot send fallback message: {e}")
-                return
-            
-            try:
-                # Получаем chat_id безопасно (никогда не обращаемся напрямую без hasattr)
-                chat_id = None
-                try:
-                    if hasattr(message, 'chat'):
-                        chat_obj = getattr(message, 'chat', None)
-                        if chat_obj and hasattr(chat_obj, 'id'):
-                            chat_id = getattr(chat_obj, 'id', None)
-                except AttributeError:
-                    pass
-                
-                if not chat_id:
-                    try:
-                        if hasattr(message, 'from_user'):
-                            user_obj = getattr(message, 'from_user', None)
-                            if user_obj and hasattr(user_obj, 'id'):
-                                chat_id = getattr(user_obj, 'id', None)
-                    except AttributeError:
-                        pass
-                
-                if chat_id:
-                    await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-                    logger.info(f"Message inaccessible, sent new message instead: chat_id={chat_id}")
-                else:
-                    logger.warning(f"Message inaccessible and cannot determine chat_id: {e}")
-            except Exception as send_error:
-                logger.error(f"Failed to send fallback message after edit failure: {send_error}")
+        elif _is_inaccessible_error(error_msg):
+            await _send_fallback(bot, message, text, reply_markup, parse_mode, "edit failed")
         else:
-            # Другие ошибки - пробрасываем
             raise
     except AttributeError as e:
-        # Защита от AttributeError при обращении к атрибутам сообщения
-        logger.warning(f"AttributeError in safe_edit_text, message may be inaccessible: {e}")
-        # Пытаемся использовать send_message как fallback
-        if bot is not None:
-            try:
-                # Получаем chat_id безопасно (никогда не обращаемся напрямую без hasattr)
-                chat_id = None
-                try:
-                    if hasattr(message, 'chat'):
-                        chat_obj = getattr(message, 'chat', None)
-                        if chat_obj and hasattr(chat_obj, 'id'):
-                            chat_id = getattr(chat_obj, 'id', None)
-                except AttributeError:
-                    pass
-                
-                if not chat_id:
-                    try:
-                        if hasattr(message, 'from_user'):
-                            user_obj = getattr(message, 'from_user', None)
-                            if user_obj and hasattr(user_obj, 'id'):
-                                chat_id = getattr(user_obj, 'id', None)
-                    except AttributeError:
-                        pass
-                
-                if chat_id:
-                    await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-                    logger.info(f"AttributeError handled, sent new message instead: chat_id={chat_id}")
-                else:
-                    logger.warning(f"AttributeError handled but cannot determine chat_id: {e}")
-            except Exception as send_error:
-                logger.error(f"Failed to send fallback message after AttributeError: {send_error}")
+        logger.warning("AttributeError in safe_edit_text, message may be inaccessible: %s", e)
+        await _send_fallback(bot, message, text, reply_markup, parse_mode, "AttributeError")
 
 
 def _markups_equal(markup1: InlineKeyboardMarkup, markup2: InlineKeyboardMarkup) -> bool:
@@ -516,7 +389,7 @@ async def safe_edit_reply_markup(message: Message, reply_markup: InlineKeyboardM
         if "message is not modified" not in str(e):
             raise
         # Игнорируем ошибку "message is not modified" - клавиатура уже имеет нужное содержимое
-        logger.debug(f"Reply markup not modified (expected): {e}")
+        logger.debug("Reply markup not modified (expected): %s", e)
 
 # ====================================================================================
 # PROMO SESSION MANAGEMENT (In-memory, 5-minute TTL)
@@ -728,7 +601,7 @@ async def format_text_with_incident(text: str, language: str) -> str:
         return text
     except Exception as e:
         # Если таблица incident_settings не существует или другая ошибка - просто возвращаем текст
-        logger.warning(f"Error getting incident settings: {e}")
+        logger.warning("Error getting incident settings: %s", e)
         return text
 
 
@@ -757,7 +630,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                     callback_data="activate_trial"
                 )])
         except Exception as e:
-            logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
+            logger.warning("Error checking trial availability for user %s: %s", telegram_id, e)
     
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.profile"),
@@ -860,66 +733,6 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
     return keyboard
 
 
-def get_profile_keyboard_with_copy(language: str, last_tariff: str = None, is_vip: bool = False, has_subscription: bool = True):
-    """Клавиатура профиля с кнопкой копирования ключа и историей (старая версия, для совместимости)"""
-    return get_profile_keyboard(language, has_subscription)
-
-
-def get_profile_keyboard_old(language: str):
-    """Клавиатура с кнопками профиля и инструкции (после активации) - старая версия, переименована"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.profile"),
-                callback_data="menu_profile"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.instruction"),
-                callback_data="menu_instruction"
-            ),
-        ],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key"),
-            callback_data="copy_key"
-        )]
-    ])
-    return keyboard
-
-
-async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):
-    """Клавиатура выбора тарифа с учетом скидок (промокод имеет высший приоритет)
-    
-    DEPRECATED: Эта функция больше не используется напрямую.
-    Кнопки тарифов создаются в callback_tariff_type с использованием calculate_final_price.
-    
-    Args:
-        language: Язык пользователя
-        telegram_id: Telegram ID пользователя
-        promo_code: Промокод (опционально)
-        purchase_id: ID покупки (опционально, больше не используется)
-    """
-    # Эта функция оставлена для обратной совместимости, но не должна использоваться
-    # Реальная логика находится в callback_tariff_type
-    buttons = []
-    
-    for tariff_key in config.TARIFFS.keys():
-        base_text = i18n_get_text(language, "buy.tariff_button_" + str(tariff_key), f"tariff_button_{tariff_key}")
-        buttons.append([InlineKeyboardButton(text=base_text, callback_data=f"tariff_type:{tariff_key}")])
-    
-    # Кнопка ввода промокода
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "buy.enter_promo"),
-        callback_data="enter_promo"
-    )])
-    
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="menu_main"
-    )])
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
 def get_payment_method_keyboard(language: str):
     """Клавиатура выбора способа оплаты"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1016,75 +829,6 @@ def get_support_keyboard(language: str):
         )],
     ])
     return keyboard
-
-
-def detect_platform(callback_or_message) -> str:
-    """
-    Определить платформу пользователя (iOS, Android, или unknown)
-    
-    Использует эвристики для определения платформы:
-    1. Primary: language_code (косвенный сигнал)
-    2. Secondary: проверка доступных полей в объекте
-    3. Fallback: "unknown" (показываем все кнопки)
-    
-    Args:
-        callback_or_message: CallbackQuery или Message объект из aiogram
-    
-    Returns:
-        "ios", "android", или "unknown"
-    """
-    try:
-        # Получаем пользователя
-        if hasattr(callback_or_message, 'from_user'):
-            user = callback_or_message.from_user
-        elif hasattr(callback_or_message, 'user'):
-            user = callback_or_message.user
-        else:
-            return "unknown"
-        
-        # PRIMARY: Используем language_code как косвенный сигнал
-        # Примечание: это не надежный метод, но может помочь в некоторых случаях
-        language_code = getattr(user, 'language_code', None)
-        
-        if language_code:
-            lang_lower = language_code.lower()
-            # Эвристика: iOS часто использует региональные коды (ru-RU, en-US)
-            # Android чаще использует простые коды (ru, en)
-            # Это НЕ надежно, но может помочь в некоторых случаях
-            
-            # Если language_code содержит дефис (региональный код), склоняемся к iOS
-            if '-' in language_code:
-                # Это может быть iOS (региональные коды)
-                # Но не уверены, поэтому используем как слабый сигнал
-                pass
-        
-        # SECONDARY: Проверка через callback query (если доступно)
-        if hasattr(callback_or_message, 'chat_instance'):
-            # chat_instance может содержать некоторую информацию о клиенте
-            # но не содержит прямой информации о платформе
-            pass
-        
-        # Проверка через web_app (если используется в будущем)
-        if hasattr(callback_or_message, 'web_app'):
-            # Если пользователь использует Web App, можем определить платформу
-            # через navigator.userAgent в клиенте
-            # Но это требует реализации на стороне клиента
-            pass
-        
-        # К сожалению, Telegram Bot API не предоставляет прямую информацию о платформе
-        # Возвращаем "unknown" для безопасного fallback (показываем все кнопки)
-        # 
-        # В будущем можно улучшить:
-        # 1. Хранить платформу в БД при первом взаимодействии (если пользователь сообщает)
-        # 2. Использовать Telegram Web App с определением платформы через JS
-        # 3. Анализ паттернов поведения пользователя
-        # 4. Использование Mini Apps для определения платформы
-        
-        return "unknown"
-    
-    except Exception as e:
-        logging.debug(f"Platform detection error: {e}")
-        return "unknown"
 
 
 def get_instruction_keyboard(language: str, platform: str = "unknown"):
@@ -1350,14 +1094,6 @@ def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
 
 
 
-async def check_subscription_expiry(telegram_id: int) -> bool:
-    """
-    Дополнительная защита: проверка и мгновенное отключение истёкшей подписки
-    
-    Вызывается в начале критичных handlers для дополнительной безопасности.
-    Возвращает True если подписка была отключена, False если активна или отсутствует.
-    """
-    return await check_subscription_expiry_service(telegram_id)
 async def show_payment_method_selection(
     callback: CallbackQuery,
     tariff_type: str,
@@ -1421,544 +1157,17 @@ async def show_payment_method_selection(
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
     except Exception as e:
-        logger.exception(f"Error showing payment method selection: {e}")
+        logger.exception("Error showing payment method selection: %s", e)
         await callback.answer(
             i18n_get_text(language, "errors.payment_processing"),
             show_alert=True
         )
-@router.pre_checkout_query()
-async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
-    """Обработчик pre_checkout_query - подтверждение платежа перед списанием"""
-    # Всегда подтверждаем платеж
-    await pre_checkout_query.answer(ok=True)
-    
-    # Логируем событие
-    payload = pre_checkout_query.invoice_payload
-    telegram_id = pre_checkout_query.from_user.id
-    
-    logger.info(f"Pre-checkout query: user_id={telegram_id}, payload={payload}, amount={pre_checkout_query.total_amount}")
-    
-    # Логируем в audit_log
-    try:
-        await database._log_audit_event_atomic_standalone(
-            "telegram_payment_pre_checkout",
-            telegram_id,
-            telegram_id,
-            f"Pre-checkout query: payload={payload}, amount={pre_checkout_query.total_amount / 100} RUB"
-        )
-    except Exception as e:
-        logger.error(f"Error logging pre-checkout query: {e}")
-async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
-    """О сервисе. Reusable for callback and /info command."""
-    msg = event.message if isinstance(event, CallbackQuery) else event
-    telegram_id = event.from_user.id
-    language = await resolve_user_language(telegram_id)
-    title = i18n_get_text(language, "main.about_title")
-    text = i18n_get_text(language, "main.about_text", "about_text")
-    full_text = f"{title}\n\n{text}"
-    await safe_edit_text(msg, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=bot)
-    if isinstance(event, CallbackQuery):
-        await event.answer()
-async def _open_support_screen(event: Union[Message, CallbackQuery], bot: Bot):
-    """Поддержка. Reusable for callback and /help command."""
-    msg = event.message if isinstance(event, CallbackQuery) else event
-    telegram_id = event.from_user.id
-    language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "main.support_text", "support_text")
-    await safe_edit_text(msg, text, reply_markup=get_support_keyboard(language), bot=bot)
-    if isinstance(event, CallbackQuery):
-        await event.answer()
-@router.message(Command("admin"))
-async def cmd_admin(message: Message):
-    """Административный дашборд"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        logging.warning(f"Unauthorized admin dashboard attempt by user {message.from_user.id}")
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        return
-    
-    language = await resolve_user_language(message.from_user.id)
-    text = i18n_get_text(language, "admin.dashboard_title")
-    await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language))
 
 
-@router.message(Command("pending_activations"))
-async def cmd_pending_activations(message: Message):
-    """Показать подписки с отложенной активацией (только для админа)"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        logging.warning(f"Unauthorized pending_activations attempt by user {message.from_user.id}")
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        return
-    
-    if not database.DB_READY:
-        await message.answer("❌ База данных недоступна")
-        return
-    
-    try:
-        pool = await database.get_pool()
-        if pool is None:
-            await message.answer("❌ Не удалось подключиться к базе данных")
-            return
-        
-        async with pool.acquire() as conn:
-            # Получаем общее количество pending подписок
-            total_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM subscriptions WHERE activation_status = 'pending'"
-            ) or 0
-            
-            # Получаем топ-5 старейших pending подписок
-            oldest_pending = await conn.fetch(
-                """SELECT id, telegram_id, activation_attempts, last_activation_error, activated_at
-                   FROM subscriptions
-                   WHERE activation_status = 'pending'
-                   ORDER BY COALESCE(activated_at, '1970-01-01'::timestamp) ASC
-                   LIMIT 5"""
-            )
-            
-            # Формируем сообщение
-            text_lines = [
-                "⏳ **ОТЛОЖЕННЫЕ АКТИВАЦИИ VPN**\n",
-                f"Всего pending подписок: **{total_count}**\n"
-            ]
-            
-            if total_count == 0:
-                text_lines.append("✅ Нет подписок с отложенной активацией")
-            else:
-                if oldest_pending:
-                    text_lines.append("\n**Топ-5 старейших:**\n")
-                    for idx, sub_row in enumerate(oldest_pending, 1):
-                        subscription_id = sub_row["id"]
-                        telegram_id = sub_row["telegram_id"]
-                        attempts = sub_row["activation_attempts"]
-                        error = sub_row.get("last_activation_error") or "N/A"
-                        pending_since = sub_row.get("activated_at")
-                        
-                        if pending_since:
-                            if isinstance(pending_since, str):
-                                pending_since = datetime.fromisoformat(pending_since)
-                            pending_since_str = pending_since.strftime("%d.%m.%Y %H:%M")
-                        else:
-                            pending_since_str = "N/A"
-                        
-                        error_preview = error[:50] + "..." if error and len(error) > 50 else error
-                        
-                        text_lines.append(
-                            f"{idx}. ID: `{subscription_id}` | "
-                            f"User: `{telegram_id}`\n"
-                            f"   Попыток: {attempts} | "
-                            f"С: {pending_since_str}\n"
-                            f"   Ошибка: `{error_preview}`\n"
-                        )
-                else:
-                    text_lines.append("\nНет данных о старейших подписках")
-            
-            text = "\n".join(text_lines)
-            await message.answer(text, parse_mode="Markdown")
-            
-    except Exception as e:
-        logger.exception(f"Error in cmd_pending_activations: {e}")
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "errors.data_fetch", error=str(e)[:100], default=f"❌ Ошибка при получении данных: {str(e)[:100]}"))
-def get_admin_discount_percent_keyboard(user_id: int, language: str = "ru"):
-    """Клавиатура для выбора процента скидки"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="10%", callback_data=f"admin:discount_percent:{user_id}:10"),
-            InlineKeyboardButton(text="15%", callback_data=f"admin:discount_percent:{user_id}:15"),
-        ],
-        [
-            InlineKeyboardButton(text="25%", callback_data=f"admin:discount_percent:{user_id}:25"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_manual"), callback_data=f"admin:discount_percent_manual:{user_id}"),
-        ],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
-    ])
-    return keyboard
-
-
-def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int, language: str = "ru"):
-    """Клавиатура для выбора срока действия скидки"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_expires_7"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:7"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_expires_30"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:30"),
-        ],
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_expires_unlimited"), callback_data=f"admin:discount_expires:{user_id}:{discount_percent}:0"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.discount_manual"), callback_data=f"admin:discount_expires_manual:{user_id}:{discount_percent}"),
-        ],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
-    ])
-    return keyboard
-@router.message(AdminCreatePromocode.waiting_for_code_name)
-async def process_admin_promocode_code_name(message: Message, state: FSMContext):
-    """Обработка имени промокода"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        await state.clear()
-        return
-    
-    language = await resolve_user_language(message.from_user.id)
-    code_input = message.text.strip() if message.text else ""
-    
-    # Если пустое сообщение — автогенерация
-    if not code_input:
-        from database import generate_promo_code
-        code = generate_promo_code(6)
-    else:
-        code = code_input.upper().strip()
-        
-        # Валидация
-        if len(code) < 3 or len(code) > 32:
-            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"))
-            return
-        
-        if not all(c.isalnum() for c in code):
-            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"))
-            return
-        
-        # Проверка активного промокода (разрешаем пересоздание после удаления/истечения/исчерпания)
-        if await database.has_active_promo(code):
-            await message.answer(i18n_get_text(language, "admin.promocode_code_exists"))
-            return
-    
-    await state.update_data(promocode_code=code)
-    await state.set_state(AdminCreatePromocode.waiting_for_discount_percent)
-    
-    text = i18n_get_text(language, "admin.promocode_discount_prompt")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
-    ])
-    await message.answer(text, reply_markup=keyboard)
-
-
-@router.message(AdminCreatePromocode.waiting_for_discount_percent)
-async def process_admin_promocode_discount(message: Message, state: FSMContext):
-    """Обработка процента скидки"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        await state.clear()
-        return
-    
-    language = await resolve_user_language(message.from_user.id)
-    
-    try:
-        discount_percent = int(message.text.strip())
-        if discount_percent < 0 or discount_percent > 100:
-            await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"))
-            return
-    except ValueError:
-        await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"))
-        return
-    
-    await state.update_data(promocode_discount=discount_percent)
-    await state.set_state(AdminCreatePromocode.waiting_for_duration_unit)
-    
-    text = i18n_get_text(language, "admin.promocode_duration_unit_prompt")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏱ Часы", callback_data="admin:promocode_unit:hours")],
-        [InlineKeyboardButton(text="📅 Дни", callback_data="admin:promocode_unit:days")],
-        [InlineKeyboardButton(text="🗓 Месяцы", callback_data="admin:promocode_unit:months")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
-    ])
-    await message.answer(text, reply_markup=keyboard)
-@router.message(AdminCreatePromocode.waiting_for_duration_value)
-async def process_admin_promocode_duration_value(message: Message, state: FSMContext):
-    """Обработка значения длительности"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        await state.clear()
-        return
-    
-    language = await resolve_user_language(message.from_user.id)
-    
-    try:
-        value = int(message.text.strip())
-        if value <= 0:
-            await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"))
-            return
-    except ValueError:
-        await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"))
-        return
-    
-    data = await state.get_data()
-    unit = data.get("promocode_duration_unit")
-    
-    # Конвертация в секунды
-    if unit == "hours":
-        duration_seconds = value * 3600
-    elif unit == "days":
-        duration_seconds = value * 86400
-    elif unit == "months":
-        duration_seconds = value * 30 * 86400
-    else:
-        await message.answer("Ошибка: неверная единица времени")
-        await state.clear()
-        return
-    
-    await state.update_data(promocode_duration_seconds=duration_seconds)
-    await state.set_state(AdminCreatePromocode.waiting_for_max_uses)
-    
-    text = i18n_get_text(language, "admin.promocode_max_uses_prompt")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
-    ])
-    await message.answer(text, reply_markup=keyboard)
-
-
-@router.message(AdminCreatePromocode.waiting_for_max_uses)
-async def process_admin_promocode_max_uses(message: Message, state: FSMContext):
-    """Обработка максимального количества использований"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        await state.clear()
-        return
-    
-    language = await resolve_user_language(message.from_user.id)
-    
-    try:
-        max_uses = int(message.text.strip())
-        if max_uses < 1:
-            await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"))
-            return
-    except ValueError:
-        await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"))
-        return
-    
-    data = await state.get_data()
-    code = data.get("promocode_code")
-    discount_percent = data.get("promocode_discount")
-    duration_seconds = data.get("promocode_duration_seconds")
-    
-    # Форматируем длительность для отображения
-    if duration_seconds < 3600:
-        duration_str = f"{duration_seconds // 60} минут"
-    elif duration_seconds < 86400:
-        duration_str = f"{duration_seconds // 3600} часов"
-    elif duration_seconds < 2592000:
-        duration_str = f"{duration_seconds // 86400} дней"
-    else:
-        duration_str = f"{duration_seconds // 2592000} месяцев"
-    
-    await state.update_data(promocode_max_uses=max_uses)
-    await state.set_state(AdminCreatePromocode.confirm_creation)
-    
-    text = (
-        f"🎟 Подтверждение создания промокода\n\n"
-        f"Код: {code}\n"
-        f"Скидка: {discount_percent}%\n"
-        f"Срок действия: {duration_str}\n"
-        f"Лимит использований: {max_uses}\n\n"
-        f"Подтвердите создание:"
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.promocode_confirm"), callback_data="admin:promocode_confirm")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.promocode_cancel"), callback_data="admin:promocode_cancel")]
-    ])
-    await message.answer(text, reply_markup=keyboard)
-@router.message(Command("admin_audit"))
-async def cmd_admin_audit(message: Message):
-    """Показать последние записи audit_log (только для админа)"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        logging.warning(f"Unauthorized admin_audit attempt by user {message.from_user.id}")
-        await message.answer("Недостаточно прав")
-        return
-    
-    try:
-        # Получаем последние 10 записей из audit_log
-        audit_logs = await database.get_last_audit_logs(limit=10)
-        
-        if not audit_logs:
-            await message.answer("Аудит пуст. Действий не зафиксировано.")
-            return
-        
-        # Формируем сообщение
-        lines = ["📜 Audit Log", ""]
-        
-        for log in audit_logs:
-            # Форматируем дату и время
-            created_at = log["created_at"]
-            if isinstance(created_at, str):
-                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-            elif isinstance(created_at, datetime):
-                pass
-            else:
-                created_at = datetime.now(timezone.utc)
-            
-            created_str = created_at.strftime("%Y-%m-%d %H:%M")
-            
-            lines.append(f"🕒 {created_str}")
-            lines.append(f"Действие: {log['action']}")
-            lines.append(f"Админ: {log['telegram_id']}")
-            
-            if log['target_user']:
-                lines.append(f"Пользователь: {log['target_user']}")
-            else:
-                lines.append("Пользователь: —")
-            
-            if log['details']:
-                lines.append(f"Детали: {log['details']}")
-            else:
-                lines.append("Детали: —")
-            
-            lines.append("")
-            lines.append("⸻")
-            lines.append("")
-        
-        # Убираем последний разделитель
-        if lines[-1] == "" and lines[-2] == "⸻":
-            lines = lines[:-2]
-        
-        text = "\n".join(lines)
-        
-        # Проверяем лимит Telegram (4096 символов на сообщение)
-        if len(text) > 4000:
-            # Если текст слишком длинный, обрезаем до первых записей
-            # Попробуем уменьшить количество записей
-            audit_logs = await database.get_last_audit_logs(limit=5)
-            lines = ["📜 Audit Log", ""]
-            
-            for log in audit_logs:
-                created_at = log["created_at"]
-                if isinstance(created_at, str):
-                    created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                elif isinstance(created_at, datetime):
-                    pass
-                else:
-                    created_at = datetime.now(timezone.utc)
-                
-                created_str = created_at.strftime("%Y-%m-%d %H:%M")
-                
-                lines.append(f"🕒 {created_str}")
-                lines.append(f"Действие: {log['action']}")
-                lines.append(f"Админ: {log['telegram_id']}")
-                
-                if log['target_user']:
-                    lines.append(f"Пользователь: {log['target_user']}")
-                else:
-                    lines.append("Пользователь: —")
-                
-                if log['details']:
-                    # Обрезаем детали если они слишком длинные
-                    details = log['details']
-                    if len(details) > 200:
-                        details = details[:200] + "..."
-                    lines.append(f"Детали: {details}")
-                else:
-                    lines.append("Детали: —")
-                
-                lines.append("")
-                lines.append("⸻")
-                lines.append("")
-            
-            if lines[-1] == "" and lines[-2] == "⸻":
-                lines = lines[:-2]
-            
-            text = "\n".join(lines)
-        
-        await message.answer(text)
-        logging.info(f"Admin audit log viewed by admin {message.from_user.id}")
-        
-    except Exception as e:
-        logging.exception(f"Error in cmd_admin_audit: {e}")
-        await message.answer("Ошибка при получении audit log. Проверь логи.")
-
-
-@router.message(Command("xray_sync"))
-async def cmd_xray_sync(message: Message):
-    """Full Xray sync (admin only) — sync all active subscriptions from DB to Xray."""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        logging.warning(f"Unauthorized xray_sync attempt by user {message.from_user.id}")
-        await message.answer("Нет доступа")
-        return
-    try:
-        import xray_sync
-        await message.answer("⏳ Синхронизация Xray...")
-        count = await xray_sync.full_sync(force=True)
-        await message.answer(f"✅ Xray full sync completed: {count} users processed")
-    except Exception as e:
-        logging.exception(f"Error in cmd_xray_sync: {e}")
-        await message.answer(f"Ошибка: {str(e)[:200]}")
-
-
-@router.message(Command("reissue_key"))
-async def cmd_reissue_key(message: Message):
-    """Перевыпустить VPN-ключ для пользователя (только для админа)"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        logging.warning(f"Unauthorized reissue_key attempt by user {message.from_user.id}")
-        await message.answer("Нет доступа")
-        return
-    
-    try:
-        # Парсим команду: /reissue_key <telegram_id>
-        parts = message.text.split()
-        if len(parts) != 2:
-            await message.answer("Использование: /reissue_key <telegram_id>")
-            return
-        
-        try:
-            target_telegram_id = int(parts[1])
-        except ValueError:
-            await message.answer("Неверный формат telegram_id. Используйте число.")
-            return
-        
-        admin_telegram_id = message.from_user.id
-        
-        # Атомарно перевыпускаем ключ
-        result = await database.reissue_vpn_key_atomic(target_telegram_id, admin_telegram_id)
-        new_vpn_key, old_vpn_key = result
-        
-        if new_vpn_key is None:
-            await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
-            return
-        
-        # Уведомляем пользователя (кнопка «Подключиться» — ключ в Mini App)
-        try:
-            from app.handlers.common.keyboards import get_connect_keyboard
-            user_text = "🔑 Ключ перевыпущен. Нажмите кнопку ниже чтобы подключиться:"
-            await message.bot.send_message(target_telegram_id, user_text, reply_markup=get_connect_keyboard(), parse_mode="HTML")
-            logging.info(f"Reissue notification sent to user {target_telegram_id}")
-        except Exception as e:
-            logging.error(f"Error sending reissue notification to user {target_telegram_id}: {e}")
-            await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}")
-            return
-        
-        await message.answer(
-            f"✅ VPN-ключ успешно перевыпущен для пользователя {target_telegram_id}\n\n"
-            f"Старый ключ: <code>{old_vpn_key[:20]}...</code>\n"
-            f"Новый ключ: <code>{new_vpn_key}</code>",
-            parse_mode="HTML"
-        )
-        logging.info(f"VPN key reissued for user {target_telegram_id} by admin {admin_telegram_id}")
-        
-    except Exception as e:
-        logging.exception(f"Error in cmd_reissue_key: {e}")
-        await message.answer("Ошибка при перевыпуске ключа. Проверь логи.")
-@router.callback_query()
-async def callback_fallback(callback: CallbackQuery, state: FSMContext):
-    """
-    Глобальный fallback handler для всех необработанных callback_query
-    
-    Логирует callback_data и текущее FSM-состояние для отладки.
-    Отвечает на callback, чтобы избежать спиннера и ошибок "Query is too old".
-    """
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    callback_data = callback.data
-    telegram_id = callback.from_user.id
-    current_state = await state.get_state()
-
-    logger.warning(
-        f"Unhandled callback_query: user={telegram_id}, "
-        f"callback_data='{callback_data}', "
-        f"fsm_state={current_state}"
-    )
+# NOTE: All @router handlers have been moved to app/handlers/ modules.
+# This router is NOT included in the dispatcher — only app.handlers.router is.
+# Handlers that were here (pre_checkout_query, cmd_admin, cmd_pending_activations,
+# cmd_admin_audit, cmd_xray_sync, cmd_reissue_key, callback_fallback, and
+# AdminCreatePromocode FSM handlers) now live in their respective modules under app/handlers/.
 
 

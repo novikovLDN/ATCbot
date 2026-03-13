@@ -29,7 +29,6 @@ from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import (
     safe_edit_text,
     format_text_with_incident,
-    safe_resolve_username_from_db,
 )
 from app.handlers.common.keyboards import (
     get_profile_keyboard,
@@ -175,24 +174,12 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 referrer_id = activation_result.get("referrer_id")
                 if referrer_id:
                     try:
-                        referrer_user_for_notif = await database.get_user(referrer_id)
                         referrer_language_notif = await resolve_user_language(referrer_id)
-                        referred_user = await database.get_user(telegram_id)
-                        referred_username = safe_resolve_username_from_db(
-                            referred_user, referrer_language_notif, telegram_id
-                        )
 
-                        user_fallback_text = i18n_get_text(referrer_language_notif, "common.user")
-                        if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
-                            referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
-                        else:
-                            referred_display = referred_username
-
-                        first_payment_msg_notif = i18n_get_text(referrer_language_notif, "referral.first_payment_notification")
                         title_trial = i18n_get_text(referrer_language_notif, "referral.trial_activated_title")
-                        user_line_trial = i18n_get_text(referrer_language_notif, "referral.trial_activated_user", user=referred_display)
                         trial_period_line = i18n_get_text(referrer_language_notif, "referral.trial_period")
-                        notification_text = f"{title_trial}\n\n{user_line_trial}\n{trial_period_line}\n\n{first_payment_msg_notif}"
+                        first_payment_msg_notif = i18n_get_text(referrer_language_notif, "referral.first_payment_notification")
+                        notification_text = f"{title_trial}\n\n{trial_period_line}\n\n{first_payment_msg_notif}"
 
                         await callback.bot.send_message(
                             chat_id=referrer_id,
@@ -201,7 +188,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
                         logger.info(
                             f"REFERRAL_NOTIFICATION_SENT [type=trial_activation, referrer={referrer_id}, "
-                            f"referred={telegram_id}, referred_display={referred_display}]"
+                            f"referred={telegram_id}]"
                         )
                     except Exception as e:
                         logger.warning(

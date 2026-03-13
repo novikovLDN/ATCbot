@@ -96,25 +96,12 @@ async def cmd_start(message: Message, state: FSMContext):
         try:
             referrer_id = referral_result.get("referrer_id")
             if referrer_id:
-                # Get referrer info
-                referrer_user = await database.get_user(referrer_id)
-                referrer_username = referrer_user.get("username") if referrer_user else None
                 referrer_language = await resolve_user_language(referrer_id)
-                
-                # Get referred user info (safe: username or first_name or fallback)
-                referred_username = username  # Already resolved via safe_resolve_username
-                # Format display name: add @ prefix if username exists and doesn't have it
-                user_fallback_text = i18n_get_text(referrer_language, "common.user")
-                if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
-                    referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
-                else:
-                    referred_display = referred_username
-                
+
                 first_payment_msg = i18n_get_text(referrer_language, "referral.first_payment_notification")
                 title = i18n_get_text(referrer_language, "referral.registered_title")
-                user_line = i18n_get_text(referrer_language, "referral.registered_user", user=referred_display)
                 date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M'))
-                notification_text = f"{title}\n\n{user_line}\n{date_line}\n\n{first_payment_msg}"
+                notification_text = f"{title}\n\n{date_line}\n\n{first_payment_msg}"
                 
                 await message.bot.send_message(
                     chat_id=referrer_id,
