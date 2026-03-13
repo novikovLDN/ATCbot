@@ -30,17 +30,20 @@ def is_enabled() -> bool:
     return bool(CRYPTO2328_PROJECT_ID and CRYPTO2328_API_KEY)
 
 
-def _compute_signature(data: dict) -> str:
+def _serialize_body(data: dict) -> bytes:
+    """Serialize request body to compact JSON bytes (matching PHP json_encode behavior)."""
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _compute_signature(body_bytes: bytes) -> str:
     """
     Compute HMAC-SHA256 signature for 2328.io API request.
 
     Algorithm:
-    1. Serialize dict to JSON
-    2. Base64-encode the JSON
-    3. HMAC-SHA256 of the Base64 string using API_KEY
+    1. Base64-encode the JSON body bytes
+    2. HMAC-SHA256 of the Base64 string using API_KEY
     """
-    json_str = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
-    b64 = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
+    b64 = base64.b64encode(body_bytes).decode("utf-8")
     return hmac.new(
         CRYPTO2328_API_KEY.encode("utf-8"),
         b64.encode("utf-8"),
@@ -58,14 +61,24 @@ def _compute_empty_signature() -> str:
     ).hexdigest()
 
 
-def _get_headers(data: Optional[dict] = None) -> Dict[str, str]:
-    """Get authentication headers for 2328.io API."""
-    sign = _compute_signature(data) if data else _compute_empty_signature()
-    return {
+def _prepare_request(data: Optional[dict] = None) -> tuple[Dict[str, str], Optional[bytes]]:
+    """Prepare headers and serialized body for 2328.io API request.
+
+    Returns (headers, body_bytes). body_bytes is None for bodyless requests.
+    The same JSON bytes are used for both signature and request body to ensure consistency.
+    """
+    if data:
+        body_bytes = _serialize_body(data)
+        sign = _compute_signature(body_bytes)
+    else:
+        body_bytes = None
+        sign = _compute_empty_signature()
+    headers = {
         "Content-Type": "application/json",
         "project": CRYPTO2328_PROJECT_ID,
         "sign": sign,
     }
+    return headers, body_bytes
 
 
 def _verify_webhook_signature(webhook_data: dict) -> bool:
@@ -75,7 +88,7 @@ def _verify_webhook_signature(webhook_data: dict) -> bool:
     Algorithm:
     1. Extract 'sign' field from webhook data
     2. Remove 'sign' from the data
-    3. JSON-encode remaining fields
+    3. JSON-encode remaining fields (compact, matching PHP json_encode)
     4. Base64-encode the JSON
     5. HMAC-SHA256 from Base64 using API_KEY
     6. Compare with received sign
@@ -85,13 +98,8 @@ def _verify_webhook_signature(webhook_data: dict) -> bool:
         return False
 
     data_copy = {k: v for k, v in webhook_data.items() if k != "sign"}
-    json_str = json.dumps(data_copy, ensure_ascii=False, separators=(",", ":"))
-    b64 = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
-    calculated_sign = hmac.new(
-        CRYPTO2328_API_KEY.encode("utf-8"),
-        b64.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
+    body_bytes = _serialize_body(data_copy)
+    calculated_sign = _compute_signature(body_bytes)
 
     return hmac.compare_digest(calculated_sign, received_sign)
 
@@ -128,14 +136,14 @@ async def create_payment(
     if callback_url:
         request_body["url_callback"] = callback_url
 
-    headers = _get_headers(request_body)
+    headers, body_bytes = _prepare_request(request_body)
 
     async def _make_request():
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{CRYPTO2328_API_URL}/v1/payment",
                 headers=headers,
-                json=request_body,
+                content=body_bytes,
             )
             if 400 <= response.status_code < 500:
                 logger.error(
