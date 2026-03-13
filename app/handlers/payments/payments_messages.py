@@ -215,7 +215,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "main.support_button", "support_button"),
-                callback_data="menu_support"
+                url="https://t.me/asc_support"
             )]
         ])
         
@@ -584,7 +584,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),
-                    callback_data="menu_support"
+                    url="https://t.me/asc_support"
                 )]
             ])
             

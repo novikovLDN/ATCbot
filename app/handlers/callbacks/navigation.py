@@ -163,12 +163,6 @@ async def callback_instruction(callback: CallbackQuery):
     await _open_instruction_screen(callback, callback.bot)
 
 
-@router.callback_query(F.data == "menu_support")
-async def callback_support(callback: CallbackQuery):
-    """Поддержка. Entry from inline button."""
-    from app.handlers.common.screens import _open_support_screen
-    await _open_support_screen(callback, callback.bot)
-
 
 @router.callback_query(F.data == "go_profile", StateFilter(default_state))
 @router.callback_query(F.data == "go_profile")
