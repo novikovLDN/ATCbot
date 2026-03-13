@@ -6264,7 +6264,7 @@ async def create_pending_balance_topup_purchase(
             telegram_id
         )
         purchase_id = f"purchase_{uuid_lib.uuid4().hex[:16]}"
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         await conn.execute(
             """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, price_kopecks, status, expires_at)
                VALUES ($1, $2, 'balance_topup', $3, 'pending', $4)""",
@@ -6309,7 +6309,7 @@ async def create_pending_purchase(
         purchase_id = f"purchase_{uuid_lib.uuid4().hex[:16]}"
         
         # Срок действия контекста покупки (30 минут)
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
         
         # Создаем запись о покупке (subscription only)
         await conn.execute(

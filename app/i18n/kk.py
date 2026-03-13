@@ -463,6 +463,7 @@ LANG = {
     'payment.stars': '⭐ Telegram Stars',
     'payment.stars_invoice_label': 'Жұлдыздармен төлем',
     'payment.stars_invoice_description': 'Atlas Secure VPN {tariff_name} — {months} ай (⭐ Stars)',
+    'payment.invoice_timeout': '⏱ 15 минут ішінде төлеңіз. Уақыт аяқталғаннан кейін инвойс жойылады.',
     'payment.crypto_pay_button': '💳 Төлемге өту',
     'payment.crypto_unavailable': 'Криптовалютамен төлем уақытша қол жетімсіз',
     'payment.crypto_waiting': '₿ Криптовалютамен төлем\n\nСома: {amount:.2f} ₽\n\n⏳ Төлемді растауды күту. Әдетте 5 минутқа дейін созылады. Қатысу автоматты беріледі.',
