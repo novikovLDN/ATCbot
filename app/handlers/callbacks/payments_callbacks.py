@@ -23,6 +23,7 @@ from app.handlers.common.utils import (
     safe_edit_reply_markup,
     get_promo_session,
     clear_promo_session,
+    sanitize_display_name,
 )
 from app.handlers.common.keyboards import (
     get_profile_keyboard,
@@ -186,8 +187,9 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         await state.clear()
         return
     amount_kopecks = int(amount * 100)
-    username = callback.from_user.username
-    wid = await database.create_withdrawal_request(telegram_id, username, amount_kopecks, requisites)
+    raw_username = callback.from_user.username
+    sanitized_username = sanitize_display_name(raw_username) if raw_username else None
+    wid = await database.create_withdrawal_request(telegram_id, sanitized_username or raw_username, amount_kopecks, requisites)
     if not wid:
         await callback.answer(i18n_get_text(language, "withdraw.insufficient_funds"), show_alert=True)
         await state.clear()
@@ -210,7 +212,7 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         sub_text = i18n_get_text(language, "profile.status_active") if has_active else i18n_get_text(language, "profile.status_inactive")
         admin_text = (
             f"💸 Новая заявка на вывод #{wid}\n\n"
-            f"👤 Пользователь: @{username or '—'} (ID: {telegram_id})\n"
+            f"👤 Пользователь: @{sanitized_username or '—'} (ID: {telegram_id})\n"
             f"📊 Баланс: {balance:.2f} ₽\n"
             f"💰 Сумма: {amount:.2f} ₽\n"
             f"📶 Подписка: {sub_text}\n"

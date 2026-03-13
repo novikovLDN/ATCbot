@@ -17,7 +17,7 @@ from app.services.subscriptions.service import (
     get_subscription_status,
     check_and_disable_expired_subscription as check_subscription_expiry_service,
 )
-from app.handlers.common.utils import safe_edit_text, detect_platform
+from app.handlers.common.utils import safe_edit_text, detect_platform, sanitize_display_name
 from app.handlers.common.keyboards import (
     get_about_keyboard,
     get_instruction_keyboard,
@@ -240,7 +240,12 @@ async def show_profile(message_or_query, language: str):
 
         from_user = message_or_query.from_user
         raw_name = getattr(from_user, "first_name", None) or from_user.username or user.get("first_name") or user.get("username")
-        display_name = raw_name or i18n_get_text(language, "profile.default_name")
+        # Санитизация имени: запрещённые слова → «Пользователь»
+        if raw_name:
+            sanitized = sanitize_display_name(raw_name)
+            display_name = sanitized if sanitized else i18n_get_text(language, "common.user")
+        else:
+            display_name = i18n_get_text(language, "common.user")
 
         # Получаем баланс
         balance_rubles = await database.get_user_balance(telegram_id)

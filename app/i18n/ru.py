@@ -270,7 +270,7 @@ LANG = {
     'common.cancel': "❌ Отмена",
     'common.go_to_connection': "🔌 Перейти к подключению",
     'common.rate_limit_message': "Слишком много запросов. Попробуйте позже.",
-    'common.user': "пользователь",
+    'common.user': "Пользователь",
     'common.username_not_set': "не указан",
     'errors.access_denied': "Доступ запрещён.",
     'errors.analytics': "Ошибка загрузки аналитики",
