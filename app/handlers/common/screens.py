@@ -147,6 +147,12 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         else:
             next_level_line = i18n_get_text(language, "referral.max_level_reached")
         
+        # Генерируем реферальную ссылку для share URL
+        bot_info = await bot.get_me()
+        referral_link = f"https://t.me/{bot_info.username}?start=ref_{telegram_id}"
+        from urllib.parse import quote
+        share_url = f"https://t.me/share/url?url={quote(referral_link)}"
+
         # Новый формат текста с разделёнными метриками
         text = (
             f"{i18n_get_text(language, 'referral.screen_title')}\n\n"
@@ -162,7 +168,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "referral.share_button"),
-                callback_data="share_referral_link"
+                url=share_url
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "referral.stats_button"),
