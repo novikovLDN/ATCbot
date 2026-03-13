@@ -58,19 +58,9 @@ async def cmd_reissue_key(message: Message):
             await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
             return
         
-        # Уведомляем пользователя (ссылка подписки вместо конфигурационного ключа)
+        # Уведомляем пользователя
         try:
-            from vpn_utils import generate_subscription_link
-            sub_link = generate_subscription_link(target_telegram_id)
-            if sub_link:
-                user_text = (
-                    "🔐 VPN-ключ обновлён\n\n"
-                    f"🔗 Ваша ссылка подписки:\n<code>{sub_link}</code>\n\n"
-                    "Скопируйте и вставьте в VPN-приложение.\n"
-                    "Ссылка подписки не изменилась — обновите подписку в приложении."
-                )
-            else:
-                user_text = get_reissue_notification_text(new_vpn_key)
+            user_text = get_reissue_notification_text(new_vpn_key)
             keyboard = get_reissue_notification_keyboard()
             await message.bot.send_message(target_telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
             logging.info(f"Reissue notification sent to user {target_telegram_id}")

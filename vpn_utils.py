@@ -19,8 +19,6 @@ STEP 3 — PART D: EXTERNAL DEPENDENCY ISOLATION
 - System continues degraded when VPN API unavailable
 - Retries handled by retry_async (transient errors only)
 """
-import hashlib
-import hmac
 import httpx
 import logging
 import asyncio
@@ -37,29 +35,6 @@ VPN_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 HTTP_TIMEOUT = 10.0
 MAX_RETRIES = 2
 RETRY_DELAY = 1.0
-
-
-def generate_sub_token(telegram_id: int) -> str:
-    """Generate HMAC-SHA256 token for subscription link (matches Mini App route.ts logic)."""
-    token = hmac.new(
-        config.BOT_TOKEN.encode(),
-        str(telegram_id).encode(),
-        hashlib.sha256,
-    ).digest()
-    import base64
-    return base64.urlsafe_b64encode(token).decode().rstrip("=")[:32]
-
-
-def generate_subscription_link(telegram_id: int) -> str:
-    """Build a subscription link for the given user.
-
-    Returns empty string if SUB_LINK_BASE_URL is not configured.
-    """
-    base = config.SUB_LINK_BASE_URL
-    if not base:
-        return ""
-    token = generate_sub_token(telegram_id)
-    return f"{base}/{token}?id={telegram_id}"
 
 
 class VPNAPIError(Exception):
