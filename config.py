@@ -176,7 +176,7 @@ else:
     print("INFO: ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)", flush=True)
 
 # Xray sync worker: sync DB subscriptions to Xray (default false for production safety)
-XRAY_SYNC_ENABLED = os.getenv("XRAY_SYNC_ENABLED", "false").lower() == "true"
+XRAY_SYNC_ENABLED = env("XRAY_SYNC_ENABLED", default="false").lower() == "true"
 
 # Bot uses ONLY XRAY_API_URL and XRAY_API_KEY.
 # Port, SNI, public key, short id, fingerprint belong to API server only.
