@@ -7247,7 +7247,7 @@ async def get_analytics_by_period(hours: int) -> Dict[str, Any]:
         )
 
         new_subscriptions = await conn.fetchval(
-            "SELECT COUNT(*) FROM subscriptions WHERE created_at >= $1",
+            "SELECT COUNT(*) FROM subscriptions WHERE activated_at >= $1",
             since_db
         )
 
