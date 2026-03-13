@@ -149,6 +149,12 @@ async def callback_topup_stars(callback: CallbackQuery):
     if not await ensure_db_ready_callback(callback):
         return
     telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
     language = await resolve_user_language(telegram_id)
 
     amount_str = callback.data.split(":")[1]
@@ -672,7 +678,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
 @payments_router.callback_query(F.data == "pay:card")
 async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     """ЭКРАН 4B — Оплата картой (Telegram Payments / ЮKassa)
-    
+
     КРИТИЧНО:
     - Работает ТОЛЬКО в состоянии choose_payment_method
     - Создает pending_purchase
@@ -680,8 +686,15 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     - Переводит в processing_payment
     """
     telegram_id = callback.from_user.id
+
+    # Rate limiting
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
     language = await resolve_user_language(telegram_id)
-    
+
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
     current_state = await state.get_state()
     if current_state != PurchaseState.choose_payment_method:
@@ -798,6 +811,13 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
     - Переводит в processing_payment
     """
     telegram_id = callback.from_user.id
+
+    # Rate limiting
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
     language = await resolve_user_language(telegram_id)
 
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
@@ -912,8 +932,15 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     - Использует polling для проверки статуса (NO WEBHOOKS)
     """
     telegram_id = callback.from_user.id
+
+    # Rate limiting
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
     language = await resolve_user_language(telegram_id)
-    
+
     # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
     current_state = await state.get_state()
     if current_state != PurchaseState.choose_payment_method:
@@ -1041,10 +1068,16 @@ async def callback_topup_crypto(callback: CallbackQuery):
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_callback(callback):
         return
-    
+
     telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
     language = await resolve_user_language(telegram_id)
-    
+
     # Извлекаем сумму из callback_data
     amount_str = callback.data.split(":")[1]
     try:
@@ -1127,7 +1160,15 @@ async def callback_topup_crypto(callback: CallbackQuery):
 @payments_router.callback_query(F.data.startswith("topup_card:"))
 async def callback_topup_card(callback: CallbackQuery):
     """Оплата пополнения баланса картой"""
+    if not await ensure_db_ready_callback(callback):
+        return
     telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
     language = await resolve_user_language(telegram_id)
     
     amount_str = callback.data.split(":")[1]
