@@ -189,7 +189,7 @@ async def reminders_task(bot: Bot):
         except asyncio.CancelledError:
             logger.info("Reminders task cancelled")
             iteration_outcome = "cancelled"
-            break
+            raise
         except Exception as e:
             logger.error("reminders: Unexpected error in task loop: %s: %.100s", type(e).__name__, str(e))
             logger.debug("reminders: Full traceback for task loop", exc_info=True)

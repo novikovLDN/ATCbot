@@ -90,10 +90,10 @@ async def full_sync(*, force: bool = False) -> int:
             continue
         try:
             await asyncio.wait_for(
-                vpn_utils.add_vless_user(
+                vpn_utils.ensure_user_in_xray(
                     telegram_id=telegram_id,
+                    uuid=uuid_val,
                     subscription_end=expires_at,
-                    uuid=uuid_val
                 ),
                 timeout=XRAY_SYNC_API_TIMEOUT,
             )

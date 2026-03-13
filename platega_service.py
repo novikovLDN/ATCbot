@@ -6,6 +6,7 @@ Configuration: merchant_id/secret/API URL resolved via config.py only.
 """
 import config
 import database
+import hmac
 import json
 import logging
 import math
@@ -149,7 +150,7 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     merchant_id = headers.get("x-merchantid", "") or headers.get("X-MerchantId", "")
     secret = headers.get("x-secret", "") or headers.get("X-Secret", "")
 
-    if merchant_id != PLATEGA_MERCHANT_ID or secret != PLATEGA_SECRET:
+    if not hmac.compare_digest(str(merchant_id), str(PLATEGA_MERCHANT_ID)) or not hmac.compare_digest(str(secret), str(PLATEGA_SECRET)):
         logger.warning(
             f"Platega webhook: auth failed, merchant_id_match={merchant_id == PLATEGA_MERCHANT_ID}"
         )
@@ -240,7 +241,10 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
         if is_balance_topup:
             topup_amount = result.get("amount", amount_rubles)
             text = i18n_get_text(language, "main.balance_topup_success", amount=topup_amount)
-            await bot.send_message(telegram_id, text, parse_mode="HTML")
+            try:
+                await bot.send_message(telegram_id, text, parse_mode="HTML")
+            except Exception as send_err:
+                logger.warning(f"Platega: failed to send topup confirmation to user={telegram_id}: {send_err}")
             logger.info(
                 f"Platega payment processed (balance topup): user={telegram_id}, "
                 f"payment_id={payment_id}, amount={topup_amount} RUB"
@@ -256,9 +260,12 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
                 text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
 
             from app.handlers.common.keyboards import get_connect_keyboard
-            await bot.send_message(
-                telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML"
-            )
+            try:
+                await bot.send_message(
+                    telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML"
+                )
+            except Exception as send_err:
+                logger.warning(f"Platega: failed to send subscription confirmation to user={telegram_id}: {send_err}")
             logger.info(
                 f"Platega payment processed: user={telegram_id}, payment_id={payment_id}, "
                 f"purchase_id={purchase_id}, subscription_activated=True"
