@@ -6,7 +6,6 @@ import hashlib
 import base64
 import uuid as uuid_lib
 import random
-import string
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
@@ -46,7 +45,8 @@ def _to_db_utc(dt: datetime) -> datetime:
     """
     if dt is None:
         return None
-    assert dt.tzinfo == timezone.utc, f"Expected UTC, got tzinfo={dt.tzinfo}"
+    if dt.tzinfo != timezone.utc:
+        raise ValueError(f"Expected UTC, got tzinfo={dt.tzinfo}")
     return dt.replace(tzinfo=None)
 
 
@@ -65,8 +65,10 @@ def _from_db_utc(dt: datetime) -> datetime:
 def _generate_subscription_uuid() -> str:
     """Canonical subscription UUID generation. DB is source of truth. Single place for new UUIDs."""
     u = str(uuid_lib.uuid4())
-    assert u, "UUID generation failed: empty"
-    assert len(u) >= 32, f"UUID generation failed: invalid length {len(u)}"
+    if not u:
+        raise RuntimeError("UUID generation failed: empty")
+    if len(u) < 32:
+        raise RuntimeError(f"UUID generation failed: invalid length {len(u)}")
     return u
 
 
@@ -661,11 +663,6 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS smart_offer_sent BOOLEAN DEFAULT FALSE")
         except Exception:
             pass
-            # Если колонка уже существует как NUMERIC, конвертируем в INTEGER (копейки)
-            # Это безопасно, так как мы всегда работаем с копейками
-        except Exception:
-            # Колонка уже существует
-            pass
         
         # Таблица balance_transactions
         await conn.execute("""
@@ -1151,7 +1148,7 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
         return False
     
     # Конвертируем рубли в копейки для хранения
-    amount_kopecks = int(amount * 100)
+    amount_kopecks = round(amount * 100)
     
     # Защита от работы с неинициализированной БД
     if not DB_READY:
@@ -1382,7 +1379,7 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
         return False
     
     # Конвертируем рубли в копейки для хранения
-    amount_kopecks = int(amount * 100)
+    amount_kopecks = round(amount * 100)
     
     # Защита от работы с неинициализированной БД
     if not DB_READY:
@@ -1459,7 +1456,7 @@ async def log_balance_transaction(telegram_id: int, amount: float, transaction_t
     Returns:
         True если успешно, False при ошибке
     """
-    amount_kopecks = int(amount * 100)
+    amount_kopecks = round(amount * 100)
     
     # Защита от работы с неинициализированной БД
     if not DB_READY:
@@ -2603,7 +2600,7 @@ async def process_referral_reward(
             referrals_needed = 0
         
         # 6. Рассчитываем сумму кешбэка (в копейках)
-        purchase_amount_kopecks = int(amount_rubles * 100)
+        purchase_amount_kopecks = round(amount_rubles * 100)
         reward_amount_kopecks = int(purchase_amount_kopecks * percent / 100)
         reward_amount_rubles = reward_amount_kopecks / 100.0
         
@@ -2771,8 +2768,10 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
         return None  # У пользователя уже есть pending платеж
     
     # Рассчитываем цену с учетом скидки
-    tariff_data = config.TARIFFS.get(tariff, config.TARIFFS["1"])
-    base_price = tariff_data["price"]
+    # TARIFFS is nested: tariff -> period_days -> {price}. Default to 30-day period.
+    tariff_periods = config.TARIFFS.get(tariff, config.TARIFFS.get("basic", {}))
+    tariff_data = tariff_periods.get(30, {})
+    base_price = tariff_data.get("price", 149)
     
     # ПРИОРИТЕТ 1: Проверяем VIP-статус (высший приоритет)
     is_vip = await is_vip_user(telegram_id)
@@ -3846,9 +3845,10 @@ async def grant_access(
     Raises:
         Exception: При любых ошибках (транзакция откатывается, исключение пробрасывается)
     """
+    _acquired_pool = None
     if conn is None:
-        pool = await get_pool()
-        conn = await pool.acquire()
+        _acquired_pool = await get_pool()
+        conn = await _acquired_pool.acquire()
         should_release_conn = True
     else:
         should_release_conn = False
@@ -4634,9 +4634,11 @@ async def grant_access(
         logger.exception(f"grant_access: EXCEPTION_TRACEBACK [user={telegram_id}]")
         raise  # Пробрасываем исключение, не возвращаем None
     finally:
-        if should_release_conn:
-            pool = await get_pool()
-            await pool.release(conn)
+        if should_release_conn and _acquired_pool is not None:
+            try:
+                await _acquired_pool.release(conn)
+            except Exception as release_err:
+                logger.error(f"grant_access: failed to release connection: {release_err}")
 
 
 def _calculate_subscription_days(months: int) -> int:
@@ -6183,7 +6185,7 @@ async def calculate_final_price(
     
     # Получаем базовую цену в рублях из конфига
     base_price_rubles = config.TARIFFS[tariff][period_days]["price"]
-    base_price_kopecks = int(base_price_rubles * 100)
+    base_price_kopecks = round(base_price_rubles * 100)
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
     promo_data = None
@@ -6651,7 +6653,7 @@ async def finalize_purchase(
                            VALUES ($1, $2, $3, 'approved', $4) RETURNING id""",
                         telegram_id,
                         "balance_topup",
-                        int(amount_rubles * 100),
+                        round(amount_rubles * 100),
                         _to_db_utc(now_utc)
                     )
                     if not payment_id:
@@ -6709,7 +6711,7 @@ async def finalize_purchase(
                        VALUES ($1, $2, $3, 'pending', $4, $5, $6) RETURNING id""",
                     telegram_id,
                     f"{tariff_type}_{period_days}",
-                    int(amount_rubles * 100),
+                    round(amount_rubles * 100),
                     purchase_id,
                     str(invoice_id) if invoice_id else None,
                     _to_db_utc(now_utc)
@@ -7874,7 +7876,7 @@ async def finalize_balance_purchase(
     if amount_rubles <= 0:
         raise ValueError(f"Invalid amount for balance purchase: {amount_rubles}")
     
-    amount_kopecks = int(amount_rubles * 100)
+    amount_kopecks = round(amount_rubles * 100)
     pool = await get_pool()
     
     if pool is None:
@@ -8149,7 +8151,7 @@ async def finalize_balance_topup(
     if provider not in ("telegram", "cryptobot", "platega", "crypto2328", "telegram_stars"):
         raise ValueError(f"Invalid provider: {provider}. Must be 'telegram', 'platega', or 'telegram_stars'")
     
-    amount_kopecks = int(amount_rubles * 100)
+    amount_kopecks = round(amount_rubles * 100)
     pool = await get_pool()
     
     if pool is None:
