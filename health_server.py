@@ -127,16 +127,27 @@ async def create_health_app(bot: Optional[Bot] = None) -> web.Application:
     
     app.router.add_get("/", root_handler)
     
-    # Register Crypto Bot webhook if enabled
+    # Register payment provider webhooks
     if bot:
+        # Platega (SBP) webhook
         try:
-            import cryptobot_service
-            if cryptobot_service.is_enabled():
-                await cryptobot_service.register_webhook_route(app, bot)
+            import platega_service
+            if platega_service.is_enabled():
+                await platega_service.register_webhook_route(app, bot)
         except ImportError:
             pass
         except Exception as e:
-            logger.error(f"Failed to register Crypto Bot webhook: {e}")
+            logger.error(f"Failed to register Platega webhook: {e}")
+
+        # 2328.io (Crypto) webhook
+        try:
+            import crypto2328_service
+            if crypto2328_service.is_enabled():
+                await crypto2328_service.register_webhook_route(app, bot)
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.error(f"Failed to register 2328.io webhook: {e}")
     
     return app
 

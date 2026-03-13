@@ -1,21 +1,15 @@
 """
 Payment Webhook API
 
-POST /webhook/payment — Unified payment webhook (CryptoBot, future providers).
+Webhook endpoints for payment providers:
+- POST /webhooks/platega — Platega (SBP) payment notifications
+- POST /webhooks/crypto2328 — 2328.io crypto payment notifications
 
-Responsibilities:
-1. Validate signature from provider (X-Crypto-Pay-API-Signature).
-2. Parse payment event (invoice_paid).
-3. Find payment by purchase_id from payload.
-4. If status already "paid" → ignore (idempotency).
-5. Mark payment as paid via database.finalize_purchase.
-6. Activate subscription via vpn_client (grant_access).
-
-Registration: health_server.create_health_app() calls cryptobot_service.register_webhook_route()
-which registers POST /webhook/payment and POST /webhooks/cryptobot.
+Registration: health_server.create_health_app() calls
+platega_service.register_webhook_route() and crypto2328_service.register_webhook_route().
 
 Security:
-- Signature verification required.
+- Signature/auth verification required per provider.
 - Idempotent: duplicate webhooks return 200, no re-activation.
 - Amount tolerance: ±1 RUB.
 - Pending expiry: 30 min (pending_purchases.expires_at).
@@ -28,10 +22,23 @@ from typing import Optional
 
 async def register_payment_webhook(app: web.Application, bot: Optional[Bot]) -> None:
     """
-    Register payment webhook routes.
-
-    Delegates to cryptobot_service which handles CryptoBot webhook format.
+    Register payment webhook routes for all configured providers.
     """
-    import cryptobot_service
-    if cryptobot_service.is_enabled() and bot:
-        await cryptobot_service.register_webhook_route(app, bot)
+    if not bot:
+        return
+
+    # Platega (SBP)
+    try:
+        import platega_service
+        if platega_service.is_enabled():
+            await platega_service.register_webhook_route(app, bot)
+    except ImportError:
+        pass
+
+    # 2328.io (Crypto)
+    try:
+        import crypto2328_service
+        if crypto2328_service.is_enabled():
+            await crypto2328_service.register_webhook_route(app, bot)
+    except ImportError:
+        pass
