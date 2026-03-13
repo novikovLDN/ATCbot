@@ -1777,7 +1777,6 @@ async def callback_admin_growth_period(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
 
-    await callback.answer()
     language = await resolve_user_language(callback.from_user.id)
 
     try:
@@ -1811,6 +1810,7 @@ async def callback_admin_growth_period(callback: CallbackQuery):
         ])
 
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await callback.answer()
 
         await database._log_audit_event_atomic_standalone(
             "admin_view_growth_analytics",
@@ -1834,7 +1834,6 @@ async def callback_admin_extended_stats(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
 
-    await callback.answer()
     language = await resolve_user_language(callback.from_user.id)
 
     try:
@@ -1866,6 +1865,7 @@ async def callback_admin_extended_stats(callback: CallbackQuery):
         ])
 
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await callback.answer()
 
         await database._log_audit_event_atomic_standalone(
             "admin_view_extended_stats",
