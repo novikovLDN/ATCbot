@@ -7471,10 +7471,10 @@ async def update_admin_broadcast_record(broadcast_id: int, success_count: int, f
 
 async def get_users_by_segment(segment: str) -> list:
     """Получить список Telegram ID пользователей по сегменту
-    
+
     Args:
-        segment: Сегмент получателей (all_users | active_subscriptions)
-    
+        segment: Сегмент получателей (all_users | active_subscriptions | no_subscription)
+
     Returns:
         Список Telegram ID пользователей
     """
@@ -7486,10 +7486,21 @@ async def get_users_by_segment(segment: str) -> list:
         elif segment == "active_subscriptions":
             now = datetime.now(timezone.utc)
             rows = await conn.fetch(
-                """SELECT DISTINCT u.telegram_id 
+                """SELECT DISTINCT u.telegram_id
                    FROM users u
                    INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
                    WHERE s.expires_at > $1""",
+                now
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "no_subscription":
+            now = datetime.now(timezone.utc)
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id AND s.expires_at > $1
+                   )""",
                 now
             )
             return [row["telegram_id"] for row in rows]
