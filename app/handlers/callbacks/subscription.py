@@ -442,8 +442,14 @@ async def callback_subscription_history(callback: CallbackQuery):
         text += f"• {start_str} — {action_text}\n"
 
         if action_type in ["purchase", "reissue", "manual_reissue"]:
-            key_label = i18n_get_text(language, "subscription.history_key_label")
-            text += f"  {key_label} {record['vpn_key']}\n"
+            from vpn_utils import generate_subscription_link
+            sub_link = generate_subscription_link(telegram_id)
+            if sub_link:
+                key_label = i18n_get_text(language, "subscription.history_key_label")
+                text += f"  {key_label} {sub_link[:40]}...\n"
+            else:
+                key_label = i18n_get_text(language, "subscription.history_key_label")
+                text += f"  {key_label} {record['vpn_key']}\n"
 
         expires_label = i18n_get_text(language, "subscription.history_expires")
         text += f"  {expires_label} {end_str}\n\n"

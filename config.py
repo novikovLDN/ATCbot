@@ -159,6 +159,10 @@ XRAY_API_TIMEOUT = float(env("XRAY_API_TIMEOUT", default="5.0"))
 # Optional: public URL of VPN server (e.g. for future subscription link features).
 VPN_SERVER_URL = env("VPN_SERVER_URL", default="").rstrip("/")
 
+# Subscription link base URL (e.g. https://example.com/api/sub)
+# Used to generate subscription links for users instead of raw vless:// config keys.
+SUB_LINK_BASE_URL = os.getenv("SUB_LINK_BASE_URL", "").rstrip("/")
+
 # Флаг доступности VPN API
 VPN_ENABLED = bool(XRAY_API_URL and XRAY_API_KEY)
 

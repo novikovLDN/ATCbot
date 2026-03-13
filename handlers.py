@@ -1916,10 +1916,19 @@ async def cmd_reissue_key(message: Message):
             await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
             return
         
-        # Уведомляем пользователя (кнопка «Подключиться» — ключ в Mini App)
+        # Уведомляем пользователя (ссылка подписки вместо конфигурационного ключа)
         try:
+            from vpn_utils import generate_subscription_link
             from app.handlers.common.keyboards import get_connect_keyboard
-            user_text = "🔑 Ключ перевыпущен. Нажмите кнопку ниже чтобы подключиться:"
+            sub_link = generate_subscription_link(target_telegram_id)
+            if sub_link:
+                user_text = (
+                    "🔐 VPN-ключ обновлён\n\n"
+                    f"🔗 Ваша ссылка подписки:\n<code>{sub_link}</code>\n\n"
+                    "Ссылка подписки не изменилась — обновите подписку в приложении."
+                )
+            else:
+                user_text = "🔑 Ключ перевыпущен. Нажмите кнопку ниже чтобы подключиться:"
             await message.bot.send_message(target_telegram_id, user_text, reply_markup=get_connect_keyboard(), parse_mode="HTML")
             logging.info(f"Reissue notification sent to user {target_telegram_id}")
         except Exception as e:

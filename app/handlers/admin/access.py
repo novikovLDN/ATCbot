@@ -136,16 +136,24 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                 success_count += 1
                 successful_ids.append(telegram_id)
                 
-                # Отправляем уведомление пользователю
+                # Отправляем уведомление пользователю (ссылка подписки вместо ключа)
                 try:
                     notify_lang = await resolve_user_language(telegram_id)
-                    
-                    try:
-                        user_text = i18n_get_text(notify_lang, "admin.reissue_user_notification", vpn_key=f"<code>{new_vpn_key}</code>")
-                    except (KeyError, TypeError):
-                        # Fallback to default if localization not found
-                        user_text = get_reissue_notification_text(new_vpn_key)
-                    
+
+                    from vpn_utils import generate_subscription_link
+                    sub_link = generate_subscription_link(telegram_id)
+                    if sub_link:
+                        user_text = (
+                            "🔐 VPN-ключ обновлён\n\n"
+                            f"🔗 Ваша ссылка подписки:\n<code>{sub_link}</code>\n\n"
+                            "Ссылка подписки не изменилась — обновите подписку в приложении."
+                        )
+                    else:
+                        try:
+                            user_text = i18n_get_text(notify_lang, "admin.reissue_user_notification", vpn_key=f"<code>{new_vpn_key}</code>")
+                        except (KeyError, TypeError):
+                            user_text = get_reissue_notification_text(new_vpn_key)
+
                     keyboard = get_reissue_notification_keyboard(notify_lang)
                     await bot.send_message(telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
                 except Exception as e:
@@ -396,6 +404,12 @@ async def process_admin_user_id(message: Message, state: FSMContext):
             vpn_key = overview.subscription.get('vpn_key', '—')
             if vpn_key and vpn_key != '—':
                 text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
+            from vpn_utils import generate_subscription_link
+            _admin_tid = overview.user.get("telegram_id")
+            if _admin_tid:
+                sub_link = generate_subscription_link(_admin_tid)
+                if sub_link:
+                    text += f"Ссылка подписки:\n<code>{sub_link}</code>\n"
             else:
                 text += "VPN-ключ: —\n"
         else:
@@ -866,8 +880,13 @@ async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
             msg = f"🔄 Ваш тариф изменён на {tariff_label}\n📅 Срок подписки не изменился."
             try:
                 await bot.send_message(user_id, msg)
-                if tariff == "plus" and sub and sub.get("vpn_key_plus"):
-                    await bot.send_message(user_id, f"<code>{sub['vpn_key_plus']}</code>", parse_mode="HTML")
+                if tariff == "plus":
+                    from vpn_utils import generate_subscription_link
+                    sub_link = generate_subscription_link(user_id)
+                    if sub_link:
+                        await bot.send_message(user_id, f"🔗 Ваша ссылка подписки:\n<code>{sub_link}</code>\n\nОбновите подписку в VPN-приложении.", parse_mode="HTML")
+                    elif sub and sub.get("vpn_key_plus"):
+                        await bot.send_message(user_id, f"<code>{sub['vpn_key_plus']}</code>", parse_mode="HTML")
             except Exception as e:
                 logger.exception(f"Error sending switch notify to user {user_id}: {e}")
         overview = await admin_service.get_admin_user_overview(user_id)
@@ -1309,8 +1328,13 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             # PART 6: Notify user if flag is True
             if notify_user and vpn_key:
                 import admin_notifications
-                vpn_key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
-                user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\nКлюч: {vpn_key_html}\nДействителен до: {expires_str}"
+                from vpn_utils import generate_subscription_link
+                sub_link = generate_subscription_link(user_id)
+                if sub_link:
+                    key_html = f"🔗 Ссылка подписки:\n<code>{sub_link}</code>"
+                else:
+                    key_html = f"<code>{vpn_key}</code>" if vpn_key else "⏳ Активация в процессе"
+                user_text = f"✅ Вам выдан доступ на {duration_value} {unit_text}\n\n{key_html}\nДействителен до: {expires_str}"
                 # Use unified notification service
                 await admin_notifications.send_user_notification(
                     bot=bot,
@@ -1807,6 +1831,12 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
             text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
         else:
             text += "VPN-ключ: —\n"
+        from vpn_utils import generate_subscription_link
+        _admin_tid2 = overview.user.get("telegram_id")
+        if _admin_tid2:
+            sub_link = generate_subscription_link(_admin_tid2)
+            if sub_link:
+                text += f"Ссылка подписки:\n<code>{sub_link}</code>\n"
     else:
         text += "Статус подписки: ❌ Нет подписки\n"
         text += "VPN-ключ: —\n"
@@ -2034,9 +2064,18 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
             extra={"correlation_id": correlation_id, "target_user_id": target_user_id},
         )
 
-        # Уведомляем пользователя
+        # Уведомляем пользователя (ссылка подписки вместо ключа)
         try:
-            user_text = get_reissue_notification_text(new_vpn_key)
+            from vpn_utils import generate_subscription_link
+            sub_link = generate_subscription_link(target_user_id)
+            if sub_link:
+                user_text = (
+                    "🔐 VPN-ключ обновлён\n\n"
+                    f"🔗 Ваша ссылка подписки:\n<code>{sub_link}</code>\n\n"
+                    "Ссылка подписки не изменилась — обновите подписку в приложении."
+                )
+            else:
+                user_text = get_reissue_notification_text(new_vpn_key)
             keyboard = get_reissue_notification_keyboard()
             await callback.bot.send_message(target_user_id, user_text, reply_markup=keyboard, parse_mode="HTML")
         except Exception as e:

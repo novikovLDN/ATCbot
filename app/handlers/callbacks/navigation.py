@@ -209,8 +209,8 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.in_({"copy_key_menu", "copy_key", "copy_key_plus", "copy_vpn_key"}))
-async def callback_connect_instead_of_copy(callback: CallbackQuery):
-    """Ключи больше не отправляются в боте; показываем кнопку «Подключиться» (Mini App)."""
+async def callback_send_subscription_link(callback: CallbackQuery):
+    """Отправляем ссылку подписки вместо конфигурационного ключа."""
     try:
         await callback.answer()
     except Exception:
@@ -218,7 +218,19 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
 
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    await callback.message.answer(
-        "🚀 Нажмите кнопку ниже чтобы подключиться:",
-        reply_markup=get_connect_keyboard(),
-    )
+
+    from vpn_utils import generate_subscription_link
+    telegram_id = callback.from_user.id
+    sub_link = generate_subscription_link(telegram_id)
+
+    if sub_link:
+        await callback.message.answer(
+            f"🔗 Ваша ссылка подписки:\n\n<code>{sub_link}</code>\n\n"
+            "Скопируйте и вставьте в VPN-приложение.",
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.answer(
+            "🚀 Нажмите кнопку ниже чтобы подключиться:",
+            reply_markup=get_connect_keyboard(),
+        )
