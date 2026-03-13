@@ -8,22 +8,37 @@ from app.i18n import get_text as i18n_get_text
 
 
 def get_admin_dashboard_keyboard(language: str = "ru"):
-    """Клавиатура главного экрана админ-дашборда"""
+    """Клавиатура главного экрана админ-дашборда (сгруппирована по категориям)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        # — Обзор —
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.dashboard"), callback_data="admin:dashboard")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.stats"), callback_data="admin:stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.analytics"), callback_data="admin:analytics")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.metrics"), callback_data="admin:metrics")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit")],
+        # — Аналитика и статистика —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.stats"), callback_data="admin:stats"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.analytics"), callback_data="admin:analytics"),
+        ],
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.metrics"), callback_data="admin:metrics"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats"),
+        ],
+        # — Управление пользователями —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management"),
+        ],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast")],
+        # — Маркетинг —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode"),
+        ],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode")],
+        # — Система —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit"),
+        ],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
     ])
     return keyboard
 
@@ -163,6 +178,7 @@ def get_broadcast_segment_keyboard(language: str = "ru"):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_all"), callback_data="broadcast_segment:all_users")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_active"), callback_data="broadcast_segment:active_subscriptions")],
+        [InlineKeyboardButton(text="🚫 Без подписки", callback_data="broadcast_segment:no_subscription")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
     return keyboard

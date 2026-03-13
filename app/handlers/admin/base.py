@@ -41,48 +41,66 @@ async def cmd_admin(message: Message):
 @admin_base_router.callback_query(F.data == "admin:dashboard")
 async def callback_admin_dashboard(callback: CallbackQuery):
     """
-    2. ADMIN DASHBOARD UI (TELEGRAM)
-    
-    Display real-time system health with severity indicator.
+    Admin Dashboard — rich real-time overview with key metrics.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
     try:
-        # Simple health check
         db_ready = database.DB_READY
         status = "✅ OK" if db_ready else "⚠️ DEGRADED"
-        
-        # Build dashboard text
+
         text = f"📊 Admin Dashboard\n\n"
-        text += f"Status: {status}\n"
-        text += f"Database: {'✅ Ready' if db_ready else '❌ Not Ready'}\n\n"
-        
-        # Add refresh button
-        user = await database.get_user(callback.from_user.id)
+        text += f"Статус: {status}\n"
+        text += f"База данных: {'✅' if db_ready else '❌'} | VPN API: {'✅' if config.VPN_ENABLED else '⚠️'}\n"
+
+        # Key metrics (if DB is ready)
+        if db_ready:
+            try:
+                stats = await database.get_admin_stats()
+                daily = await database.get_daily_summary(None)
+                text += f"\n━━━ Ключевые показатели ━━━\n"
+                text += f"👥 Пользователей: {stats['total_users']}\n"
+                text += f"🔑 Активных подписок: {stats['active_subscriptions']}\n"
+                text += f"💳 Платежей: {stats['approved_payments']}/{stats['total_payments']}\n"
+                text += f"\n━━━ Сегодня ━━━\n"
+                text += f"💰 Доход: {daily.get('revenue', 0):.2f} ₽\n"
+                text += f"🆕 Новых: {daily.get('new_users', 0)} польз. | {daily.get('new_subscriptions', 0)} подп.\n"
+                text += f"💳 Платежей: {daily.get('payments_count', 0)}\n"
+            except Exception as stats_err:
+                logger.warning(f"Failed to load dashboard metrics: {stats_err}")
+                text += "\n⚠️ Не удалось загрузить метрики\n"
+
+        # Uptime
+        start_time = get_bot_start_time()
+        if start_time:
+            uptime_seconds = int((datetime.now(timezone.utc) - start_time).total_seconds())
+            uptime_days = uptime_seconds // 86400
+            uptime_hours = (uptime_seconds % 86400) // 3600
+            uptime_minutes = (uptime_seconds % 3600) // 60
+            text += f"\n⏱ Аптайм: {uptime_days}д {uptime_hours}ч {uptime_minutes}м"
+
         language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.refresh"), callback_data="admin:dashboard")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_menu"), callback_data="admin:test_menu")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
-        
+
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
-        
-        # Audit log
+
         await database._log_audit_event_atomic_standalone(
             "admin_dashboard_viewed",
             callback.from_user.id,
             None,
             f"Admin viewed dashboard: db_ready={db_ready}"
         )
-        
+
     except Exception as e:
         logger.exception(f"Error in callback_admin_dashboard: {e}")
-        user = await database.get_user(callback.from_user.id)
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "errors.dashboard_data"), show_alert=True)
 
@@ -184,13 +202,33 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
 
 
 @admin_base_router.callback_query(F.data == "admin:reissue_all_active")
+async def callback_admin_reissue_all_active_confirm(callback: CallbackQuery):
+    """Подтверждение массового перевыпуска"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    language = await resolve_user_language(callback.from_user.id)
+    text = "⚠️ Массовый перевыпуск ключей\n\nВсе активные VPN-ключи будут перевыпущены.\nПродолжить?"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, перевыпустить", callback_data="admin:reissue_all_active_go"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin:keys"),
+        ]
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@admin_base_router.callback_query(F.data == "admin:reissue_all_active_go")
 async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
     """Массовый перевыпуск ключей для всех активных подписок"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
     await callback.answer("Начинаю массовый перевыпуск...")
     language = await resolve_user_language(callback.from_user.id)
 
