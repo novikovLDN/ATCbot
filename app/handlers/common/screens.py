@@ -181,15 +181,20 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         ])
         
         file_id = get_loyalty_screen_attachment(current_level_name)
+        photo_sent = False
         if file_id:
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=file_id,
-                caption=text,
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-        else:
+            try:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file_id,
+                    caption=text,
+                    reply_markup=keyboard,
+                    parse_mode=None,
+                )
+                photo_sent = True
+            except Exception as photo_err:
+                logger.warning(f"Failed to send loyalty photo for user={telegram_id}, falling back to text: {photo_err}")
+        if not photo_sent:
             await bot.send_message(
                 chat_id=chat_id,
                 text=text,
