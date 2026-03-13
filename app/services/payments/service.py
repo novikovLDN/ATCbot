@@ -459,8 +459,8 @@ async def finalize_balance_topup_payment(
     if not provider_charge_id:
         raise PaymentFinalizationError("provider_charge_id is required for idempotency")
     
-    if provider not in ("telegram", "cryptobot"):
-        raise PaymentFinalizationError(f"Invalid provider: {provider}. Must be 'telegram' or 'cryptobot'")
+    if provider not in ("telegram", "cryptobot", "telegram_stars"):
+        raise PaymentFinalizationError(f"Invalid provider: {provider}. Must be 'telegram', 'cryptobot', or 'telegram_stars'")
     
     try:
         result = await database.finalize_balance_topup(

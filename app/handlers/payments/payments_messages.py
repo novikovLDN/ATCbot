@@ -234,17 +234,27 @@ async def process_successful_payment(message: Message, state: FSMContext):
     payment = message.successful_payment
     payload = payment.invoice_payload
     
+    # Определяем, является ли оплата через Telegram Stars
+    is_stars_payment = (payment.currency == "XTR")
+
     # КРИТИЧНО: Логируем получение события оплаты от Telegram
     purchase_id_from_payload = payload.split(":", 1)[1] if payload and payload.startswith("purchase:") else payload
+    if is_stars_payment:
+        log_amount = payment.total_amount if payment.total_amount else 0
+        log_currency = "XTR"
+    else:
+        log_amount = payment.total_amount / 100.0 if payment.total_amount else 0
+        log_currency = "RUB"
     logger.info(
-        "SUCCESSFUL_PAYMENT_RECEIVED purchase_id=%s telegram_id=%s amount=%s RUB",
+        "SUCCESSFUL_PAYMENT_RECEIVED purchase_id=%s telegram_id=%s amount=%s %s",
         purchase_id_from_payload,
         telegram_id,
-        payment.total_amount / 100.0 if payment.total_amount else 0,
+        log_amount,
+        log_currency,
     )
     logger.info(
-        f"payment_event_received: provider=telegram_payment, user={telegram_id}, "
-        f"payload={payload}, amount={payment.total_amount / 100.0:.2f} RUB, "
+        f"payment_event_received: provider={'telegram_stars' if is_stars_payment else 'telegram_payment'}, "
+        f"user={telegram_id}, payload={payload}, amount={log_amount} {log_currency}, "
         f"currency={payment.currency}"
     )
     
@@ -254,7 +264,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
         
         if payload_info.payload_type == "balance_topup":
             # Пополнение баланса - используем payment service
-            payment_amount_rubles = payment.total_amount / 100.0
+            # Для Stars: total_amount = кол-во Stars напрямую; для RUB: total_amount в копейках
+            payment_amount_rubles = payment.total_amount if is_stars_payment else payment.total_amount / 100.0
             
             # КРИТИЧНО: Извлекаем provider_charge_id для идемпотентности
             # Telegram гарантирует уникальность telegram_payment_charge_id
@@ -268,13 +279,19 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 await message.answer(error_text)
                 return
             
+            topup_provider = "telegram_stars" if is_stars_payment else "telegram"
+            topup_description = (
+                "Пополнение баланса через Telegram Stars"
+                if is_stars_payment
+                else "Пополнение баланса через Telegram Payments"
+            )
             try:
                 result = await payment_service.finalize_balance_topup_payment(
                     telegram_id=telegram_id,
                     amount_rubles=payment_amount_rubles,
-                    provider="telegram",
+                    provider=topup_provider,
                     provider_charge_id=provider_charge_id,
-                    description="Пополнение баланса через Telegram Payments",
+                    description=topup_description,
                     correlation_id=str(message.message_id)
                 )
             except PaymentFinalizationError as e:
@@ -485,7 +502,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
     tariff_type = pending_purchase["tariff"]
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
-    payment_amount_rubles = payment.total_amount / 100.0
+    # Для Stars: total_amount = кол-во Stars напрямую; для RUB: total_amount в копейках
+    payment_amount_rubles = payment.total_amount if is_stars_payment else payment.total_amount / 100.0
     
     # КРИТИЧНО: Логируем верификацию платежа
     logger.info(
@@ -502,11 +520,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         
     # Finalize subscription payment through payment service
+    payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:
         result = await payment_service.finalize_subscription_payment(
             purchase_id=purchase_id,
             telegram_id=telegram_id,
-            payment_provider="telegram_payment",
+            payment_provider=payment_provider_name,
             amount_rubles=payment_amount_rubles
         )
         

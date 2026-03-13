@@ -1402,7 +1402,13 @@ async def show_payment_method_selection(
         text=i18n_get_text(language, "payment.crypto"),
         callback_data="pay:crypto"
     )])
-    
+
+    # Кнопка оплаты Telegram Stars
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.stars"),
+        callback_data="pay:stars"
+    )])
+
     # Кнопка "Назад"
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
