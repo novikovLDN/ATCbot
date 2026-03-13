@@ -126,6 +126,10 @@ async def callback_topup_amount(callback: CallbackQuery):
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.sbp"),
+            callback_data=f"topup_sbp:{amount}"
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_crypto"),
             callback_data=f"topup_crypto:{amount}"
         )],
@@ -920,16 +924,15 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
 
 
-@payments_router.callback_query(F.data == "pay:crypto")
-async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
-    """Оплата криптовалютой через CryptoBot
-    
+@payments_router.callback_query(F.data == "pay:sbp")
+async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
+    """Оплата через СБП (Platega.io, +11% наценка)
+
     КРИТИЧНО:
     - Работает ТОЛЬКО в состоянии choose_payment_method
-    - Создает pending_purchase
-    - Создает invoice через CryptoBot API
+    - Создает pending_purchase с ценой +11%
+    - Создает транзакцию через Platega API
     - Отправляет payment URL пользователю
-    - Использует polling для проверки статуса (NO WEBHOOKS)
     """
     telegram_id = callback.from_user.id
 
@@ -946,41 +949,159 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     if current_state != PurchaseState.choose_payment_method:
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
-        logger.warning(f"Invalid FSM state for pay:crypto: user={telegram_id}, state={current_state}, expected=PurchaseState.choose_payment_method")
+        logger.warning(f"Invalid FSM state for pay:sbp: user={telegram_id}, state={current_state}")
         await state.set_state(None)
         return
-    
+
     # КРИТИЧНО: Получаем данные из FSM state
     fsm_data = await state.get_data()
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    
+
     # Получаем промо-сессию
     promo_session = await get_promo_session(state)
     promo_code = promo_session.get("promo_code") if promo_session else None
-    
+
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
-        logger.error(f"Missing purchase data in FSM: user={telegram_id}, tariff={tariff_type}, period={period_days}, price={final_price_kopecks}")
+        logger.error(f"Missing purchase data in FSM for sbp: user={telegram_id}")
         await state.set_state(None)
         return
-    
-    # Проверяем наличие CryptoBot конфигурации
+
+    # Проверяем доступность Platega
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.sbp_unavailable"), show_alert=True)
+        logger.error("Platega not configured")
+        return
+
     try:
-        from payments import cryptobot
-        if not cryptobot.is_enabled():
-            error_text = i18n_get_text(language, "payment.crypto_unavailable")
-            await callback.answer(error_text, show_alert=True)
-            logger.error(f"CryptoBot not configured")
-            return
-    except ImportError:
+        # Применяем наценку +11% для СБП
+        sbp_price_kopecks = platega_service.apply_sbp_markup(final_price_kopecks)
+
+        # Создаем pending_purchase с ценой СБП (+11%)
+        purchase_id = await subscription_service.create_subscription_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=sbp_price_kopecks,
+            promo_code=promo_code
+        )
+
+        await state.update_data(purchase_id=purchase_id)
+
+        logger.info(
+            f"Purchase created for SBP payment: user={telegram_id}, purchase_id={purchase_id}, "
+            f"tariff={tariff_type}, period_days={period_days}, "
+            f"base_price={final_price_kopecks}, sbp_price={sbp_price_kopecks}"
+        )
+
+        sbp_price_rubles = sbp_price_kopecks / 100.0
+
+        # Создаем транзакцию через Platega API
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=sbp_price_rubles,
+            description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
+            purchase_id=purchase_id,
+        )
+
+        transaction_id = tx_data["transaction_id"]
+        redirect_url = tx_data["redirect_url"]
+
+        # Сохраняем invoice_id в БД
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+        except Exception as e:
+            logger.error(f"Failed to save transaction_id to DB: purchase_id={purchase_id}, error={e}")
+
+        logger.info(
+            f"invoice_created: provider=platega, user={telegram_id}, purchase_id={purchase_id}, "
+            f"transaction_id={transaction_id}, sbp_price={sbp_price_rubles:.2f}"
+        )
+
+        # Отправляем пользователю ссылку на оплату
+        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.sbp_pay_button"),
+                url=redirect_url
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="menu_buy_vpn"
+            )]
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+        # Очищаем FSM state
+        await state.set_state(None)
+        await state.clear()
+
+    except Exception as e:
+        logger.exception(f"Error creating Platega SBP transaction: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.set_state(None)
+
+
+@payments_router.callback_query(F.data == "pay:crypto")
+async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
+    """Оплата криптовалютой через 2328.io
+
+    КРИТИЧНО:
+    - Работает ТОЛЬКО в состоянии choose_payment_method
+    - Создает pending_purchase
+    - Создает платёж через 2328.io API
+    - Отправляет payment URL пользователю
+    """
+    telegram_id = callback.from_user.id
+
+    # Rate limiting
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
+    current_state = await state.get_state()
+    if current_state != PurchaseState.choose_payment_method:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid FSM state for pay:crypto: user={telegram_id}, state={current_state}")
+        await state.set_state(None)
+        return
+
+    # КРИТИЧНО: Получаем данные из FSM state
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type")
+    period_days = fsm_data.get("period_days")
+    final_price_kopecks = fsm_data.get("final_price_kopecks")
+
+    # Получаем промо-сессию
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+
+    if not tariff_type or not period_days or not final_price_kopecks:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Missing purchase data in FSM: user={telegram_id}")
+        await state.set_state(None)
+        return
+
+    # Проверяем доступность 2328.io
+    import crypto2328_service
+    if not crypto2328_service.is_enabled():
         error_text = i18n_get_text(language, "payment.crypto_unavailable")
         await callback.answer(error_text, show_alert=True)
-        logger.error(f"CryptoBot module not found")
+        logger.error("2328.io not configured")
         return
-    
+
     try:
         # Создаем pending_purchase
         purchase_id = await subscription_service.create_subscription_purchase(
@@ -990,52 +1111,42 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             price_kopecks=final_price_kopecks,
             promo_code=promo_code
         )
-        
-        # Сохраняем purchase_id в FSM state
+
         await state.update_data(purchase_id=purchase_id)
-        
+
         logger.info(
             f"Purchase created for crypto payment: user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period_days={period_days}, final_price_kopecks={final_price_kopecks}"
         )
-        
-        # Формируем сумму в рублях
+
         final_price_rubles = final_price_kopecks / 100.0
-        
-        # Формируем описание тарифа
-        months = period_days // 30
-        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
-        description = i18n_get_text(language, "buy.invoice_description", tariff_name=tariff_name, months=months)
 
-        # Формируем payload (храним purchase_id для идентификации)
-        payload = f"purchase:{purchase_id}"
+        # Формируем callback URL для webhook
+        callback_url = f"{config.PUBLIC_BASE_URL}/webhooks/crypto2328" if config.PUBLIC_BASE_URL else None
 
-        # Создаем invoice через CryptoBot API
-        invoice_data = await cryptobot.create_invoice(
-            amount_rub=final_price_rubles,
-            description=description,
-            payload=payload
+        # Создаем платёж через 2328.io API (order_id = purchase_id)
+        payment_data = await crypto2328_service.create_payment(
+            amount_rubles=final_price_rubles,
+            order_id=purchase_id,
+            description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
+            callback_url=callback_url,
         )
-        
-        invoice_id = invoice_data["invoice_id"]
-        payment_url = invoice_data["pay_url"]
-        
-        # КРИТИЧНО: Сохраняем invoice_id в FSM state для последующей проверки статуса
-        await state.update_data(cryptobot_invoice_id=invoice_id)
-        
-        # Сохраняем invoice_id в БД для автоматической проверки платежей
+
+        payment_uuid = payment_data["uuid"]
+        payment_url = payment_data["payment_url"]
+
+        # Сохраняем invoice_id в БД
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(payment_uuid))
         except Exception as e:
-            logger.error(f"Failed to save invoice_id to DB: purchase_id={purchase_id}, invoice_id={invoice_id}, error={e}")
-        
+            logger.error(f"Failed to save payment_uuid to DB: purchase_id={purchase_id}, error={e}")
+
         logger.info(
-            f"invoice_created: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
-            f"tariff={tariff_type}, period_days={period_days}, invoice_id={invoice_id}, "
-            f"final_price_rubles={final_price_rubles:.2f}"
+            f"invoice_created: provider=crypto2328, user={telegram_id}, purchase_id={purchase_id}, "
+            f"uuid={payment_uuid}, final_price_rubles={final_price_rubles:.2f}"
         )
-        
-        # Отправляем пользователю сообщение с payment URL
+
+        # Отправляем пользователю ссылку на оплату
         text = i18n_get_text(language, "payment.crypto_waiting", amount=final_price_rubles)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1048,24 +1159,23 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
                 callback_data="menu_buy_vpn"
             )]
         ])
-        
+
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
-        
-        # Очищаем FSM state после создания invoice
+
+        # Очищаем FSM state
         await state.set_state(None)
         await state.clear()
-        
+
     except Exception as e:
-        logger.exception(f"Error creating CryptoBot invoice: {e}")
+        logger.exception(f"Error creating 2328.io payment: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
         await state.set_state(None)
 
 
-@payments_router.callback_query(F.data.startswith("topup_crypto:"))
-async def callback_topup_crypto(callback: CallbackQuery):
-    """Пополнение баланса через CryptoBot"""
-    # SAFE STARTUP GUARD: Проверка готовности БД
+@payments_router.callback_query(F.data.startswith("topup_sbp:"))
+async def callback_topup_sbp(callback: CallbackQuery):
+    """Пополнение баланса через СБП (Platega.io, +11%)"""
     if not await ensure_db_ready_callback(callback):
         return
 
@@ -1078,69 +1188,140 @@ async def callback_topup_crypto(callback: CallbackQuery):
         return
     language = await resolve_user_language(telegram_id)
 
-    # Извлекаем сумму из callback_data
     amount_str = callback.data.split(":")[1]
     try:
         amount = int(amount_str)
     except ValueError:
         await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
         return
-    
+
     if amount <= 0 or amount > 100000:
         await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
         return
-    
-    # Проверяем доступность CryptoBot
-    from payments import cryptobot
-    if not cryptobot.is_enabled():
-        await callback.answer(
-            i18n_get_text(language, "payment.crypto_unavailable"),
-            show_alert=True
-        )
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.sbp_unavailable"), show_alert=True)
         return
-    
+
     try:
-        # Создаем pending purchase для пополнения баланса (отдельный flow, без subscription logic)
+        # Применяем наценку +11%
+        amount_kopecks = amount * 100
+        sbp_amount_kopecks = platega_service.apply_sbp_markup(amount_kopecks)
+        sbp_amount_rubles = sbp_amount_kopecks / 100.0
+
+        purchase_id = await subscription_service.create_balance_topup_purchase(
+            telegram_id=telegram_id,
+            amount_kopecks=sbp_amount_kopecks,
+            currency="RUB"
+        )
+
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=sbp_amount_rubles,
+            description=f"Пополнение баланса на {amount} ₽",
+            purchase_id=purchase_id,
+        )
+
+        transaction_id = tx_data["transaction_id"]
+        redirect_url = tx_data["redirect_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+        except Exception as e:
+            logger.error(f"Failed to save transaction_id to DB: purchase_id={purchase_id}, error={e}")
+
+        logger.info(
+            f"balance_topup_invoice_created: provider=platega, user={telegram_id}, "
+            f"purchase_id={purchase_id}, base_amount={amount}, sbp_amount={sbp_amount_rubles:.2f}"
+        )
+
+        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_amount_rubles)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.sbp_pay_button"),
+                url=redirect_url
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="topup_balance"
+            )]
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error creating Platega SBP transaction for balance top-up: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@payments_router.callback_query(F.data.startswith("topup_crypto:"))
+async def callback_topup_crypto(callback: CallbackQuery):
+    """Пополнение баланса через 2328.io (криптовалюта)"""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    amount_str = callback.data.split(":")[1]
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    if amount <= 0 or amount > 100000:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    import crypto2328_service
+    if not crypto2328_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
+        return
+
+    try:
         amount_kopecks = amount * 100
         purchase_id = await subscription_service.create_balance_topup_purchase(
             telegram_id=telegram_id,
             amount_kopecks=amount_kopecks,
             currency="RUB"
         )
-        
-        # Формируем описание
-        description = f"Пополнение баланса на {amount} ₽"
-        
-        # Формируем payload (храним purchase_id для идентификации)
-        payload = f"purchase:{purchase_id}"
-        
-        # Создаем invoice через CryptoBot API
-        invoice_data = await cryptobot.create_invoice(
-            amount_rub=float(amount),
-            description=description,
-            payload=payload
+
+        callback_url = f"{config.PUBLIC_BASE_URL}/webhooks/crypto2328" if config.PUBLIC_BASE_URL else None
+
+        payment_data = await crypto2328_service.create_payment(
+            amount_rubles=float(amount),
+            order_id=purchase_id,
+            description=f"Пополнение баланса на {amount} ₽",
+            callback_url=callback_url,
         )
-        
-        invoice_id = invoice_data["invoice_id"]
-        payment_url = invoice_data["pay_url"]
-        
-        # Сохраняем invoice_id в БД для автоматической проверки платежей
+
+        payment_uuid = payment_data["uuid"]
+        payment_url = payment_data["payment_url"]
+
         try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+            await database.update_pending_purchase_invoice_id(purchase_id, str(payment_uuid))
         except Exception as e:
-            logger.error(f"Failed to save invoice_id to DB: purchase_id={purchase_id}, invoice_id={invoice_id}, error={e}")
-        
+            logger.error(f"Failed to save payment_uuid to DB: purchase_id={purchase_id}, error={e}")
+
         logger.info(
-            f"balance_topup_invoice_created: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
-            f"amount={amount} RUB, invoice_id={invoice_id}"
+            f"balance_topup_invoice_created: provider=crypto2328, user={telegram_id}, "
+            f"purchase_id={purchase_id}, amount={amount} RUB, uuid={payment_uuid}"
         )
-        
-        # Отправляем пользователю сообщение с payment URL
+
         text = i18n_get_text(language, "main.balance_topup_waiting", amount=amount)
-        
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=i18n_get_text(language, "main.crypto_pay_button"),
+                text=i18n_get_text(language, "payment.crypto_pay_button"),
                 url=payment_url
             )],
             [InlineKeyboardButton(
@@ -1148,12 +1329,12 @@ async def callback_topup_crypto(callback: CallbackQuery):
                 callback_data="topup_balance"
             )]
         ])
-        
+
         await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
-        
+
     except Exception as e:
-        logger.exception(f"Error creating CryptoBot invoice for balance top-up: {e}")
+        logger.exception(f"Error creating 2328.io payment for balance top-up: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
@@ -1328,37 +1509,3 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
-@payments_router.callback_query(F.data.startswith("crypto_pay:tariff:"))
-async def callback_crypto_pay_tariff(callback: CallbackQuery, state: FSMContext):
-    """Оплата тарифа криптой - ОТКЛЮЧЕНА"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    logger.warning(f"crypto_payment_disabled: user={telegram_id}, callback_data={callback.data}")
-
-    await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
-    return
-
-
-@payments_router.callback_query(F.data.startswith("pay_crypto_asset:"))
-async def callback_pay_crypto_asset(callback: CallbackQuery, state: FSMContext):
-    """Оплата криптой (выбор актива) - ОТКЛЮЧЕНА"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    logger.warning(f"crypto_payment_disabled: user={telegram_id}, callback_data={callback.data}")
-
-    await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
-    return
-
-
-@payments_router.callback_query(F.data.startswith("crypto_pay:balance:"))
-async def callback_crypto_pay_balance(callback: CallbackQuery):
-    """Оплата пополнения баланса криптой - ОТКЛЮЧЕНА"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    logger.warning(f"crypto_payment_disabled: user={telegram_id}, callback_data={callback.data}")
-
-    await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
-    return

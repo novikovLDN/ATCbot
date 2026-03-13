@@ -182,15 +182,21 @@ XRAY_SYNC_ENABLED = os.getenv("XRAY_SYNC_ENABLED", "false").lower() == "true"
 # Port, SNI, public key, short id, fingerprint belong to API server only.
 # Bot receives vless_link from API — never generates links locally.
 
-# Crypto Bot (Telegram Crypto Pay) Configuration
-# All CryptoBot vars use env() prefix: STAGE_CRYPTOBOT_* or PROD_CRYPTOBOT_*
-CRYPTOBOT_TOKEN = env("CRYPTOBOT_TOKEN")
-CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
-CRYPTOBOT_WEBHOOK_SECRET = env("CRYPTOBOT_WEBHOOK_SECRET")
-CRYPTOBOT_ASSETS_STR = env("CRYPTOBOT_ASSETS", default="USDT,TON,BTC")
-CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.split(",") if a.strip()]
+# Platega (SBP) Configuration
+# СБП оплата через Platega.io — наценка +11%
+PLATEGA_MERCHANT_ID = env("PLATEGA_MERCHANT_ID") or "aa5f5d2d-162e-4dad-a58d-c6dedd89360f"
+PLATEGA_SECRET = env("PLATEGA_SECRET")
+PLATEGA_API_URL = env("PLATEGA_API_URL") or "https://app.platega.io"
+# Процент наценки для СБП (11%)
+SBP_MARKUP_PERCENT = 11
 
-# Public base URL for webhooks (Railway + Cloudflare). Required for Crypto Pay webhook.
+# 2328.io (Crypto) Configuration
+# Криптовалютные платежи через 2328.io
+CRYPTO2328_PROJECT_ID = env("CRYPTO2328_PROJECT_ID") or "8f7c14f1-2473-4652-9f7a-5c04693b40af"
+CRYPTO2328_API_KEY = env("CRYPTO2328_API_KEY")
+CRYPTO2328_API_URL = env("CRYPTO2328_API_URL") or "https://api.2328.io/api"
+
+# Public base URL for webhooks (Railway + Cloudflare). Required for payment webhooks.
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
 

@@ -1133,7 +1133,13 @@ async def show_payment_method_selection(
         callback_data="pay:card"
     )])
     
-    # Кнопка оплаты криптовалютой (CryptoBot)
+    # Кнопка оплаты через СБП (Platega, +11%)
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.sbp"),
+        callback_data="pay:sbp"
+    )])
+
+    # Кнопка оплаты криптовалютой (2328.io)
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.crypto"),
         callback_data="pay:crypto"

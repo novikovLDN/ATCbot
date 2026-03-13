@@ -6496,9 +6496,9 @@ async def finalize_purchase(
     
     Args:
         purchase_id: ID покупки из pending_purchases
-        payment_provider: 'telegram_payment' или 'cryptobot'
+        payment_provider: 'telegram_payment', 'platega', 'crypto2328', или 'cryptobot'
         amount_rubles: Сумма оплаты в рублях
-        invoice_id: ID инвойса (опционально, для крипты)
+        invoice_id: ID инвойса (опционально)
     
     Returns:
         {
@@ -8146,8 +8146,8 @@ async def finalize_balance_topup(
     if not provider_charge_id:
         raise ValueError("provider_charge_id is required for idempotency")
     
-    if provider not in ("telegram", "cryptobot"):
-        raise ValueError(f"Invalid provider: {provider}. Must be 'telegram' or 'cryptobot'")
+    if provider not in ("telegram", "cryptobot", "platega", "crypto2328"):
+        raise ValueError(f"Invalid provider: {provider}. Must be 'telegram', 'cryptobot', 'platega', or 'crypto2328'")
     
     amount_kopecks = int(amount_rubles * 100)
     pool = await get_pool()
@@ -8159,6 +8159,13 @@ async def finalize_balance_topup(
         async with conn.transaction():
             # STEP 1: SCHEMA SAFETY CHECK (P0 HOTFIX - prevent silent failures)
             # Defensive check: ensure idempotency columns exist before querying
+            provider_column_map = {
+                'telegram': 'telegram_payment_charge_id',
+                'cryptobot': 'cryptobot_payment_id',
+                'platega': 'platega_payment_id',
+                'crypto2328': 'crypto2328_payment_id',
+            }
+            idempotency_column = provider_column_map[provider]
             column_exists = await conn.fetchval(
                 """
                 SELECT 1
@@ -8167,13 +8174,13 @@ async def finalize_balance_topup(
                   AND table_name = 'payments'
                   AND column_name = $1
                 """,
-                'telegram_payment_charge_id' if provider == 'telegram' else 'cryptobot_payment_id'
+                idempotency_column
             )
-            
+
             if not column_exists:
                 error_msg = (
-                    f"CRITICAL_SCHEMA_MISMATCH: payments.{'telegram_payment_charge_id' if provider == 'telegram' else 'cryptobot_payment_id'} "
-                    f"column missing. Migration 012 may not have been applied correctly. "
+                    f"CRITICAL_SCHEMA_MISMATCH: payments.{idempotency_column} "
+                    f"column missing. Migration may not have been applied correctly. "
                     f"Provider: {provider}, provider_charge_id: {provider_charge_id}"
                 )
                 logger.error(error_msg)
@@ -8186,6 +8193,8 @@ async def finalize_balance_topup(
                 FROM payments
                 WHERE telegram_payment_charge_id = $1
                    OR cryptobot_payment_id = $1
+                   OR platega_payment_id = $1
+                   OR crypto2328_payment_id = $1
                 """,
                 provider_charge_id
             )
@@ -8228,12 +8237,16 @@ async def finalize_balance_topup(
                     amount,
                     status,
                     telegram_payment_charge_id,
-                    cryptobot_payment_id
+                    cryptobot_payment_id,
+                    platega_payment_id,
+                    crypto2328_payment_id
                 )
                 VALUES (
                     $1, $2, $3, 'approved',
                     CASE WHEN $4 = 'telegram' THEN $5 ELSE NULL END,
-                    CASE WHEN $4 = 'cryptobot' THEN $5 ELSE NULL END
+                    CASE WHEN $4 = 'cryptobot' THEN $5 ELSE NULL END,
+                    CASE WHEN $4 = 'platega' THEN $5 ELSE NULL END,
+                    CASE WHEN $4 = 'crypto2328' THEN $5 ELSE NULL END
                 )
                 RETURNING id
                 """,

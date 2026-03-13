@@ -1,37 +1,82 @@
 """
-Payment Webhook API
+Payment Webhook API (FastAPI)
 
-POST /webhook/payment — Unified payment webhook (CryptoBot, future providers).
-
-Responsibilities:
-1. Validate signature from provider (X-Crypto-Pay-API-Signature).
-2. Parse payment event (invoice_paid).
-3. Find payment by purchase_id from payload.
-4. If status already "paid" → ignore (idempotency).
-5. Mark payment as paid via database.finalize_purchase.
-6. Activate subscription via vpn_client (grant_access).
-
-Registration: health_server.create_health_app() calls cryptobot_service.register_webhook_route()
-which registers POST /webhook/payment and POST /webhooks/cryptobot.
+Webhook endpoints for payment providers:
+- POST /webhooks/platega — Platega (SBP) payment notifications
+- POST /webhooks/crypto2328 — 2328.io crypto payment notifications
 
 Security:
-- Signature verification required.
+- Signature/auth verification required per provider.
 - Idempotent: duplicate webhooks return 200, no re-activation.
 - Amount tolerance: ±1 RUB.
 - Pending expiry: 30 min (pending_purchases.expires_at).
 """
 
-from aiohttp import web
-from aiogram import Bot
-from typing import Optional
+import logging
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+_bot = None
 
 
-async def register_payment_webhook(app: web.Application, bot: Optional[Bot]) -> None:
-    """
-    Register payment webhook routes.
+def setup(bot):
+    """Store bot instance for webhook handlers."""
+    global _bot
+    _bot = bot
 
-    Delegates to cryptobot_service which handles CryptoBot webhook format.
-    """
-    import cryptobot_service
-    if cryptobot_service.is_enabled() and bot:
-        await cryptobot_service.register_webhook_route(app, bot)
+
+@router.post("/webhooks/platega")
+async def platega_webhook(request: Request):
+    """Handle Platega (SBP) webhook callback."""
+    try:
+        import platega_service
+        if not platega_service.is_enabled():
+            logger.warning("Platega webhook received but service is disabled")
+            return JSONResponse({"status": "disabled"})
+
+        headers = dict(request.headers)
+        try:
+            body = await request.json()
+        except Exception as e:
+            logger.error(f"Platega webhook: invalid JSON: {e}")
+            return JSONResponse({"status": "invalid"})
+
+        result = await platega_service.process_webhook_data(headers, body, _bot)
+        return JSONResponse(result)
+
+    except ImportError:
+        logger.error("platega_service not available")
+        return JSONResponse({"status": "error"})
+    except Exception as e:
+        logger.exception(f"Platega webhook error: {e}")
+        return JSONResponse({"status": "error"})
+
+
+@router.post("/webhooks/crypto2328")
+async def crypto2328_webhook(request: Request):
+    """Handle 2328.io crypto webhook callback."""
+    try:
+        import crypto2328_service
+        if not crypto2328_service.is_enabled():
+            logger.warning("2328.io webhook received but service is disabled")
+            return JSONResponse({"status": "disabled"})
+
+        try:
+            body = await request.json()
+        except Exception as e:
+            logger.error(f"2328.io webhook: invalid JSON: {e}")
+            return JSONResponse({"status": "invalid"})
+
+        result = await crypto2328_service.process_webhook_data(body, _bot)
+        return JSONResponse(result)
+
+    except ImportError:
+        logger.error("crypto2328_service not available")
+        return JSONResponse({"status": "error"})
+    except Exception as e:
+        logger.exception(f"2328.io webhook error: {e}")
+        return JSONResponse({"status": "error"})

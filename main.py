@@ -133,6 +133,10 @@ async def main():
     from app.api import telegram_webhook as tg_webhook_module
     tg_webhook_module.setup(bot, dp)
 
+    # Pass bot to payment webhook handlers
+    from app.api import payment_webhook as pay_webhook_module
+    pay_webhook_module.setup(bot)
+
     # Global concurrency limiter for update processing
     MAX_CONCURRENT_UPDATES = int(os.getenv("MAX_CONCURRENT_UPDATES", "20"))
     update_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPDATES)
