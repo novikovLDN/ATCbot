@@ -9077,3 +9077,72 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
             "new_users": new_users,
             "new_subscriptions": new_subscriptions
         }
+
+
+async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -> bool:
+    """Полное удаление пользователя из БД (все данные).
+
+    В одной транзакции:
+    - Удаляет UUID из Xray API (если есть)
+    - Удаляет записи из: promo_usage_logs, user_discounts, vip_users,
+      referral_rewards, referrals, balance_transactions, subscription_history,
+      pending_purchases, payments, subscriptions, broadcast_log, users
+    - Записывает событие в audit_log
+
+    Args:
+        telegram_id: Telegram ID удаляемого пользователя
+        admin_telegram_id: Telegram ID администратора
+
+    Returns:
+        True если пользователь был удалён, False если не найден
+    """
+    pool = await get_pool()
+    uuid_to_remove = None
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Проверяем существование пользователя
+            user_row = await conn.fetchrow(
+                "SELECT * FROM users WHERE telegram_id = $1 FOR UPDATE", telegram_id
+            )
+            if not user_row:
+                return False
+
+            # Получаем UUID из подписки для удаления из Xray
+            sub_row = await conn.fetchrow(
+                "SELECT uuid FROM subscriptions WHERE telegram_id = $1", telegram_id
+            )
+            if sub_row and sub_row.get("uuid"):
+                uuid_to_remove = sub_row["uuid"]
+
+            # Удаляем все связанные данные (порядок важен для FK constraints)
+            await conn.execute("DELETE FROM promo_usage_logs WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM user_discounts WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM vip_users WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM referral_rewards WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM referrals WHERE referrer_id = $1 OR referred_id = $1", telegram_id)
+            await conn.execute("DELETE FROM balance_transactions WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM subscription_history WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM pending_purchases WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM payments WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM broadcast_log WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM subscriptions WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM users WHERE telegram_id = $1", telegram_id)
+
+            # Записываем в audit_log
+            await _log_audit_event_atomic(
+                conn, "admin_delete_user", admin_telegram_id, telegram_id,
+                f"Complete user deletion from DB"
+            )
+
+            logger.info(f"Admin {admin_telegram_id} deleted user {telegram_id} completely from DB")
+
+    # PHASE 2 (outside transaction): Remove UUID from Xray API
+    if uuid_to_remove:
+        try:
+            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
+            logger.info(f"ADMIN_DELETE_UUID_REMOVED uuid={uuid_to_remove[:8]}...")
+        except Exception as e:
+            logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
+
+    return True
