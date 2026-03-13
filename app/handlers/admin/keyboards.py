@@ -135,16 +135,24 @@ def get_broadcast_test_type_keyboard(language: str = "ru"):
     return keyboard
 
 
-def get_broadcast_type_keyboard(language: str = "ru"):
-    """Клавиатура выбора типа уведомления"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_info"), callback_data="broadcast_type:info")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_maintenance"), callback_data="broadcast_type:maintenance")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_security"), callback_data="broadcast_type:security")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_promo"), callback_data="broadcast_type:promo")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
-    ])
-    return keyboard
+def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
+    """Клавиатура выбора кнопок для уведомления"""
+    selected = selected or []
+    buttons = [
+        ("🛒 Купить", "buy"),
+        ("🎁 Купить со скидкой", "promo_buy"),
+        ("📢 Наш канал", "channel"),
+        ("💬 Поддержка", "support"),
+        ("👥 Пригласить друга", "referral"),
+    ]
+    rows = []
+    for label, key in buttons:
+        check = "✅ " if key in selected else ""
+        rows.append([InlineKeyboardButton(text=f"{check}{label}", callback_data=f"broadcast_btn:{key}")])
+    rows.append([InlineKeyboardButton(text="✅ Готово", callback_data="broadcast_btn:done")])
+    rows.append([InlineKeyboardButton(text="⏭ Без кнопок", callback_data="broadcast_btn:none")])
+    rows.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_broadcast_segment_keyboard(language: str = "ru"):

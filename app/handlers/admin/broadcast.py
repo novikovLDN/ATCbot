@@ -4,6 +4,7 @@ Admin broadcast handlers: create broadcasts, A/B tests, no-subscription broadcas
 import logging
 import asyncio
 import random
+from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramRetryAfter
@@ -19,9 +20,9 @@ from app.handlers.common.states import BroadcastCreate, AdminBroadcastNoSubscrip
 from app.handlers.admin.keyboards import (
     get_admin_back_keyboard,
     get_broadcast_test_type_keyboard,
-    get_broadcast_type_keyboard,
     get_broadcast_segment_keyboard,
     get_broadcast_confirm_keyboard,
+    get_broadcast_buttons_keyboard,
     get_ab_test_list_keyboard,
 )
 from app.handlers.common.utils import safe_edit_text
@@ -65,6 +66,110 @@ async def _safe_send(
                 await asyncio.sleep(1)
         return False
 
+
+
+async def _safe_send_with_buttons(
+    bot: Bot,
+    user_id: int,
+    text: str,
+    semaphore: asyncio.Semaphore,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    photo_file_id: str | None = None,
+    caption: str | None = None,
+) -> bool:
+    """Send message with optional inline buttons."""
+    async with semaphore:
+        for attempt in range(BROADCAST_RETRY_LIMIT):
+            try:
+                if photo_file_id:
+                    await bot.send_photo(
+                        user_id,
+                        photo=photo_file_id,
+                        caption=caption or text,
+                        reply_markup=reply_markup,
+                    )
+                else:
+                    await bot.send_message(user_id, text, reply_markup=reply_markup)
+                return True
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after + 1)
+            except Exception:
+                await asyncio.sleep(1)
+        return False
+
+
+def _build_broadcast_reply_markup(
+    buttons: list[str],
+    broadcast_id: int,
+    discount: int | None = None,
+) -> InlineKeyboardMarkup | None:
+    """Build inline keyboard for broadcast message based on selected buttons."""
+    if not buttons:
+        return None
+
+    rows = []
+    for btn in buttons:
+        if btn == "buy":
+            rows.append([InlineKeyboardButton(text="🛒 Купить", callback_data="menu_buy_vpn")])
+        elif btn == "promo_buy":
+            label = f"🎁 Купить со скидкой {discount}%" if discount else "🎁 Купить со скидкой"
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_buy:{broadcast_id}")])
+        elif btn == "channel":
+            rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
+        elif btn == "support":
+            rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/ATC_support")])
+        elif btn == "referral":
+            rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="referral_menu")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast_promo_buy:"))
+async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContext):
+    """Пользователь нажал 'Купить со скидкой' в уведомлении — автоматически применяем скидку"""
+    await callback.answer()
+
+    try:
+        broadcast_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    telegram_id = callback.from_user.id
+
+    try:
+        # Get discount from DB
+        discount = await database.get_broadcast_discount(broadcast_id)
+        if not discount:
+            # No discount found, just redirect to tariff selection
+            from app.handlers.common.screens import show_tariffs_main_screen
+            await show_tariffs_main_screen(callback, state)
+            return
+
+        discount_percent = discount.get("discount_percent", 0)
+
+        # Auto-apply discount to user
+        from datetime import timedelta
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=discount_percent,
+            expires_at=expires_at,
+            created_by=config.ADMIN_TELEGRAM_ID,
+        )
+
+        # Redirect to tariff screen
+        from app.handlers.common.screens import show_tariffs_main_screen
+        await show_tariffs_main_screen(callback, state)
+
+        language = await resolve_user_language(telegram_id)
+        await callback.message.answer(
+            f"🎁 Скидка {discount_percent}% автоматически применена! Действует 7 дней."
+        )
+
+    except Exception as e:
+        logger.exception(f"Error applying broadcast promo discount: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
 @admin_broadcast_router.message(Command("notify_no_subscription"))
@@ -279,10 +384,10 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     language = await resolve_user_language(message.from_user.id)
     
     await state.update_data(message_b=message.text)
-    await state.set_state(BroadcastCreate.waiting_for_type)
+    await state.set_state(BroadcastCreate.waiting_for_emoji)
     await message.answer(
-        i18n_get_text(language, "broadcast._select_type"),
-        reply_markup=get_broadcast_type_keyboard(language)
+        "Отправьте эмодзи для уведомления (любой смайлик):\n\n"
+        "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆"
     )
 
 
@@ -320,49 +425,119 @@ async def process_broadcast_message(message: Message, state: FSMContext):
         await message.answer(i18n_get_text(language, "broadcast._enter_message"))
         return
 
-    await state.set_state(BroadcastCreate.waiting_for_type)
+    await state.set_state(BroadcastCreate.waiting_for_emoji)
     await message.answer(
-        i18n_get_text(language, "broadcast._select_type"),
-        reply_markup=get_broadcast_type_keyboard(language)
+        "Отправьте эмодзи для уведомления (любой смайлик):\n\n"
+        "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆"
     )
 
 
-@admin_broadcast_router.callback_query(F.data.startswith("broadcast_type:"))
-async def callback_broadcast_type(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора типа уведомления"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+@admin_broadcast_router.message(BroadcastCreate.waiting_for_emoji)
+async def process_broadcast_emoji(message: Message, state: FSMContext):
+    """Обработка выбора эмодзи"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         return
-    
+    language = await resolve_user_language(message.from_user.id)
+
+    if not message.text or not message.text.strip():
+        await message.answer("Отправьте эмодзи для уведомления:")
+        return
+
+    emoji = message.text.strip()
+    # Allow any text as emoji prefix (user can send any emoji or even short text)
+    if len(emoji) > 10:
+        await message.answer("Слишком длинный текст. Отправьте эмодзи (1-2 символа):")
+        return
+
+    await state.update_data(emoji=emoji, type="custom")
+    await state.set_state(BroadcastCreate.waiting_for_buttons)
+    await message.answer(
+        "Выберите кнопки для уведомления:",
+        reply_markup=get_broadcast_buttons_keyboard(language)
+    )
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast_btn:"))
+async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора кнопок для уведомления"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
     await callback.answer()
-    broadcast_type = callback.data.split(":")[1]
-    
-    data = await state.get_data()
-    title = data.get("title")
-    message_text = data.get("message")
-    
-    # Формируем предпросмотр
-    type_emoji = {
-        "info": "ℹ️",
-        "maintenance": "🔧",
-        "security": "🔒",
-        "promo": "🎯"
-    }
-    type_name = {
-        "info": "Информация",
-        "maintenance": "Технические работы",
-        "security": "Безопасность",
-        "promo": "Промо"
-    }
-    
-    await state.update_data(type=broadcast_type)
-    await state.set_state(BroadcastCreate.waiting_for_segment)
-    
     language = await resolve_user_language(callback.from_user.id)
-    
-    await callback.message.edit_text(
-        i18n_get_text(language, "broadcast._select_segment"),
+    btn_type = callback.data.split(":")[1]
+
+    if btn_type == "none":
+        await state.update_data(broadcast_buttons=[])
+        await state.set_state(BroadcastCreate.waiting_for_segment)
+        await callback.message.edit_text(
+            "Выберите сегмент получателей:",
+            reply_markup=get_broadcast_segment_keyboard(language)
+        )
+    elif btn_type == "promo_buy":
+        # Need to ask for discount percentage
+        await state.set_state(BroadcastCreate.waiting_for_discount)
+        await callback.message.edit_text(
+            "Введите процент скидки для акции (число от 1 до 99):"
+        )
+    elif btn_type == "done":
+        # Finished selecting buttons, move to segment
+        await state.set_state(BroadcastCreate.waiting_for_segment)
+        await callback.message.edit_text(
+            "Выберите сегмент получателей:",
+            reply_markup=get_broadcast_segment_keyboard(language)
+        )
+    else:
+        # Add button to list: buy, channel, support, referral
+        data = await state.get_data()
+        buttons = data.get("broadcast_buttons", [])
+        if btn_type not in buttons:
+            buttons.append(btn_type)
+        await state.update_data(broadcast_buttons=buttons)
+        # Show updated keyboard with selected buttons
+        await callback.message.edit_text(
+            f"Выбранные кнопки: {', '.join(_btn_label(b) for b in buttons)}\n\n"
+            "Выберите ещё кнопки или нажмите «Готово»:",
+            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons)
+        )
+
+
+def _btn_label(btn_type: str) -> str:
+    """Human-readable label for button type"""
+    labels = {
+        "buy": "🛒 Купить",
+        "promo_buy": "🎁 Купить со скидкой",
+        "channel": "📢 Наш канал",
+        "support": "💬 Поддержка",
+        "referral": "👥 Реферальная программа",
+    }
+    return labels.get(btn_type, btn_type)
+
+
+@admin_broadcast_router.message(BroadcastCreate.waiting_for_discount)
+async def process_broadcast_discount(message: Message, state: FSMContext):
+    """Обработка ввода скидки для кнопки 'Купить со скидкой'"""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    language = await resolve_user_language(message.from_user.id)
+
+    try:
+        discount = int(message.text.strip())
+        if not 1 <= discount <= 99:
+            raise ValueError
+    except (ValueError, AttributeError):
+        await message.answer("Введите число от 1 до 99:")
+        return
+
+    data = await state.get_data()
+    buttons = data.get("broadcast_buttons", [])
+    if "promo_buy" not in buttons:
+        buttons.append("promo_buy")
+    await state.update_data(broadcast_buttons=buttons, broadcast_discount=discount)
+    await state.set_state(BroadcastCreate.waiting_for_segment)
+    await message.answer(
+        f"Скидка {discount}% установлена.\n\nВыберите сегмент получателей:",
         reply_markup=get_broadcast_segment_keyboard(language)
     )
 
@@ -374,47 +549,32 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
     await callback.answer()
     segment = callback.data.split(":")[1]
-    
-    data = await state.get_data()
-    title = data.get("title")
-    message_text = data.get("message")
-    broadcast_type = data.get("type")
-    
-    # Формируем предпросмотр
-    type_emoji = {
-        "info": "ℹ️",
-        "maintenance": "🔧",
-        "security": "🔒",
-        "promo": "🎯"
-    }
-    type_name = {
-        "info": "Информация",
-        "maintenance": "Технические работы",
-        "security": "Безопасность",
-        "promo": "Промо"
-    }
+
+    data_for_preview = await state.get_data()
+    title = data_for_preview.get("title")
+    emoji = data_for_preview.get("emoji", "📢")
+    is_ab_test = data_for_preview.get("is_ab_test", False)
+    has_photo = data_for_preview.get("has_photo", False)
+    caption = data_for_preview.get("caption", "") if has_photo else ""
+    buttons = data_for_preview.get("broadcast_buttons", [])
+    discount = data_for_preview.get("broadcast_discount")
+
     segment_name = {
         "all_users": "Все пользователи",
         "active_subscriptions": "Только активные подписки"
     }
-    
-    data_for_preview = await state.get_data()
-    is_ab_test = data_for_preview.get("is_ab_test", False)
-    has_photo = data_for_preview.get("has_photo", False)
-    caption = data_for_preview.get("caption", "") if has_photo else ""
-    
+
     if is_ab_test:
         message_a = data_for_preview.get("message_a", "")
         message_b = data_for_preview.get("message_b", "")
         preview_text = (
-            f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n"
+            f"{emoji} {title}\n\n"
             f"🔬 A/B ТЕСТ\n\n"
             f"Вариант A:\n{message_a}\n\n"
             f"Вариант B:\n{message_b}\n\n"
-            f"Тип: {type_name.get(broadcast_type, broadcast_type)}\n"
             f"Сегмент: {segment_name.get(segment, segment)}"
         )
     else:
@@ -424,17 +584,21 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
         else:
             body = message_text
         preview_text = (
-            f"{type_emoji.get(broadcast_type, '📢')} {title}\n\n"
+            f"{emoji} {title}\n\n"
             f"{body}\n\n"
-            f"Тип: {type_name.get(broadcast_type, broadcast_type)}\n"
             f"Сегмент: {segment_name.get(segment, segment)}"
         )
-    
+
+    if buttons:
+        preview_text += f"\nКнопки: {', '.join(_btn_label(b) for b in buttons)}"
+    if discount:
+        preview_text += f"\nСкидка: {discount}%"
+
     await state.update_data(segment=segment)
     await state.set_state(BroadcastCreate.waiting_for_confirm)
-    
+
     language = await resolve_user_language(callback.from_user.id)
-    
+
     preview_confirm_text = i18n_get_text(language, "broadcast._preview_confirm", preview=preview_text)
     await callback.message.edit_text(
         preview_confirm_text,
@@ -463,43 +627,40 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
     has_photo = data.get("has_photo", False)
     photo_file_id = data.get("photo_file_id")
     caption = data.get("caption") or ""
-    broadcast_type = data.get("type")
+    broadcast_type = data.get("type", "custom")
     segment = data.get("segment")
-    
+    emoji = data.get("emoji", "📢")
+    broadcast_buttons = data.get("broadcast_buttons", [])
+    broadcast_discount = data.get("broadcast_discount")
+
     # Проверка данных
-    if not all([title, broadcast_type, segment]):
+    if not all([title, segment]):
         await callback.message.answer("Ошибка: не все данные заполнены. Начните заново.")
         await state.clear()
         return
-    
+
     if is_ab_test:
         if not all([message_a, message_b]):
             await callback.message.answer("Ошибка: не заполнены тексты вариантов A и B. Начните заново.")
             await state.clear()
             return
     else:
-        # Для обычной рассылки должен быть либо текст, либо фото
         if not (message_text or has_photo):
             await callback.message.answer("Ошибка: не заполнен текст уведомления. Начните заново.")
             await state.clear()
             return
-    
+
     try:
         # Создаем уведомление в БД
         broadcast_id = await database.create_broadcast(
             title, caption if has_photo else message_text, broadcast_type, segment, callback.from_user.id,
             is_ab_test=is_ab_test, message_a=message_a, message_b=message_b
         )
-        
-        # Формируем сообщения для отправки
-        type_emoji = {
-            "info": "ℹ️",
-            "maintenance": "🔧",
-            "security": "🔒",
-            "promo": "🎯"
-        }
-        emoji = type_emoji.get(broadcast_type, "📢")
-        
+
+        # Save broadcast discount if set
+        if broadcast_discount and "promo_buy" in broadcast_buttons:
+            await database.save_broadcast_discount(broadcast_id, broadcast_discount)
+
         if is_ab_test:
             final_message_a = f"{emoji} {title}\n\n{message_a}"
             final_message_b = f"{emoji} {title}\n\n{message_b}"
@@ -508,25 +669,28 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                 final_message = f"{emoji} {title}\n\n{caption}".strip()
             else:
                 final_message = f"{emoji} {title}\n\n{message_text}"
-        
+
+        # Build inline keyboard for broadcast message
+        reply_markup = _build_broadcast_reply_markup(broadcast_buttons, broadcast_id, broadcast_discount)
+
         # Получаем список пользователей по сегменту
         user_ids = await database.get_users_by_segment(segment)
         total = len(user_ids)
-        
+
         logger.info(
             f"BROADCAST_START broadcast_id={broadcast_id} segment={segment} total_users={total}"
         )
-        
+
         await callback.message.edit_text(
             i18n_get_text(language, "broadcast._sending", total=total),
             reply_markup=None
         )
-        
+
         semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
         sent_count = 0
-        failed_list = []  # [{"telegram_id": int, "error": str}, ...]
+        failed_list = []
         processed = 0
-        
+
         async def _send_one(
             user_id: int,
             msg: str,
@@ -534,9 +698,13 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             photo_file_id: str | None = None,
             caption: str | None = None,
         ):
-            ok = await _safe_send(bot, user_id, msg, semaphore, photo_file_id=photo_file_id, caption=caption)
+            ok = await _safe_send_with_buttons(
+                bot, user_id, msg, semaphore,
+                reply_markup=reply_markup,
+                photo_file_id=photo_file_id, caption=caption,
+            )
             return (user_id, variant, ok)
-        
+
         for i in range(0, total, BROADCAST_BATCH_SIZE):
             batch = user_ids[i:i + BROADCAST_BATCH_SIZE]
             batch_items = []
@@ -548,12 +716,12 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                 else:
                     variant = None
                     if has_photo:
-                        msg = final_message  # caption text
+                        msg = final_message
                         batch_items.append((user_id, msg, variant, photo_file_id, final_message))
                     else:
                         msg = final_message
                         batch_items.append((user_id, msg, variant, None, None))
-            
+
             tasks = [
                 _send_one(uid, msg, variant, p_file_id, cap)
                 for uid, msg, variant, p_file_id, cap in batch_items

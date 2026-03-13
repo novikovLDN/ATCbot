@@ -230,9 +230,7 @@ async def callback_admin_stats(callback: CallbackQuery):
         text += f"🔑 Активных подписок: {stats['active_subscriptions']}\n"
         text += f"⛔ Истёкших подписок: {stats['expired_subscriptions']}\n"
         text += f"💳 Всего платежей: {stats['total_payments']}\n"
-        text += f"✅ Подтверждённых платежей: {stats['approved_payments']}\n"
-        text += f"❌ Отклонённых платежей: {stats['rejected_payments']}\n"
-        text += f"🔓 Свободных VPN-ключей: {stats['free_vpn_keys']}"
+        text += f"✅ Подтверждённых платежей: {stats['approved_payments']}"
         
         await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
@@ -1570,11 +1568,10 @@ async def callback_admin_analytics(callback: CallbackQuery):
         language = await resolve_user_language(callback.from_user.id)
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-
+            [InlineKeyboardButton(text="📈 Рост пользователей", callback_data="admin:analytics:growth")],
+            [InlineKeyboardButton(text="📊 Расширенная статистика", callback_data="admin:analytics:extended")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.refresh"), callback_data="admin:analytics")],
-
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
-
         ])
 
         
@@ -1727,3 +1724,156 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
 
         await callback.answer("Ошибка при получении ежемесячной сводки", show_alert=True)
 
+
+# ==================== АНАЛИТИКА ПО ПЕРИОДАМ (РОСТ ПОЛЬЗОВАТЕЛЕЙ) ====================
+
+PERIOD_OPTIONS = [
+    ("6ч", 6),
+    ("24ч", 24),
+    ("3д", 72),
+    ("7д", 168),
+    ("14д", 336),
+    ("28д", 672),
+    ("60д", 1440),
+    ("180д", 4320),
+    ("365д", 8760),
+]
+
+
+def _get_growth_period_keyboard(language: str = "ru") -> InlineKeyboardMarkup:
+    """Клавиатура выбора периода для аналитики роста."""
+    rows = []
+    row = []
+    for label, hours in PERIOD_OPTIONS:
+        row.append(InlineKeyboardButton(text=label, callback_data=f"admin:growth:{hours}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:analytics")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@admin_stats_router.callback_query(F.data == "admin:analytics:growth")
+async def callback_admin_analytics_growth(callback: CallbackQuery):
+    """Экран выбора периода для аналитики роста пользователей"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    language = await resolve_user_language(callback.from_user.id)
+    await callback.answer()
+    text = "📈 Рост пользователей\n\nВыберите период для просмотра статистики:"
+    await safe_edit_text(callback.message, text, reply_markup=_get_growth_period_keyboard(language))
+
+
+@admin_stats_router.callback_query(F.data.startswith("admin:growth:"))
+async def callback_admin_growth_period(callback: CallbackQuery):
+    """Показать аналитику за выбранный период"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    await callback.answer()
+    language = await resolve_user_language(callback.from_user.id)
+
+    try:
+        hours = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    # Find period label
+    period_label = next((label for label, h in PERIOD_OPTIONS if h == hours), f"{hours}ч")
+
+    try:
+        stats = await database.get_analytics_by_period(hours)
+
+        trial_rate = round((stats["trial_activated"] / stats["new_users"] * 100), 1) if stats["new_users"] > 0 else 0
+        total_trial_rate = round((stats["total_trial_used"] / stats["total_users"] * 100), 1) if stats["total_users"] > 0 else 0
+
+        text = f"📈 Аналитика за {period_label}\n\n"
+        text += f"👥 Новые пользователи: {stats['new_users']}\n"
+        text += f"🎁 Активировали пробный период: {stats['trial_activated']}\n"
+        text += f"📊 Конверсия в trial: {trial_rate}%\n"
+        text += f"🔑 Новые подписки: {stats['new_subscriptions']}\n\n"
+        text += f"— Общие показатели —\n"
+        text += f"👥 Всего пользователей: {stats['total_users']}\n"
+        text += f"🎁 Всего trial активаций: {stats['total_trial_used']} ({total_trial_rate}%)"
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data=f"admin:growth:{hours}")],
+            [InlineKeyboardButton(text="◀️ Назад к периодам", callback_data="admin:analytics:growth")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:analytics")],
+        ])
+
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_growth_analytics",
+            callback.from_user.id,
+            None,
+            f"Viewed growth analytics for period: {period_label}"
+        )
+
+    except Exception as e:
+        logger.exception(f"Error in growth analytics: {e}")
+        await callback.answer("Ошибка при получении аналитики", show_alert=True)
+
+
+# ==================== РАСШИРЕННАЯ СТАТИСТИКА БОТА ====================
+
+@admin_stats_router.callback_query(F.data == "admin:analytics:extended")
+async def callback_admin_extended_stats(callback: CallbackQuery):
+    """Расширенная статистика и мониторинг бота"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    await callback.answer()
+    language = await resolve_user_language(callback.from_user.id)
+
+    try:
+        stats = await database.get_extended_bot_stats()
+
+        text = "📊 Расширенная статистика\n\n"
+        text += "— Пользователи —\n"
+        text += f"👥 Всего: {stats['total_users']}\n"
+        text += f"🆕 Новых сегодня: {stats['new_today']}\n"
+        text += f"🎁 Trial активаций: {stats['total_trial']} ({stats['trial_rate']}%)\n\n"
+
+        text += "— Подписки —\n"
+        text += f"🔑 Активных: {stats['active_subs']}\n"
+        text += f"⛔ Истёкших: {stats['expired_subs']}\n"
+        text += f"📈 Конверсия: {stats['conversion_rate']}%\n"
+        text += f"📉 Отток: {stats['churn_rate']}%\n"
+        text += f"🔄 Ср. подписок на юзера: {stats['avg_subs_per_user']}\n\n"
+
+        text += "— Финансы —\n"
+        text += f"💰 Общая выручка: {stats['total_revenue']}₽\n"
+        text += f"📅 MRR (30 дней): {stats['mrr']}₽\n\n"
+
+        text += "— Система —\n"
+        text += f"📢 Рассылок отправлено: {stats['total_broadcasts']}"
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:analytics:extended")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:analytics")],
+        ])
+
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_extended_stats",
+            callback.from_user.id,
+            None,
+            "Admin viewed extended bot statistics"
+        )
+
+    except Exception as e:
+        logger.exception(f"Error in extended stats: {e}")
+        await callback.answer("Ошибка при получении расширенной статистики", show_alert=True)

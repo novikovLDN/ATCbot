@@ -18,7 +18,9 @@ class BroadcastCreate(StatesGroup):
     waiting_for_message = State()
     waiting_for_message_a = State()
     waiting_for_message_b = State()
-    waiting_for_type = State()
+    waiting_for_emoji = State()
+    waiting_for_buttons = State()
+    waiting_for_discount = State()
     waiting_for_segment = State()
     waiting_for_confirm = State()
 
