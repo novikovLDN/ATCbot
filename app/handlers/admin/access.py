@@ -393,16 +393,20 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 text += "Статус подписки: ⛔ Истекла\n"
             
             text += f"Срок действия: до {expires_str}\n"
-            text += f"VPN-ключ: {overview.subscription.get('vpn_key', '—')}\n"
+            vpn_key = overview.subscription.get('vpn_key', '—')
+            if vpn_key and vpn_key != '—':
+                text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
+            else:
+                text += "VPN-ключ: —\n"
         else:
             text += "Статус подписки: ❌ Нет подписки\n"
             text += "VPN-ключ: —\n"
             text += "Срок действия: —\n"
-        
+
         # Статистика
         text += f"\nКоличество продлений: {overview.stats['renewals_count']}\n"
         text += f"Количество перевыпусков: {overview.stats['reissues_count']}\n"
-        
+
         # Персональная скидка
         if overview.user_discount:
             discount_percent = overview.user_discount["discount_percent"]
@@ -414,11 +418,11 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 text += f"\n🎯 Персональная скидка: {discount_percent}% (до {expires_str})\n"
             else:
                 text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
-        
+
         # VIP-статус
         if overview.is_vip:
             text += f"\n👑 VIP-статус: активен\n"
-        
+
         # Используем actions для определения доступных действий
         sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
         if sub_type not in ("basic", "plus"):
@@ -1798,12 +1802,16 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
             text += "Статус подписки: ⛔ Истекла\n"
         
         text += f"Срок действия: до {expires_str}\n"
-        text += f"VPN-ключ: {overview.subscription.get('vpn_key', '—')}\n"
+        vpn_key = overview.subscription.get('vpn_key', '—')
+        if vpn_key and vpn_key != '—':
+            text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
+        else:
+            text += "VPN-ключ: —\n"
     else:
         text += "Статус подписки: ❌ Нет подписки\n"
         text += "VPN-ключ: —\n"
         text += "Срок действия: —\n"
-    
+
     # Статистика
     text += f"\nКоличество продлений: {overview.stats['renewals_count']}\n"
     text += f"Количество перевыпусков: {overview.stats['reissues_count']}\n"
@@ -2047,3 +2055,124 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
     finally:
         # GUARANTEED RELEASE (lock was acquired, no check needed)
         lock.release()
+
+
+# ====================================================================================
+# ADMIN: DELETE USER FROM DB
+# ====================================================================================
+
+@admin_access_router.callback_query(F.data.startswith("admin:delete_user:"))
+async def callback_admin_delete_user(callback: CallbackQuery):
+    """Показываем подтверждение удаления пользователя из БД"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    await callback.answer()
+
+    try:
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer("Ошибка формата команды", show_alert=True)
+            return
+
+        user_id = int(parts[2])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✅ Подтвердить удаление",
+                callback_data=f"admin:delete_user_confirm:{user_id}"
+            )],
+            [InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=f"admin:user_back:{user_id}"
+            )],
+        ])
+        await callback.message.edit_text(
+            f"⚠️ Вы точно хотите удалить пользователя <b>{user_id}</b> из базы данных?\n\n"
+            "Будут удалены ВСЕ данные:\n"
+            "• Профиль пользователя\n"
+            "• Подписка и VPN-ключ\n"
+            "• История платежей\n"
+            "• Баланс\n"
+            "• Реферальные данные\n"
+            "• Скидки и VIP-статус\n\n"
+            "❗️ Это действие необратимо!",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+    except ValueError:
+        await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_delete_user: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:delete_user_confirm:"))
+async def callback_admin_delete_user_confirm(callback: CallbackQuery):
+    """Подтверждение удаления — выполняем полное удаление пользователя из БД"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    await callback.answer()
+
+    try:
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer("Ошибка формата команды", show_alert=True)
+            return
+
+        user_id = int(parts[2])
+        admin_id = callback.from_user.id
+
+        success = await database.admin_delete_user_complete(user_id, admin_id)
+
+        if success:
+            logger.info(f"Admin {admin_id} deleted user {user_id} from DB completely")
+            await callback.message.edit_text(
+                f"✅ Пользователь <b>{user_id}</b> полностью удалён из базы данных.",
+                reply_markup=get_admin_back_keyboard(language),
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.edit_text(
+                f"❌ Пользователь <b>{user_id}</b> не найден в базе данных.",
+                reply_markup=get_admin_back_keyboard(language),
+                parse_mode="HTML"
+            )
+    except ValueError:
+        await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_delete_user_confirm: {e}")
+        await callback.message.edit_text(
+            "❌ Ошибка при удалении пользователя. Проверь логи.",
+            reply_markup=get_admin_back_keyboard(language),
+        )
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:user_back:"))
+async def callback_admin_user_back(callback: CallbackQuery):
+    """Возврат к карточке пользователя после отмены удаления"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    await callback.answer()
+
+    try:
+        parts = callback.data.split(":")
+        if len(parts) != 3:
+            await callback.answer("Ошибка формата команды", show_alert=True)
+            return
+
+        user_id = int(parts[2])
+        await _show_admin_user_card(callback.message, user_id, callback.from_user.id)
+    except ValueError:
+        await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_user_back: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)

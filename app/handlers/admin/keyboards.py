@@ -79,6 +79,8 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
         # Кнопка выдачи средств
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
+        # Кнопка удаления пользователя из БД
+        buttons.append([InlineKeyboardButton(text="🗑 Удалить из БД", callback_data=f"admin:delete_user:{user_id}")])
     buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -104,6 +106,7 @@ def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False,
         else:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
+        buttons.append([InlineKeyboardButton(text="🗑 Удалить из БД", callback_data=f"admin:delete_user:{user_id}")])
     buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
