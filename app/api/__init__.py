@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import telegram_webhook
+from app.api import payment_webhook
 
 # SECURITY: Disable OpenAPI/Swagger docs in production (information leak prevention)
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -26,6 +27,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestSizeLimitMiddleware, max_size=1 * 1024 * 1024)
 app.include_router(telegram_webhook.router)
+app.include_router(payment_webhook.router)
 
 
 @app.get("/health")

@@ -12,7 +12,6 @@ import math
 from typing import Optional, Dict, Any
 from uuid import uuid4
 import httpx
-from aiohttp import web
 from aiogram import Bot
 from app.utils.retry import retry_async
 
@@ -130,38 +129,31 @@ async def create_transaction(
     }
 
 
-async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
+async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     """
-    Handle Platega webhook callback.
+    Process Platega webhook data (framework-agnostic).
 
-    Platega sends POST with headers X-MerchantId and X-Secret for auth.
-    Payload contains transaction status and payload with purchase_id.
+    Args:
+        headers: Request headers dict
+        body: Parsed JSON body
+        bot: Bot instance for sending messages
 
-    Always returns 200 OK for reliability.
+    Returns:
+        Response dict with "status" key
     """
-    if not is_enabled():
-        logger.warning("Platega webhook received but service is disabled")
-        return web.json_response({"status": "disabled"}, status=200)
-
     if not database.DB_READY:
         logger.warning("Platega webhook: DB not ready")
-        return web.json_response({"status": "degraded"}, status=200)
+        return {"status": "degraded"}
 
-    # Verify authentication headers
-    merchant_id = request.headers.get("X-MerchantId", "")
-    secret = request.headers.get("X-Secret", "")
+    # Verify authentication headers (case-insensitive lookup)
+    merchant_id = headers.get("x-merchantid", "") or headers.get("X-MerchantId", "")
+    secret = headers.get("x-secret", "") or headers.get("X-Secret", "")
 
     if merchant_id != PLATEGA_MERCHANT_ID or secret != PLATEGA_SECRET:
         logger.warning(
             f"Platega webhook: auth failed, merchant_id_match={merchant_id == PLATEGA_MERCHANT_ID}"
         )
-        return web.json_response({"status": "unauthorized"}, status=200)
-
-    try:
-        body = await request.json()
-    except Exception as e:
-        logger.error(f"Platega webhook: invalid JSON: {e}")
-        return web.json_response({"status": "invalid"}, status=200)
+        return {"status": "unauthorized"}
 
     transaction_id = body.get("id") or body.get("transactionId")
     status = (body.get("status") or "").lower()
@@ -173,7 +165,7 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
     # Only process confirmed/completed payments
     if status not in ("confirmed", "completed", "paid"):
         logger.info(f"Platega webhook: ignoring status={status}")
-        return web.json_response({"status": "ignored"}, status=200)
+        return {"status": "ignored"}
 
     # Extract purchase_id from payload
     payload_raw = body.get("payload")
@@ -191,14 +183,14 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
 
     if not purchase_id:
         logger.error(f"Platega webhook: could not extract purchase_id, payload={payload_raw}")
-        return web.json_response({"status": "invalid"}, status=200)
+        return {"status": "invalid"}
 
     # Look up pending purchase
     pending_purchase = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
 
     if not pending_purchase:
         logger.warning(f"Platega webhook: purchase not found: purchase_id={purchase_id}")
-        return web.json_response({"status": "not_found"}, status=200)
+        return {"status": "not_found"}
 
     telegram_id = pending_purchase["telegram_id"]
     purchase_status = pending_purchase.get("status")
@@ -208,7 +200,7 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
             f"Platega webhook: purchase already processed: "
             f"purchase_id={purchase_id}, status={purchase_status}"
         )
-        return web.json_response({"status": "already_processed"}, status=200)
+        return {"status": "already_processed"}
 
     # Get payment amount
     payment_details = body.get("paymentDetails", {})
@@ -277,21 +269,17 @@ async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
             f"Platega webhook: purchase already processed (ValueError): "
             f"purchase_id={purchase_id}, error={e}"
         )
-        return web.json_response({"status": "already_processed"}, status=200)
+        return {"status": "already_processed"}
     except Exception as e:
         logger.exception(
             f"Platega webhook: finalize_purchase failed: user={telegram_id}, "
             f"purchase_id={purchase_id}, error={e}"
         )
-        return web.json_response({"status": "error"}, status=200)
+        return {"status": "error"}
 
-    return web.json_response({"status": "ok"}, status=200)
+    return {"status": "ok"}
 
 
-async def register_webhook_route(app: web.Application, bot: Bot):
-    """Register Platega webhook route."""
-    async def webhook_handler(request: web.Request) -> web.Response:
-        return await handle_webhook(request, bot)
-
-    app.router.add_post("/webhooks/platega", webhook_handler)
-    logger.info("Platega webhook registered: POST /webhooks/platega")
+async def register_webhook_route(app, bot: Bot):
+    """Register Platega webhook route (legacy aiohttp — unused when running on FastAPI)."""
+    logger.info("Platega webhook registered via FastAPI: POST /webhooks/platega")
