@@ -50,8 +50,6 @@
   "errors.tariff": "Tariffehler",
   "errors.top_referrers": "Fehler beim Abrufen der Top-Referrer",
   "main.contact_manager_button": "💬 VIP-Zugriff verbinden",
-  "main.crypto_payment_invoice": "Rechnung per Crypto Bot bezahlen. Abo wird nach Zahlung automatisch aktiviert.",
-  "main.crypto_payment_redirect": "Zahlung per Telegram Crypto Bot\n\nSie werden zur Zahlung zum Crypto Bot weitergeleitet.",
   "main.enter_promo_text": "Promocode eingeben:",
   "main.friend_dual": "Freunde",
   "main.friend_plural": "Freunde",

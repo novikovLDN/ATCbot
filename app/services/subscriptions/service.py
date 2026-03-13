@@ -161,7 +161,7 @@ async def create_balance_topup_purchase(
 ) -> str:
     """
     Create a pending balance top-up purchase. No tariff, no period_days.
-    Separate from subscription logic. Uses CryptoBot for invoice creation (caller's responsibility).
+    Separate from subscription logic. Invoice creation is caller's responsibility.
     
     Args:
         telegram_id: Telegram ID of the user
@@ -232,7 +232,7 @@ async def finalize_purchase(
     
     Args:
         purchase_id: Purchase ID from pending_purchases
-        payment_provider: Payment provider ("telegram_payment" or "cryptobot")
+        payment_provider: Payment provider ("telegram_payment", "platega", etc.)
         amount_rubles: Amount paid in rubles
         invoice_id: Optional invoice ID from payment provider
         

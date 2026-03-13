@@ -3,7 +3,6 @@ Payment Webhook API (FastAPI)
 
 Webhook endpoints for payment providers:
 - POST /webhooks/platega — Platega (SBP) payment notifications
-- POST /webhooks/crypto2328 — 2328.io crypto payment notifications
 
 Security:
 - Signature/auth verification required per provider.
@@ -64,29 +63,3 @@ async def platega_webhook(request: Request):
 async def platega_callback(request: Request):
     """Alias route — Platega dashboard sends webhooks to this URL."""
     return await _handle_platega_webhook(request)
-
-
-@router.post("/webhooks/crypto2328")
-async def crypto2328_webhook(request: Request):
-    """Handle 2328.io crypto webhook callback."""
-    try:
-        import crypto2328_service
-        if not crypto2328_service.is_enabled():
-            logger.warning("2328.io webhook received but service is disabled")
-            return JSONResponse({"status": "disabled"})
-
-        try:
-            body = await request.json()
-        except Exception as e:
-            logger.error(f"2328.io webhook: invalid JSON: {e}")
-            return JSONResponse({"status": "invalid"})
-
-        result = await crypto2328_service.process_webhook_data(body, _bot)
-        return JSONResponse(result)
-
-    except ImportError:
-        logger.error("crypto2328_service not available")
-        return JSONResponse({"status": "error"})
-    except Exception as e:
-        logger.exception(f"2328.io webhook error: {e}")
-        return JSONResponse({"status": "error"})

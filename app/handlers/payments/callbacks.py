@@ -459,18 +459,6 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(text)
 
 
-@payments_callbacks_router.callback_query(F.data == "crypto_disabled")
-async def callback_crypto_disabled(callback: CallbackQuery):
-    """Обработчик неактивной кнопки крипты"""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    logger.warning(f"crypto_payment_disabled: user={telegram_id}, callback_data={callback.data}")
-
-    await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
-    return
-
-
 @payments_callbacks_router.callback_query(F.data == "promo_back")
 async def callback_promo_back(callback: CallbackQuery, state: FSMContext):
     """Обработчик кнопки 'Назад' при ошибке промокода - возвращает на экран выбора тарифа"""

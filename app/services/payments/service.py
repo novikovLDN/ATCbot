@@ -66,68 +66,11 @@ class PaymentPayloadInfo:
     promo_code: Optional[str]
 
 
-# ====================================================================================
-# Invoice Creation (Crypto)
-# ====================================================================================
-
-async def create_invoice(
-    telegram_id: int,
-    tariff: str,
-    period_days: int,
-    amount_rubles: float,
-    purchase_id: str,
-    asset: str = "USDT",
-    description: str = ""
-) -> Dict[str, Any]:
-    """
-    Create crypto invoice via CryptoBot API.
-
-    Caller must create pending_purchase first and pass purchase_id.
-    Returns pay_url and invoice_id for the payment button.
-
-    Args:
-        telegram_id: User Telegram ID
-        tariff: Tariff (basic/plus)
-        period_days: Subscription period
-        amount_rubles: Amount in rubles
-        purchase_id: Pending purchase ID (correlation for webhook)
-        asset: Crypto asset (USDT/TON/BTC)
-        description: Invoice description
-
-    Returns:
-        {"invoice_id": int, "pay_url": str, "asset": str, "amount": float}
-
-    Raises:
-        PaymentFinalizationError: If CryptoBot not configured or API fails
-    """
-    try:
-        import cryptobot_service
-        if not cryptobot_service.is_enabled():
-            raise PaymentFinalizationError("CryptoBot not configured")
-        result = await cryptobot_service.create_invoice(
-            telegram_id=telegram_id,
-            tariff=tariff,
-            period_days=period_days,
-            amount_rubles=amount_rubles,
-            purchase_id=purchase_id,
-            asset=asset,
-            description=description
-        )
-        return {
-            "invoice_id": result.get("invoice_id"),
-            "pay_url": result.get("pay_url"),
-            "asset": result.get("asset", asset),
-            "amount": amount_rubles,
-        }
-    except Exception as e:
-        raise PaymentFinalizationError(f"Failed to create invoice: {e}") from e
-
-
 async def mark_payment_paid(
     purchase_id: str,
     telegram_id: int,
     amount_rubles: float,
-    provider: str = "cryptobot",
+    provider: str = "telegram",
     invoice_id: Optional[str] = None
 ) -> PaymentResult:
     """
@@ -459,8 +402,8 @@ async def finalize_balance_topup_payment(
     if not provider_charge_id:
         raise PaymentFinalizationError("provider_charge_id is required for idempotency")
     
-    if provider not in ("telegram", "cryptobot", "telegram_stars"):
-        raise PaymentFinalizationError(f"Invalid provider: {provider}. Must be 'telegram', 'cryptobot', or 'telegram_stars'")
+    if provider not in ("telegram", "telegram_stars", "platega"):
+        raise PaymentFinalizationError(f"Invalid provider: {provider}. Must be 'telegram', 'telegram_stars', or 'platega'")
     
     try:
         result = await database.finalize_balance_topup(

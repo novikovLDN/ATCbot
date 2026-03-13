@@ -10,6 +10,9 @@ import database
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 from app.i18n import get_text as i18n_get_text
+from app.services.trials import service as trial_service
+
+logger = logging.getLogger(__name__)
 
 MINI_APP_URL = "https://atlas-miniapp-production.up.railway.app"
 
@@ -33,9 +36,6 @@ def get_connect_keyboard():
         )],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile")],
     ])
-from app.services.trials import service as trial_service
-
-logger = logging.getLogger(__name__)
 
 
 def get_language_keyboard(language: str = "ru"):

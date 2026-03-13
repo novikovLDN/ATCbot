@@ -117,9 +117,7 @@ async def main():
     flags = get_feature_flags()
     if flags.payments_enabled:
         import platega_service
-        import crypto2328_service
-        logger.info("PAYMENT_PROVIDERS: platega=%s, crypto2328=%s",
-                     platega_service.is_enabled(), crypto2328_service.is_enabled())
+        logger.info("PAYMENT_PROVIDERS: platega=%s", platega_service.is_enabled())
 
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
@@ -461,8 +459,6 @@ async def main():
     xray_sync_task = await start_xray_sync_safe(bot)
     if xray_sync_task:
         background_tasks.append(xray_sync_task)
-    
-    # CryptoBot watcher removed — payments now use Platega (SBP) and 2328.io (Crypto)
     
     # Bot initialization complete
     if database.DB_READY:
