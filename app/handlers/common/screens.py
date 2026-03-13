@@ -21,7 +21,6 @@ from app.handlers.common.utils import safe_edit_text, detect_platform, sanitize_
 from app.handlers.common.keyboards import (
     get_about_keyboard,
     get_instruction_keyboard,
-    get_support_keyboard,
     get_profile_keyboard,
 )
 from app.handlers.common.states import PurchaseState
@@ -75,20 +74,6 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
         bot=bot
     )
 
-
-async def _open_support_screen(event: Union[Message, CallbackQuery], bot: Bot):
-    """Поддержка. Reusable for callback and /help command."""
-    if isinstance(event, CallbackQuery):
-        try:
-            await event.answer()
-        except Exception:
-            pass
-
-    msg = event.message if isinstance(event, CallbackQuery) else event
-    telegram_id = event.from_user.id
-    language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "main.support_text", "support_text")
-    await safe_edit_text(msg, text, reply_markup=get_support_keyboard(language), bot=bot)
 
 
 async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):

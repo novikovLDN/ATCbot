@@ -655,7 +655,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
-            callback_data="menu_support"
+            url="https://t.me/asc_support"
         ),
     ])
     buttons.append([InlineKeyboardButton(
@@ -776,7 +776,7 @@ def get_pending_payment_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            callback_data="menu_support"
+            url="https://t.me/asc_support"
         )],
     ])
     return keyboard
@@ -810,25 +810,12 @@ def get_service_status_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            callback_data="menu_support"
-        )],
-    ])
-    return keyboard
-
-
-def get_support_keyboard(language: str):
-    """Клавиатура раздела 'Поддержка'"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "support.write_button"),
             url="https://t.me/asc_support"
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
     ])
     return keyboard
+
+
 
 
 def get_instruction_keyboard(language: str, platform: str = "unknown"):
@@ -883,7 +870,7 @@ def get_instruction_keyboard(language: str, platform: str = "unknown"):
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            callback_data="menu_support"
+            url="https://t.me/asc_support"
         )
     ])
     
