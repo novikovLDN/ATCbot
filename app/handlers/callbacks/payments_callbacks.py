@@ -114,13 +114,58 @@ async def callback_topup_amount(callback: CallbackQuery):
             callback_data=f"topup_crypto:{amount}"
         )],
         [InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.stars"),
+            callback_data=f"topup_stars:{amount}"
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="topup_balance"
         )],
     ])
-    
+
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
+
+
+@payments_router.callback_query(F.data.startswith("topup_stars:"))
+async def callback_topup_stars(callback: CallbackQuery):
+    """Оплата пополнения баланса через Telegram Stars"""
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    amount_str = callback.data.split(":")[1]
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    if amount <= 0 or amount > 100000:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    # Конвертируем рубли в Stars (+70% наценка)
+    # amount — рубли, конвертируем: amount * 1.7 / 1.85 (примерный курс), округляем вверх
+    import math
+    stars_amount = math.ceil(amount * 1.7 / 1.85)
+
+    timestamp = int(time.time())
+    payload = f"balance_topup_{telegram_id}_{amount}_{timestamp}"
+
+    try:
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title=i18n_get_text(language, "main.topup_invoice_title"),
+            description=i18n_get_text(language, "main.topup_invoice_description", amount=amount),
+            payload=payload,
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label=i18n_get_text(language, "payment.stars_invoice_label"), amount=stars_amount)]
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error sending Stars invoice for balance topup: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
 @payments_router.callback_query(F.data == "topup_custom")
@@ -716,6 +761,117 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
         
     except Exception as e:
         logger.exception(f"Error creating invoice for card payment: {e}")
+        error_text = i18n_get_text(language, "errors.payment_create")
+        await callback.answer(error_text, show_alert=True)
+        await state.set_state(None)
+
+
+@payments_router.callback_query(F.data == "pay:stars")
+async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
+    """ЭКРАН 4D — Оплата Telegram Stars
+
+    КРИТИЧНО:
+    - Работает ТОЛЬКО в состоянии choose_payment_method
+    - Создает pending_purchase (с ценой в Stars)
+    - Создает invoice через Telegram Payments с provider_token="" и currency="XTR"
+    - Переводит в processing_payment
+    """
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    # КРИТИЧНО: Проверяем FSM state - должен быть choose_payment_method
+    current_state = await state.get_state()
+    if current_state != PurchaseState.choose_payment_method:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid FSM state for pay:stars: user={telegram_id}, state={current_state}")
+        await state.set_state(None)
+        return
+
+    # КРИТИЧНО: Получаем данные из FSM state
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type")
+    period_days = fsm_data.get("period_days")
+
+    if not tariff_type or not period_days:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Missing purchase data in FSM for stars: user={telegram_id}")
+        await state.set_state(None)
+        return
+
+    # Получаем цену в Stars из TARIFFS_STARS
+    if tariff_type not in config.TARIFFS_STARS or period_days not in config.TARIFFS_STARS[tariff_type]:
+        error_text = i18n_get_text(language, "errors.tariff")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Stars tariff not found: tariff={tariff_type}, period={period_days}")
+        return
+
+    stars_price = config.TARIFFS_STARS[tariff_type][period_days]["price"]
+
+    # Получаем промо-сессию (промокоды НЕ применяются к Stars — цена фиксирована)
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+
+    # Для Stars: цена в копейках = stars_price * 100 (для pending_purchase, хранение)
+    # Но фактическая оплата идёт в Stars, не в рублях
+    stars_price_kopecks = stars_price * 100
+
+    try:
+        # Создаем pending_purchase
+        purchase_id = await subscription_service.create_subscription_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=stars_price_kopecks,
+            promo_code=promo_code
+        )
+
+        await state.update_data(purchase_id=purchase_id, payment_method="stars")
+
+        logger.info(
+            f"Purchase created for stars payment: user={telegram_id}, purchase_id={purchase_id}, "
+            f"tariff={tariff_type}, period_days={period_days}, stars_price={stars_price}"
+        )
+
+        # Формируем payload
+        payload = f"purchase:{purchase_id}"
+
+        # Формируем описание
+        months = period_days // 30
+        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+        description = i18n_get_text(
+            language, "payment.stars_invoice_description",
+            tariff_name=tariff_name, months=months
+        )
+
+        # КРИТИЧНО: Для Stars — provider_token="", currency="XTR", amount = кол-во Stars
+        prices = [LabeledPrice(
+            label=i18n_get_text(language, "payment.stars_invoice_label"),
+            amount=stars_price
+        )]
+
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title="Atlas Secure VPN",
+            description=description,
+            payload=payload,
+            provider_token="",
+            currency="XTR",
+            prices=prices
+        )
+
+        await state.set_state(PurchaseState.processing_payment)
+
+        logger.info(
+            f"stars_invoice_created: user={telegram_id}, purchase_id={purchase_id}, "
+            f"tariff={tariff_type}, period_days={period_days}, stars_price={stars_price}"
+        )
+
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error creating Stars invoice: {e}")
         error_text = i18n_get_text(language, "errors.payment_create")
         await callback.answer(error_text, show_alert=True)
         await state.set_state(None)
