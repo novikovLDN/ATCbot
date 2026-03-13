@@ -113,10 +113,13 @@ async def main():
     logger.info(f"Using DATABASE_URL from {config.APP_ENV.upper()}_DATABASE_URL")
     logger.info(f"Using ADMIN_TELEGRAM_ID from {config.APP_ENV.upper()}_ADMIN_TELEGRAM_ID")
 
-    # Defensive: payments enabled but no CryptoBot token → will silently disable
+    # Log payment providers status
     flags = get_feature_flags()
-    if flags.payments_enabled and not config.CRYPTOBOT_TOKEN:
-        logger.warning("PAYMENTS_ENABLED_BUT_NO_CRYPTOBOT_TOKEN — CryptoBot disabled until token is set")
+    if flags.payments_enabled:
+        import platega_service
+        import crypto2328_service
+        logger.info("PAYMENT_PROVIDERS: platega=%s, crypto2328=%s",
+                     platega_service.is_enabled(), crypto2328_service.is_enabled())
 
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
@@ -459,18 +462,7 @@ async def main():
     if xray_sync_task:
         background_tasks.append(xray_sync_task)
     
-    # Запуск фоновой задачи для автоматической проверки CryptoBot платежей (только если БД готова)
-    crypto_watcher_task = None
-    if database.DB_READY:
-        try:
-            import crypto_payment_watcher
-            crypto_watcher_task = asyncio.create_task(crypto_payment_watcher.crypto_payment_watcher_task(bot))
-            background_tasks.append(crypto_watcher_task)
-            logger.info("Crypto payment watcher task started")
-        except Exception as e:
-            logger.warning(f"Crypto payment watcher task skipped: {e}")
-    else:
-        logger.warning("Crypto payment watcher task skipped (DB not ready)")
+    # CryptoBot watcher removed — payments now use Platega (SBP) and 2328.io (Crypto)
     
     # Bot initialization complete
     if database.DB_READY:

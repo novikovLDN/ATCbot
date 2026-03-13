@@ -60,7 +60,7 @@ print(f"INFO: Config loaded for environment: {APP_ENV.upper()}", flush=True)
 # ====================================================================================
 # Secrets are validated at startup and never logged.
 # Required secrets: BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL
-# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, CRYPTOBOT_TOKEN (via env prefix)
+# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, PLATEGA_SECRET, CRYPTO2328_API_KEY (via env prefix)
 # ====================================================================================
 
 # Telegram Bot Token (получить у @BotFather)
