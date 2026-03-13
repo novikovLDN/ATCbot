@@ -52,7 +52,7 @@ async def health_handler(request: web.Request) -> web.Response:
         response_data: Dict[str, Any] = {
             "status": status,
             "db_ready": db_ready,
-            "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         }
         # HTTP статус код: 200 для обоих случаев (ok и degraded)
         # Мониторинг может различать по полю "status"

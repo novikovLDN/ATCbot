@@ -5,6 +5,7 @@ Handles invoice creation and webhook processing for cryptocurrency payments.
 Configuration: Token/webhook/API URL resolved via config.py only (Railway env-safe).
 """
 import config
+import database
 import json
 import hmac
 import hashlib
