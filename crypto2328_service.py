@@ -127,14 +127,15 @@ async def create_payment(
     """
     if not is_enabled():
         raise Exception("2328.io not configured")
+    if not callback_url:
+        raise Exception("2328.io requires url_callback (set PUBLIC_BASE_URL in env)")
 
     request_body = {
         "amount": f"{amount_rubles:.2f}",
         "currency": "RUB",
         "order_id": order_id,
+        "url_callback": callback_url,
     }
-    if callback_url:
-        request_body["url_callback"] = callback_url
 
     headers, body_bytes = _prepare_request(request_body)
 
