@@ -883,6 +883,16 @@ async def init_db() -> bool:
             # Колонка уже существует или таблицы нет
             pass
 
+        # Таблица broadcast_discounts (скидки для кнопок уведомлений)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_discounts (
+                id SERIAL PRIMARY KEY,
+                broadcast_id INTEGER NOT NULL UNIQUE REFERENCES broadcasts(id) ON DELETE CASCADE,
+                discount_percent INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Таблица incident_settings (режим инцидента)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS incident_settings (
@@ -5534,7 +5544,7 @@ async def get_subscriptions_for_reminders() -> list:
 
 async def get_admin_stats() -> Dict[str, int]:
     """Получить статистику для админ-дашборда
-    
+
     Returns:
         Словарь с ключами:
         - total_users: всего пользователей
@@ -5542,8 +5552,6 @@ async def get_admin_stats() -> Dict[str, int]:
         - expired_subscriptions: истёкших подписок
         - total_payments: всего платежей
         - approved_payments: подтверждённых платежей
-        - rejected_payments: отклонённых платежей
-        - free_vpn_keys: свободных VPN-ключей
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -5572,24 +5580,12 @@ async def get_admin_stats() -> Dict[str, int]:
             "SELECT COUNT(*) FROM payments WHERE status = 'approved'"
         )
         
-        # Отклонённых платежей
-        rejected_payments = await conn.fetchval(
-            "SELECT COUNT(*) FROM payments WHERE status = 'rejected'"
-        )
-        
-        # Свободных VPN-ключей
-        free_vpn_keys = await conn.fetchval(
-            "SELECT COUNT(*) FROM vpn_keys WHERE is_used = FALSE"
-        )
-        
         return {
             "total_users": total_users or 0,
             "active_subscriptions": active_subscriptions or 0,
             "expired_subscriptions": expired_subscriptions or 0,
             "total_payments": total_payments or 0,
             "approved_payments": approved_payments or 0,
-            "rejected_payments": rejected_payments or 0,
-            "free_vpn_keys": free_vpn_keys or 0,
         }
 
 
@@ -7198,6 +7194,152 @@ async def get_broadcast(broadcast_id: int) -> Optional[Dict[str, Any]]:
             "SELECT * FROM broadcasts WHERE id = $1", broadcast_id
         )
         return dict(row) if row else None
+
+
+async def save_broadcast_discount(broadcast_id: int, discount_percent: int) -> None:
+    """Save discount percentage for a broadcast promo button."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO broadcast_discounts (broadcast_id, discount_percent)
+               VALUES ($1, $2)
+               ON CONFLICT (broadcast_id) DO UPDATE SET discount_percent = $2""",
+            broadcast_id, discount_percent
+        )
+
+
+async def get_broadcast_discount(broadcast_id: int) -> Optional[Dict[str, Any]]:
+    """Get discount info for a broadcast promo button."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM broadcast_discounts WHERE broadcast_id = $1",
+            broadcast_id
+        )
+        return dict(row) if row else None
+
+
+async def get_analytics_by_period(hours: int) -> Dict[str, Any]:
+    """Получить аналитику за указанный период (в часах).
+
+    Returns:
+        Словарь с ключами:
+        - new_users: новые пользователи за период
+        - trial_activated: активировали пробный период за период
+        - new_subscriptions: новые платные подписки за период
+        - total_users: общее количество пользователей
+        - total_trial_used: всего активировали trial
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(hours=hours)
+        since_db = _to_db_utc(since)
+
+        new_users = await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE created_at >= $1",
+            since_db
+        )
+
+        trial_activated = await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE trial_used_at IS NOT NULL AND trial_used_at >= $1",
+            since_db
+        )
+
+        new_subscriptions = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions WHERE created_at >= $1",
+            since_db
+        )
+
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+
+        total_trial_used = await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE trial_used_at IS NOT NULL"
+        )
+
+        return {
+            "new_users": new_users or 0,
+            "trial_activated": trial_activated or 0,
+            "new_subscriptions": new_subscriptions or 0,
+            "total_users": total_users or 0,
+            "total_trial_used": total_trial_used or 0,
+        }
+
+
+async def get_extended_bot_stats() -> Dict[str, Any]:
+    """Расширенная статистика бота для мониторинга."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        now = datetime.now(timezone.utc)
+        now_db = _to_db_utc(now)
+
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+
+        # Active subscriptions
+        active_subs = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions WHERE expires_at > $1", now_db
+        )
+
+        # Expired and not renewed (churn)
+        expired_subs = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions WHERE expires_at <= $1", now_db
+        )
+
+        # Trial stats
+        total_trial = await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE trial_used_at IS NOT NULL"
+        )
+
+        # Conversion: users who have at least one subscription
+        users_with_sub = await conn.fetchval(
+            "SELECT COUNT(DISTINCT telegram_id) FROM subscriptions"
+        )
+
+        # Revenue (sum of approved payments)
+        total_revenue = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved'"
+        ) or 0
+
+        # Revenue last 30 days (MRR estimate)
+        mrr_since = _to_db_utc(now - timedelta(days=30))
+        mrr = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'approved' AND created_at >= $1",
+            mrr_since
+        ) or 0
+
+        # New users today
+        today_start = _to_db_utc(now.replace(hour=0, minute=0, second=0, microsecond=0))
+        new_today = await conn.fetchval(
+            "SELECT COUNT(*) FROM users WHERE created_at >= $1", today_start
+        )
+
+        # Broadcasts sent
+        total_broadcasts = await conn.fetchval("SELECT COUNT(*) FROM broadcasts")
+
+        # Average subscriptions per paying user
+        avg_subs = await conn.fetchval(
+            "SELECT ROUND(AVG(cnt), 1) FROM (SELECT COUNT(*) as cnt FROM subscriptions GROUP BY telegram_id) sub"
+        )
+
+        conversion_rate = round((users_with_sub / total_users * 100), 1) if total_users > 0 else 0
+        trial_rate = round((total_trial / total_users * 100), 1) if total_users > 0 else 0
+        churn_rate = round((expired_subs / (active_subs + expired_subs) * 100), 1) if (active_subs + expired_subs) > 0 else 0
+
+        return {
+            "total_users": total_users or 0,
+            "active_subs": active_subs or 0,
+            "expired_subs": expired_subs or 0,
+            "total_trial": total_trial or 0,
+            "trial_rate": trial_rate,
+            "users_with_sub": users_with_sub or 0,
+            "conversion_rate": conversion_rate,
+            "churn_rate": churn_rate,
+            "total_revenue": total_revenue,
+            "mrr": mrr,
+            "new_today": new_today or 0,
+            "total_broadcasts": total_broadcasts or 0,
+            "avg_subs_per_user": float(avg_subs) if avg_subs else 0,
+        }
 
 
 async def get_all_users_telegram_ids() -> list:
