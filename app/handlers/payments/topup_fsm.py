@@ -87,10 +87,6 @@ async def process_topup_amount(message: Message, state: FSMContext):
             callback_data=f"topup_card:{amount}"
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.pay_crypto"),
-            callback_data=f"topup_crypto:{amount}"
-        )],
-        [InlineKeyboardButton(
             text=i18n_get_text(language, "payment.stars"),
             callback_data=f"topup_stars:{amount}"
         )],

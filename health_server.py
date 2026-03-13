@@ -89,7 +89,7 @@ async def health_handler(request: web.Request) -> web.Response:
 
 
 async def create_health_app(bot: Optional[Bot] = None) -> web.Application:
-    """Создать aiohttp приложение с health endpoint и Crypto Bot webhook"""
+    """Создать aiohttp приложение с health endpoint и payment webhooks"""
     app = web.Application()
     
     # Регистрируем health endpoint
@@ -139,15 +139,6 @@ async def create_health_app(bot: Optional[Bot] = None) -> web.Application:
         except Exception as e:
             logger.error(f"Failed to register Platega webhook: {e}")
 
-        # 2328.io (Crypto) webhook
-        try:
-            import crypto2328_service
-            if crypto2328_service.is_enabled():
-                await crypto2328_service.register_webhook_route(app, bot)
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.error(f"Failed to register 2328.io webhook: {e}")
     
     return app
 

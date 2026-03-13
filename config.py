@@ -60,7 +60,7 @@ print(f"INFO: Config loaded for environment: {APP_ENV.upper()}", flush=True)
 # ====================================================================================
 # Secrets are validated at startup and never logged.
 # Required secrets: BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL
-# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, PLATEGA_SECRET, CRYPTO2328_API_KEY (via env prefix)
+# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, PLATEGA_SECRET (via env prefix)
 # ====================================================================================
 
 # Telegram Bot Token (получить у @BotFather)
@@ -189,12 +189,6 @@ PLATEGA_SECRET = env("PLATEGA_SECRET")
 PLATEGA_API_URL = env("PLATEGA_API_URL") or "https://app.platega.io"
 # Процент наценки для СБП (11%)
 SBP_MARKUP_PERCENT = 11
-
-# 2328.io (Crypto) Configuration
-# Криптовалютные платежи через 2328.io
-CRYPTO2328_PROJECT_ID = env("CRYPTO2328_PROJECT_ID") or "8f7c14f1-2473-4652-9f7a-5c04693b40af"
-CRYPTO2328_API_KEY = env("CRYPTO2328_API_KEY")
-CRYPTO2328_API_URL = env("CRYPTO2328_API_URL") or "https://api.2328.io/api"
 
 # Public base URL for webhooks (Railway + Cloudflare). Required for payment webhooks.
 # Example: https://api.yourdomain.com

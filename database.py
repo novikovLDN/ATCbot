@@ -6423,7 +6423,7 @@ async def update_pending_purchase_invoice_id(purchase_id: str, invoice_id: str) 
     
     Args:
         purchase_id: ID покупки
-        invoice_id: Invoice ID от платежного провайдера (CryptoBot)
+        invoice_id: Invoice ID от платежного провайдера
     
     Returns:
         True если успешно, False если покупка не найдена
@@ -6496,7 +6496,7 @@ async def finalize_purchase(
     
     Args:
         purchase_id: ID покупки из pending_purchases
-        payment_provider: 'telegram_payment', 'platega', 'crypto2328', или 'cryptobot'
+        payment_provider: 'telegram_payment', 'platega', 'telegram_stars', etc.
         amount_rubles: Сумма оплаты в рублях
         invoice_id: ID инвойса (опционально)
     
@@ -6637,7 +6637,7 @@ async def finalize_purchase(
                     balance_increased = await increase_balance(
                         telegram_id=telegram_id,
                         amount=amount_rubles,
-                        source="cryptobot" if payment_provider == "cryptobot" else "telegram_payment",
+                        source=payment_provider or "telegram_payment",
                         description=f"Balance top-up via {payment_provider}",
                         conn=conn
                     )
@@ -8122,7 +8122,7 @@ async def finalize_balance_topup(
     Args:
         telegram_id: Telegram ID пользователя
         amount_rubles: Сумма пополнения в рублях
-        provider: Провайдер платежа ('telegram' или 'cryptobot')
+        provider: Провайдер платежа ('telegram', 'platega', 'telegram_stars')
         provider_charge_id: Уникальный ID платежа от провайдера (для идемпотентности)
         description: Описание платежа (опционально)
         correlation_id: ID для корреляции логов (опционально)
@@ -8146,8 +8146,8 @@ async def finalize_balance_topup(
     if not provider_charge_id:
         raise ValueError("provider_charge_id is required for idempotency")
     
-    if provider not in ("telegram", "cryptobot", "platega", "crypto2328"):
-        raise ValueError(f"Invalid provider: {provider}. Must be 'telegram', 'cryptobot', 'platega', or 'crypto2328'")
+    if provider not in ("telegram", "cryptobot", "platega", "crypto2328", "telegram_stars"):
+        raise ValueError(f"Invalid provider: {provider}. Must be 'telegram', 'platega', or 'telegram_stars'")
     
     amount_kopecks = int(amount_rubles * 100)
     pool = await get_pool()

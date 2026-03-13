@@ -130,7 +130,7 @@ def safe_resolve_username_from_db(user_dict: Optional[Dict], language: str, tele
 # PART D — EXTERNAL DEPENDENCY ISOLATION:
 # - VPN API calls: isolated in try/except, mapped to dependency_error
 # - Payment provider calls: isolated in try/except, mapped to dependency_error
-# - CryptoBot API calls: isolated in try/except, mapped to dependency_error
+# - External API calls: isolated in try/except, mapped to dependency_error
 # 
 # PART E — SECRET & CONFIG SAFETY:
 # - Secrets never logged (sanitize_for_logging used)
@@ -1137,12 +1137,6 @@ async def show_payment_method_selection(
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.sbp"),
         callback_data="pay:sbp"
-    )])
-
-    # Кнопка оплаты криптовалютой (2328.io)
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.crypto"),
-        callback_data="pay:crypto"
     )])
 
     # Кнопка оплаты Telegram Stars
