@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 MIN_WITHDRAW_RUBLES = 500
 MAX_WITHDRAW_RUBLES = 1_000_000
 
-# Строгий паттерн: только ASCII-цифры, опционально одна точка/запятая + копейки
-_AMOUNT_PATTERN = re.compile(r"^\d{1,7}([.,]\d{1,2})?$")
+# Строгий паттерн: только ASCII-цифры (макс 6), опционально одна точка/запятая + копейки
+_AMOUNT_PATTERN = re.compile(r"^\d{1,6}([.,]\d{1,2})?$")
 
 # Реквизиты: номер карты (16-19 цифр, с пробелами) или телефон (+7XXXXXXXXXX)
-# Макс 22 символа = 16 цифр карты + 6 на пробелы/дефисы
-_REQUISITES_PATTERN = re.compile(r"^[\d\s\-+]{5,22}$")
+# Макс 28 символов = 19 цифр карты + 9 на пробелы/дефисы
+_REQUISITES_PATTERN = re.compile(r"^[\d\s\-+]{5,28}$")
 
 # Максимум неудачных попыток ввода
 _MAX_ATTEMPTS = 5
@@ -134,7 +134,7 @@ async def process_withdraw_requisites(message: Message, state: FSMContext):
     # Санитизация: убираем невидимые юникод-символы
     requisites = _sanitize_text(raw)
 
-    # Строгая валидация: только допустимые символы, 5-120 знаков
+    # Строгая валидация: только допустимые символы, 5-28 знаков
     if not _REQUISITES_PATTERN.match(requisites):
         fsm_data = await state.get_data()
         attempts = fsm_data.get("withdraw_req_attempts", 0) + 1

@@ -3,6 +3,7 @@ Top-up FSM message handlers: TopUpStates.waiting_for_amount
 """
 import logging
 import re
+import unicodedata
 
 from aiogram import Router
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -23,6 +24,17 @@ _DIGITS_ONLY = re.compile(r"^\d{1,6}$")
 _MAX_ATTEMPTS = 3
 
 
+def _sanitize_text(text: str) -> str:
+    """Убирает control-символы, zero-width, RTL/LTR marks и прочий невидимый unicode."""
+    cleaned = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat.startswith(("Cc", "Cf", "Co", "Cs")):
+            continue
+        cleaned.append(ch)
+    return "".join(cleaned).strip()
+
+
 @payments_router.message(TopUpStates.waiting_for_amount)
 async def process_topup_amount(message: Message, state: FSMContext):
     """Обработка введенной суммы пополнения - показываем экран выбора способа оплаты"""
@@ -38,7 +50,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
     if not message.text:
         return
 
-    raw_text = message.text.strip()
+    raw_text = _sanitize_text(message.text.strip())
 
     # Строгая валидация: только ASCII-цифры, 1-6 символов
     if not _DIGITS_ONLY.match(raw_text):
