@@ -49,6 +49,18 @@ async def telegram_webhook(
         )
         return Response(status_code=403)
 
+    # SECURITY: Reject oversized request bodies (DDoS / memory exhaustion protection)
+    # Telegram updates are typically < 10 KB; 1 MB is a generous upper bound.
+    MAX_BODY_SIZE = 1 * 1024 * 1024  # 1 MB
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_BODY_SIZE:
+        logger.warning(
+            "WEBHOOK_BODY_TOO_LARGE ip=%s content_length=%s",
+            request.client.host if request.client else "unknown",
+            content_length,
+        )
+        return Response(status_code=413)
+
     # Parse and feed update to aiogram with timeout — C2 fix
     try:
         body = await request.json()
