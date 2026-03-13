@@ -463,6 +463,7 @@ LANG = {
     'payment.stars': '⭐ Telegram Stars',
     'payment.stars_invoice_label': 'Пардохт бо ситораҳо',
     'payment.stars_invoice_description': 'Atlas Secure VPN {tariff_name} — {months} моҳ (⭐ Stars)',
+    'payment.invoice_timeout': '⏱ Дар давоми 15 дақиқа пардохт кунед. Баъд аз тамомшавии вақт инвойс бекор мешавад.',
     'payment.crypto_pay_button': '💳 Ба пардохт',
     'payment.crypto_unavailable': 'Пардохти криптовалюта муваққатан дастрас нест',
     'payment.crypto_waiting': '₿ Пардохти криптовалюта\n\nМаблағ: {amount:.2f} ₽\n\n⏳ Интизори тасдиқи пардохт. Одатан то 5 дақиқа давом мекунад. Дастрасӣ худкор дода мешавад.',

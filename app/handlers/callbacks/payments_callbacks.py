@@ -1,13 +1,15 @@
 """
-Payment-related callback handlers: topup, withdraw, pay:balance, pay:card, pay:crypto.
+Payment-related callback handlers: topup, withdraw, pay:balance, pay:card, pay:crypto, pay:stars.
 """
+import asyncio
 import logging
+import math
 import time
 
 import config
 import database
 from aiogram import Router, F, Bot
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice, Message
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 
@@ -34,6 +36,20 @@ from app.handlers.common.states import TopUpStates, WithdrawStates, PurchaseStat
 
 payments_router = Router()
 logger = logging.getLogger(__name__)
+
+# --- Invoice auto-deletion after timeout ---
+INVOICE_TIMEOUT = config.INVOICE_TIMEOUT_SECONDS  # 15 минут
+
+
+async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Message, timeout: int = INVOICE_TIMEOUT):
+    """Удаляет сообщение с инвойсом через timeout секунд."""
+    try:
+        await asyncio.sleep(timeout)
+        await bot.delete_message(chat_id=chat_id, message_id=invoice_message.message_id)
+        logger.info(f"INVOICE_EXPIRED: deleted invoice message_id={invoice_message.message_id} chat_id={chat_id}")
+    except Exception as e:
+        logger.debug(f"Failed to delete expired invoice: chat_id={chat_id}, error={e}")
+
 
 # --- User withdrawal flow ---
 MIN_WITHDRAW_RUBLES = 500
@@ -130,6 +146,8 @@ async def callback_topup_amount(callback: CallbackQuery):
 @payments_router.callback_query(F.data.startswith("topup_stars:"))
 async def callback_topup_stars(callback: CallbackQuery):
     """Оплата пополнения баланса через Telegram Stars"""
+    if not await ensure_db_ready_callback(callback):
+        return
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
@@ -146,14 +164,13 @@ async def callback_topup_stars(callback: CallbackQuery):
 
     # Конвертируем рубли в Stars (+70% наценка)
     # amount — рубли, конвертируем: amount * 1.7 / 1.85 (примерный курс), округляем вверх
-    import math
     stars_amount = math.ceil(amount * 1.7 / 1.85)
 
     timestamp = int(time.time())
     payload = f"balance_topup_{telegram_id}_{amount}_{timestamp}"
 
     try:
-        await callback.bot.send_invoice(
+        invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
             title=i18n_get_text(language, "main.topup_invoice_title"),
             description=i18n_get_text(language, "main.topup_invoice_description", amount=amount),
@@ -162,6 +179,8 @@ async def callback_topup_stars(callback: CallbackQuery):
             currency="XTR",
             prices=[LabeledPrice(label=i18n_get_text(language, "payment.stars_invoice_label"), amount=stars_amount)]
         )
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending Stars invoice for balance topup: {e}")
@@ -738,7 +757,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
         prices = [LabeledPrice(label=i18n_get_text(language, "buy.invoice_label"), amount=final_price_kopecks)]
         
         # КРИТИЧНО: Создаем invoice через Telegram Payments
-        await callback.bot.send_invoice(
+        invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
             title="Atlas Secure VPN",
             description=description,
@@ -747,16 +766,18 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             currency="RUB",
             prices=prices
         )
-        
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+
         # КРИТИЧНО: Переводим в состояние processing_payment
         await state.set_state(PurchaseState.processing_payment)
-        
+
         logger.info(
             f"invoice_created: user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period_days={period_days}, "
             f"final_price_kopecks={final_price_kopecks}"
         )
-        
+
         await callback.answer()
         
     except Exception as e:
@@ -851,7 +872,7 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             amount=stars_price
         )]
 
-        await callback.bot.send_invoice(
+        invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
             title="Atlas Secure VPN",
             description=description,
@@ -860,6 +881,8 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             currency="XTR",
             prices=prices
         )
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
 
         await state.set_state(PurchaseState.processing_payment)
 
@@ -1124,7 +1147,7 @@ async def callback_topup_card(callback: CallbackQuery):
     amount_kopecks = amount * 100
     
     try:
-        await callback.bot.send_invoice(
+        invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
             title=i18n_get_text(language, "main.topup_invoice_title"),
             description=i18n_get_text(language, "main.topup_invoice_description", amount=amount),
@@ -1133,6 +1156,8 @@ async def callback_topup_card(callback: CallbackQuery):
             currency="RUB",
             prices=[LabeledPrice(label=i18n_get_text(language, "main.topup_invoice_label"), amount=amount_kopecks)]
         )
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice for balance topup: {e}")
@@ -1245,8 +1270,7 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     )
     
     try:
-        # Отправляем invoice
-        await callback.bot.send_invoice(
+        invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
             title="Atlas Secure VPN",
             description=description,
@@ -1255,6 +1279,8 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
             currency="RUB",
             prices=prices
         )
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice: {e}")

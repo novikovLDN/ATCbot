@@ -2,6 +2,7 @@
 Subscription-related callback handlers: toggle_auto_renew, activate_trial,
 menu_profile, menu_vip_access, renewal_pay, subscription_history.
 """
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -381,7 +382,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
     prices = [LabeledPrice(label=i18n_get_text(language, "payment.label"), amount=amount * 100)]
 
     try:
-        await callback.bot.send_invoice(
+        invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
             title="Atlas Secure VPN",
             description=description,
@@ -390,6 +391,9 @@ async def callback_renewal_pay(callback: CallbackQuery):
             currency="RUB",
             prices=prices
         )
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        from app.handlers.callbacks.payments_callbacks import _schedule_invoice_deletion
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:
         logger.exception(f"Error sending invoice for renewal: {e}")

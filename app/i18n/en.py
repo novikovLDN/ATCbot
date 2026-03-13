@@ -470,6 +470,7 @@ LANG = {
     'payment.stars': "⭐ Telegram Stars",
     'payment.stars_invoice_label': "Stars payment",
     'payment.stars_invoice_description': "Atlas Secure VPN {tariff_name} — {months} mo. (⭐ Stars)",
+    'payment.invoice_timeout': "⏱ Please pay within 15 minutes. The invoice will be cancelled after expiration.",
     'payment.crypto_pay_button': "💳 Go to Payment",
     'payment.crypto_unavailable': "Cryptocurrency payment temporarily unavailable",
     'payment.crypto_waiting': "₿ Cryptocurrency Payment\n\nAmount: {amount:.2f} ₽\n\n⏳ Waiting for payment confirmation. This usually takes up to 5 minutes. Access will be granted automatically.",
