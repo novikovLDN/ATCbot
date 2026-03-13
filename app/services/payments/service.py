@@ -176,8 +176,11 @@ async def verify_payment_payload(
         except (ValueError, IndexError) as e:
             raise InvalidPaymentPayloadError(f"Error parsing balance topup payload: {e}")
     
-    # New format: "purchase:{purchase_id}"
-    if payload.startswith("purchase:"):
+    # New format: "purchase:{purchase_id}" (check promo variant first)
+    if payload.startswith("purchase:promo:"):
+        # Handled below in legacy promo section
+        pass
+    elif payload.startswith("purchase:"):
         purchase_id = payload.split(":", 1)[1]
         if not purchase_id:
             raise InvalidPaymentPayloadError("Purchase ID is empty in payload")

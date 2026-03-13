@@ -118,7 +118,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 "NOTIFICATION_FAILED",
                 extra={
                     "type": "referral_registration",
-                    "referrer": referrer_id,
+                    "referrer": referral_result.get("referrer_id"),
                     "referred": telegram_id,
                     "error": str(e)
                 }

@@ -42,9 +42,11 @@ async def callback_admin_discount_create(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         user_id = int(callback.data.split(":")[2])
-        
+
         # Проверяем, есть ли уже скидка
         existing_discount = await database.get_user_discount(user_id)
         if existing_discount:
@@ -93,12 +95,14 @@ async def callback_admin_discount_percent_manual(callback: CallbackQuery, state:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         user_id = int(callback.data.split(":")[2])
-        
+
         await state.update_data(discount_user_id=user_id)
         await state.set_state(AdminDiscountCreate.waiting_for_percent)
-        
+
         text = "🎯 Назначить скидку\n\nВведите процент скидки (число от 1 до 99):"
         await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
@@ -150,17 +154,19 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         parts = callback.data.split(":")
         user_id = int(parts[2])
         discount_percent = int(parts[3])
         expires_days = int(parts[4])
-        
+
         # Рассчитываем expires_at
         expires_at = None
         if expires_days > 0:
             expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
-        
+
         # Создаём скидку
         success = await database.create_user_discount(
             telegram_id=user_id,
@@ -168,7 +174,7 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
             expires_at=expires_at,
             created_by=callback.from_user.id
         )
-        
+
         if success:
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
             text = f"✅ Персональная скидка {discount_percent}% назначена\n\nСрок действия: {expires_str}"
@@ -177,10 +183,8 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
         else:
             text = "❌ Ошибка при создании скидки"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
-            user = await database.get_user(callback.from_user.id)
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
-        
+            await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
+
     except Exception as e:
         logging.exception(f"Error in callback_admin_discount_expires: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
@@ -194,14 +198,16 @@ async def callback_admin_discount_expires_manual(callback: CallbackQuery, state:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         parts = callback.data.split(":")
         user_id = int(parts[2])
         discount_percent = int(parts[3])
-        
+
         await state.update_data(discount_user_id=user_id, discount_percent=discount_percent)
         await state.set_state(AdminDiscountCreate.waiting_for_expires)
-        
+
         text = "🎯 Назначить скидку\n\nВведите количество дней действия скидки (или 0 для бессрочной):"
         await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
         await callback.answer()
@@ -220,11 +226,13 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
         await state.clear()
         return
     
+    language = await resolve_user_language(message.from_user.id)
+
     try:
         data = await state.get_data()
         user_id = data.get("discount_user_id")
         discount_percent = data.get("discount_percent")
-        
+
         try:
             expires_days = int(message.text.strip())
             if expires_days < 0:
@@ -272,9 +280,11 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
+    language = await resolve_user_language(callback.from_user.id)
+
     try:
         user_id = int(callback.data.split(":")[2])
-        
+
         # Удаляем скидку
         success = await database.delete_user_discount(
             telegram_id=user_id,
@@ -305,9 +315,10 @@ async def callback_admin_incident(callback: CallbackQuery):
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
     await callback.answer()
-    
+    language = await resolve_user_language(callback.from_user.id)
+
     incident = await database.get_incident_settings()
     is_active = incident["is_active"]
     incident_text = incident.get("incident_text") or "Текст не указан"
