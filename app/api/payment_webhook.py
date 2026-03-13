@@ -29,8 +29,7 @@ def setup(bot):
     _bot = bot
 
 
-@router.post("/webhooks/platega")
-async def platega_webhook(request: Request):
+async def _handle_platega_webhook(request: Request):
     """Handle Platega (SBP) webhook callback."""
     try:
         import platega_service
@@ -54,6 +53,17 @@ async def platega_webhook(request: Request):
     except Exception as e:
         logger.exception(f"Platega webhook error: {e}")
         return JSONResponse({"status": "error"})
+
+
+@router.post("/webhooks/platega")
+async def platega_webhook(request: Request):
+    return await _handle_platega_webhook(request)
+
+
+@router.post("/platega/callback")
+async def platega_callback(request: Request):
+    """Alias route — Platega dashboard sends webhooks to this URL."""
+    return await _handle_platega_webhook(request)
 
 
 @router.post("/webhooks/crypto2328")
