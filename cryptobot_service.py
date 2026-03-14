@@ -265,6 +265,7 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
             text = i18n_get_text(
                 language, "payment.crypto_success",
                 f"🎉 Оплата получена!\n{_emoji} Тариф: {_label}\n📅 До: {expires_str}",
+                tariff_icon=_emoji,
                 tariff=_label,
                 date=expires_str,
             )
