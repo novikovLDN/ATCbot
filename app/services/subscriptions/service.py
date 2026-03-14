@@ -38,7 +38,8 @@ async def calculate_price(
     telegram_id: int,
     tariff: str,
     period_days: int,
-    promo_code: Optional[str] = None
+    promo_code: Optional[str] = None,
+    country: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Calculate final price for a subscription with all discounts applied.
@@ -81,7 +82,8 @@ async def calculate_price(
             telegram_id=telegram_id,
             tariff=tariff,
             period_days=period_days,
-            promo_code=promo_code
+            promo_code=promo_code,
+            country=country
         )
         
         return result
@@ -103,7 +105,8 @@ async def create_subscription_purchase(
     tariff: str,
     period_days: int,
     price_kopecks: int,
-    promo_code: Optional[str] = None
+    promo_code: Optional[str] = None,
+    country: Optional[str] = None
 ) -> str:
     """
     Create a pending subscription purchase record.
@@ -138,7 +141,8 @@ async def create_subscription_purchase(
             tariff=tariff,
             period_days=period_days,
             price_kopecks=price_kopecks,
-            promo_code=promo_code
+            promo_code=promo_code,
+            country=country
         )
 
         logger.info(

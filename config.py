@@ -160,6 +160,63 @@ def tariff_for_vpn_api(tariff: str) -> str:
         return "plus"
     return "basic"
 
+# --- Страны для бизнес-тарифов ---
+# Ценовые множители относительно базовой цены (Амстердам = 1.0)
+# Основаны на реальной стоимости инфраструктуры в регионе + 10% выше конкурентов
+BIZ_COUNTRIES = {
+    "nl": {
+        "name": "Амстердам",
+        "flag": "🇳🇱",
+        "multiplier": 1.0,  # Базовая цена (Hetzner NL)
+    },
+    "ru": {
+        "name": "Россия",
+        "flag": "🇷🇺",
+        "multiplier": 0.90,  # Selectel/Timeweb дешевле, но +10% над рынком
+    },
+    "uk": {
+        "name": "Великобритания",
+        "flag": "🇬🇧",
+        "multiplier": 1.20,  # UK дороже на ~20% (AWS/Vultr London)
+    },
+    "fr": {
+        "name": "Франция",
+        "flag": "🇫🇷",
+        "multiplier": 1.05,  # OVH Франция, чуть дороже NL
+    },
+    "us": {
+        "name": "США",
+        "flag": "🇺🇸",
+        "multiplier": 1.15,  # US дороже (Vultr/DO East Coast)
+    },
+}
+
+# Конфигурации серверов для бизнес-тарифов (для отображения в профиле)
+BIZ_TIER_SPECS = {
+    "biz_starter":    {"cpu": 2,  "ram": 8,   "traffic": 20, "users": 5},
+    "biz_team":       {"cpu": 4,  "ram": 16,  "traffic": 20, "users": 15},
+    "biz_business":   {"cpu": 8,  "ram": 32,  "traffic": 30, "users": 50},
+    "biz_pro":        {"cpu": 16, "ram": 64,  "traffic": 40, "users": 100},
+    "biz_enterprise": {"cpu": 32, "ram": 128, "traffic": 50, "users": 250},
+    "biz_ultimate":   {"cpu": 48, "ram": 192, "traffic": 60, "users": 500},
+}
+
+def get_biz_price(tariff: str, period_days: int, country: str = "nl") -> int:
+    """Получить цену бизнес-тарифа для конкретной страны (в рублях)."""
+    if tariff not in TARIFFS or period_days not in TARIFFS[tariff]:
+        return 0
+    base_price = TARIFFS[tariff][period_days]["price"]
+    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+    return int(round(base_price * multiplier / 100) * 100)  # Округление до сотен
+
+def get_biz_price_stars(tariff: str, period_days: int, country: str = "nl") -> int:
+    """Получить цену бизнес-тарифа в Stars для конкретной страны."""
+    if tariff not in TARIFFS_STARS or period_days not in TARIFFS_STARS[tariff]:
+        return 0
+    base_price = TARIFFS_STARS[tariff][period_days]["price"]
+    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+    return int(round(base_price * multiplier))
+
 # Тарифы для оплаты Telegram Stars (цены в Stars, +70% от рублёвых)
 # 1 Star ≈ 1.85 RUB (курс приблизительный, цены округлены)
 TARIFFS_STARS = {

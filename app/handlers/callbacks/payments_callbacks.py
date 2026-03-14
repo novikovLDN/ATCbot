@@ -404,14 +404,15 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    
+    country = fsm_data.get("country")  # Страна для бизнес-тарифов
+
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
         logger.error(f"Missing purchase data in FSM: user={telegram_id}, tariff={tariff_type}, period={period_days}, price={final_price_kopecks}")
         await state.set_state(None)
         return
-    
+
     # Получаем баланс пользователя
     balance_rubles = await database.get_user_balance(telegram_id)
     final_price_rubles = final_price_kopecks / 100.0
@@ -452,7 +453,12 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     
     # КРИТИЧНО: Формируем данные для активации подписки
     months = period_days // 30
-    tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+    if config.is_biz_tariff(tariff_type):
+        tariff_name = "Business"
+    elif tariff_type == "basic":
+        tariff_name = "Basic"
+    else:
+        tariff_name = "Plus"
     
     try:
         # КРИТИЧНО: Проверяем, была ли активная подписка ДО платежа
@@ -463,7 +469,6 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # КРИТИЧНО: Все финансовые операции выполняются атомарно в одной транзакции
         # через finalize_balance_purchase
         months = period_days // 30
-        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
         transaction_description = f"Оплата подписки {tariff_name} на {months} месяц(ев)"
         
         # CRITICAL FIX: Получаем промокод из промо-сессии для передачи в finalize_balance_purchase
@@ -476,7 +481,8 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             amount_rubles=final_price_rubles,
             description=transaction_description,
-            promo_code=promo_code_from_session  # CRITICAL: Промокод потребляется внутри транзакции
+            promo_code=promo_code_from_session,  # CRITICAL: Промокод потребляется внутри транзакции
+            country=country
         )
         
         if not result or not result.get("success"):
@@ -709,18 +715,19 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
-    
+    country = fsm_data.get("country")  # Страна для бизнес-тарифов
+
     # КРИТИЧНО: Получаем промо-сессию для сохранения в pending_purchase
     promo_session = await get_promo_session(state)
     promo_code = promo_session.get("promo_code") if promo_session else None
-    
+
     if not tariff_type or not period_days or not final_price_kopecks:
         error_text = i18n_get_text(language, "errors.session_expired")
         await callback.answer(error_text, show_alert=True)
         logger.error(f"Missing purchase data in FSM: user={telegram_id}, tariff={tariff_type}, period={period_days}, price={final_price_kopecks}")
         await state.set_state(None)
         return
-    
+
     # Проверяем наличие provider_token
     if not config.TG_PROVIDER_TOKEN:
         error_text = i18n_get_text(language, "errors.payments_unavailable")
@@ -746,7 +753,8 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             tariff=tariff_type,
             period_days=period_days,
             price_kopecks=final_price_kopecks,
-            promo_code=promo_code
+            promo_code=promo_code,
+            country=country
         )
         
         # КРИТИЧНО: Сохраняем purchase_id в FSM state
@@ -763,7 +771,12 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
         
         # Формируем описание тарифа
         months = period_days // 30
-        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+        if config.is_biz_tariff(tariff_type):
+            tariff_name = "Business"
+        elif tariff_type == "basic":
+            tariff_name = "Basic"
+        else:
+            tariff_name = "Plus"
         description = i18n_get_text(language, "buy.invoice_description", tariff_name=tariff_name, months=months)
 
         # Формируем prices (цена в копейках из FSM)
@@ -833,6 +846,7 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
     fsm_data = await state.get_data()
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
+    country = fsm_data.get("country")  # Страна для бизнес-тарифов
 
     if not tariff_type or not period_days:
         error_text = i18n_get_text(language, "errors.session_expired")
@@ -849,6 +863,10 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
         return
 
     stars_price = config.TARIFFS_STARS[tariff_type][period_days]["price"]
+    # Для бизнес-тарифов применяем множитель страны к Stars
+    if country and config.is_biz_tariff(tariff_type):
+        multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+        stars_price = int(round(stars_price * multiplier))
 
     # Получаем промо-сессию (промокоды НЕ применяются к Stars — цена фиксирована)
     promo_session = await get_promo_session(state)
@@ -865,7 +883,8 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             tariff=tariff_type,
             period_days=period_days,
             price_kopecks=stars_price_kopecks,
-            promo_code=promo_code
+            promo_code=promo_code,
+            country=country
         )
 
         await state.update_data(purchase_id=purchase_id, payment_method="stars")
@@ -880,7 +899,12 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
 
         # Формируем описание
         months = period_days // 30
-        tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+        if config.is_biz_tariff(tariff_type):
+            tariff_name = "Business"
+        elif tariff_type == "basic":
+            tariff_name = "Basic"
+        else:
+            tariff_name = "Plus"
         description = i18n_get_text(
             language, "payment.stars_invoice_description",
             tariff_name=tariff_name, months=months
@@ -954,6 +978,7 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
     tariff_type = fsm_data.get("tariff_type")
     period_days = fsm_data.get("period_days")
     final_price_kopecks = fsm_data.get("final_price_kopecks")
+    country = fsm_data.get("country")  # Страна для бизнес-тарифов
 
     # Получаем промо-сессию
     promo_session = await get_promo_session(state)
@@ -983,7 +1008,8 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             tariff=tariff_type,
             period_days=period_days,
             price_kopecks=sbp_price_kopecks,
-            promo_code=promo_code
+            promo_code=promo_code,
+            country=country
         )
 
         await state.update_data(purchase_id=purchase_id)
@@ -1268,7 +1294,12 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     
     # Формируем описание тарифа
     months = period_days // 30
-    tariff_name = "Basic" if tariff_type == "basic" else "Plus"
+    if config.is_biz_tariff(tariff_type):
+        tariff_name = "Business"
+    elif tariff_type == "basic":
+        tariff_name = "Basic"
+    else:
+        tariff_name = "Plus"
     description = i18n_get_text(language, "buy.invoice_description", tariff_name=tariff_name, months=months)
 
     # Формируем prices (цена в копейках)
