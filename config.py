@@ -345,6 +345,11 @@ PLATEGA_API_URL = env("PLATEGA_API_URL") or "https://app.platega.io"
 # Процент наценки для СБП (11%)
 SBP_MARKUP_PERCENT = 11
 
+# CryptoBot (Crypto Pay) Configuration
+# Криптовалютная оплата через @CryptoBot
+CRYPTOBOT_API_TOKEN = env("CRYPTOBOT_API_TOKEN", default="")
+CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
+
 # Public base URL for webhooks (Railway + Cloudflare). Required for payment webhooks.
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")

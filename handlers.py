@@ -1139,6 +1139,14 @@ async def show_payment_method_selection(
         callback_data="pay:stars"
     )])
 
+    # Кнопка оплаты криптовалютой (CryptoBot)
+    import cryptobot_service
+    if cryptobot_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.crypto"),
+            callback_data="pay:crypto"
+        )])
+
     # Кнопка "Назад"
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
