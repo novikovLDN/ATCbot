@@ -204,11 +204,20 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
             text=i18n_get_text(language, "payment.stars", "⭐ Telegram Stars"),
             callback_data="gift_pay:stars"
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="gift_subscription"
-        )],
     ]
+
+    # CryptoBot — если настроен
+    import cryptobot_service
+    if cryptobot_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.crypto", "₿ Криптовалюта"),
+            callback_data="gift_pay:crypto"
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="gift_subscription"
+    )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML", bot=callback.bot)
@@ -440,6 +449,89 @@ async def callback_gift_pay_stars(callback: CallbackQuery, state: FSMContext):
 
     except Exception as e:
         logger.exception(f"Error creating gift stars invoice: user={telegram_id}, error={e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.clear()
+
+
+# ====================================================================================
+# STEP 4D: Оплата криптовалютой (CryptoBot)
+# ====================================================================================
+
+@gift_router.callback_query(F.data == "gift_pay:crypto", GiftState.choose_payment_method)
+async def callback_gift_pay_crypto(callback: CallbackQuery, state: FSMContext):
+    """Оплата подарка через CryptoBot (криптовалюта)."""
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    fsm_data = await state.get_data()
+    tariff = fsm_data.get("gift_tariff")
+    period_days = fsm_data.get("gift_period_days")
+    price_kopecks = fsm_data.get("gift_price_kopecks")
+
+    if not tariff or not period_days or not price_kopecks:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    import cryptobot_service
+    if not cryptobot_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
+        return
+
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            purchase_type="gift",
+        )
+
+        await state.update_data(gift_purchase_id=purchase_id)
+
+        tariff_name = _tariff_display_name(tariff)
+        period_text = _period_display(period_days)
+        price_rubles = price_kopecks / 100.0
+
+        invoice_data = await cryptobot_service.create_invoice(
+            amount_rubles=price_rubles,
+            description=f"Подарочная подписка {tariff_name} на {period_text}",
+            purchase_id=purchase_id,
+        )
+
+        invoice_id = invoice_data["invoice_id"]
+        pay_url = invoice_data["pay_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error(f"Failed to save cryptobot invoice_id for gift: purchase_id={purchase_id}, error={e}")
+
+        text = i18n_get_text(language, "payment.crypto_waiting", amount=price_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.crypto_pay_button"),
+                url=pay_url
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="gift_subscription"
+            )]
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+        await state.set_state(None)
+        await state.clear()
+
+    except Exception as e:
+        logger.exception(f"Error creating gift crypto invoice: user={telegram_id}, error={e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
         await state.clear()
 
