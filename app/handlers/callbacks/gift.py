@@ -1,0 +1,490 @@
+"""
+Gift subscription handlers: gift_subscription flow (tariff → period → payment → share link).
+"""
+import asyncio
+import logging
+import math
+import time
+from urllib.parse import quote
+
+import config
+import database
+from aiogram import Router, F, Bot
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    LabeledPrice,
+    Message,
+    SwitchInlineQueryChosenChat,
+)
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+
+from app.i18n import get_text as i18n_get_text
+from app.services.language_service import resolve_user_language
+from app.services.subscriptions import service as subscription_service
+from app.core.rate_limit import check_rate_limit
+from app.handlers.common.guards import ensure_db_ready_callback
+from app.handlers.common.utils import safe_edit_text
+from app.handlers.common.states import GiftState
+
+gift_router = Router()
+logger = logging.getLogger(__name__)
+
+INVOICE_TIMEOUT = config.INVOICE_TIMEOUT_SECONDS
+
+
+async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Message, timeout: int = INVOICE_TIMEOUT):
+    """Удаляет сообщение с инвойсом через timeout секунд."""
+    try:
+        await asyncio.sleep(timeout)
+        await bot.delete_message(chat_id=chat_id, message_id=invoice_message.message_id)
+    except Exception:
+        pass
+
+
+def _tariff_display_name(tariff: str) -> str:
+    """Человекочитаемое название тарифа."""
+    names = {"basic": "Basic", "plus": "Plus"}
+    return names.get(tariff, tariff.capitalize())
+
+
+def _period_display(period_days: int) -> str:
+    """Человекочитаемый период."""
+    months = period_days // 30
+    if months == 1:
+        return "1 месяц"
+    elif months in (2, 3, 4):
+        return f"{months} месяца"
+    else:
+        return f"{months} месяцев"
+
+
+# ====================================================================================
+# STEP 1: Начало — экран подарочной подписки
+# ====================================================================================
+
+@gift_router.callback_query(F.data == "gift_subscription")
+async def callback_gift_start(callback: CallbackQuery, state: FSMContext):
+    """Экран подарочной подписки — выбор тарифа."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    await callback.answer()
+    await state.clear()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    text = i18n_get_text(language, "gift.intro")
+
+    # Только basic и plus для подарков
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📦 Basic",
+            callback_data="gift_tariff:basic"
+        )],
+        [InlineKeyboardButton(
+            text="⚡ Plus",
+            callback_data="gift_tariff:plus"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main"
+        )],
+    ])
+
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML", bot=callback.bot)
+    await state.set_state(GiftState.choose_tariff)
+
+
+# ====================================================================================
+# STEP 2: Выбор тарифа → экран выбора периода
+# ====================================================================================
+
+@gift_router.callback_query(F.data.startswith("gift_tariff:"), GiftState.choose_tariff)
+async def callback_gift_tariff(callback: CallbackQuery, state: FSMContext):
+    """Выбор тарифа для подарка → показываем периоды."""
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    tariff = callback.data.split(":")[1]
+    if tariff not in ("basic", "plus"):
+        await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
+        return
+
+    await callback.answer()
+    await state.update_data(gift_tariff=tariff)
+
+    tariff_name = _tariff_display_name(tariff)
+    tariff_prices = config.TARIFFS.get(tariff, {})
+
+    text = i18n_get_text(language, "gift.choose_period", tariff_name=tariff_name)
+
+    buttons = []
+    for period_days in sorted(tariff_prices.keys()):
+        price = tariff_prices[period_days]["price"]
+        period_text = _period_display(period_days)
+        btn_text = f"{period_text} — {price} ₽"
+        buttons.append([InlineKeyboardButton(
+            text=btn_text,
+            callback_data=f"gift_period:{period_days}"
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="gift_subscription"
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML", bot=callback.bot)
+    await state.set_state(GiftState.choose_period)
+
+
+# ====================================================================================
+# STEP 3: Выбор периода → экран выбора способа оплаты
+# ====================================================================================
+
+@gift_router.callback_query(F.data.startswith("gift_period:"), GiftState.choose_period)
+async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
+    """Выбор периода → показываем способы оплаты."""
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    period_str = callback.data.split(":")[1]
+    try:
+        period_days = int(period_str)
+    except ValueError:
+        await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
+        return
+
+    fsm_data = await state.get_data()
+    tariff = fsm_data.get("gift_tariff")
+    if not tariff or tariff not in config.TARIFFS:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        return
+
+    if period_days not in config.TARIFFS[tariff]:
+        await callback.answer(i18n_get_text(language, "errors.tariff"), show_alert=True)
+        return
+
+    price_rubles = config.TARIFFS[tariff][period_days]["price"]
+    price_kopecks = price_rubles * 100
+
+    await callback.answer()
+    await state.update_data(
+        gift_period_days=period_days,
+        gift_price_kopecks=price_kopecks,
+    )
+
+    tariff_name = _tariff_display_name(tariff)
+    period_text = _period_display(period_days)
+
+    text = i18n_get_text(
+        language, "gift.choose_payment",
+        tariff_name=tariff_name,
+        period=period_text,
+        price=price_rubles,
+    )
+
+    # Получаем баланс для кнопки
+    balance = await database.get_user_balance(telegram_id)
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.pay_balance", balance=balance),
+            callback_data="gift_pay:balance"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.pay_with_card"),
+            callback_data="gift_pay:card"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.stars", "⭐ Telegram Stars"),
+            callback_data="gift_pay:stars"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="gift_subscription"
+        )],
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML", bot=callback.bot)
+    await state.set_state(GiftState.choose_payment_method)
+
+
+# ====================================================================================
+# STEP 4A: Оплата балансом
+# ====================================================================================
+
+@gift_router.callback_query(F.data == "gift_pay:balance", GiftState.choose_payment_method)
+async def callback_gift_pay_balance(callback: CallbackQuery, state: FSMContext):
+    """Оплата подарка с баланса."""
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    fsm_data = await state.get_data()
+    tariff = fsm_data.get("gift_tariff")
+    period_days = fsm_data.get("gift_period_days")
+    price_kopecks = fsm_data.get("gift_price_kopecks")
+
+    if not tariff or not period_days or not price_kopecks:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    price_rubles = price_kopecks / 100.0
+    balance = await database.get_user_balance(telegram_id)
+
+    if balance < price_rubles:
+        shortage = price_rubles - balance
+        error_text = i18n_get_text(
+            language, "errors.insufficient_balance",
+            amount=price_rubles, balance=balance, shortage=shortage,
+        )
+        await callback.answer(error_text, show_alert=True)
+        return
+
+    # Защита от дублей
+    current_state = await state.get_state()
+    if current_state == GiftState.processing_payment.state:
+        await callback.answer(i18n_get_text(language, "errors.session_expired_processing"), show_alert=True)
+        return
+
+    await callback.answer()
+    await state.set_state(GiftState.processing_payment)
+
+    try:
+        # Списываем баланс
+        success = await database.decrease_balance(
+            telegram_id=telegram_id,
+            amount=price_rubles,
+            source="gift_subscription",
+            description=f"Подарочная подписка {_tariff_display_name(tariff)} на {_period_display(period_days)}",
+        )
+        if not success:
+            await callback.message.answer(i18n_get_text(language, "errors.payment_processing"))
+            await state.clear()
+            return
+
+        # Создаём запись о подарке
+        gift = await database.create_gift_subscription(
+            buyer_telegram_id=telegram_id,
+            tariff=tariff,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            purchase_id=f"gift_balance_{telegram_id}_{int(time.time())}",
+        )
+
+        gift_code = gift["gift_code"]
+        logger.info(f"GIFT_PAID_BALANCE buyer={telegram_id} code={gift_code} tariff={tariff} period={period_days}d")
+
+        await _send_gift_success(callback.bot, telegram_id, language, gift_code, tariff, period_days)
+        await state.clear()
+
+    except Exception as e:
+        logger.exception(f"Error processing gift balance payment: user={telegram_id}, error={e}")
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await state.clear()
+
+
+# ====================================================================================
+# STEP 4B: Оплата картой
+# ====================================================================================
+
+@gift_router.callback_query(F.data == "gift_pay:card", GiftState.choose_payment_method)
+async def callback_gift_pay_card(callback: CallbackQuery, state: FSMContext):
+    """Оплата подарка картой через Telegram Payments."""
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    fsm_data = await state.get_data()
+    tariff = fsm_data.get("gift_tariff")
+    period_days = fsm_data.get("gift_period_days")
+    price_kopecks = fsm_data.get("gift_price_kopecks")
+
+    if not tariff or not period_days or not price_kopecks:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
+        return
+
+    # Минимальная сумма для Telegram Payments — 64 RUB
+    MIN_PAYMENT_AMOUNT_KOPECKS = 6400
+    if price_kopecks < MIN_PAYMENT_AMOUNT_KOPECKS:
+        await callback.answer(i18n_get_text(language, "errors.payment_min_amount"), show_alert=True)
+        return
+
+    try:
+        # Создаём pending_purchase с типом gift
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            purchase_type="gift",
+        )
+
+        await state.update_data(gift_purchase_id=purchase_id)
+
+        tariff_name = _tariff_display_name(tariff)
+        period_text = _period_display(period_days)
+        description = f"Подарочная подписка {tariff_name} на {period_text}"
+        payload = f"purchase:{purchase_id}"
+
+        invoice_msg = await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title="Atlas Secure — Подарок",
+            description=description,
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label="Подарочная подписка", amount=price_kopecks)],
+        )
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=i18n_get_text(language, "payment.invoice_timeout"),
+        )
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        await state.set_state(GiftState.processing_payment)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error creating gift card invoice: user={telegram_id}, error={e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.clear()
+
+
+# ====================================================================================
+# STEP 4C: Оплата Stars
+# ====================================================================================
+
+@gift_router.callback_query(F.data == "gift_pay:stars", GiftState.choose_payment_method)
+async def callback_gift_pay_stars(callback: CallbackQuery, state: FSMContext):
+    """Оплата подарка через Telegram Stars."""
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    fsm_data = await state.get_data()
+    tariff = fsm_data.get("gift_tariff")
+    period_days = fsm_data.get("gift_period_days")
+    price_kopecks = fsm_data.get("gift_price_kopecks")
+
+    if not tariff or not period_days or not price_kopecks:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.clear()
+        return
+
+    # Получаем цену в Stars
+    stars_tariff = config.TARIFFS_STARS.get(tariff, {})
+    stars_price = stars_tariff.get(period_days, {}).get("price")
+    if not stars_price:
+        # Конвертируем из рублей
+        stars_price = math.ceil(price_kopecks / 100 * 1.7 / 1.85)
+
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            purchase_type="gift",
+        )
+
+        await state.update_data(gift_purchase_id=purchase_id)
+
+        tariff_name = _tariff_display_name(tariff)
+        period_text = _period_display(period_days)
+        description = f"Подарочная подписка {tariff_name} на {period_text}"
+        payload = f"purchase:{purchase_id}"
+
+        invoice_msg = await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title="Atlas Secure — Подарок",
+            description=description,
+            payload=payload,
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label="Подарочная подписка", amount=stars_price)],
+        )
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=i18n_get_text(language, "payment.invoice_timeout"),
+        )
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
+        await state.set_state(GiftState.processing_payment)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error creating gift stars invoice: user={telegram_id}, error={e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.clear()
+
+
+# ====================================================================================
+# Отправка сообщения с подарочной ссылкой
+# ====================================================================================
+
+async def _send_gift_success(bot: Bot, telegram_id: int, language: str, gift_code: str, tariff: str, period_days: int):
+    """Отправляет сообщение с подарочной ссылкой и кнопками шаринга."""
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username
+    gift_link = f"https://t.me/{bot_username}?start=gift_{gift_code}"
+
+    tariff_name = _tariff_display_name(tariff)
+    period_text = _period_display(period_days)
+
+    text = i18n_get_text(
+        language, "gift.success",
+        tariff_name=tariff_name,
+        period=period_text,
+        gift_link=gift_link,
+    )
+
+    # Текст для шаринга
+    share_text = i18n_get_text(
+        language, "gift.share_text",
+        tariff_name=tariff_name,
+        period=period_text,
+        gift_link=gift_link,
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "gift.btn_share", "📤 Отправить ссылку"),
+            url=f"https://t.me/share/url?url={quote(gift_link)}&text={quote(share_text)}",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "gift.btn_share_chat", "💬 Отправить в чат"),
+            switch_inline_query=f"gift_{gift_code}",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main",
+        )],
+    ])
+
+    await bot.send_message(chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML")

@@ -103,28 +103,33 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=i18n_get_text(language, "main.profile"),
         callback_data="menu_profile"
     )])
-    # Динамическая кнопка покупки
+    # Динамическая кнопка покупки + подарить подписку в одном ряду
     if subscription and subscription.get("subscription_type"):
         buy_text = i18n_get_text(language, "main.buy_renew")
     elif telegram_id and database.DB_READY and not subscription:
         buy_text = i18n_get_text(language, "main.buy_new")
     else:
         buy_text = i18n_get_text(language, "main.buy_new")
-    buttons.append([InlineKeyboardButton(
-        text=buy_text,
-        callback_data="menu_buy_vpn"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.instruction"),
-        callback_data="menu_instruction"
-    )])
+    buttons.append([
+        InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
+            callback_data="gift_subscription"
+        ),
+    ])
+    buttons.append([
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "main.instruction"),
+            callback_data="menu_instruction"
+        ),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
+            callback_data="games_menu"
+        ),
+    ])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.referral"),
         callback_data="menu_referral"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.game", "Игры 🎮"),
-        callback_data="games_menu"
     )])
     buttons.append([
         InlineKeyboardButton(

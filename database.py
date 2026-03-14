@@ -980,6 +980,36 @@ async def init_db() -> bool:
         except Exception:
             pass
 
+        # Таблица gift_subscriptions — подарочные подписки
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS gift_subscriptions (
+                id SERIAL PRIMARY KEY,
+                gift_code TEXT UNIQUE NOT NULL,
+                buyer_telegram_id BIGINT NOT NULL,
+                tariff TEXT NOT NULL,
+                period_days INTEGER NOT NULL,
+                price_kopecks INTEGER NOT NULL,
+                purchase_id TEXT,
+                status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'activated', 'expired')),
+                activated_by BIGINT,
+                activated_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
+            )
+        """)
+        try:
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_gift_subscriptions_code ON gift_subscriptions(gift_code)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_gift_subscriptions_buyer ON gift_subscriptions(buyer_telegram_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_gift_subscriptions_status ON gift_subscriptions(status)")
+        except Exception:
+            pass
+
+        # Миграция: purchase_type для gift в pending_purchases
+        try:
+            await conn.execute("ALTER TABLE pending_purchases ADD COLUMN IF NOT EXISTS purchase_type TEXT DEFAULT 'subscription'")
+        except Exception:
+            pass
+
         logger.info("Database tables initialized")
         
         # ====================================================================================
@@ -6320,18 +6350,20 @@ async def create_pending_purchase(
     period_days: int,
     price_kopecks: int,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    purchase_type: str = "subscription",
 ) -> str:
     """
     Создать pending покупку с уникальным purchase_id
-    
+
     Args:
         telegram_id: Telegram ID пользователя
         tariff: Тип тарифа ("basic" или "plus")
         period_days: Период в днях (30, 90, 180, 365)
         price_kopecks: Цена в копейках
         promo_code: Промокод (опционально)
-    
+        purchase_type: Тип покупки ("subscription", "gift", "balance_topup")
+
     Returns:
         purchase_id: Уникальный ID покупки
     """
@@ -6342,18 +6374,18 @@ async def create_pending_purchase(
             "UPDATE pending_purchases SET status = 'expired' WHERE telegram_id = $1 AND status = 'pending'",
             telegram_id
         )
-        
+
         # Генерируем уникальный purchase_id
         purchase_id = f"purchase_{uuid_lib.uuid4().hex[:16]}"
-        
+
         # Срок действия контекста покупки (30 минут)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
-        
-        # Создаем запись о покупке (subscription only)
+
+        # Создаем запись о покупке
         await conn.execute(
             """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
-               VALUES ($1, $2, 'subscription', $3, $4, $5, $6, $7, $8, $9)""",
-            purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+            purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country
         )
 
         logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks, country={country}")
@@ -6579,6 +6611,7 @@ async def finalize_purchase(
         purchase_country = pending_purchase.get("country")
         expected_amount_rubles = price_kopecks / 100.0
         is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
+        is_gift_purchase = (purchase_type == "gift")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
         if amount_diff > 1.0:
             error_msg = (
@@ -6592,7 +6625,7 @@ async def finalize_purchase(
         # TWO-PHASE: Phase 1 — add_vless_user OUTSIDE transaction (orphan prevention)
         pre_provisioned_uuid = None
         uuid_to_cleanup_on_failure = None
-        if not is_balance_topup and tariff_type and period_days and period_days > 0:
+        if not is_balance_topup and not is_gift_purchase and tariff_type and period_days and period_days > 0:
             sub_row = await conn.fetchrow("SELECT * FROM subscriptions WHERE telegram_id = $1", telegram_id)
             now_pre = datetime.now(timezone.utc)
             is_new_issuance = True
@@ -6735,6 +6768,53 @@ async def finalize_purchase(
                         "is_balance_topup": True,
                         "amount": amount_rubles,
                         "referral_reward": referral_reward_result
+                    }
+
+                # STEP 4.5: ОБРАБОТКА ПОДАРОЧНОЙ ПОДПИСКИ (gift)
+                if is_gift_purchase:
+                    logger.info(
+                        f"finalize_purchase: GIFT_PURCHASE [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"tariff={tariff_type}, period_days={period_days}, amount={amount_rubles:.2f} RUB]"
+                    )
+                    now_utc = datetime.now(timezone.utc)
+                    payment_id = await conn.fetchval(
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        telegram_id,
+                        f"gift_{tariff_type}_{period_days}",
+                        round(amount_rubles * 100),
+                        purchase_id,
+                        _to_db_utc(now_utc),
+                    )
+                    if not payment_id:
+                        raise Exception(f"Failed to create payment record for gift: purchase_id={purchase_id}")
+
+                    # Создаём подарочную подписку
+                    gift_code = generate_gift_code()
+                    gift_expires = now_utc + timedelta(days=90)
+                    await conn.execute(
+                        """INSERT INTO gift_subscriptions
+                           (gift_code, buyer_telegram_id, tariff, period_days, price_kopecks,
+                            purchase_id, status, created_at, expires_at)
+                           VALUES ($1, $2, $3, $4, $5, $6, 'paid', $7, $8)""",
+                        gift_code, telegram_id, tariff_type, period_days, price_kopecks,
+                        purchase_id, _to_db_utc(now_utc), _to_db_utc(gift_expires),
+                    )
+
+                    logger.info(
+                        f"finalize_purchase: GIFT_CREATED [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"gift_code={gift_code}, tariff={tariff_type}, period={period_days}d]"
+                    )
+                    return {
+                        "success": True,
+                        "payment_id": payment_id,
+                        "expires_at": None,
+                        "vpn_key": None,
+                        "is_renewal": False,
+                        "is_gift": True,
+                        "gift_code": gift_code,
+                        "gift_tariff": tariff_type,
+                        "gift_period_days": period_days,
                     }
 
                 # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)
@@ -9210,3 +9290,161 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
 
     return True
+
+
+# ====================================================================================
+# GIFT SUBSCRIPTIONS: Подарочные подписки
+# ====================================================================================
+
+def generate_gift_code() -> str:
+    """Генерирует уникальный код подарочной подписки (12 символов, alphanumeric)."""
+    import secrets
+    import string
+    alphabet = string.ascii_uppercase + string.digits
+    # Убираем похожие символы для удобства: O/0, I/1/L
+    alphabet = alphabet.replace("O", "").replace("0", "").replace("I", "").replace("1", "").replace("L", "")
+    return "".join(secrets.choice(alphabet) for _ in range(12))
+
+
+async def create_gift_subscription(
+    buyer_telegram_id: int,
+    tariff: str,
+    period_days: int,
+    price_kopecks: int,
+    purchase_id: str,
+) -> Dict[str, Any]:
+    """
+    Создаёт подарочную подписку после оплаты.
+
+    Returns:
+        {"gift_code": str, "id": int}
+    """
+    pool = await get_pool()
+    gift_code = generate_gift_code()
+    now = datetime.now(timezone.utc)
+    # Подарок действителен 90 дней для активации
+    gift_expires = now + timedelta(days=90)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO gift_subscriptions
+               (gift_code, buyer_telegram_id, tariff, period_days, price_kopecks,
+                purchase_id, status, created_at, expires_at)
+               VALUES ($1, $2, $3, $4, $5, $6, 'paid', $7, $8)
+               RETURNING id, gift_code""",
+            gift_code, buyer_telegram_id, tariff, period_days, price_kopecks,
+            purchase_id, _to_db_utc(now), _to_db_utc(gift_expires),
+        )
+    logger.info(
+        f"GIFT_CREATED buyer={buyer_telegram_id} code={gift_code} "
+        f"tariff={tariff} period={period_days}d"
+    )
+    return {"gift_code": row["gift_code"], "id": row["id"]}
+
+
+async def get_gift_subscription(gift_code: str) -> Optional[Dict[str, Any]]:
+    """Получает подарочную подписку по коду."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM gift_subscriptions WHERE gift_code = $1",
+            gift_code.upper().strip(),
+        )
+    if row is None:
+        return None
+    d = dict(row)
+    for k in ("created_at", "expires_at", "activated_at"):
+        if k in d and d[k] is not None and isinstance(d[k], datetime):
+            d[k] = _from_db_utc(d[k])
+    return d
+
+
+async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[str, Any]:
+    """
+    Активирует подарочную подписку для пользователя.
+
+    Проверки:
+    - Подарок существует и оплачен (status='paid')
+    - Срок активации не истёк
+    - Подарок ещё не активирован
+    - Нельзя активировать свой же подарок (защита от самоактивации)
+
+    Returns:
+        {"success": bool, "error": str | None, "tariff": str, "period_days": int}
+    """
+    pool = await get_pool()
+    now = datetime.now(timezone.utc)
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT * FROM gift_subscriptions WHERE gift_code = $1 FOR UPDATE",
+                gift_code.upper().strip(),
+            )
+            if row is None:
+                return {"success": False, "error": "not_found"}
+
+            gift = dict(row)
+            if gift["status"] == "activated":
+                return {"success": False, "error": "already_activated"}
+            if gift["status"] != "paid":
+                return {"success": False, "error": "invalid_status"}
+
+            expires_at = _from_db_utc(gift["expires_at"]) if gift["expires_at"] else None
+            if expires_at and expires_at < now:
+                await conn.execute(
+                    "UPDATE gift_subscriptions SET status = 'expired' WHERE id = $1",
+                    gift["id"],
+                )
+                return {"success": False, "error": "expired"}
+
+            # Защита от самоактивации
+            if gift["buyer_telegram_id"] == activated_by:
+                return {"success": False, "error": "self_activation"}
+
+            # Помечаем подарок как активированный
+            await conn.execute(
+                """UPDATE gift_subscriptions
+                   SET status = 'activated', activated_by = $1, activated_at = $2
+                   WHERE id = $3""",
+                activated_by, _to_db_utc(now), gift["id"],
+            )
+
+            tariff = gift["tariff"]
+            period_days = gift["period_days"]
+
+            # Активируем подписку через grant_access
+            duration = timedelta(days=period_days)
+            grant_result = await grant_access(
+                telegram_id=activated_by,
+                duration=duration,
+                source="gift",
+                tariff=tariff,
+                conn=conn,
+                _caller_holds_transaction=True,
+            )
+
+    logger.info(
+        f"GIFT_ACTIVATED code={gift_code} by={activated_by} "
+        f"tariff={tariff} period={period_days}d buyer={gift['buyer_telegram_id']}"
+    )
+    return {
+        "success": True,
+        "error": None,
+        "tariff": tariff,
+        "period_days": period_days,
+        "grant_result": grant_result,
+    }
+
+
+async def get_user_gifts(telegram_id: int) -> list:
+    """Получает список подарков, купленных пользователем."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT * FROM gift_subscriptions
+               WHERE buyer_telegram_id = $1
+               ORDER BY created_at DESC LIMIT 20""",
+            telegram_id,
+        )
+    return [dict(r) for r in rows]

@@ -87,6 +87,63 @@ async def cmd_start(message: Message, state: FSMContext):
                     referral_code, telegram_id
                 )
     
+    # GIFT ACTIVATION: Обработка подарочной ссылки /start gift_XXXXX
+    if message.text:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1 and start_parts[1].startswith("gift_"):
+            gift_code = start_parts[1][5:]  # Убираем "gift_" префикс
+            if gift_code and len(gift_code) <= 20 and gift_code.isalnum():
+                try:
+                    activation_result = await database.activate_gift_subscription(
+                        gift_code=gift_code,
+                        activated_by=telegram_id,
+                    )
+                    language = await resolve_user_language(telegram_id)
+
+                    if activation_result["success"]:
+                        tariff = activation_result["tariff"]
+                        period_days = activation_result["period_days"]
+                        tariff_name = "Basic" if tariff == "basic" else "Plus"
+                        months = period_days // 30
+                        if months == 1:
+                            period_text = "1 месяц"
+                        elif months in (2, 3, 4):
+                            period_text = f"{months} месяца"
+                        else:
+                            period_text = f"{months} месяцев"
+
+                        text = i18n_get_text(
+                            language, "gift.activated",
+                            tariff_name=tariff_name,
+                            period=period_text,
+                        )
+                        from app.handlers.common.keyboards import get_connect_keyboard
+                        await message.answer(text, reply_markup=get_connect_keyboard(), parse_mode="HTML")
+                        logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code}")
+                        return
+                    else:
+                        error = activation_result.get("error", "unknown")
+                        error_keys = {
+                            "not_found": "gift.error_not_found",
+                            "already_activated": "gift.error_already_activated",
+                            "expired": "gift.error_expired",
+                            "self_activation": "gift.error_self_activation",
+                            "invalid_status": "gift.error_invalid",
+                        }
+                        error_key = error_keys.get(error, "gift.error_invalid")
+                        text = i18n_get_text(language, error_key)
+                        keyboard = await get_main_menu_keyboard(language, telegram_id)
+                        await message.answer(text, reply_markup=keyboard)
+                        logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={gift_code} error={error}")
+                        return
+                except Exception as e:
+                    logger.exception(f"Gift activation error: user={telegram_id}, code={gift_code}, error={e}")
+                    language = await resolve_user_language(telegram_id)
+                    text = i18n_get_text(language, "gift.error_invalid")
+                    keyboard = await get_main_menu_keyboard(language, telegram_id)
+                    await message.answer(text, reply_markup=keyboard)
+                    return
+
     # 1. REFERRAL REGISTRATION: Process on FIRST interaction
     # This uses the new deterministic referral service
     referral_result = await process_referral_on_first_interaction(message, telegram_id)
