@@ -216,17 +216,11 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
 
 @payments_router.callback_query(F.data == "withdraw_start")
 async def callback_withdraw_start(callback: CallbackQuery, state: FSMContext):
-    """Начало вывода средств"""
-    if not await ensure_db_ready_callback(callback):
-        return
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "withdraw.amount_prompt")
-    await state.set_state(WithdrawStates.withdraw_amount)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_profile")]
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-    await callback.answer()
+    """Вывод средств — заглушка, направляем в поддержку"""
+    await callback.answer(
+        "Обратитесь в техподдержку для создания заявки на вывод средств.",
+        show_alert=True,
+    )
 
 
 @payments_router.callback_query(F.data == "withdraw_confirm_amount", StateFilter(WithdrawStates.withdraw_confirm))
