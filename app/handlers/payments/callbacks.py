@@ -185,11 +185,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         )
         
         # Формируем правильное склонение периода
-        if period_days == 1:
-            period_text = i18n_get_text(language, "buy.period_1_day")
-        elif period_days == 7:
-            period_text = i18n_get_text(language, "buy.period_7_days")
-        elif period_days == 730:
+        if period_days == 730:
             period_text = i18n_get_text(language, "buy.period_24_months")
         else:
             months = period_days // 30
