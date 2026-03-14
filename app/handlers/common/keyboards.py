@@ -262,6 +262,11 @@ def get_profile_keyboard(
         )])
 
     buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
+        callback_data="my_gifts:0"
+    )])
+
+    buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back", "← Назад"),
         callback_data="menu_main"
     )])
