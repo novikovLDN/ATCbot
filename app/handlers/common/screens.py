@@ -6,6 +6,7 @@ import logging
 from datetime import timedelta
 from typing import Union
 
+import config
 import database
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -65,7 +66,7 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
     if subscription:
         subscription_type = (subscription.get("subscription_type") or "basic").strip().lower()
         vpn_key = subscription.get("vpn_key")
-    if subscription_type not in ("basic", "plus"):
+    if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
         subscription_type = "basic"
     text = i18n_get_text(language, "instruction._text", "instruction_text")
     await safe_edit_text(
@@ -249,7 +250,7 @@ async def show_profile(message_or_query, language: str):
 
         auto_renew = bool(subscription and subscription.get("auto_renew"))
         sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
-        if sub_type not in ("basic", "plus"):
+        if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
 
         # Карточка профиля: единый формат
@@ -261,7 +262,12 @@ async def show_profile(message_or_query, language: str):
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
             text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
-            tariff_label = "Plus" if sub_type == "plus" else "Basic"
+            if config.is_biz_tariff(sub_type):
+                tariff_label = "Business"
+            elif sub_type == "plus":
+                tariff_label = "Plus"
+            else:
+                tariff_label = "Basic"
             text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
             if auto_renew and expires_at:
                 renewal_window = timedelta(hours=6)
@@ -329,10 +335,9 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     await state.set_state(PurchaseState.choose_tariff)
     
     text = (
-        f"💎 Тарифы Atlas Secure\n\n\n"
+        f"💎 Тарифы Atlas Secure\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
-        f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"{i18n_get_text(language, 'buy.tariff_corporate')}"
+        f"{i18n_get_text(language, 'buy.tariff_plus')}"
     )
     
     # Получаем текущую подписку для динамических кнопок

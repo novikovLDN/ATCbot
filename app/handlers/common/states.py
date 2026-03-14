@@ -105,6 +105,7 @@ class AdminCreatePromocode(StatesGroup):
 
 class PurchaseState(StatesGroup):
     choose_tariff = State()
+    choose_biz_tier = State()
     choose_period = State()
     choose_payment_method = State()
     processing_payment = State()

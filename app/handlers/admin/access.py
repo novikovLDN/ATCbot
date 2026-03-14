@@ -425,7 +425,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
 
         # Используем actions для определения доступных действий
         sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
-        if sub_type not in ("basic", "plus"):
+        if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
         await message.answer(
             text,
@@ -872,7 +872,7 @@ async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
                 logger.exception(f"Error sending switch notify to user {user_id}: {e}")
         overview = await admin_service.get_admin_user_overview(user_id)
         sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
-        if sub_type not in ("basic", "plus"):
+        if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
         keyboard = get_admin_user_keyboard(
             has_active_subscription=overview.subscription_status.is_active,
@@ -1834,7 +1834,7 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
     
     # Отображаем карточку
     sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
-    if sub_type not in ("basic", "plus"):
+    if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
         sub_type = "basic"
     keyboard = get_admin_user_keyboard(
         has_active_subscription=overview.subscription_status.is_active,
@@ -2014,7 +2014,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
 
         sub = await database.get_subscription(target_user_id)
         sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
-        if sub_type not in ("basic", "plus"):
+        if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
         await callback.message.edit_text(
             text,

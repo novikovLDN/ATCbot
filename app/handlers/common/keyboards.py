@@ -335,7 +335,7 @@ def get_service_status_keyboard(language: str):
 def get_instruction_screen_keyboard(language: str, subscription_type: str = "basic"):
     """Клавиатура экрана «Инструкция»: кнопки копирования ключа по тарифу + Назад."""
     subscription_type = (subscription_type or "basic").strip().lower()
-    if subscription_type not in ("basic", "plus"):
+    if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
         subscription_type = "basic"
 
     if subscription_type == "plus":

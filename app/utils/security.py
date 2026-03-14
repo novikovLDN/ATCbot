@@ -31,8 +31,8 @@ MAX_USERNAME_LENGTH = 100  # Username length limit
 ALLOWED_CALLBACK_PATTERNS = [
     r"^menu_(main|profile|buy_vpn|instruction|referral|about|support)$",
     r"^lang_(ru|en|uz|tj)$",
-    r"^tariff:(basic|plus)$",
-    r"^period:\d+$",
+    r"^tariff:(basic|plus|biz_\w+)$",
+    r"^period:(basic|plus|biz_\w+):\d+$",
     r"^payment_method:(balance|card)$",
     r"^toggle_auto_renew:(on|off)$",
     r"^topup_balance$",

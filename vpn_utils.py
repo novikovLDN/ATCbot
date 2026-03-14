@@ -235,9 +235,7 @@ async def add_vless_user(
 
     if not uuid or not str(uuid).strip():
         raise ValueError("add_vless_user requires uuid; DB is source of truth")
-    tariff_normalized = (tariff or "basic").strip().lower()
-    if tariff_normalized not in ("basic", "plus"):
-        tariff_normalized = "basic"
+    tariff_normalized = config.tariff_for_vpn_api((tariff or "basic").strip().lower())
     expiry_ms = int(subscription_end.timestamp() * 1000) if subscription_end else 0
     json_body: dict = {
         "uuid": str(uuid).strip(),
@@ -321,7 +319,7 @@ async def add_vless_user(
         # basic_link = vpn_key (always), plus_link = vpn_key_plus (only for plus)
         api_tariff = (data.get("tariff") or tariff_normalized).strip().lower()
         if api_tariff not in ("basic", "plus"):
-            api_tariff = tariff_normalized
+            api_tariff = tariff_normalized  # API returns basic/plus only
         basic_link = data.get("basic_link")
         plus_link = data.get("plus_link")  # None for basic
         if not basic_link:

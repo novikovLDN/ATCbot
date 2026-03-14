@@ -957,7 +957,19 @@ async def init_db() -> bool:
         
         # Инициализируем промокоды, если их нет
         await _init_promo_codes(conn)
-        
+
+        # Миграция 034: расширяем CHECK constraint для бизнес-тарифов в pending_purchases
+        try:
+            await conn.execute("""
+                ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check
+            """)
+            await conn.execute("""
+                ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check
+                CHECK (tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate'))
+            """)
+        except Exception:
+            pass
+
         logger.info("Database tables initialized")
         
         # ====================================================================================
@@ -3070,7 +3082,7 @@ async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: O
     if pool is None:
         return None
     tariff = (new_tariff or "basic").strip().lower()
-    if tariff not in ("basic", "plus"):
+    if tariff not in config.VALID_SUBSCRIPTION_TYPES:
         tariff = "basic"
     async with pool.acquire() as conn:
         if vpn_key_plus is not None:
@@ -3658,7 +3670,7 @@ async def reissue_vpn_key_atomic(
             old_vpn_key = subscription.get("vpn_key", "")
             expires_at = _ensure_utc(subscription["expires_at"])
             reissue_tariff = (subscription.get("subscription_type") or "basic").strip().lower()
-            if reissue_tariff not in ("basic", "plus"):
+            if reissue_tariff not in config.VALID_SUBSCRIPTION_TYPES:
                 reissue_tariff = "basic"
 
             # PHASE 1 (outside DB transaction): add_vless_user
@@ -3695,7 +3707,7 @@ async def reissue_vpn_key_atomic(
                     if not sub_check:
                         raise Exception("Subscription no longer active")
                     new_subscription_type = (vless_result.get("subscription_type") or reissue_tariff).strip().lower()
-                    if new_subscription_type not in ("basic", "plus"):
+                    if new_subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
                         new_subscription_type = "basic"
                     await conn.execute(
                         "UPDATE subscriptions SET uuid = $1, vpn_key = $2, subscription_type = $4 WHERE telegram_id = $3",
@@ -4448,7 +4460,7 @@ async def grant_access(
             subscription_type_value = (pre_provisioned_uuid.get("subscription_type") or tariff or "basic").strip().lower()
         else:
             subscription_type_value = (tariff or "basic").strip().lower()
-        if subscription_type_value not in ("basic", "plus"):
+        if subscription_type_value not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type_value = "basic"
 
         # Defensive: UUID must be resolved after successful provisioning
@@ -6862,7 +6874,7 @@ async def finalize_purchase(
                 )
 
                 subscription_type_ret = (grant_result.get("subscription_type") or "basic").strip().lower()
-                if subscription_type_ret not in ("basic", "plus"):
+                if subscription_type_ret not in config.VALID_SUBSCRIPTION_TYPES:
                     subscription_type_ret = "basic"
                 if is_renewal:
                     sub_row = await conn.fetchrow(
@@ -7741,7 +7753,7 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 sub.get("status") != "active" or not exp or exp <= now_pre or not sub.get("uuid")
             )
         tariff_normalized = (tariff or "basic").strip().lower()
-        if tariff_normalized not in ("basic", "plus"):
+        if tariff_normalized not in config.VALID_SUBSCRIPTION_TYPES:
             tariff_normalized = "basic"
         if is_new_issuance and config.VPN_ENABLED:
             try:
@@ -7913,9 +7925,7 @@ async def finalize_balance_purchase(
         if is_new_issuance and config.VPN_ENABLED:
             try:
                 new_uuid_pre = _generate_subscription_uuid()
-                tariff_for_api = (tariff_type or "basic").strip().lower()
-                if tariff_for_api not in ("basic", "plus"):
-                    tariff_for_api = "basic"
+                tariff_for_api = config.tariff_for_vpn_api((tariff_type or "basic").strip().lower())
                 vless_result = await vpn_utils.add_vless_user(
                     telegram_id=telegram_id,
                     subscription_end=subscription_end_pre,
@@ -8056,7 +8066,7 @@ async def finalize_balance_purchase(
                 )
                 
                 subscription_type_ret = (grant_result.get("subscription_type") or "basic").strip().lower()
-                if subscription_type_ret not in ("basic", "plus"):
+                if subscription_type_ret not in config.VALID_SUBSCRIPTION_TYPES:
                     subscription_type_ret = "basic"
                 vpn_key_plus_ret = grant_result.get("vpn_key_plus") or grant_result.get("vless_url_plus")
                 ret_val = {
