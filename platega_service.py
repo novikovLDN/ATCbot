@@ -252,12 +252,15 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
         else:
             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
             subscription_type = (result.get("subscription_type") or "basic").strip().lower()
-            if subscription_type not in ("basic", "plus"):
+            if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
                 subscription_type = "basic"
-            if subscription_type == "plus":
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
+            if config.is_biz_tariff(subscription_type):
+                _label, _emoji = "Business", "🏢"
+            elif subscription_type == "plus":
+                _label, _emoji = "Plus", "⭐️"
             else:
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+                _label, _emoji = "Basic", "📦"
+            text = f"🎉 Добро пожаловать в Atlas Secure!\n{_emoji} Тариф: {_label}\n📅 До: {expires_str}"
 
             from app.handlers.common.keyboards import get_connect_keyboard
             try:

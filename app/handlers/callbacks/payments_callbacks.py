@@ -492,7 +492,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         vpn_key_plus = result.get("vpn_key_plus")
         is_renewal = result["is_renewal"]
         subscription_type = (result.get("subscription_type") or "basic").strip().lower()
-        if subscription_type not in ("basic", "plus"):
+        if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
         is_upgrade = result.get("is_basic_to_plus_upgrade", False)
         referral_reward_result = result.get("referral_reward")
@@ -618,9 +618,13 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             except Exception as e:
                 logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
         else:
+            if config.is_biz_tariff(subscription_type):
+                tariff_label, tariff_icon = "Business", "🏢"
+            elif subscription_type == "plus":
+                tariff_label, tariff_icon = "Plus", "⭐️"
+            else:
+                tariff_label, tariff_icon = "Basic", "📦"
             if is_renewal:
-                tariff_label = "Plus" if subscription_type == "plus" else "Basic"
-                tariff_icon = "⭐️" if subscription_type == "plus" else "📦"
                 text = i18n_get_text(
                     language,
                     "payment.success_renewal_compact",
@@ -631,6 +635,8 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             else:
                 if subscription_type == "plus":
                     text = i18n_get_text(language, "payment.success_welcome_plus", date=expires_str)
+                elif config.is_biz_tariff(subscription_type):
+                    text = f"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"
                 else:
                     text = i18n_get_text(language, "payment.success_welcome_basic", date=expires_str)
             try:

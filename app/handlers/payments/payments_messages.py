@@ -559,7 +559,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         vpn_key = result.vpn_key
         is_renewal = result.is_renewal
         subscription_type = (getattr(result, "subscription_type", None) or "basic").strip().lower()
-        if subscription_type not in ("basic", "plus"):
+        if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
         vpn_key_plus = getattr(result, "vpn_key_plus", None)
         
@@ -791,14 +791,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
         except Exception as e:
             logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
     else:
-        if is_renewal:
-            tariff_label = "Plus" if subscription_type == "plus" else "Basic"
-            text = f"✅ Подписка продлена\n📦/⭐️ Тариф: {tariff_label}\n📅 До: {expires_str}"
+        if config.is_biz_tariff(subscription_type):
+            tariff_label, tariff_emoji = "Business", "🏢"
+        elif subscription_type == "plus":
+            tariff_label, tariff_emoji = "Plus", "⭐️"
         else:
-            if subscription_type == "plus":
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
-            else:
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+            tariff_label, tariff_emoji = "Basic", "📦"
+        if is_renewal:
+            text = f"✅ Подписка продлена\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
+        else:
+            text = f"🎉 Добро пожаловать в Atlas Secure!\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
         keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
         try:
             degradation = ""
