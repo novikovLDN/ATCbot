@@ -4065,11 +4065,12 @@ async def grant_access(
                 # UUID НЕ МЕНЯЕТСЯ - VPN соединение продолжает работать без перерыва
                 try:
                     await conn.execute(
-                        """UPDATE subscriptions 
-                           SET expires_at = $1, 
+                        """UPDATE subscriptions
+                           SET expires_at = $1,
                                uuid = $4,
                                status = 'active',
                                source = $2,
+                               subscription_type = COALESCE($5, subscription_type),
                                reminder_sent = FALSE,
                                reminder_3d_sent = FALSE,
                                reminder_24h_sent = FALSE,
@@ -4077,7 +4078,7 @@ async def grant_access(
                                reminder_6h_sent = FALSE,
                                activation_status = 'active'
                            WHERE telegram_id = $3""",
-                        _to_db_utc(subscription_end), source, telegram_id, uuid
+                        _to_db_utc(subscription_end), source, telegram_id, uuid, incoming_tariff
                     )
                     
                     # ВАЛИДАЦИЯ: Проверяем что запись обновлена
@@ -4171,7 +4172,8 @@ async def grant_access(
                     "vless_url": None,  # Не новый UUID
                     "vpn_key": subscription.get("vpn_key"),  # Используем существующий из БД (от API при issuance)
                     "subscription_end": subscription_end,
-                    "action": "renewal"  # Явно указываем тип операции
+                    "action": "renewal",  # Явно указываем тип операции
+                    "subscription_type": incoming_tariff,
                 }
                 if _caller_holds_transaction:
                     # B1: Caller holds tx — ensure_user_in_xray MUST run post-commit. Defer to caller.
@@ -4246,6 +4248,7 @@ async def grant_access(
             
             # Сохраняем подписку с pending activation status
             try:
+                pending_sub_type = (tariff or "basic").strip().lower()
                 await conn.execute(
                     """INSERT INTO subscriptions (
                            telegram_id, uuid, vpn_key, expires_at, status, source,
@@ -4256,11 +4259,11 @@ async def grant_access(
                            trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
                            trial_notif_71h_sent,
                            activation_status, activation_attempts, last_activation_error,
-                           country
+                           country, subscription_type
                        )
                        VALUES ($1, NULL, NULL, $2, 'active', $3, FALSE, FALSE, FALSE, FALSE, FALSE, $4, $5, 0,
                                FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
-                               'pending', 0, NULL, $6)
+                               'pending', 0, NULL, $6, $7)
                        ON CONFLICT (telegram_id)
                        DO UPDATE SET
                            expires_at = $2,
@@ -4286,8 +4289,9 @@ async def grant_access(
                            last_activation_error = NULL,
                            uuid = NULL,
                            vpn_key = NULL,
-                           country = COALESCE($6, subscriptions.country)""",
-                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country
+                           country = COALESCE($6, subscriptions.country),
+                           subscription_type = COALESCE($7, subscriptions.subscription_type)""",
+                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type
                 )
                 
                 # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
