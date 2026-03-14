@@ -63,6 +63,7 @@ async def cmd_start(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     # Safe username resolution: username or first_name or localized fallback
     user = await database.get_user(telegram_id)
+    is_new_user = user is None
     start_language = await resolve_user_language(telegram_id)
     username = safe_resolve_username(message.from_user, start_language, telegram_id)
     # Ограничиваем длину для БД
@@ -112,14 +113,28 @@ async def cmd_start(message: Message, state: FSMContext):
                         else:
                             period_text = f"{months} месяцев"
 
-                        text = i18n_get_text(
-                            language, "gift.activated",
-                            tariff_name=tariff_name,
-                            period=period_text,
-                        )
-                        from app.handlers.common.keyboards import get_connect_keyboard
-                        await message.answer(text, reply_markup=get_connect_keyboard(), parse_mode="HTML")
-                        logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code}")
+                        if is_new_user:
+                            # Новый пользователь: приветствие + активация + выбор языка
+                            text = i18n_get_text(
+                                language, "gift.activated_welcome",
+                                tariff_name=tariff_name,
+                                period=period_text,
+                            )
+                            await message.answer(
+                                text,
+                                reply_markup=get_language_keyboard(language),
+                                parse_mode="HTML",
+                            )
+                        else:
+                            # Существующий пользователь: активация + главное меню
+                            text = i18n_get_text(
+                                language, "gift.activated",
+                                tariff_name=tariff_name,
+                                period=period_text,
+                            )
+                            keyboard = await get_main_menu_keyboard(language, telegram_id)
+                            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                        logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code} new_user={is_new_user}")
                         return
                     else:
                         error = activation_result.get("error", "unknown")
@@ -132,7 +147,10 @@ async def cmd_start(message: Message, state: FSMContext):
                         }
                         error_key = error_keys.get(error, "gift.error_invalid")
                         text = i18n_get_text(language, error_key)
-                        keyboard = await get_main_menu_keyboard(language, telegram_id)
+                        if is_new_user:
+                            keyboard = get_language_keyboard(language)
+                        else:
+                            keyboard = await get_main_menu_keyboard(language, telegram_id)
                         await message.answer(text, reply_markup=keyboard)
                         logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={gift_code} error={error}")
                         return
@@ -140,7 +158,10 @@ async def cmd_start(message: Message, state: FSMContext):
                     logger.exception(f"Gift activation error: user={telegram_id}, code={gift_code}, error={e}")
                     language = await resolve_user_language(telegram_id)
                     text = i18n_get_text(language, "gift.error_invalid")
-                    keyboard = await get_main_menu_keyboard(language, telegram_id)
+                    if is_new_user:
+                        keyboard = get_language_keyboard(language)
+                    else:
+                        keyboard = await get_main_menu_keyboard(language, telegram_id)
                     await message.answer(text, reply_markup=keyboard)
                     return
 

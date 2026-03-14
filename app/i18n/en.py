@@ -605,6 +605,7 @@ LANG = {
     'gift.btn_share': "📤 Share Link",
     'gift.btn_share_chat': "💬 Send to Chat",
     'gift.activated': "🎉 <b>Gift Activated!</b>\n\n📦 Plan: {tariff_name}\n⏳ Period: {period}\n\nYour subscription is now active.\nTap «Connect» to start using it.",
+    'gift.activated_welcome': "🎉 <b>Welcome to Atlas Secure!</b>\n\n🎁 You've received a gift subscription:\n📦 Plan: {tariff_name}\n⏳ Period: {period}\n\nYour subscription is already active.\nPlease choose your language:",
     'gift.error_not_found': "❌ Gift link not found.\n\nCheck the link or contact the sender.",
     'gift.error_already_activated': "⚠️ This gift subscription has already been activated.\n\nEach gift can only be used once.",
     'gift.error_expired': "⏰ This gift link has expired.\n\nAsk the sender to purchase a new gift.",
