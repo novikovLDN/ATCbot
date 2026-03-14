@@ -9363,11 +9363,9 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
     """
     Активирует подарочную подписку для пользователя.
 
-    Проверки:
-    - Подарок существует и оплачен (status='paid')
-    - Срок активации не истёк
-    - Подарок ещё не активирован
-    - Нельзя активировать свой же подарок (защита от самоактивации)
+    Двухфазная активация:
+    - Phase 1: Проверяем подписку, при необходимости создаём UUID через VPN API (вне транзакции)
+    - Phase 2: Атомарно обновляем подарок + выдаём доступ через grant_access (внутри транзакции)
 
     Returns:
         {"success": bool, "error": str | None, "tariff": str, "period_days": int}
@@ -9375,8 +9373,82 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
     pool = await get_pool()
     now = datetime.now(timezone.utc)
 
+    # =========================================================================
+    # PRE-CHECK: Валидация подарка (без блокировки — быстрая проверка)
+    # =========================================================================
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM gift_subscriptions WHERE gift_code = $1",
+            gift_code.upper().strip(),
+        )
+    if row is None:
+        return {"success": False, "error": "not_found"}
+
+    gift = dict(row)
+    if gift["status"] == "activated":
+        return {"success": False, "error": "already_activated"}
+    if gift["status"] != "paid":
+        return {"success": False, "error": "invalid_status"}
+
+    expires_at = _from_db_utc(gift["expires_at"]) if gift["expires_at"] else None
+    if expires_at and expires_at < now:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE gift_subscriptions SET status = 'expired' WHERE id = $1",
+                gift["id"],
+            )
+        return {"success": False, "error": "expired"}
+
+    if gift["buyer_telegram_id"] == activated_by:
+        return {"success": False, "error": "self_activation"}
+
+    tariff = gift["tariff"]
+    period_days = gift["period_days"]
+    duration = timedelta(days=period_days)
+
+    # =========================================================================
+    # PHASE 1: Провизия VPN UUID вне транзакции (если нужна новая выдача)
+    # =========================================================================
+    pre_provisioned = None
+    if config.VPN_ENABLED:
+        async with pool.acquire() as conn:
+            sub_row = await conn.fetchrow(
+                "SELECT status, expires_at, uuid FROM subscriptions WHERE telegram_id = $1",
+                activated_by,
+            )
+        needs_new_issuance = True
+        if sub_row:
+            sub_expires = _ensure_utc(sub_row["expires_at"]) if sub_row["expires_at"] else None
+            if (
+                sub_row["status"] == "active"
+                and sub_expires
+                and sub_expires > now
+                and sub_row["uuid"]
+            ):
+                needs_new_issuance = False
+
+        if needs_new_issuance:
+            new_uuid = _generate_subscription_uuid()
+            subscription_end = now + duration
+            vless_result = await vpn_utils.add_vless_user(
+                telegram_id=activated_by,
+                subscription_end=subscription_end,
+                uuid=new_uuid,
+                tariff=tariff,
+            )
+            pre_provisioned = {
+                "uuid": vless_result["uuid"],
+                "vless_url": vless_result["vless_url"],
+                "vless_url_plus": vless_result.get("vless_url_plus"),
+                "subscription_type": vless_result.get("subscription_type", tariff),
+            }
+
+    # =========================================================================
+    # PHASE 2: Атомарная транзакция — обновление подарка + выдача доступа
+    # =========================================================================
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Повторная проверка с блокировкой (защита от race condition)
             row = await conn.fetchrow(
                 "SELECT * FROM gift_subscriptions WHERE gift_code = $1 FOR UPDATE",
                 gift_code.upper().strip(),
@@ -9385,22 +9457,8 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
                 return {"success": False, "error": "not_found"}
 
             gift = dict(row)
-            if gift["status"] == "activated":
-                return {"success": False, "error": "already_activated"}
             if gift["status"] != "paid":
-                return {"success": False, "error": "invalid_status"}
-
-            expires_at = _from_db_utc(gift["expires_at"]) if gift["expires_at"] else None
-            if expires_at and expires_at < now:
-                await conn.execute(
-                    "UPDATE gift_subscriptions SET status = 'expired' WHERE id = $1",
-                    gift["id"],
-                )
-                return {"success": False, "error": "expired"}
-
-            # Защита от самоактивации
-            if gift["buyer_telegram_id"] == activated_by:
-                return {"success": False, "error": "self_activation"}
+                return {"success": False, "error": "already_activated" if gift["status"] == "activated" else "invalid_status"}
 
             # Помечаем подарок как активированный
             await conn.execute(
@@ -9410,11 +9468,7 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
                 activated_by, _to_db_utc(now), gift["id"],
             )
 
-            tariff = gift["tariff"]
-            period_days = gift["period_days"]
-
             # Активируем подписку через grant_access
-            duration = timedelta(days=period_days)
             grant_result = await grant_access(
                 telegram_id=activated_by,
                 duration=duration,
@@ -9422,6 +9476,7 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
                 tariff=tariff,
                 conn=conn,
                 _caller_holds_transaction=True,
+                pre_provisioned_uuid=pre_provisioned,
             )
 
     logger.info(
