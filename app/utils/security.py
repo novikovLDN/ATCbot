@@ -32,12 +32,14 @@ ALLOWED_CALLBACK_PATTERNS = [
     r"^menu_(main|profile|buy_vpn|instruction|referral|about|support)$",
     r"^lang_(ru|en|uz|tj)$",
     r"^tariff:(basic|plus|biz_\w+)$",
+    r"^biz_country:(nl|ru|uk|fr|us)$",
     r"^period:(basic|plus|biz_\w+):\d+$",
     r"^payment_method:(balance|card)$",
     r"^toggle_auto_renew:(on|off)$",
     r"^topup_balance$",
     r"^activate_trial$",
     r"^enter_promo$",
+    r"^biz_(main|profile|ecosystem|control_panel|renew_config|copy_login|copy_password)$",
     r"^admin_.*$",  # Admin actions (validated separately)
 ]
 

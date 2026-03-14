@@ -100,8 +100,6 @@ TARIFFS = {
     # --- Бизнес-тарифы: выделенные VPN-серверы ---
     # 2 vCPU · 8 GB RAM · 20 TB трафик · до 5 пользователей
     "biz_starter": {
-        1: {"price": 150},       # 1 день
-        7: {"price": 800},       # 7 дней
         30: {"price": 2900},     # 1 месяц
         180: {"price": 14900},   # 6 месяцев
         365: {"price": 24900},   # 12 месяцев
@@ -109,8 +107,6 @@ TARIFFS = {
     },
     # 4 vCPU · 16 GB RAM · 20 TB трафик · до 15 пользователей
     "biz_team": {
-        1: {"price": 250},
-        7: {"price": 1400},
         30: {"price": 5500},
         180: {"price": 28900},
         365: {"price": 48900},
@@ -118,8 +114,6 @@ TARIFFS = {
     },
     # 8 vCPU · 32 GB RAM · 30 TB трафик · до 50 пользователей
     "biz_business": {
-        1: {"price": 450},
-        7: {"price": 2500},
         30: {"price": 10900},
         180: {"price": 56900},
         365: {"price": 96900},
@@ -127,8 +121,6 @@ TARIFFS = {
     },
     # 16 vCPU · 64 GB RAM · 40 TB трафик · до 100 пользователей
     "biz_pro": {
-        1: {"price": 800},
-        7: {"price": 4500},
         30: {"price": 21500},
         180: {"price": 109900},
         365: {"price": 189900},
@@ -136,8 +128,6 @@ TARIFFS = {
     },
     # 32 vCPU · 128 GB RAM · 50 TB трафик · до 250 пользователей
     "biz_enterprise": {
-        1: {"price": 1500},
-        7: {"price": 8500},
         30: {"price": 42900},
         180: {"price": 219900},
         365: {"price": 379900},
@@ -145,8 +135,6 @@ TARIFFS = {
     },
     # 48 vCPU · 192 GB RAM · 60 TB трафик · до 500 пользователей
     "biz_ultimate": {
-        1: {"price": 2200},
-        7: {"price": 12500},
         30: {"price": 64900},
         180: {"price": 329900},
         365: {"price": 569900},
@@ -172,6 +160,63 @@ def tariff_for_vpn_api(tariff: str) -> str:
         return "plus"
     return "basic"
 
+# --- Страны для бизнес-тарифов ---
+# Ценовые множители относительно базовой цены (Амстердам = 1.0)
+# Основаны на реальной стоимости инфраструктуры в регионе + 10% выше конкурентов
+BIZ_COUNTRIES = {
+    "nl": {
+        "name": "Амстердам",
+        "flag": "🇳🇱",
+        "multiplier": 1.0,  # Базовая цена (Hetzner NL)
+    },
+    "ru": {
+        "name": "Россия",
+        "flag": "🇷🇺",
+        "multiplier": 0.90,  # Selectel/Timeweb дешевле, но +10% над рынком
+    },
+    "uk": {
+        "name": "Великобритания",
+        "flag": "🇬🇧",
+        "multiplier": 1.20,  # UK дороже на ~20% (AWS/Vultr London)
+    },
+    "fr": {
+        "name": "Франция",
+        "flag": "🇫🇷",
+        "multiplier": 1.05,  # OVH Франция, чуть дороже NL
+    },
+    "us": {
+        "name": "США",
+        "flag": "🇺🇸",
+        "multiplier": 1.15,  # US дороже (Vultr/DO East Coast)
+    },
+}
+
+# Конфигурации серверов для бизнес-тарифов (для отображения в профиле)
+BIZ_TIER_SPECS = {
+    "biz_starter":    {"cpu": 2,  "ram": 8,   "traffic": 20, "users": 5},
+    "biz_team":       {"cpu": 4,  "ram": 16,  "traffic": 20, "users": 15},
+    "biz_business":   {"cpu": 8,  "ram": 32,  "traffic": 30, "users": 50},
+    "biz_pro":        {"cpu": 16, "ram": 64,  "traffic": 40, "users": 100},
+    "biz_enterprise": {"cpu": 32, "ram": 128, "traffic": 50, "users": 250},
+    "biz_ultimate":   {"cpu": 48, "ram": 192, "traffic": 60, "users": 500},
+}
+
+def get_biz_price(tariff: str, period_days: int, country: str = "nl") -> int:
+    """Получить цену бизнес-тарифа для конкретной страны (в рублях)."""
+    if tariff not in TARIFFS or period_days not in TARIFFS[tariff]:
+        return 0
+    base_price = TARIFFS[tariff][period_days]["price"]
+    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+    return int(round(base_price * multiplier / 100) * 100)  # Округление до сотен
+
+def get_biz_price_stars(tariff: str, period_days: int, country: str = "nl") -> int:
+    """Получить цену бизнес-тарифа в Stars для конкретной страны."""
+    if tariff not in TARIFFS_STARS or period_days not in TARIFFS_STARS[tariff]:
+        return 0
+    base_price = TARIFFS_STARS[tariff][period_days]["price"]
+    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+    return int(round(base_price * multiplier))
+
 # Тарифы для оплаты Telegram Stars (цены в Stars, +70% от рублёвых)
 # 1 Star ≈ 1.85 RUB (курс приблизительный, цены округлены)
 TARIFFS_STARS = {
@@ -189,48 +234,36 @@ TARIFFS_STARS = {
     },
     # Бизнес-тарифы Stars (price × 1.7 / 1.85, округление вверх)
     "biz_starter": {
-        1: {"price": 138},       # 150 × 1.7 / 1.85 ≈ 138⭐
-        7: {"price": 735},       # 800 × 1.7 / 1.85 ≈ 735⭐
         30: {"price": 2665},     # 2900 × 1.7 / 1.85 ≈ 2665⭐
         180: {"price": 13690},   # 14900 × 1.7 / 1.85 ≈ 13689⭐
         365: {"price": 22865},   # 24900 × 1.7 / 1.85 ≈ 22865⭐
         730: {"price": 39405},   # 42900 × 1.7 / 1.85 ≈ 39405⭐
     },
     "biz_team": {
-        1: {"price": 230},
-        7: {"price": 1286},
         30: {"price": 5054},
         180: {"price": 26551},
         365: {"price": 44919},
         730: {"price": 78000},
     },
     "biz_business": {
-        1: {"price": 414},
-        7: {"price": 2297},
         30: {"price": 10014},
         180: {"price": 52270},
         365: {"price": 89027},
         730: {"price": 156100},
     },
     "biz_pro": {
-        1: {"price": 735},
-        7: {"price": 4135},
         30: {"price": 19757},
         180: {"price": 100981},
         365: {"price": 174519},
         730: {"price": 303081},
     },
     "biz_enterprise": {
-        1: {"price": 1378},
-        7: {"price": 7811},
         30: {"price": 39405},
         180: {"price": 202054},
         365: {"price": 349027},
         730: {"price": 606243},
     },
     "biz_ultimate": {
-        1: {"price": 2022},
-        7: {"price": 11486},
         30: {"price": 59627},
         180: {"price": 303081},
         365: {"price": 523581},

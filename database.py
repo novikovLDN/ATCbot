@@ -970,6 +970,16 @@ async def init_db() -> bool:
         except Exception:
             pass
 
+        # Миграция 035: добавляем колонку country для бизнес-тарифов
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS country TEXT")
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE pending_purchases ADD COLUMN IF NOT EXISTS country TEXT")
+        except Exception:
+            pass
+
         logger.info("Database tables initialized")
         
         # ====================================================================================
@@ -3791,6 +3801,7 @@ async def grant_access(
     pre_provisioned_uuid: Optional[Dict[str, str]] = None,
     _caller_holds_transaction: bool = False,
     tariff: str = "basic",
+    country: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     ЕДИНАЯ ФУНКЦИЯ ВЫДАЧИ ДОСТУПА (SINGLE SOURCE OF TRUTH)
@@ -4244,13 +4255,14 @@ async def grant_access(
                            trial_notif_6h_sent, trial_notif_18h_sent, trial_notif_30h_sent,
                            trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
                            trial_notif_71h_sent,
-                           activation_status, activation_attempts, last_activation_error
+                           activation_status, activation_attempts, last_activation_error,
+                           country
                        )
                        VALUES ($1, NULL, NULL, $2, 'active', $3, FALSE, FALSE, FALSE, FALSE, FALSE, $4, $5, 0,
                                FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
-                               'pending', 0, NULL)
-                       ON CONFLICT (telegram_id) 
-                       DO UPDATE SET 
+                               'pending', 0, NULL, $6)
+                       ON CONFLICT (telegram_id)
+                       DO UPDATE SET
                            expires_at = $2,
                            status = 'active',
                            source = $3,
@@ -4273,8 +4285,9 @@ async def grant_access(
                            activation_attempts = 0,
                            last_activation_error = NULL,
                            uuid = NULL,
-                           vpn_key = NULL""",
-                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start)
+                           vpn_key = NULL,
+                           country = COALESCE($6, subscriptions.country)""",
+                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country
                 )
                 
                 # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
@@ -4517,11 +4530,11 @@ async def grant_access(
             if vless_result is not None:
                 vless_url_plus = vless_result.get("vless_url_plus")
             activation_status_value = 'pending' if pending_activation else 'active'
-            args = (telegram_id, new_uuid, vless_url, vless_url_plus, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), activation_status_value, subscription_type_value)
+            args = (telegram_id, new_uuid, vless_url, vless_url_plus, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), activation_status_value, subscription_type_value, country)
             logger.debug(
                 f"grant_access: SQL_ARGS_COUNT [user={telegram_id}, "
-                f"placeholders=10, args_count={len(args)}, "
-                f"activation_status={activation_status_value}, subscription_type={subscription_type_value}]"
+                f"placeholders=11, args_count={len(args)}, "
+                f"activation_status={activation_status_value}, subscription_type={subscription_type_value}, country={country}]"
             )
 
             await conn.execute(
@@ -4534,11 +4547,11 @@ async def grant_access(
                        trial_notif_42h_sent, trial_notif_54h_sent, trial_notif_60h_sent,
                        trial_notif_71h_sent,
                        activation_status, activation_attempts, last_activation_error,
-                       subscription_type
+                       subscription_type, country
                    )
                    VALUES ($1, $2, $3, $4, $5, 'active', $6, FALSE, FALSE, FALSE, FALSE, FALSE, $7, $8, 0,
                            FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
-                           $9, 0, NULL, $10)
+                           $9, 0, NULL, $10, $11)
                    ON CONFLICT (telegram_id)
                    DO UPDATE SET
                        uuid = COALESCE($2, subscriptions.uuid),
@@ -4565,7 +4578,8 @@ async def grant_access(
                        activation_status = $9,
                        activation_attempts = 0,
                        last_activation_error = NULL,
-                       subscription_type = COALESCE($10, subscriptions.subscription_type)""",
+                       subscription_type = COALESCE($10, subscriptions.subscription_type),
+                       country = COALESCE($11, subscriptions.country)""",
                 *args
             )
             
@@ -6155,7 +6169,8 @@ async def calculate_final_price(
     telegram_id: int,
     tariff: str,
     period_days: int,
-    promo_code: Optional[str] = None
+    promo_code: Optional[str] = None,
+    country: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     ЕДИНАЯ ФУНКЦИЯ РАСЧЕТА ФИНАЛЬНОЙ ЦЕНЫ (SINGLE SOURCE OF TRUTH)
@@ -6197,6 +6212,10 @@ async def calculate_final_price(
     
     # Получаем базовую цену в рублях из конфига
     base_price_rubles = config.TARIFFS[tariff][period_days]["price"]
+    # Для бизнес-тарифов применяем множитель страны
+    if country and config.is_biz_tariff(tariff):
+        multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+        base_price_rubles = int(round(base_price_rubles * multiplier / 100) * 100)
     base_price_kopecks = round(base_price_rubles * 100)
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
@@ -6293,10 +6312,11 @@ async def create_pending_balance_topup_purchase(
 
 async def create_pending_purchase(
     telegram_id: int,
-    tariff: str,  # "basic" или "plus"
+    tariff: str,  # "basic", "plus", or "biz_*"
     period_days: int,
     price_kopecks: int,
-    promo_code: Optional[str] = None
+    promo_code: Optional[str] = None,
+    country: Optional[str] = None
 ) -> str:
     """
     Создать pending покупку с уникальным purchase_id
@@ -6327,12 +6347,12 @@ async def create_pending_purchase(
         
         # Создаем запись о покупке (subscription only)
         await conn.execute(
-            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at)
-               VALUES ($1, $2, 'subscription', $3, $4, $5, $6, $7, $8)""",
-            purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at)
+            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
+               VALUES ($1, $2, 'subscription', $3, $4, $5, $6, $7, $8, $9)""",
+            purchase_id, telegram_id, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country
         )
-        
-        logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks")
+
+        logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks, country={country}")
         
         return purchase_id
 
@@ -6552,6 +6572,7 @@ async def finalize_purchase(
         period_days = pending_purchase.get("period_days")
         purchase_type = pending_purchase.get("purchase_type", "subscription")
         price_kopecks = pending_purchase["price_kopecks"]
+        purchase_country = pending_purchase.get("country")
         expected_amount_rubles = price_kopecks / 100.0
         is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
         amount_diff = abs(amount_rubles - expected_amount_rubles)
@@ -6747,6 +6768,7 @@ async def finalize_purchase(
                     pre_provisioned_uuid=pre_provisioned_uuid,
                     _caller_holds_transaction=bool(pre_provisioned_uuid),
                     tariff=tariff_type or "basic",
+                    country=purchase_country,
                 )
                 if not grant_result:
                     error_msg = f"grant_access returned None: purchase_id={purchase_id}, user={telegram_id}"
@@ -7862,7 +7884,8 @@ async def finalize_balance_purchase(
     period_days: int,
     amount_rubles: float,
     description: Optional[str] = None,
-    promo_code: Optional[str] = None
+    promo_code: Optional[str] = None,
+    country: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Атомарно обработать покупку подписки с баланса.
@@ -8005,6 +8028,7 @@ async def finalize_balance_purchase(
                     pre_provisioned_uuid=pre_provisioned_uuid,
                     _caller_holds_transaction=True,
                     tariff=tariff_type or "basic",
+                    country=country,
                 )
 
                 expires_at = grant_result["subscription_end"]

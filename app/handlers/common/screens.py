@@ -253,6 +253,36 @@ async def show_profile(message_or_query, language: str):
         if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
 
+        # Бизнес-профиль: специальный экран для biz_* подписок
+        if config.is_biz_tariff(sub_type) and has_active_subscription:
+            from app.handlers.common.keyboards import get_biz_profile_keyboard
+            specs = config.BIZ_TIER_SPECS.get(sub_type, {})
+            country_code = subscription.get("country") or "nl"
+            country_info = config.BIZ_COUNTRIES.get(country_code, config.BIZ_COUNTRIES["nl"])
+            tariff_names = {
+                "biz_starter": "Starter", "biz_team": "Team", "biz_business": "Business",
+                "biz_pro": "Pro", "biz_enterprise": "Enterprise", "biz_ultimate": "Ultimate",
+            }
+            tariff_label = tariff_names.get(sub_type, "Business")
+            date_str = format_date_ru(expires_at)
+            text = i18n_get_text(language, "biz.profile_title") + "\n\n"
+            text += i18n_get_text(language, "biz.profile_welcome", name=display_name) + "\n\n"
+            text += i18n_get_text(language, "biz.profile_info",
+                date=date_str,
+                tariff=tariff_label,
+                balance=balance_str,
+                country=f"{country_info['flag']} {country_info['name']}",
+                cpu=specs.get("cpu", "?"),
+                ram=specs.get("ram", "?"),
+                traffic=specs.get("traffic", "?"),
+            )
+            keyboard = get_biz_profile_keyboard(language)
+            try:
+                await send_func(text, reply_markup=keyboard, parse_mode="HTML")
+            except Exception:
+                await send_func(text, reply_markup=keyboard)
+            return
+
         # Карточка профиля: единый формат
         text = (
             f"{i18n_get_text(language, 'profile.welcome')}\n\n"

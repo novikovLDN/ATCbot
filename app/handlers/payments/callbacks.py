@@ -137,16 +137,33 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
     promo_code = promo_session.get("promo_code") if promo_session else None
     
     # КРИТИЧНО: НЕ создаем pending_purchase - только показываем кнопки периодов
-    # Определяем описание тарифа в зависимости от типа
+    # Для бизнес-тарифов → сначала выбор страны
     if config.is_biz_tariff(tariff_type):
+        await state.set_state(PurchaseState.choose_country)
+        await state.update_data(tariff_type=tariff_type)
         text = i18n_get_text(language, f"buy.tariff_{tariff_type}_desc")
-    elif tariff_type == "basic":
+        text += "\n\n" + i18n_get_text(language, "buy.choose_country")
+        buttons = []
+        for code, info in config.BIZ_COUNTRIES.items():
+            price = config.get_biz_price(tariff_type, 30, code)
+            btn_text = f"{info['flag']} {info['name']} · от {price:,} ₽/мес".replace(",", " ")
+            buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"biz_country:{code}")])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="corporate_access_request"
+        )])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        return
+
+    # Определяем описание тарифа в зависимости от типа
+    if tariff_type == "basic":
         text = i18n_get_text(language, "buy.tariff_basic_desc")
     else:
         text = i18n_get_text(language, "buy.tariff_plus_desc")
-    
+
     buttons = []
-    
+
     # Получаем цены для выбранного тарифа с учетом скидок
     periods = config.TARIFFS[tariff_type]
     
@@ -185,11 +202,7 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         )
         
         # Формируем правильное склонение периода
-        if period_days == 1:
-            period_text = i18n_get_text(language, "buy.period_1_day")
-        elif period_days == 7:
-            period_text = i18n_get_text(language, "buy.period_7_days")
-        elif period_days == 730:
+        if period_days == 730:
             period_text = i18n_get_text(language, "buy.period_24_months")
         else:
             months = period_days // 30
@@ -339,13 +352,17 @@ async def callback_tariff_period(callback: CallbackQuery, state: FSMContext):
             f"expires_in={expires_in}s"
         )
     
+    # Для бизнес-тарифов берём страну из FSM
+    country = fsm_data.get("country") if config.is_biz_tariff(tariff_type) else None
+
     # КРИТИЧНО: Используем ЕДИНУЮ функцию расчета цены
     try:
         price_info = await subscription_service.calculate_price(
             telegram_id=telegram_id,
             tariff=tariff_type,
             period_days=period_days,
-            promo_code=promo_code
+            promo_code=promo_code,
+            country=country
         )
     except (subscription_service.InvalidTariffError, subscription_service.PriceCalculationError) as e:
         error_text = i18n_get_text(language, "errors.tariff")
@@ -944,6 +961,72 @@ async def callback_corporate_access_request(callback: CallbackQuery, state: FSMC
 
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
     logger.debug(f"Business catalog shown for user {telegram_id}")
+
+
+@payments_callbacks_router.callback_query(
+    F.data.startswith("biz_country:"),
+    StateFilter(PurchaseState.choose_country),
+)
+async def callback_biz_country_selected(callback: CallbackQuery, state: FSMContext):
+    """ЭКРАН 3 (бизнес) — После выбора страны → показать периоды с ценами для этой страны."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    if not validate_callback_data(callback.data):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    country_code = callback.data.split(":")[1]
+    if country_code not in config.BIZ_COUNTRIES:
+        await callback.answer("Invalid country", show_alert=True)
+        return
+
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type")
+    if not tariff_type or tariff_type not in config.TARIFFS:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        return
+
+    await state.update_data(country=country_code)
+    await state.set_state(PurchaseState.choose_period)
+
+    country_info = config.BIZ_COUNTRIES[country_code]
+    text = i18n_get_text(language, f"buy.tariff_{tariff_type}_desc")
+    text += f"\n\n{country_info['flag']} Регион: {country_info['name']}"
+
+    buttons = []
+    periods = config.TARIFFS[tariff_type]
+    for period_days in periods:
+        price = config.get_biz_price(tariff_type, period_days, country_code)
+
+        if period_days == 730:
+            period_text = i18n_get_text(language, "buy.period_24_months")
+        else:
+            months = period_days // 30
+            if months == 1:
+                period_text = i18n_get_text(language, "buy.period_1")
+            elif months in [2, 3, 4]:
+                period_text = i18n_get_text(language, "buy.period_2_4", months=months)
+            else:
+                period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
+
+        button_text = f"{price:,} ₽ — {period_text}".replace(",", " ")
+        buttons.append([InlineKeyboardButton(
+            text=button_text,
+            callback_data=f"period:{tariff_type}:{period_days}"
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"tariff:{tariff_type}"
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
 
 
 @payments_callbacks_router.callback_query(F.data == "corporate_access_confirm", StateFilter(CorporateAccessRequest.waiting_for_confirmation))
