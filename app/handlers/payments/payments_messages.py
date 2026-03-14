@@ -544,6 +544,52 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount_rubles:.2f} RUB"
         )
         
+    # Проверяем, является ли это подарочной подпиской
+    is_gift_purchase = pending_purchase.get("purchase_type") == "gift"
+
+    if is_gift_purchase:
+        # Подарочная подписка — финализируем напрямую через database
+        payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
+        try:
+            gift_result = await database.finalize_purchase(
+                purchase_id=purchase_id,
+                payment_provider=payment_provider_name,
+                amount_rubles=payment_amount_rubles,
+            )
+            if gift_result and gift_result.get("is_gift") and gift_result.get("gift_code"):
+                from app.handlers.callbacks.gift import _send_gift_success
+                await _send_gift_success(
+                    bot=message.bot,
+                    telegram_id=telegram_id,
+                    language=language,
+                    gift_code=gift_result["gift_code"],
+                    tariff=gift_result["gift_tariff"],
+                    period_days=gift_result["gift_period_days"],
+                )
+                logger.info(
+                    f"GIFT_PAYMENT_FINALIZED purchase_id={purchase_id} user={telegram_id} "
+                    f"code={gift_result['gift_code']}"
+                )
+                await state.clear()
+                duration_ms = (time.time() - start_time) * 1000
+                log_handler_exit(
+                    handler_name="process_successful_payment",
+                    outcome="success",
+                    telegram_id=telegram_id,
+                    operation="payment_finalization",
+                    duration_ms=duration_ms,
+                    payment_type="gift_subscription",
+                )
+                return
+            else:
+                logger.error(f"Gift finalization returned unexpected result: {gift_result}")
+                await message.answer(i18n_get_text(language, "errors.payment_processing"))
+                return
+        except Exception as e:
+            logger.exception(f"Gift payment finalization failed: user={telegram_id}, error={e}")
+            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+            return
+
     # Finalize subscription payment through payment service
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:

@@ -593,4 +593,21 @@ LANG = {
     'reminder.paid_24h': "⚡️ Less than 24 hours of subscription left\n\nRenew now with one tap so VPN keeps working without interruption 🛡",
     'reminder.paid_3h': "🚨 Your subscription expires in 3 hours!\n\nRenew right now so you don't lose access to a protected internet 🔒",
     'connect.press_button': "🚀 Press the button below to connect:",
+
+    # Gift subscription
+    'main.gift_subscription': "🎁 Gift",
+    'main.game_club': "🎮 Game Club",
+    'gift.intro': "🎁 <b>Gift a Subscription</b>\n\nGive your loved one secure internet access — the best sign of care in the digital age.\n\nChoose a plan for the gift:",
+    'gift.choose_period': "🎁 <b>Gift — {tariff_name}</b>\n\nChoose the subscription period for the gift:",
+    'gift.choose_payment': "🎁 <b>Gift — {tariff_name}</b>\n\n📦 Plan: {tariff_name}\n⏳ Period: {period}\n💰 Price: {price} ₽\n\nChoose a payment method:",
+    'gift.success': "🎉 <b>Your gift is ready!</b>\n\n📦 Plan: {tariff_name}\n⏳ Period: {period}\n\n🔗 Activation link:\n<code>{gift_link}</code>\n\n📌 <b>Important:</b>\n• The link can only be activated <b>once</b>\n• Send it to the person you want to gift\n• The recipient taps the link — and the subscription activates automatically",
+    'gift.share_text': "🎁 Hi! I'm gifting you an Atlas Secure subscription ({tariff_name}, {period}). Tap the link to activate:",
+    'gift.btn_share': "📤 Share Link",
+    'gift.btn_share_chat': "💬 Send to Chat",
+    'gift.activated': "🎉 <b>Gift Activated!</b>\n\n📦 Plan: {tariff_name}\n⏳ Period: {period}\n\nYour subscription is now active.\nTap «Connect» to start using it.",
+    'gift.error_not_found': "❌ Gift link not found.\n\nCheck the link or contact the sender.",
+    'gift.error_already_activated': "⚠️ This gift subscription has already been activated.\n\nEach gift can only be used once.",
+    'gift.error_expired': "⏰ This gift link has expired.\n\nAsk the sender to purchase a new gift.",
+    'gift.error_self_activation': "🚫 You cannot activate your own gift.\n\nSend the link to someone else.",
+    'gift.error_invalid': "❌ This gift link is invalid.",
 }

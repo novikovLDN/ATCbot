@@ -112,5 +112,12 @@ class PurchaseState(StatesGroup):
     processing_payment = State()
 
 
+class GiftState(StatesGroup):
+    choose_tariff = State()
+    choose_period = State()
+    choose_payment_method = State()
+    processing_payment = State()
+
+
 class BomberState(StatesGroup):
     playing = State()
