@@ -1130,3 +1130,24 @@ Admin handlers импортируют из `admin/keyboards.py` (более по
 
 Добавлено: 3 CRIT (i18n), 4 MED = +7 issues
 **Итого по проекту: 34 critical/high, 84 medium, 4 low — 122 issues total.**
+
+---
+
+# ДОПОЛНЕНИЕ 8. МИГРАЦИИ — ДОПОЛНИТЕЛЬНЫЕ НАХОДКИ
+
+### [M-HIGH-1] Migration 013 ссылается на несуществующий столбец
+**Файл:** `migrations/013_fix_referrals_columns.sql`
+**Проблема:** `ALTER TABLE referrals ALTER COLUMN first_paid_at DROP NOT NULL` — но столбец `first_paid_at` не создаётся ни в одной предыдущей миграции. Migration 003 создаёт referrals без этого столбца. Столбец создаётся динамически в `database/core.py:752`. Миграция упадёт если столбец не был создан приложением до запуска миграций.
+**Рекомендация:** Добавить `ADD COLUMN IF NOT EXISTS first_paid_at TIMESTAMPTZ` перед `DROP NOT NULL`.
+
+### [M-HIGH-2] Migration 022 может создать дубликаты UUID
+**Файл:** `migrations/022_remove_uuid_prefix.sql`
+**Проблема:** `UPDATE subscriptions SET uuid = regexp_replace(uuid, '^(stage-|prod-|test-)', '')` — если два UUID отличались только префиксом (`stage-abc-123` и `prod-abc-123`), после UPDATE оба станут `abc-123`. Migration 024 потом добавляет UNIQUE constraint на uuid — и упадёт.
+**Рекомендация:** Добавить проверку на дубликаты перед UPDATE или обработать конфликты.
+
+### [M-MED-5] Migration 024 — timezone conversion предполагает UTC
+**Файл:** `migrations/024_schema_hardening_timestamptz_uuid_constraints.sql:12-26`
+**Проблема:** `ALTER COLUMN expires_at TYPE TIMESTAMPTZ USING expires_at AT TIME ZONE 'UTC'` — предполагает что все данные хранились в UTC. Если какие-то записи были в local timezone, конвертация будет неверной (сдвиг на часовой пояс).
+**Рекомендация:** Задокументировать pre-migration проверку: `SELECT DISTINCT date_part('timezone', expires_at) FROM subscriptions`.
+
+**Обновлённая статистика: +2 HIGH, +1 MED = 36 critical/high, 85 medium, 4 low — 125 issues total.**
