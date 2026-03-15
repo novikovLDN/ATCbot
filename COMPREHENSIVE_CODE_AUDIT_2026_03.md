@@ -751,7 +751,9 @@ await callback.answer(
 | Архитектура | 0 | 18 | 0 |
 | Миграции | 2 | 4 | 0 |
 | Тесты | 2 | 1 | 1 |
-| **Итого** | **26** | **66** | **4** |
+| Хэндлеры (доп.) | 1 | 2 | 0 |
+| Баги/логика (доп.) | 0 | 5 | 0 |
+| **Итого** | **27** | **71** | **4** |
 
 > Примечание: "Безопасность (HIGH)" — это проблемы высокой серьёзности, не дотягивающие до CRIT, но требующие срочного внимания (admin auth bypass, brute force, missing signature validation).
 
@@ -915,3 +917,59 @@ assert True
 - [M-MED-4] — Добавить FOREIGN KEY
 - [T-MED-1] — Написать тесты для критических бизнес-модулей
 - [T-LOW-1] — Очистить conftest.py
+
+---
+
+# ДОПОЛНЕНИЕ 4. ХЭНДЛЕРЫ — РАСШИРЕННЫЙ АНАЛИЗ
+
+## D4.1 БЕЗОПАСНОСТЬ
+
+### [H-CRIT-1] Race condition в балансовой оплате подарка (gift.py)
+**Файл:** `app/handlers/gift.py:~254`
+**Проблема:** В `callback_gift_pay_balance` баланс проверяется через `get_user_balance`, затем списывается через `decrease_balance` в отдельном вызове. Между проверкой и списанием другой конкурентный запрос может потратить те же средства. FSM state `processing_payment` даёт частичную защиту, но не атомарен с проверкой баланса.
+**Рекомендация:** Использовать атомарную DB-операцию `UPDATE users SET balance = balance - $1 WHERE telegram_id = $2 AND balance >= $1 RETURNING balance`.
+
+### [H-MED-1] CSV-экспорт содержит VPN-ключи
+**Файл:** `app/handlers/admin/export.py:129`
+**Проблема:** CSV-экспорт включает столбец `vpn_key`, отправляемый как документ в Telegram. Файл содержит все активные ключи подписок. Утечка этого файла = компрометация всех пользователей VPN.
+**Рекомендация:** Исключить VPN-ключи из экспорта или маскировать (`vless://***...abc`). Или отправлять файл с auto-delete таймером.
+
+### [H-MED-2] Промокод допускает 0% и 100% скидку
+**Файл:** `app/handlers/admin/promo_fsm.py:70`
+**Проблема:** Валидация `if discount_percent < 0 or discount_percent > 100` — допускает 0% (бесполезный промо) и 100% (полностью бесплатный). Персональная скидка в `finance.py:130` правильно использует 1-99%.
+**Рекомендация:** Изменить на `if discount_percent < 1 or discount_percent > 99`.
+
+## D4.2 БАГИ И ЛОГИКА
+
+### [H-BUG-1] Дублированные клавиатуры: common/keyboards.py vs admin/keyboards.py
+**Файлы:** `app/handlers/common/keyboards.py`, `app/handlers/admin/keyboards.py`
+**Проблема:** 8+ клавиатур определены в обоих файлах с РАЗНЫМИ реализациями:
+- `get_admin_dashboard_keyboard`, `get_admin_back_keyboard`, `get_admin_export_keyboard`
+- `get_broadcast_test_type_keyboard`, `get_broadcast_segment_keyboard`, `get_broadcast_confirm_keyboard`
+- `get_ab_test_list_keyboard`, `get_admin_user_keyboard`
+Admin handlers импортируют из `admin/keyboards.py` (более полная версия), остальные — из `common/keyboards.py`. При рефакторинге легко импортировать не ту версию.
+**Рекомендация:** Удалить дубли из `common/keyboards.py`, оставить только в `admin/keyboards.py`.
+
+### [H-BUG-2] Broadcast блокирует event loop
+**Файл:** `app/handlers/admin/broadcast.py:730`
+**Проблема:** `callback_broadcast_confirm_send` блокирует хэндлер до отправки всех сообщений (цикл с `await asyncio.gather`). Для тысяч пользователей хэндлер зависнет на минуты, блокируя обработку других callback-ов.
+**Рекомендация:** Обернуть в `asyncio.create_task()` как уже сделано для no-subscription broadcast (line 289).
+
+### [H-BUG-3] Unreachable docstring в /start (start.py:62)
+**Файл:** `app/handlers/start.py:62`
+**Проблема:** Docstring `"""Обработчик команды /start"""` стоит после executable code (early return на line 61). Строка становится no-op выражением, а не docstring функции.
+
+### [H-BUG-4] Неиспользуемые DB-запросы
+- `app/handlers/admin/audit.py:133` — `user = await database.get_user(...)` — результат не используется
+- `app/handlers/admin/broadcast.py:295` — `user = await database.get_user(...)` — результат не используется
+**Рекомендация:** Удалить ненужные запросы для экономии DB-ресурсов.
+
+### [H-BUG-5] Дублированный audit log formatting (audit.py)
+**Файл:** `app/handlers/admin/audit.py:30-237`
+**Проблема:** Форматирование audit log дублировано почти идентично между `cmd_admin_audit` (30-127) и `callback_admin_audit` (130-237). Плюс "retry with limit=5" path дублирует ту же логику ещё раз.
+**Рекомендация:** Вынести в общую функцию `_format_audit_entries(entries, limit)`.
+
+## D4.3 Обновлённая статистика
+
+Добавлено: 1 CRIT, 2 MED (безопасность), 5 BUG/LOGIC = +8 issues
+**Итого по проекту: 27 critical/high, 71 medium, 4 low — 102 issues total.**
