@@ -37,7 +37,7 @@ async def _handle_platega_webhook(request: Request):
             logger.warning("Platega webhook received but service is disabled")
             return JSONResponse({"status": "disabled"})
 
-        headers = dict(request.headers)
+        headers = {k.lower(): v for k, v in request.headers.items()}
         try:
             body = await request.json()
         except Exception as e:
