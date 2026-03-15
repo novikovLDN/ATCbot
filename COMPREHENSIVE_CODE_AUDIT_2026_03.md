@@ -755,7 +755,8 @@ await callback.answer(
 | Баги/логика (доп.) | 0 | 5 | 0 |
 | Интеграции/VPN/скрипты | 2 | 2 | 0 |
 | Баги интеграций | 0 | 5 | 0 |
-| **Итого** | **29** | **76** | **4** |
+| Middleware/утилиты/core | 2 | 4 | 0 |
+| **Итого** | **31** | **80** | **4** |
 
 > Примечание: "Безопасность (HIGH)" — это проблемы высокой серьёзности, не дотягивающие до CRIT, но требующие срочного внимания (admin auth bypass, brute force, missing signature validation).
 
@@ -1032,3 +1033,46 @@ Admin handlers импортируют из `admin/keyboards.py` (более по
 
 Добавлено: 2 CRIT, 2 MED (безопасность), 5 BUG = +9 issues
 **Итого по проекту: 29 critical/high, 76 medium, 4 low — 109 issues total.**
+
+---
+
+# ДОПОЛНЕНИЕ 6. MIDDLEWARE, УТИЛИТЫ, CORE
+
+## D6.1 КРИТИЧЕСКИЕ БАГИ
+
+### [U-CRIT-1] NameError при импорте i18n/types.py — _ar_plural
+**Файл:** `app/core/i18n/types.py:35`
+**Проблема:** В dict `PLURAL_RULES` (строка 29-38) ссылка `"ar": _ar_plural` на строке 35, но функция `_ar_plural` определена на строке 45 — **после** dict. При импорте модуля — `NameError: name '_ar_plural' is not defined`. Это означает, что арабский язык не работает вообще если этот модуль когда-либо импортируется напрямую.
+**Рекомендация:** Переместить `_ar_plural` выше `PLURAL_RULES` или использовать отложенную инициализацию.
+
+### [U-CRIT-2] AttributeError в pool_monitor — _conn не в __slots__
+**Файл:** `app/core/pool_monitor.py:31,36`
+**Проблема:** `__slots__ = ("pool", "label")` не включает `_conn`. Строка 36: `self._conn = None` и строка 40: `self._conn = await self.pool.acquire()` вызовут `AttributeError` когда `POOL_MONITOR_ENABLED=true`.
+**Рекомендация:** Добавить `"_conn"` в `__slots__`: `__slots__ = ("pool", "label", "_conn")`.
+
+## D6.2 СРЕДНИЕ ПРОБЛЕМЫ
+
+### [U-MED-1] payment_webhook.py не лимитирует chunked requests
+**Файл:** `app/api/__init__.py` (RequestSizeLimitMiddleware)
+**Проблема:** Middleware проверяет только `Content-Length` header. При chunked transfer encoding (без Content-Length) тело запроса не лимитировано и может исчерпать память. `telegram_webhook.py` имеет свою проверку (1MB), но `payment_webhook.py` — нет.
+**Рекомендация:** Добавить проверку размера body в payment_webhook или обрабатывать chunked encoding в middleware.
+
+### [U-MED-2] Redis rate limiter считает запросы даже при active rate-limit
+**Файл:** `app/core/rate_limit_middleware.py:96`
+**Проблема:** `pipe.zadd(rate_key, {str(now): now})` добавляет entry при каждом вызове, даже когда пользователь уже rate-limited. Это ускоряет накопление flood ban быстрее чем задумано.
+**Рекомендация:** Записывать request в sorted set только если пользователь НЕ rate-limited.
+
+### [U-MED-3] Дублированные константы LOYALTY_IMAGES / LOYALTY_PHOTOS
+**Файл:** `app/constants/loyalty.py`
+**Проблема:** `LOYALTY_IMAGES` и `LOYALTY_PHOTOS` содержат идентичные данные. При обновлении одного — второй может не обновиться.
+**Рекомендация:** Удалить один из словарей, оставить alias: `LOYALTY_PHOTOS = LOYALTY_IMAGES`.
+
+### [U-MED-4] pool_monitor.py — pool.release() может быть async
+**Файл:** `app/core/pool_monitor.py:63`
+**Проблема:** `self.pool.release(self._conn)` вызывается синхронно. В asyncpg `pool.release()` является coroutine. Без `await` вызов может не выполниться.
+**Рекомендация:** Заменить на `await self.pool.release(self._conn)`.
+
+## D6.3 Обновлённая статистика
+
+Добавлено: 2 CRIT, 4 MED = +6 issues
+**Итого по проекту: 31 critical/high, 80 medium, 4 low — 115 issues total.**
