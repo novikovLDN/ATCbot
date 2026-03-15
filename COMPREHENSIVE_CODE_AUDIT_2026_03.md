@@ -756,7 +756,8 @@ await callback.answer(
 | Интеграции/VPN/скрипты | 2 | 2 | 0 |
 | Баги интеграций | 0 | 5 | 0 |
 | Middleware/утилиты/core | 2 | 4 | 0 |
-| **Итого** | **31** | **80** | **4** |
+| i18n/переводы (доп.) | 3 | 4 | 0 |
+| **Итого** | **34** | **84** | **4** |
 
 > Примечание: "Безопасность (HIGH)" — это проблемы высокой серьёзности, не дотягивающие до CRIT, но требующие срочного внимания (admin auth bypass, brute force, missing signature validation).
 
@@ -1076,3 +1077,56 @@ Admin handlers импортируют из `admin/keyboards.py` (более по
 
 Добавлено: 2 CRIT, 4 MED = +6 issues
 **Итого по проекту: 31 critical/high, 80 medium, 4 low — 115 issues total.**
+
+---
+
+# ДОПОЛНЕНИЕ 7. i18n — ГЛУБОКИЙ АНАЛИЗ ПЕРЕВОДОВ
+
+## D7.1 КРИТИЧЕСКИЕ ПРОБЛЕМЫ ПЕРЕВОДОВ
+
+### [I18N-CRIT-1] Казахский и таджикский — 36% ключей не переведены
+**Файлы:** `app/i18n/kk.py`, `app/i18n/tj.py`
+**Проблема:** По 258 ключей из 710 (36%) остаются на английском языке. Затронуты: весь admin namespace, многие main.* (welcome, settings, service status), payment.*, profile.*, buy.*. Эти языки фактически непригодны для пользователей.
+**Рекомендация:** Применить имеющиеся патчи (`translation_patch_kk.json`, `translation_patch_tj.json`) и дозаказать перевод оставшихся ключей.
+
+### [I18N-CRIT-2] Арабский — 94 ключа не переведены
+**Файл:** `app/i18n/ar.py`
+**Проблема:** 94 ключа на английском. Затронуты: admin panel, payment notifications, несколько user-facing ключей.
+
+### [I18N-CRIT-3] 4 ключа с несовпадающими placeholder-ами между языками
+**Ключи:**
+- `referral.cashback_amount` — ru/en: `{amount:.2f}`, остальные: `{action_type}`, `{amount:.2f}` (лишний `{action_type}`)
+- `referral.cashback_title` — ru/en: без placeholder, остальные: `{action_type}`
+- `referral.registered_notification` — ru/en: `{date}`, `{first_payment_msg}`, остальные: + `{user}`
+- `referral.trial_activated_notification` — ru/en: без placeholder, остальные: `{first_payment_msg}`, `{user}`
+**Проблема:** При вызове `get_text` с набором kwargs из ru/en — у других языков KeyError (хотя get_text перехватывает format errors и возвращает raw string). Пользователь увидит нелокализованную строку с `{placeholder}`.
+**Связано с:** [L-CRIT-12] (games.dice_success mismatch)
+
+## D7.2 СРЕДНИЕ ПРОБЛЕМЫ
+
+### [I18N-MED-1] 26 непримерённых translation patches
+**Файлы:** `translation_patch_ar.json` (4), `translation_patch_de.json` (3), `translation_patch_kk.json` (7), `translation_patch_tj.json` (9), `translation_patch_uz.json` (3)
+**Проблема:** Переводы подготовлены в JSON patch files, но не применены к .py файлам. Включая полностью отсутствующий ключ `main.trial_notification_54h` (18ч до конца триала).
+**Рекомендация:** Написать скрипт для автоматического применения патчей и добавить в CI.
+
+### [I18N-MED-2] Дублирование namespace: main.* и новые namespace
+**Проблема:** Многие ключи существуют в двух namespace одновременно:
+- `main.trial_notification_6h` ↔ `trial.notification_6h`
+- `main.reminder_paid_3d` ↔ `reminder.paid_3d`
+- `main.auto_renewal_success` ↔ `subscription.auto_renew_success`
+При обновлении одного — второй может отстать, создавая рассинхрон.
+**Рекомендация:** Завершить миграцию, удалить старые `main.*` дубли, обновить все вызовы `get_text`.
+
+### [I18N-MED-3] Валидатор ложно помечает казахский и таджикский
+**Файл:** `validate_language_content.py`
+**Проблема:** `CYRILLIC_ALLOWED_KEYS` содержит только 3 ключа, но весь казахский и таджикский пишутся кириллицей. Валидатор ложно помечает их как нарушения.
+**Рекомендация:** Добавить `kk` и `tj` в список языков, где кириллица допустима целиком.
+
+### [I18N-MED-4] admin.reissue_user_notification — HTML теги только в non-ru
+**Ключ:** `admin.reissue_user_notification`
+**Проблема:** en/tj/de/kk/ar содержат `<b>` и `<code>` теги, а ru — plain text. Русская версия рендерится без форматирования.
+
+## D7.3 Обновлённая статистика
+
+Добавлено: 3 CRIT (i18n), 4 MED = +7 issues
+**Итого по проекту: 34 critical/high, 84 medium, 4 low — 122 issues total.**
