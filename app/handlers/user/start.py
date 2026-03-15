@@ -178,7 +178,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
                 first_payment_msg = i18n_get_text(referrer_language, "referral.first_payment_notification")
                 title = i18n_get_text(referrer_language, "referral.registered_title")
-                date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M'))
+                date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now(timezone.utc).strftime('%d.%m.%Y'))
                 notification_text = f"{title}\n\n{date_line}\n\n{first_payment_msg}"
                 
                 await message.bot.send_message(

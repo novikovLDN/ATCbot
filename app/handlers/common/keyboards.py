@@ -138,7 +138,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         ),
     ])
     buttons.append([InlineKeyboardButton(
@@ -166,7 +166,7 @@ def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.settings", "main.settings"),
@@ -210,7 +210,7 @@ def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
@@ -381,7 +381,7 @@ def get_pending_payment_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         )],
     ])
 
@@ -413,7 +413,7 @@ def get_service_status_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         )],
     ])
 
@@ -489,7 +489,7 @@ def get_instruction_keyboard(
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         )
     ])
 

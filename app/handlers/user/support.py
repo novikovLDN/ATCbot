@@ -30,7 +30,7 @@ async def cmd_help(message: Message, bot: Bot):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "support.write_button"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         )],
     ])
     await message.answer(
