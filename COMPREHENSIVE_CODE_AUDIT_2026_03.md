@@ -78,7 +78,20 @@ if x_telegram_bot_api_secret_token != config.WEBHOOK_SECRET:
 **Проблема:** Print-ы на уровне модуля выводятся при каждом импорте, включая тесты. Не критично для безопасности, но шумно.
 **Рекомендация:** Перевести на logging.
 
-### [S-MED-6] Referral код формата `ref_<telegram_id>` — enumerable
+### [S-MED-6] Health check alert может утечь DB connection string
+**Файл:** `healthcheck.py:78`
+```python
+f"🚨 DB health check failed: {e}"
+```
+**Проблема:** Exception message может содержать DATABASE_URL с паролем, hostname и портом. Эта информация отправляется админу в Telegram (незашифрованный канал).
+**Рекомендация:** Маскировать exception message: отправлять только `type(e).__name__`, не полный `str(e)`.
+
+### [S-MED-7] pytest в production requirements
+**Файл:** `requirements.txt`
+**Проблема:** `pytest` и `pytest-asyncio` включены в production dependencies. Увеличивают attack surface и размер Docker image.
+**Рекомендация:** Вынести в отдельный `requirements-dev.txt`.
+
+### [S-MED-8] Referral код формата `ref_<telegram_id>` — enumerable
 **Файл:** `app/services/referrals/service.py:72`
 **Проблема:** Реферальный код напрямую содержит Telegram ID пользователя (`ref_123456`). Любой может перебором угадывать валидные реферальные коды.
 **Рекомендация:** Использовать opaque токены (hash или random UUID) вместо прямого Telegram ID.
@@ -186,7 +199,20 @@ await message.answer(text, reply_markup=get_language_keyboard("ru"))
 **Проблема:** Даже для существующих пользователей, которые уже выбрали язык, при /start всегда показывается экран выбора языка. Это может раздражать.
 **Рекомендация:** Для существующих пользователей показывать главное меню, выбор языка — только для новых.
 
-### [L-CRIT-5] Float-to-kopeck конвертация теряет точность
+### [L-CRIT-5] get_referral_analytics — conn используется вне async with (RUNTIME CRASH)
+**Файл:** `database/admin.py:2031-2064`
+**Проблема:** Из-за ошибки индентации переменная `conn` используется за пределами `async with pool.acquire() as conn:`. Соединение уже закрыто. Вызов `get_referral_analytics` гарантированно упадёт с `NameError` или ошибкой закрытого соединения.
+**Рекомендация:** Исправить индентацию — вернуть строки 2038-2064 внутрь блока `async with`.
+
+### [L-CRIT-6] pending_purchases CHECK constraint блокирует бизнес-тарифы
+**Файл:** `database/core.py:487`
+```sql
+CHECK (tariff IN ('basic', 'plus'))
+```
+**Проблема:** Таблица `pending_purchases` имеет CHECK constraint, допускающий только 'basic' и 'plus'. Бизнес-тарифы (biz_starter, biz_team, и т.д.) не могут быть сохранены в pending_purchases. Покупка бизнес-тарифа упадёт с SQL ошибкой.
+**Рекомендация:** Обновить CHECK constraint: `CHECK (tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate'))` или использовать `config.VALID_SUBSCRIPTION_TYPES`.
+
+### [L-CRIT-7] Float-to-kopeck конвертация теряет точность
 **Файл:** `app/services/subscriptions/service.py:524`
 ```python
 price_kopecks=int(amount_rubles * 100)
@@ -347,10 +373,161 @@ return [dict(row) for row in rows]
 **Проблема:** `resolve_user_language()` вызывает `database.get_user()` на каждый вызов. При 10 вызовах в одном handler flow — 10 DB запросов для одного и того же telegram_id.
 **Рекомендация:** Добавить in-memory кэш с TTL 60 секунд или передавать language через middleware.
 
-### [A-9] Admin overview — 6 последовательных DB запросов
+### [A-9] Dual schema management — DDL в init_db + migration files
+**Файл:** `database/core.py:465-487`, `migrations/*.sql`
+**Проблема:** Схема БД описана в двух местах: `CREATE TABLE IF NOT EXISTS` в `init_db()` и SQL-миграции в папке `migrations/`. Если миграция добавляет колонку, которая уже определена в `init_db`, возникает schema drift.
+**Рекомендация:** Убрать DDL из `init_db()`, оставить только миграции как single source of truth.
+
+### [A-10] Миграции без блокировки от конкурентного запуска
+**Файл:** `migrations.py:110`
+**Проблема:** Нет advisory lock вокруг выполнения миграций. Два инстанса при одновременном старте могут попытаться применить одну миграцию параллельно.
+**Рекомендация:** Добавить `pg_advisory_lock` перед выполнением миграций.
+
+### [A-11] decrease_balance логирует refund как "topup"
+**Файл:** `database/users.py:354`
+**Проблема:** Когда `source="refund"`, `transaction_type` устанавливается в `"topup"`. Возврат средств логируется как пополнение — семантически неверно.
+**Рекомендация:** Добавить отдельный `transaction_type = "refund"`.
+
+### [A-12] Admin overview — 6 последовательных DB запросов
 **Файл:** `app/services/admin/service.py:60-112`
 **Проблема:** `get_admin_user_overview()` делает 6 последовательных DB вызовов: `get_user`, `get_subscription`, `get_user_extended_stats`, `get_user_discount`, `is_vip_user`, `is_trial_available`.
 **Рекомендация:** Использовать `asyncio.gather()` для параллельного выполнения.
+
+---
+
+# ДОПОЛНЕНИЕ: HANDLERS, NAVIGATION, PAYMENTS CALLBACKS
+
+## Handlers — game.py
+
+### [L-CRIT-8] Весь game.py (Ферма) — текст захардкожен на русском
+**Файлы:** `app/handlers/game.py:30-36, 86-104, 547-570, 584-636`
+**Проблема:** PLANT_TYPES (названия растений), текст игрового меню, _render_farm (грядки), все кнопки фермы, все callback.answer() — всё на русском, i18n не используется, хотя `language` доступен.
+**Масштаб:** ~30+ hardcoded строк. Пользователи на EN/UZ/DE/AR увидят русский текст.
+**Рекомендация:** Создать i18n ключи для всех текстов фермы и игр. Минимально — использовать `i18n_get_text()` для всех user-facing строк.
+
+### [L-MED-9] Farm (game_farm) — нет проверки подписки
+**Файл:** `app/handlers/game.py:646-664`
+**Проблема:** `games_menu` (line 83-90) проверяет подписку, но `game_farm` — нет. Пользователь может перейти напрямую по callback `game_farm` без подписки.
+**Рекомендация:** Добавить проверку подписки в `callback_game_farm`, как в `callback_game_bowling`.
+
+### [L-MED-10] Farm — race condition при параллельных кликах
+**Файл:** `app/handlers/game.py:722-752` (и аналогичные: water, fert, harvest, buy_plot)
+**Проблема:** Между `get_farm_data()` и `save_farm_plots()` нет блокировки. Два быстрых клика могут прочитать одно состояние и перезаписать друг друга (double harvest, double water).
+**Рекомендация:** Использовать `FOR UPDATE` или advisory lock по telegram_id для farm операций.
+
+### [S-MED-10] Hardcoded telegra.ph URL
+**Файл:** `app/handlers/game.py:634`
+```python
+url="https://telegra.ph/Instrukciya-Ferma-02-20"
+```
+**Проблема:** Захардкоженная внешняя ссылка. Если страница будет удалена — битая ссылка.
+**Рекомендация:** Вынести в config или i18n.
+
+## Navigation callbacks — navigation.py
+
+### [L-MED-11] Hardcoded Russian тексты в navigation callbacks
+**Файлы:** `app/handlers/callbacks/navigation.py:102, 152, 167, 169, 180, 182, 304`
+**Проблема:** Множество user-facing строк захардкожены на русском:
+- `"✍️ Трекер Only"` (line 102) — кнопка в экосистеме
+- `"🔗 Ваша ссылка подключения готова."` (line 152)
+- `"Скопируйте ссылку выше"` / `"Ключ не найден"` (lines 167, 169, 180, 182)
+- `"🚀 Нажмите кнопку ниже чтобы подключиться:"` (line 304)
+**Рекомендация:** Перевести на i18n ключи.
+
+### [A-13] Неиспользуемая переменная в error handler
+**Файл:** `app/handlers/callbacks/navigation.py:285`
+```python
+user = await database.get_user(telegram_id)
+```
+**Проблема:** Результат `get_user()` не используется — лишний DB-запрос в обработчике ошибок.
+**Рекомендация:** Удалить строку.
+
+### [A-14] Дублирование route для go_profile
+**Файл:** `app/handlers/callbacks/navigation.py:255-256`
+```python
+@router.callback_query(F.data == "go_profile", StateFilter(default_state))
+@router.callback_query(F.data == "go_profile")
+```
+**Проблема:** Второй декоратор перехватывает все состояния, делая первый (с `default_state`) избыточным.
+**Рекомендация:** Оставить только один декоратор без StateFilter.
+
+## Payments callbacks — payments_callbacks.py
+
+### [L-CRIT-9] Business welcome text захардкожен на русском
+**Файл:** `app/handlers/callbacks/payments_callbacks.py:645`
+```python
+text = f"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"
+```
+**Проблема:** Для бизнес-тарифов текст успешной оплаты полностью на русском, хотя для Basic/Plus используется i18n.
+**Рекомендация:** Создать i18n ключ `payment.success_welcome_business`.
+
+### [L-CRIT-10] Upgrade text захардкожен на русском
+**Файл:** `app/handlers/callbacks/payments_callbacks.py:616-621`
+```python
+text = (
+    f"⭐️ Апгрейд до Plus!\n"
+    f"📅 До: {expires_str}\n\n"
+    f"📲 Чтобы конфигурации обновились в приложении:\n"
+    f"V2rayTUN — нажмите 🔄 (обновить подписку)"
+)
+```
+**Проблема:** Текст апгрейда захардкожен на русском.
+**Рекомендация:** Создать i18n ключ `payment.upgrade_success`.
+
+### [L-MED-12] int(amount * 100) — повторение IEEE 754 бага
+**Файл:** `app/handlers/callbacks/payments_callbacks.py:253`
+```python
+amount_kopecks = int(amount * 100)
+```
+**Проблема:** Та же проблема float-to-int, что и [L-CRIT-7]. `int(2.29 * 100)` = `228`.
+**Рекомендация:** Использовать `round(amount * 100)`.
+
+### [L-MED-13] Withdraw admin notification — text захардкожен на русском
+**Файл:** `app/handlers/callbacks/payments_callbacks.py:277-284`
+**Проблема:** Текст уведомления админу о заявке на вывод захардкожен на русском. Кнопки "✅ Подтвердить" / "❌ Отклонить" тоже.
+**Рекомендация:** Для admin-facing текстов это допустимо (админ один, язык фиксирован). Но callback.answer() типа "Доступ запрещён", "Заявка уже обработана" (lines 317, 323, 333, 336, 339, 352, 362, 365, 368) — это admin-facing, оставить.
+
+### [P-MED-4] show_profile — check_subscription_expiry вызывается дважды
+**Файл:** `app/handlers/common/screens.py:218, 222`
+```python
+await check_subscription_expiry_service(telegram_id)  # line 218
+...
+await check_subscription_expiry_service(telegram_id)  # line 222
+```
+**Проблема:** Одна и та же проверка выполняется дважды за один вызов `show_profile()`. Лишний DB-запрос.
+**Рекомендация:** Удалить один из вызовов.
+
+### [L-MED-14] format_date_ru используется для всех языков
+**Файл:** `app/handlers/common/screens.py:267, 293`
+**Проблема:** `format_date_ru(expires_at)` форматирует дату в русском формате ("15 марта 2026") для всех пользователей, включая EN/DE/AR.
+**Рекомендация:** Создать `format_date(expires_at, language)` с i18n-совместимым форматированием.
+
+### [L-MED-15] Tariff screen title hardcoded
+**Файл:** `app/handlers/common/screens.py:367-368`
+```python
+text = (
+    f"💎 Тарифы Atlas Secure\n\n"
+    ...
+)
+```
+**Проблема:** Заголовок экрана тарифов на русском, хотя остальные тексты используют i18n.
+**Рекомендация:** Использовать i18n ключ `buy.tariffs_title`.
+
+### [A-15] _REISSUE_LOCKS — растёт неограниченно
+**Файл:** `app/handlers/common/utils.py:718-724`
+**Проблема:** Dict `_REISSUE_LOCKS` создаёт asyncio.Lock для каждого user_id и никогда не очищается. Аналогично [S-MED-3] (rate limiter buckets).
+**Рекомендация:** Добавить TTL-based cleanup или использовать `weakref`.
+
+### [S-MED-11] withdraw_start — обратитесь в поддержку без i18n
+**Файл:** `app/handlers/callbacks/payments_callbacks.py:220-223`
+```python
+await callback.answer(
+    "Обратитесь в техподдержку для создания заявки на вывод средств.",
+    show_alert=True,
+)
+```
+**Проблема:** User-facing текст без i18n.
+**Рекомендация:** Использовать i18n ключ.
 
 ---
 
@@ -369,6 +546,26 @@ return [dict(row) for row in rows]
 - **Оригинал:** `"🎉 Добро пожаловать в Atlas Secure!\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"`
 - **Предложение 1:** Создать i18n ключ `activation.vpn_ready` = `"🎉 VPN подключение готово!\n{tariff_icon} Тариф: {tariff}\n📅 Активно до: {date}"` — более точное описание события
 - **Предложение 2:** `"✅ Подписка активирована!\n{tariff_icon} {tariff}\n📅 До: {date}\n\nНажмите «Подключиться» для настройки VPN"` — call to action
+
+**payments_callbacks.py:645 (Business welcome)**
+- **Оригинал:** `"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"`
+- **Предложение 1:** Создать i18n ключ `payment.success_welcome_business` = `"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: {tariff}\n📅 Активно до: {date}"` — унифицировать с Basic/Plus
+- **Предложение 2:** `"🏢 Бизнес-подписка активирована!\n📅 До: {date}\n\n🎛 Управление: /profile"` — с CTA
+
+**payments_callbacks.py:616-621 (Upgrade to Plus)**
+- **Оригинал:** `"⭐️ Апгрейд до Plus!\n📅 До: {expires_str}\n\n📲 Чтобы конфигурации обновились в приложении:\nV2rayTUN — нажмите 🔄 (обновить подписку)"`
+- **Предложение 1:** Создать i18n ключ `payment.upgrade_success` = `"⭐️ Апгрейд до Plus!\n📅 До: {date}\n\n📲 Обновите конфигурацию в VPN-приложении"` — короче и понятнее
+- **Предложение 2:** `"⭐️ Тариф повышен до Plus!\n📅 Активно до: {date}\n\nНажмите «Подключиться» для обновления"` — с кнопкой connect
+
+**navigation.py:304 (Connect instead of copy)**
+- **Оригинал:** `"🚀 Нажмите кнопку ниже чтобы подключиться:"`
+- **Предложение 1:** Создать i18n ключ `vpn.connect_prompt` = `"🚀 Подключитесь через кнопку ниже:"`
+- **Предложение 2:** `"🚀 Нажмите «Подключиться» для настройки VPN"`
+
+**game.py:86-104 (Games menu)**
+- **Оригинал:** Полный русский текст игрового меню (18 строк)
+- **Предложение 1:** Создать i18n ключ `games.welcome` со всем текстом меню
+- **Предложение 2:** Сократить текст и сделать его более dynamic: показывать только доступные игры с краткими описаниями
 
 ### 7.2 Уведомления admin
 
@@ -416,35 +613,50 @@ return [dict(row) for row in rows]
 
 | Категория | Критические | Средние | Низкие |
 |-----------|-------------|---------|--------|
-| Безопасность | 3 | 7 | 2 |
-| Корректность логики | 5 | 8 | 0 |
-| Производительность | 0 | 3 | 1 |
+| Безопасность | 3 | 11 | 2 |
+| Корректность логики | 10 | 15 | 0 |
+| Производительность | 0 | 4 | 1 |
 | Workers | 0 | 3 | 0 |
-| Архитектура | 0 | 9 | 0 |
-| **Итого** | **8** | **30** | **3** |
+| Архитектура | 0 | 15 | 0 |
+| **Итого** | **13** | **48** | **3** |
 
 ## Приоритеты исправления
 
-### P0 (Немедленно):
-1. [S-CRIT-2] — Webhook 200 при ошибке может терять платежи
-2. [L-CRIT-3] — Нелокализованные уведомления автопродления
-3. [L-CRIT-4] — Нелокализованные уведомления активации
-4. [L-CRIT-5] — Float-to-kopeck потеря точности (финансовая ошибка)
+### P0 (Немедленно — может ломать production):
+1. [L-CRIT-5] — `get_referral_analytics` crash — conn вне async with
+2. [L-CRIT-6] — pending_purchases CHECK блокирует бизнес-тарифы
+3. [S-CRIT-2] — Webhook 200 при ошибке может терять платежи
+4. [L-CRIT-7] + [L-MED-12] — Float-to-kopeck потеря точности (финансовая ошибка) — 2 места
+5. [L-CRIT-3] — Нелокализованные уведомления автопродления
+6. [L-CRIT-4] — Нелокализованные уведомления активации
+7. [L-CRIT-8] — Весь game.py/Farm — тексты захардкожены на русском (~30+ строк)
+8. [L-CRIT-9] — Business welcome text захардкожен на русском
+9. [L-CRIT-10] — Upgrade text захардкожен на русском
+10. [L-MED-9] — Farm без проверки подписки (обход paywall)
 
 ### P1 (В ближайшие спринты):
 1. [S-CRIT-1] — Platega webhook аутентификация
 2. [S-CRIT-3] — MINI_APP_URL в config
 3. [S-MED-5] — Advisory lock enforcement
-4. [S-MED-6] — Referral код enumerable
-5. [L-CRIT-1] — Проверить единицы баланса в auto_renewal
-6. [L-CRIT-2] — create_payment всегда 30 дней
-7. [A-5] — confirmation.py нарушает архитектуру service layer
-8. [A-6] — Дублирование PaymentFinalizationError
+4. [S-MED-6] — Health check alert может утечь DB creds
+5. [S-MED-8] — Referral код enumerable
+6. [L-CRIT-1] — Проверить единицы баланса в auto_renewal
+7. [L-CRIT-2] — create_payment всегда 30 дней
+8. [L-MED-10] — Farm race condition (double harvest)
+9. [L-MED-11] — Navigation callbacks — hardcoded Russian
+10. [A-5] — confirmation.py нарушает архитектуру service layer
+11. [A-6] — Дублирование PaymentFinalizationError
+12. [A-9] — Dual schema management (DDL + migrations)
+13. [A-10] — Миграции без блокировки
 
 ### P2 (При рефакторинге):
 - Все средние проблемы безопасности и корректности
 - Производительность export и metrics queries
 - Workers consistency
-- Dead code cleanup [A-7]
+- Dead code cleanup [A-7], [A-13] unused user variable, [A-14] duplicate route
 - Language caching [A-8]
-- Admin overview parallelization [A-9]
+- Admin overview parallelization [A-12]
+- pytest из production requirements [S-MED-7]
+- Refund как topup в логах [A-11]
+- [S-MED-10] — Hardcoded telegra.ph URL
+- [S-MED-11] — withdraw_start без i18n
