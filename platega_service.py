@@ -150,6 +150,11 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     merchant_id = headers.get("x-merchantid", "") or headers.get("X-MerchantId", "")
     secret = headers.get("x-secret", "") or headers.get("X-Secret", "")
 
+    # SECURITY: Reject if server-side credentials are not configured (prevents empty-string bypass)
+    if not PLATEGA_MERCHANT_ID or not PLATEGA_SECRET:
+        logger.error("Platega webhook: server credentials not configured")
+        return {"status": "unauthorized"}
+
     if not hmac.compare_digest(str(merchant_id), str(PLATEGA_MERCHANT_ID)) or not hmac.compare_digest(str(secret), str(PLATEGA_SECRET)):
         logger.warning("Platega webhook: auth failed")
         return {"status": "unauthorized"}

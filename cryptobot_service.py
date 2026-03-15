@@ -155,6 +155,9 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
 
     # Verify signature
     signature = headers.get("crypto-pay-api-signature", "")
+    if not signature:
+        logger.warning("CryptoBot webhook: missing signature header")
+        return {"status": "unauthorized"}
     if not verify_webhook_signature(raw_body, signature):
         logger.warning("CryptoBot webhook: signature verification failed")
         return {"status": "unauthorized"}
