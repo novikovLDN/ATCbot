@@ -1,0 +1,154 @@
+# ──────────────────────────────────────────────────────────────
+# PR Quality Gates — additional checks for pull requests
+# ──────────────────────────────────────────────────────────────
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main, stage]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ── PR size label ──────────────────────────────────────────
+  pr-size:
+    name: PR Size Label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate PR size and add label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              per_page: 100,
+            });
+
+            const changes = files.reduce((sum, f) => sum + f.additions + f.deletions, 0);
+
+            let label, color;
+            if (changes < 10) { label = 'size/XS'; color = '3CBF00'; }
+            else if (changes < 50) { label = 'size/S'; color = '5D9801'; }
+            else if (changes < 200) { label = 'size/M'; color = 'FBCA04'; }
+            else if (changes < 500) { label = 'size/L'; color = 'E68D09'; }
+            else { label = 'size/XL'; color = 'D93F0B'; }
+
+            // Ensure label exists
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+              });
+            } catch {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: label,
+                color: color,
+              });
+            }
+
+            // Remove old size labels
+            const currentLabels = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const l of currentLabels.data) {
+              if (l.name.startsWith('size/') && l.name !== label) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  name: l.name,
+                });
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [label],
+            });
+
+            console.log(`PR has ${changes} changed lines → ${label}`);
+
+  # ── Commit message check ───────────────────────────────────
+  commit-lint:
+    name: Commit Messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit message format
+        run: |
+          echo "Checking commit messages in PR..."
+          MERGE_BASE=$(git merge-base origin/${{ github.base_ref }} HEAD)
+          BAD=0
+          while IFS= read -r line; do
+            HASH=$(echo "$line" | cut -d' ' -f1)
+            MSG=$(echo "$line" | cut -d' ' -f2-)
+            # Skip merge commits
+            if echo "$MSG" | grep -qE "^Merge "; then continue; fi
+            # Check length (max 72 chars for first line)
+            LEN=$(echo "$MSG" | head -1 | wc -c)
+            if [ "$LEN" -gt 73 ]; then
+              echo "::warning::Commit $HASH: subject too long ($LEN chars, max 72)"
+              BAD=1
+            fi
+          done < <(git log --oneline "$MERGE_BASE..HEAD")
+          if [ "$BAD" -eq 1 ]; then
+            echo "::warning::Some commit messages exceed 72 chars. Consider shortening."
+          fi
+          echo "Commit message check complete."
+
+  # ── Secrets leak detection ─────────────────────────────────
+  secrets-scan:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for potential secrets in diff
+        run: |
+          MERGE_BASE=$(git merge-base origin/${{ github.base_ref }} HEAD 2>/dev/null || echo "HEAD~1")
+          DIFF=$(git diff "$MERGE_BASE..HEAD" -- . ':!*.lock' ':!*.svg' ':!*.png' ':!*.jpg')
+
+          PATTERNS=(
+            'PRIVATE.KEY'
+            'BEGIN RSA'
+            'BEGIN DSA'
+            'BEGIN EC'
+            'password\s*=\s*["\x27][^"\x27]{8,}'
+            'secret\s*=\s*["\x27][^"\x27]{8,}'
+            'api[_-]?key\s*=\s*["\x27][^"\x27]{8,}'
+            'token\s*=\s*["\x27][^"\x27]{6,}'
+          )
+
+          FOUND=0
+          for pattern in "${PATTERNS[@]}"; do
+            if echo "$DIFF" | grep -iE "^\+" | grep -iE "$pattern" | grep -viE '(fake|test|example|placeholder|ci-secret|mock|dummy|0000)'; then
+              echo "::error::Potential secret found matching pattern: $pattern"
+              FOUND=1
+            fi
+          done
+
+          if [ "$FOUND" -eq 1 ]; then
+            echo "::error::Potential secrets detected in PR diff. Review before merging."
+            exit 1
+          fi
+          echo "No secrets detected."
