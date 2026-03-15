@@ -616,11 +616,11 @@ async def run_trial_scheduler(bot: Bot):
                     f"[FEATURE_FLAG] Background workers disabled, skipping iteration in trial_notifications "
                     f"(iteration={iteration_number})"
                 )
-                outcome = "skipped"
+                iteration_outcome = "skipped"
                 reason = "background_workers_enabled=false"
                 log_worker_iteration_end(
                     worker_name="trial_notifications",
-                    outcome=outcome,
+                    outcome=iteration_outcome,
                     items_processed=0,
                     duration_ms=(time.time() - iteration_start_time) * 1000,
                     reason=reason,

@@ -65,17 +65,25 @@ async def process_confirmed_payment(
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
 
-        await _send_confirmation(
-            provider=provider,
-            bot=bot,
-            telegram_id=telegram_id,
-            payment_id=payment_id,
-            purchase_id=purchase_id,
-            is_balance_topup=is_balance_topup,
-            amount_rubles=amount_rubles,
-            result=result,
-            expires_at=expires_at,
-        )
+        # Notification failure must NOT fail the payment — DB is already committed
+        try:
+            await _send_confirmation(
+                provider=provider,
+                bot=bot,
+                telegram_id=telegram_id,
+                payment_id=payment_id,
+                purchase_id=purchase_id,
+                is_balance_topup=is_balance_topup,
+                amount_rubles=amount_rubles,
+                result=result,
+                expires_at=expires_at,
+            )
+        except Exception as notif_err:
+            logger.error(
+                f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "
+                f"purchase_id={purchase_id}, payment_id={payment_id}, "
+                f"error={type(notif_err).__name__}: {notif_err} — payment was successful"
+            )
 
     except ValueError as e:
         logger.info(

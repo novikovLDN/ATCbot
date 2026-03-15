@@ -39,6 +39,9 @@ def setup(bot):
 
 async def _handle_platega_webhook(request: Request):
     """Handle Platega (SBP) webhook callback."""
+    if _bot is None:
+        logger.critical("Platega webhook received but bot is not initialized — setup() not called")
+        return JSONResponse({"status": "error"}, status_code=500)
     try:
         import platega_service
         if not platega_service.is_enabled():
@@ -89,6 +92,9 @@ async def platega_callback(request: Request):
 
 async def _handle_cryptobot_webhook(request: Request):
     """Handle CryptoBot (Crypto Pay) webhook callback."""
+    if _bot is None:
+        logger.critical("CryptoBot webhook received but bot is not initialized — setup() not called")
+        return JSONResponse({"status": "error"}, status_code=500)
     try:
         import cryptobot_service
         if not cryptobot_service.is_enabled():
