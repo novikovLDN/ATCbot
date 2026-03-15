@@ -558,7 +558,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),
-                    url="https://t.me/asc_support"
+                    url="https://t.me/Atlas_SupportSecurity"
                 )]
             ])
             

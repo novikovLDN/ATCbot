@@ -906,7 +906,7 @@ async def reject_payment(callback: CallbackQuery):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "main.support_button", "support_button"),
-                url="https://t.me/asc_support"
+                url="https://t.me/Atlas_SupportSecurity"
             )]
         ])
         
