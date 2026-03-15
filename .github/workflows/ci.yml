@@ -1,3 +1,7 @@
+# ──────────────────────────────────────────────────────────────
+# CI Pipeline — runs on every push and PR to main/stage
+# Jobs run in parallel for speed: lint, test, security, docker
+# ──────────────────────────────────────────────────────────────
 name: CI
 
 on:
@@ -6,8 +10,38 @@ on:
   pull_request:
     branches: [main, stage]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  lint-and-test:
+  # ── 1. Lint & static analysis ──────────────────────────────
+  lint:
+    name: Lint & Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff lint
+        run: ruff check . --output-format=github
+
+      - name: Syntax check (compile all .py)
+        run: python -m compileall . -q -x '.venv|__pycache__'
+
+  # ── 2. Tests with PostgreSQL ───────────────────────────────
+  test:
+    name: Tests
     runs-on: ubuntu-latest
 
     services:
@@ -41,26 +75,95 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install ruff
-
-      - name: Lint (ruff)
-        run: ruff check . --output-format=github
-
-      - name: Syntax check (compile all .py files)
-        run: python -m compileall . -q -x '.venv|__pycache__'
+          pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ --tb=short --junitxml=test-results.xml
 
-  docker-build:
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+          retention-days: 7
+
+  # ── 3. Security scan ───────────────────────────────────────
+  security:
+    name: Security Scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Docker build (verify Dockerfile works)
-        run: docker build -t atcs-test .
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install security tools
+        run: pip install pip-audit safety
+
+      - name: Check dependencies for known vulnerabilities
+        run: pip-audit -r requirements.txt --desc on --fix --dry-run || true
+
+      - name: Safety check
+        run: safety check -r requirements.txt --output text || true
+        continue-on-error: true
+
+  # ── 4. Docker build verification ───────────────────────────
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: atcbot:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 5. Migration check ────────────────────────────────────
+  migrations:
+    name: Migration Integrity
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: atcs_migration_test
+          POSTGRES_USER: atcs
+          POSTGRES_PASSWORD: test_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atcs -d atcs_migration_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify all migrations apply cleanly
+        run: |
+          for f in migrations/*.sql; do
+            echo "Applying: $f"
+            PGPASSWORD=test_pass psql -h localhost -U atcs -d atcs_migration_test -f "$f" \
+              || { echo "FAILED: $f"; exit 1; }
+          done
+          echo "All migrations applied successfully."
