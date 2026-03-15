@@ -279,6 +279,9 @@ async def process_auto_renewals(bot: Bot):
                                         f"refund_uuid_regen_{telegram_id}",
                                         RuntimeError(f"Refund failed after UUID regeneration, amount={amount_rubles}"),
                                         is_transient=False,
+                                        amount_rubles=amount_rubles,
+                                        tariff=tariff_type,
+                                        period_days=period_days,
                                     )
                                 continue
                             
@@ -312,6 +315,9 @@ async def process_auto_renewals(bot: Bot):
                                         f"refund_renewal_fail_{telegram_id}",
                                         RuntimeError(f"Refund failed after renewal failure, amount={amount_rubles}"),
                                         is_transient=False,
+                                        amount_rubles=amount_rubles,
+                                        tariff=tariff_type,
+                                        period_days=period_days,
                                     )
                                 continue
                             
