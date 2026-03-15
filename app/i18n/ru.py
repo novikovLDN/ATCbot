@@ -557,7 +557,7 @@ LANG = {
     'payment.sbp_waiting': "🏦 Оплата через СБП\n\nСумма: {amount:.2f} ₽ (включая комиссию +11%)\n\n⏳ Перейдите по ссылке для оплаты. После подтверждения доступ будет выдан автоматически.",
     'payment.sbp_pay_button': "🏦 Оплатить через СБП",
     'payment.sbp_unavailable': "Оплата через СБП временно недоступна",
-    'payment.crypto': "₿ Криптовалюта",
+    'payment.crypto': "🌎 CryptoBot",
     'payment.crypto_waiting': "₿ Оплата криптовалютой\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты через @CryptoBot.\nПосле подтверждения подписка будет активирована автоматически.",
     'payment.crypto_pay_button': "₿ Оплатить через CryptoBot",
     'payment.crypto_unavailable': "Оплата криптовалютой временно недоступна",
