@@ -131,9 +131,11 @@ async def main():
             if redis_ok:
                 logger.info("REDIS_CONNECTIVITY=ok")
             else:
-                logger.warning("REDIS_CONNECTIVITY=failed — FSM storage may not work")
+                raise RuntimeError("Redis ping returned False — FSM storage will not work")
+        except RuntimeError:
+            raise
         except Exception as e:
-            logger.warning("REDIS_CONNECTIVITY_CHECK error=%s", e)
+            raise RuntimeError(f"Redis connectivity check failed: {type(e).__name__}: {e}") from e
     else:
         storage = MemoryStorage()
         logger.warning("FSM_STORAGE=memory — states will be lost on restart")
