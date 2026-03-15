@@ -395,7 +395,137 @@ return [dict(row) for row in rows]
 
 ---
 
-# ДОПОЛНЕНИЕ: HANDLERS, NAVIGATION, PAYMENTS CALLBACKS
+# ДОПОЛНЕНИЕ 1: ГЛУБОКИЙ АНАЛИЗ АГЕНТОВ (handlers, middleware, i18n, workers)
+
+## Безопасность — новые критические находки
+
+### [S-CRIT-4] Race condition: webhook heartbeat без синхронизации
+**Файл:** `app/api/telegram_webhook.py:52`
+**Проблема:** `global last_webhook_update_at` обновляется без lock из конкурентных async-хендлеров. Watchdog может прочитать повреждённый timestamp.
+**Рекомендация:** Использовать `threading.Lock()` для atomic update.
+
+### [S-CRIT-5] Race condition: rate limiter shared state
+**Файл:** `app/core/rate_limit_middleware.py:137,143,177-178`
+**Проблема:** `self._user_requests` и `self._banned_users` (dict) модифицируются конкурентно без синхронизации. Dict операции не atomic. Конкурентные запросы от одного user_id могут повредить структуру данных.
+**Рекомендация:** Добавить `asyncio.Lock()` для всех операций с shared dictionaries.
+
+### [S-CRIT-6] Race condition: pool monitor global heartbeat
+**Файл:** `app/core/pool_monitor.py:42-44, 52`
+**Проблема:** `_last_pool_wait_spike_monotonic` обновляется без блокировки из конкурентных `__aenter__` вызовов.
+**Рекомендация:** Обернуть в `threading.Lock()`.
+
+### [S-HIGH-1] Admin auth check — silent failure (authorization bypass potential)
+**Файл:** `app/handlers/admin/access.py:454-459`
+**Проблема:** Неавторизованные пользователи получают `callback.answer()` без сообщения об ошибке. Позволяет разведку (silent failure выглядит как отсутствие handler'а).
+**Рекомендация:** Всегда отправлять явное `access_denied` с `show_alert=True`.
+
+### [S-HIGH-2] Финансовая операция без верификации target user_id
+**Файл:** `app/handlers/admin/access.py:816-847`
+**Проблема:** `admin_switch_confirm:{tariff}:{user_id}` — user_id извлекается из callback_data без проверки, что он был pre-selected. Replay attack: модифицировать user_id в callback → смена тарифа произвольному пользователю.
+**Рекомендация:** Хранить selected user_id в FSM state и верифицировать при confirm.
+
+### [S-HIGH-3] Gift code activation без rate limiting — brute force
+**Файл:** `app/handlers/user/start.py:94-125`
+**Проблема:** Нет rate limiting на попытки активации gift-кодов. Атакующий может перебирать коды без ограничений. Нет логирования неудачных попыток.
+**Рекомендация:** Добавить `check_rate_limit(telegram_id, "gift_activate", limit=5, window=3600)`.
+
+### [S-HIGH-4] Webhook signature verification delegated without assertion
+**Файл:** `app/api/payment_webhook.py:78-85`
+**Проблема:** CryptoBot webhook handler читает `raw_body` но не валидирует подпись перед JSON парсингом. Верификация делегирована в service layer без явной проверки результата.
+**Рекомендация:** Добавить explicit signature verification в handler до обработки.
+
+### [S-MED-12] Callback data parsing без bounds check (IndexError)
+**Файл:** `app/handlers/callbacks/payments_callbacks.py:108-114`
+```python
+amount_str = callback.data.split(":")[1]  # IndexError если ":"  отсутствует
+```
+**Проблема:** Если callback_data = `"topup_amount"` (без `:`) — `split(":")[1]` бросит IndexError. Aiogram filter `startswith("topup_amount:")` требует `:`, но callback может быть подменён.
+**Аналогично:** `payments/callbacks.py:983` (country_code), множество admin handlers.
+**Рекомендация:** Проверять `len(parts) >= 2` перед доступом к `parts[1]`.
+
+### [S-MED-13] Missing DB readiness check в admin reissue
+**Файл:** `app/handlers/admin/reissue.py:30-55`
+**Проблема:** `/reissue_key` command не вызывает `ensure_db_ready_message()`. Если БД не инициализирована — crash.
+**Рекомендация:** Добавить guard в начало handler'а.
+
+### [S-MED-14] safe_send_message без timeout
+**Файл:** `app/utils/telegram_safe.py:24`
+**Проблема:** `bot.send_message()` вызывается без timeout. Если Telegram API зависнет — блокируется весь event loop.
+**Рекомендация:** Обернуть в `asyncio.wait_for(..., timeout=10.0)`.
+
+### [S-MED-15] Health endpoint без аутентификации
+**Файл:** `app/api/__init__.py:41`
+**Проблема:** `/health` endpoint открыт публично, экспонирует состояние системы (DB, Redis).
+**Рекомендация:** Возвращать минимум (`{"status":"ok"}`) или добавить IP rate limiting.
+
+## Корректность — новые находки
+
+### [L-CRIT-11] Farm notifications — все тексты захардкожены на русском
+**Файл:** `app/workers/farm_notifications.py:71-72, 85-86, 100-101`
+**Проблема:** Уведомления о созревании, предупреждении (12ч) и гибели растений — полностью на русском. i18n не используется, хотя `language` доступен (но не получается — нет вызова resolve_user_language).
+**Масштаб:** 3 notification templates + plant names dict (lines 25-30).
+**Рекомендация:** Добавить `resolve_user_language(telegram_id)` и i18n ключи для всех farm notifications.
+
+### [L-CRIT-12] Format string placeholder mismatch: games.dice_success
+**Файл:** `app/i18n/en.py` vs `app/i18n/ru.py`
+**Проблема:** EN версия содержит только `{value}`, RU версия — `{value}` и `{date}`. Если код вызывает `i18n.get_text("ru", "games.dice_success", value=100)` — `KeyError: 'date'` crash.
+**Рекомендация:** Синхронизировать placeholders между языками.
+
+### [L-MED-16] Race condition в toggle_auto_renew
+**Файл:** `app/handlers/callbacks/subscription.py:45-73`
+**Проблема:** UPDATE без проверки результата (0 rows). Нет transaction isolation. Два быстрых клика могут конфликтовать.
+**Рекомендация:** Проверять результат UPDATE, использовать `WHERE status = 'active'`.
+
+### [L-MED-17] Missing RU translation keys (5 ключей)
+**Файл:** `app/i18n/ru.py`
+**Ключи:** `payment.success_welcome_basic`, `payment.success_welcome_plus`, `referral.cashback_referred`, `referral.registered_user`, `referral.trial_activated_user`
+**Проблема:** Существуют в EN, отсутствуют в RU. Русские пользователи увидят EN fallback.
+**Рекомендация:** Добавить перевод этих 5 ключей в ru.py.
+
+### [L-MED-18] AR (Arabic) — те же 5 ключей отсутствуют
+**Файл:** `app/i18n/ar.py`
+**Проблема:** Аналогично RU — те же 5 ключей отсутствуют.
+**Рекомендация:** Добавить арабский перевод.
+
+## Производительность — новые находки
+
+### [P-MED-5] N+1 query в bulk key reissue
+**Файл:** `app/handlers/admin/access.py:119-183`
+**Проблема:** Для каждой подписки из списка вызывается `reissue_vpn_key_atomic()` (3-5 DB операций). При 1000 подписок = 3000-5000 queries.
+**Рекомендация:** Использовать batch operations.
+
+### [P-MED-6] Blocking dictionary cleanup в async middleware
+**Файл:** `app/core/rate_limit_middleware.py:145-156`
+**Проблема:** Синхронная очистка до 25,000 записей блокирует event loop.
+**Рекомендация:** Рефакторить в async метод с yield через `asyncio.sleep(0)`.
+
+## Workers — новые находки
+
+### [W-4] Farm notifications worker — нет startup jitter
+**Файл:** `app/workers/farm_notifications.py:114`
+**Проблема:** Фиксированный `asyncio.sleep(60)` без random jitter. При одновременном рестарте контейнеров — burst DB запросов.
+**Рекомендация:** Добавить `jitter_s = random.uniform(5, 60)` как в других workers.
+
+## Архитектура — новые находки
+
+### [A-16] Audit log failure cascade — silent loss
+**Файл:** `app/utils/audit.py:227-247`
+**Проблема:** Если запись audit log и fallback `log_security_error()` оба падают — событие потеряно без следа.
+**Рекомендация:** Добавить last-resort fallback на stderr.
+
+### [A-17] Error disclosure в admin responses
+**Файл:** `app/handlers/admin/access.py:254-259`
+**Проблема:** Exception message (обрезанная до 80 символов) отправляется админу. Может содержать DB credentials, API endpoints.
+**Рекомендация:** Отправлять generic message, логировать полную ошибку.
+
+### [A-18] Inconsistent logging — JSON vs string
+**Файл:** `app/utils/logging_helpers.py:111, 165-171`
+**Проблема:** Часть логов в JSON, часть — в произвольном формате. Затрудняет агрегацию.
+**Рекомендация:** Стандартизировать формат логирования.
+
+---
+
+# ДОПОЛНЕНИЕ 2: HANDLERS, NAVIGATION, PAYMENTS CALLBACKS
 
 ## Handlers — game.py
 
@@ -613,12 +743,15 @@ await callback.answer(
 
 | Категория | Критические | Средние | Низкие |
 |-----------|-------------|---------|--------|
-| Безопасность | 3 | 11 | 2 |
-| Корректность логики | 10 | 15 | 0 |
-| Производительность | 0 | 4 | 1 |
-| Workers | 0 | 3 | 0 |
-| Архитектура | 0 | 15 | 0 |
-| **Итого** | **13** | **48** | **3** |
+| Безопасность | 6 | 15 | 2 |
+| Безопасность (HIGH) | 4 | — | — |
+| Корректность логики | 12 | 18 | 0 |
+| Производительность | 0 | 6 | 1 |
+| Workers | 0 | 4 | 0 |
+| Архитектура | 0 | 18 | 0 |
+| **Итого** | **22** | **61** | **3** |
+
+> Примечание: "Безопасность (HIGH)" — это проблемы высокой серьёзности, не дотягивающие до CRIT, но требующие срочного внимания (admin auth bypass, brute force, missing signature validation).
 
 ## Приоритеты исправления
 
@@ -626,37 +759,52 @@ await callback.answer(
 1. [L-CRIT-5] — `get_referral_analytics` crash — conn вне async with
 2. [L-CRIT-6] — pending_purchases CHECK блокирует бизнес-тарифы
 3. [S-CRIT-2] — Webhook 200 при ошибке может терять платежи
-4. [L-CRIT-7] + [L-MED-12] — Float-to-kopeck потеря точности (финансовая ошибка) — 2 места
-5. [L-CRIT-3] — Нелокализованные уведомления автопродления
-6. [L-CRIT-4] — Нелокализованные уведомления активации
-7. [L-CRIT-8] — Весь game.py/Farm — тексты захардкожены на русском (~30+ строк)
-8. [L-CRIT-9] — Business welcome text захардкожен на русском
-9. [L-CRIT-10] — Upgrade text захардкожен на русском
-10. [L-MED-9] — Farm без проверки подписки (обход paywall)
+4. [S-CRIT-4/5/6] — Race conditions: webhook heartbeat, rate limiter state, pool monitor
+5. [L-CRIT-7] + [L-MED-12] — Float-to-kopeck потеря точности — 2 места
+6. [L-CRIT-12] — Format string placeholder mismatch (games.dice_success → crash)
+7. [S-HIGH-2] — Admin financial op без верификации target user_id
+8. [S-HIGH-4] — Webhook signature не проверяется в handler
+
+### P0.5 (Критично для UX — не ломает, но портит):
+9. [L-CRIT-3] — Нелокализованные уведомления автопродления
+10. [L-CRIT-4] — Нелокализованные уведомления активации
+11. [L-CRIT-8] — game.py/Farm — тексты на русском (~30+ строк)
+12. [L-CRIT-9] — Business welcome text на русском
+13. [L-CRIT-10] — Upgrade text на русском
+14. [L-CRIT-11] — Farm notifications — все на русском (3 templates)
+15. [L-MED-9] — Farm без проверки подписки (обход paywall)
 
 ### P1 (В ближайшие спринты):
 1. [S-CRIT-1] — Platega webhook аутентификация
 2. [S-CRIT-3] — MINI_APP_URL в config
-3. [S-MED-5] — Advisory lock enforcement
-4. [S-MED-6] — Health check alert может утечь DB creds
-5. [S-MED-8] — Referral код enumerable
-6. [L-CRIT-1] — Проверить единицы баланса в auto_renewal
-7. [L-CRIT-2] — create_payment всегда 30 дней
-8. [L-MED-10] — Farm race condition (double harvest)
-9. [L-MED-11] — Navigation callbacks — hardcoded Russian
-10. [A-5] — confirmation.py нарушает архитектуру service layer
-11. [A-6] — Дублирование PaymentFinalizationError
-12. [A-9] — Dual schema management (DDL + migrations)
-13. [A-10] — Миграции без блокировки
+3. [S-HIGH-1] — Admin auth check silent failure
+4. [S-HIGH-3] — Gift code activation без rate limiting
+5. [S-MED-5] — Advisory lock enforcement
+6. [S-MED-6] — Health check alert может утечь DB creds
+7. [S-MED-8] — Referral код enumerable
+8. [S-MED-12] — Callback data parsing без bounds check
+9. [S-MED-13] — Missing DB readiness check в admin reissue
+10. [S-MED-14] — safe_send_message без timeout
+11. [L-CRIT-1] — Проверить единицы баланса в auto_renewal
+12. [L-CRIT-2] — create_payment всегда 30 дней
+13. [L-MED-10] — Farm race condition (double harvest)
+14. [L-MED-17/18] — Missing RU/AR translation keys
+15. [A-5] — confirmation.py нарушает service layer
+16. [A-9] — Dual schema management
+17. [A-10] — Миграции без блокировки
 
 ### P2 (При рефакторинге):
-- Все средние проблемы безопасности и корректности
-- Производительность export и metrics queries
-- Workers consistency
-- Dead code cleanup [A-7], [A-13] unused user variable, [A-14] duplicate route
-- Language caching [A-8]
-- Admin overview parallelization [A-12]
-- pytest из production requirements [S-MED-7]
-- Refund как topup в логах [A-11]
-- [S-MED-10] — Hardcoded telegra.ph URL
-- [S-MED-11] — withdraw_start без i18n
+- Все оставшиеся средние проблемы безопасности и корректности
+- [L-MED-11] — Navigation callbacks hardcoded Russian
+- [L-MED-14] — format_date_ru для всех языков
+- [L-MED-15] — Tariff screen title hardcoded
+- [L-MED-16] — Race condition в toggle_auto_renew
+- [P-MED-4] — Дублированный check_subscription_expiry
+- [P-MED-5] — N+1 query в bulk reissue
+- [P-MED-6] — Blocking cleanup в rate limiter
+- [W-4] — Farm notifications worker без jitter
+- Dead code: [A-7], [A-13], [A-14]
+- Language caching [A-8], Admin parallelization [A-12]
+- pytest из production [S-MED-7], Refund как topup [A-11]
+- [A-15] — _REISSUE_LOCKS unbounded, [S-MED-10], [S-MED-11]
+- [A-16] — Audit failure cascade, [A-17] — Error disclosure, [A-18] — Logging format
