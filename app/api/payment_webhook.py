@@ -12,9 +12,17 @@ Security:
 - Pending expiry: 30 min (pending_purchases.expires_at).
 """
 
+import asyncio
 import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+
+from app.services.payments.confirmation import TransientPaymentError
+
+# Outer timeout for entire webhook processing — must complete before
+# Railway's 30s request timeout. Prevents event loop starvation if
+# payment provider APIs are slow.
+_WEBHOOK_TIMEOUT = 25.0
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +39,9 @@ def setup(bot):
 
 async def _handle_platega_webhook(request: Request):
     """Handle Platega (SBP) webhook callback."""
+    if _bot is None:
+        logger.critical("Platega webhook received but bot is not initialized — setup() not called")
+        return JSONResponse({"status": "error"}, status_code=500)
     try:
         import platega_service
         if not platega_service.is_enabled():
@@ -44,15 +55,28 @@ async def _handle_platega_webhook(request: Request):
             logger.error(f"Platega webhook: invalid JSON: {e}")
             return JSONResponse({"status": "invalid"})
 
-        result = await platega_service.process_webhook_data(headers, body, _bot)
+        result = await asyncio.wait_for(
+            platega_service.process_webhook_data(headers, body, _bot),
+            timeout=_WEBHOOK_TIMEOUT,
+        )
         return JSONResponse(result)
 
     except ImportError:
         logger.error("platega_service not available")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
+    except ValueError as e:
+        # Idempotency: already-processed payment — return 200 so provider stops retrying
+        logger.info(f"Platega webhook: already processed: {e}")
+        return JSONResponse({"status": "already_processed"})
+    except TransientPaymentError as e:
+        logger.error(f"Platega webhook transient error (returning 500 for retry): {e}")
+        return JSONResponse({"status": "transient_error"}, status_code=500)
+    except asyncio.TimeoutError:
+        logger.error("Platega webhook timeout (returning 500 for retry)")
+        return JSONResponse({"status": "timeout"}, status_code=500)
     except Exception as e:
         logger.exception(f"Platega webhook error: {e}")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
 
 
 @router.post("/webhooks/platega")
@@ -68,6 +92,9 @@ async def platega_callback(request: Request):
 
 async def _handle_cryptobot_webhook(request: Request):
     """Handle CryptoBot (Crypto Pay) webhook callback."""
+    if _bot is None:
+        logger.critical("CryptoBot webhook received but bot is not initialized — setup() not called")
+        return JSONResponse({"status": "error"}, status_code=500)
     try:
         import cryptobot_service
         if not cryptobot_service.is_enabled():
@@ -82,15 +109,27 @@ async def _handle_cryptobot_webhook(request: Request):
             logger.error(f"CryptoBot webhook: invalid JSON: {e}")
             return JSONResponse({"status": "invalid"})
 
-        result = await cryptobot_service.process_webhook_data(headers, raw_body, body, _bot)
+        result = await asyncio.wait_for(
+            cryptobot_service.process_webhook_data(headers, raw_body, body, _bot),
+            timeout=_WEBHOOK_TIMEOUT,
+        )
         return JSONResponse(result)
 
     except ImportError:
         logger.error("cryptobot_service not available")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
+    except ValueError as e:
+        logger.info(f"CryptoBot webhook: already processed: {e}")
+        return JSONResponse({"status": "already_processed"})
+    except TransientPaymentError as e:
+        logger.error(f"CryptoBot webhook transient error (returning 500 for retry): {e}")
+        return JSONResponse({"status": "transient_error"}, status_code=500)
+    except asyncio.TimeoutError:
+        logger.error("CryptoBot webhook timeout (returning 500 for retry)")
+        return JSONResponse({"status": "timeout"}, status_code=500)
     except Exception as e:
         logger.exception(f"CryptoBot webhook error: {e}")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
 
 
 @router.post("/webhooks/cryptobot")

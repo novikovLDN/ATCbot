@@ -4,15 +4,25 @@ Shared payment confirmation logic for all webhook providers.
 Eliminates duplicate code between platega_service and cryptobot_service.
 Each provider handles auth/signature verification, then delegates here.
 """
+import asyncio
 import json
 import logging
 from typing import Optional, Dict, Any
 
+import asyncpg
 import config
 import database
 from aiogram import Bot
 
 logger = logging.getLogger(__name__)
+
+
+class TransientPaymentError(Exception):
+    """Transient error during payment processing (DB timeout, connection error).
+
+    Webhook handler should return HTTP 500 so the payment provider retries.
+    """
+    pass
 
 
 async def process_confirmed_payment(
@@ -55,17 +65,25 @@ async def process_confirmed_payment(
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
 
-        await _send_confirmation(
-            provider=provider,
-            bot=bot,
-            telegram_id=telegram_id,
-            payment_id=payment_id,
-            purchase_id=purchase_id,
-            is_balance_topup=is_balance_topup,
-            amount_rubles=amount_rubles,
-            result=result,
-            expires_at=expires_at,
-        )
+        # Notification failure must NOT fail the payment — DB is already committed
+        try:
+            await _send_confirmation(
+                provider=provider,
+                bot=bot,
+                telegram_id=telegram_id,
+                payment_id=payment_id,
+                purchase_id=purchase_id,
+                is_balance_topup=is_balance_topup,
+                amount_rubles=amount_rubles,
+                result=result,
+                expires_at=expires_at,
+            )
+        except Exception as notif_err:
+            logger.error(
+                f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "
+                f"purchase_id={purchase_id}, payment_id={payment_id}, "
+                f"error={type(notif_err).__name__}: {notif_err} — payment was successful"
+            )
 
     except ValueError as e:
         logger.info(
@@ -73,11 +91,24 @@ async def process_confirmed_payment(
             f"purchase_id={purchase_id}, error={e}"
         )
         return {"status": "already_processed"}
+    except (asyncpg.PostgresError, asyncio.TimeoutError, OSError) as e:
+        # Transient infrastructure error — provider MUST retry
+        logger.error(
+            f"PAYMENT_TRANSIENT_ERROR: provider={provider}, user={telegram_id}, "
+            f"purchase_id={purchase_id}, error={type(e).__name__}: {e}"
+        )
+        from app.services.admin_alerts import alert_payment_failure
+        await alert_payment_failure(bot, provider, telegram_id, purchase_id, e, is_transient=True)
+        raise TransientPaymentError(
+            f"Transient DB error during payment: {type(e).__name__}"
+        ) from e
     except Exception as e:
         logger.exception(
-            f"{provider} webhook: finalize_purchase failed: user={telegram_id}, "
+            f"PAYMENT_PERMANENT_ERROR: provider={provider}, user={telegram_id}, "
             f"purchase_id={purchase_id}, error={e}"
         )
+        from app.services.admin_alerts import alert_payment_failure
+        await alert_payment_failure(bot, provider, telegram_id, purchase_id, e, is_transient=False)
         return {"status": "error"}
 
     return {"status": "ok"}
@@ -200,3 +231,5 @@ async def _send_confirmation(
             f"{provider} payment processed: user={telegram_id}, payment_id={payment_id}, "
             f"purchase_id={purchase_id}, subscription_activated=True"
         )
+
+

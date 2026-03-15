@@ -60,7 +60,9 @@ class _MonitoredAcquireContextManager:
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
-            self.pool.release(self._conn)
+            await self.pool.release(self._conn)
+        except Exception as e:
+            logger.error("pool_monitor: failed to release connection for '%s': %s", self.label, e)
         finally:
             self._conn = None
 

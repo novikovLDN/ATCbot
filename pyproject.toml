@@ -1,0 +1,37 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# Focus on critical issues: security and bugs only
+# Unused imports (F401) and style upgrades (UP) are warnings, not blockers
+select = [
+    "E9",    # Runtime errors (syntax, etc.)
+    "F63",   # Invalid format string
+    "F7",    # Syntax errors in assertions, etc.
+    "F82",   # Undefined names
+    "S",     # Bandit security checks
+    "B",     # Bugbear (common bugs)
+]
+ignore = [
+    "S101",  # assert usage (OK in tests)
+    "S603",  # subprocess without shell=True (not applicable)
+    "S607",  # partial executable path (not applicable)
+    "B008",  # function call in default argument (FastAPI uses this pattern)
+    "S104",  # possible binding to all interfaces (Railway requires 0.0.0.0)
+    "S311",  # random for non-crypto (OK for jitter/scheduling)
+    "S110",  # try-except-pass (used intentionally for non-critical cleanup)
+    "B904",  # raise without from (existing codebase pattern)
+    "B023",  # function definition in loop (common callback pattern in aiogram)
+    "B905",  # zip() without strict= (lengths always match by construction)
+    "B007",  # unused loop variable (used for range-based retry loops)
+    "B025",  # except BaseException (used intentionally)
+    "S608",  # SQL injection via string formatting (false positive: whitelist-validated flags)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]  # disable security checks in tests
+"validate_language_content.py" = ["S"]  # validation script
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

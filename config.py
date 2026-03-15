@@ -1,5 +1,8 @@
+import logging
 import os
 import sys
+
+_log = logging.getLogger(__name__)
 
 # ====================================================================================
 # ENVIRONMENT CONFIGURATION: Изоляция PROD / STAGE / LOCAL через префиксы
@@ -53,7 +56,7 @@ for var in _direct_usage_vars:
         print(f"ERROR: This prevents accidental PROD/STAGE configuration mix-up", file=sys.stderr)
         sys.exit(1)
 
-print(f"INFO: Config loaded for environment: {APP_ENV.upper()}", flush=True)
+_log.info("Config loaded for environment: %s", APP_ENV.upper())
 
 # ====================================================================================
 # STEP 4 — PART E: SECRET & CONFIG SAFETY
@@ -68,7 +71,7 @@ BOT_TOKEN = env("BOT_TOKEN")
 if not BOT_TOKEN:
     print(f"ERROR: {APP_ENV.upper()}_BOT_TOKEN environment variable is not set!", file=sys.stderr)
     sys.exit(1)
-print(f"INFO: Using BOT_TOKEN from {APP_ENV.upper()}_BOT_TOKEN", flush=True)
+_log.info("Using BOT_TOKEN from %s_BOT_TOKEN", APP_ENV.upper())
 
 # Telegram ID администратора (можно узнать у @userinfobot)
 ADMIN_TELEGRAM_ID_STR = env("ADMIN_TELEGRAM_ID")
@@ -318,17 +321,17 @@ VPN_ENABLED = bool(XRAY_API_URL and XRAY_API_KEY)
 VPN_PROVISIONING_ENABLED = env("VPN_PROVISIONING_ENABLED", default="true").lower() == "true" if VPN_ENABLED else False
 
 if not VPN_ENABLED:
-    print("INFO: ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)", flush=True)
-    print("WARNING: XRAY_API_URL or XRAY_API_KEY is not set!", file=sys.stderr)
-    print("WARNING: VPN operations will be BLOCKED until XRAY_API_URL and XRAY_API_KEY are configured", file=sys.stderr)
-    print("WARNING: Bot will continue running, but subscriptions cannot be activated", file=sys.stderr)
+    _log.info("ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)")
+    _log.warning("XRAY_API_URL or XRAY_API_KEY is not set!")
+    _log.warning("VPN operations will be BLOCKED until XRAY_API_URL and XRAY_API_KEY are configured")
+    _log.warning("Bot will continue running, but subscriptions cannot be activated")
 else:
-    print(f"INFO: Using XRAY_API_URL from {APP_ENV.upper()}_XRAY_API_URL", flush=True)
-    print(f"INFO: Using XRAY_API_KEY from {APP_ENV.upper()}_XRAY_API_KEY", flush=True)
-    print(f"INFO: XRAY_API_TIMEOUT={XRAY_API_TIMEOUT}s", flush=True)
-    print(f"INFO: VPN_PROVISIONING_ENABLED={VPN_PROVISIONING_ENABLED}", flush=True)
-    print("INFO: VPN API configured successfully (VLESS + REALITY)", file=sys.stderr)
-    print("INFO: ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)", flush=True)
+    _log.info("Using XRAY_API_URL from %s_XRAY_API_URL", APP_ENV.upper())
+    _log.info("Using XRAY_API_KEY from %s_XRAY_API_KEY", APP_ENV.upper())
+    _log.info("XRAY_API_TIMEOUT=%ss", XRAY_API_TIMEOUT)
+    _log.info("VPN_PROVISIONING_ENABLED=%s", VPN_PROVISIONING_ENABLED)
+    _log.info("VPN API configured successfully (VLESS + REALITY)")
+    _log.info("ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)")
 
 # Xray sync worker: sync DB subscriptions to Xray (default false for production safety)
 XRAY_SYNC_ENABLED = env("XRAY_SYNC_ENABLED", default="false").lower() == "true"
@@ -365,7 +368,7 @@ if not WEBHOOK_SECRET:
     print(f"ERROR: {APP_ENV.upper()}_WEBHOOK_SECRET environment variable is REQUIRED!", file=sys.stderr)
     sys.exit(1)
 WEBHOOK_PORT = int(os.getenv("PORT") or env("WEBHOOK_PORT") or "8080")
-print(f"INFO: Using WEBHOOK_URL from {APP_ENV.upper()}_WEBHOOK_URL", flush=True)
+_log.info("Using WEBHOOK_URL from %s_WEBHOOK_URL", APP_ENV.upper())
 
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")

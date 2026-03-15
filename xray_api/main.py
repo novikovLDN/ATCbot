@@ -337,6 +337,7 @@ _last_restart_time: float = 0.0  # Last successful restart timestamp (for metric
 async def _restart_xray_async() -> None:
     """Перезапустить Xray через systemctl (non-blocking via asyncio subprocess)"""
     global _last_restart_time
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "systemctl", "restart", "xray",
@@ -347,12 +348,11 @@ async def _restart_xray_async() -> None:
             _, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=10)
         except asyncio.TimeoutError:
             proc.kill()
-            await proc.wait()
             logger.error("Timeout while restarting Xray")
             raise HTTPException(
                 status_code=500,
                 detail="Timeout while restarting Xray"
-            ) from None
+            )
 
         stderr = stderr_bytes.decode() if stderr_bytes else ""
         if proc.returncode != 0:
@@ -378,6 +378,14 @@ async def _restart_xray_async() -> None:
             status_code=500,
             detail=f"Error restarting Xray: {e}"
         )
+    finally:
+        # Ensure process handle is always cleaned up to prevent zombies
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
 
 
 def _mark_restart_pending(op: str = "mutation") -> None:

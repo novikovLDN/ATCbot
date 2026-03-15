@@ -157,7 +157,11 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             conn=conn
                         )
                 except Exception as e:
-                    logger.error(f"Failed to mark expired subscription as failed: {e}")
+                    logger.critical(f"ACTIVATION_DB_FAILURE: Failed to mark expired subscription as failed: sub={subscription_id}, error={e}")
+                    from app.services.admin_alerts import alert_subscription_failure
+                    await alert_subscription_failure(
+                        bot, telegram_id, f"mark_expired_failed (sub={subscription_id})", e
+                    )
             else:
                 logger.info(
                     f"ACTIVATION_RETRY_ATTEMPT [subscription_id={subscription_id}, "
@@ -295,8 +299,13 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                     f"Failed to send admin notification: {admin_error}"
                                 )
                     except Exception as db_error:
-                        logger.error(
-                            f"Failed to update activation attempts in DB: {db_error}"
+                        logger.critical(
+                            f"ACTIVATION_DB_FAILURE: Failed to update activation attempts: "
+                            f"subscription_id={subscription_id}, user={telegram_id}, error={db_error}"
+                        )
+                        from app.services.admin_alerts import alert_subscription_failure
+                        await alert_subscription_failure(
+                            bot, telegram_id, f"activation_db_update (sub={subscription_id})", db_error
                         )
                 except ActivationFailedError as e:
                     error_msg = str(e)
@@ -316,8 +325,13 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 conn=conn
                             )
                     except Exception as db_error:
-                        logger.error(
-                            f"Failed to update activation attempts in DB: {db_error}"
+                        logger.critical(
+                            f"ACTIVATION_DB_FAILURE: Failed to update activation attempts: "
+                            f"subscription_id={subscription_id}, user={telegram_id}, error={db_error}"
+                        )
+                        from app.services.admin_alerts import alert_subscription_failure
+                        await alert_subscription_failure(
+                            bot, telegram_id, f"activation_db_update_2 (sub={subscription_id})", db_error
                         )
 
             # Connection released before sleep — no conn held during asyncio.sleep

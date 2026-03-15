@@ -106,7 +106,11 @@ async def callback_topup_amount(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
     
     # Извлекаем сумму из callback_data
-    amount_str = callback.data.split(":")[1]
+    parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+    amount_str = parts[1]
     try:
         amount = int(amount_str)
     except ValueError:

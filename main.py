@@ -131,9 +131,11 @@ async def main():
             if redis_ok:
                 logger.info("REDIS_CONNECTIVITY=ok")
             else:
-                logger.warning("REDIS_CONNECTIVITY=failed — FSM storage may not work")
+                raise RuntimeError("Redis ping returned False — FSM storage will not work")
+        except RuntimeError:
+            raise
         except Exception as e:
-            logger.warning("REDIS_CONNECTIVITY_CHECK error=%s", e)
+            raise RuntimeError(f"Redis connectivity check failed: {type(e).__name__}: {e}") from e
     else:
         storage = MemoryStorage()
         logger.warning("FSM_STORAGE=memory — states will be lost on restart")
@@ -223,6 +225,9 @@ async def main():
             await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
             logger.info("Advisory lock acquired")
         except Exception as e:
+            if config.IS_PROD:
+                logger.critical("Advisory lock not acquired in PROD — another instance may be running: %s", e)
+                sys.exit(1)
             logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
             if instance_lock_conn:
                 await pool.release(instance_lock_conn)

@@ -494,6 +494,7 @@ async def get_eligible_no_subscription_broadcast_users() -> list:
 
 async def check_user_still_eligible_for_no_sub_broadcast(conn, telegram_id: int, now: datetime) -> bool:
     """Race-condition re-check before sending. Returns True if still eligible."""
+    from database.subscriptions import get_active_paid_subscription
     paid = await get_active_paid_subscription(conn, telegram_id, now)
     if paid:
         return False
@@ -1084,6 +1085,7 @@ async def finalize_balance_purchase(
                 
                 # STEP 1.5: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
                 if promo_code:
+                    from database.subscriptions import _consume_promo_in_transaction
                     await _consume_promo_in_transaction(conn, promo_code, telegram_id, None)
                 
                 # STEP 2: Активируем подписку
@@ -2029,47 +2031,47 @@ async def get_referral_analytics() -> Dict[str, Any]:
         async with pool.acquire() as conn:
             # Доход от рефералов: сумма всех платежей пользователей, у которых есть referrer_id
             referral_revenue_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(p.amount), 0)
-               FROM payments p
-               JOIN users u ON p.telegram_id = u.telegram_id
-               WHERE p.status = 'approved' 
-               AND (u.referrer_id IS NOT NULL OR u.referred_by IS NOT NULL)"""
-        ) or 0
-        
-        referral_revenue = referral_revenue_kopecks / 100.0
-        
-        # Выплаченный кешбэк (сумма всех транзакций типа cashback)
-        cashback_paid_kopecks = await conn.fetchval(
-            """SELECT COALESCE(SUM(amount), 0) 
-               FROM balance_transactions 
-               WHERE type = 'cashback'"""
-        ) or 0
-        
-        cashback_paid = cashback_paid_kopecks / 100.0
-        
-        # Чистая прибыль
-        net_profit = referral_revenue - cashback_paid
-        
-        # Количество приглашенных пользователей
-        referred_users_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM referrals"
-        ) or 0
-        
-        # Количество активных рефералов (с активной подпиской)
-        active_referrals = await conn.fetchval(
-            """SELECT COUNT(DISTINCT r.referred_user_id)
-               FROM referrals r
-               JOIN subscriptions s ON r.referred_user_id = s.telegram_id
-               WHERE s.expires_at > NOW()"""
-        ) or 0
-        
-        return {
-            "referral_revenue": referral_revenue,
-            "cashback_paid": cashback_paid,
-            "net_profit": net_profit,
-            "referred_users_count": referred_users_count,
-            "active_referrals": active_referrals
-        }
+                """SELECT COALESCE(SUM(p.amount), 0)
+                   FROM payments p
+                   JOIN users u ON p.telegram_id = u.telegram_id
+                   WHERE p.status = 'approved'
+                   AND (u.referrer_id IS NOT NULL OR u.referred_by IS NOT NULL)"""
+            ) or 0
+
+            referral_revenue = referral_revenue_kopecks / 100.0
+
+            # Выплаченный кешбэк (сумма всех транзакций типа cashback)
+            cashback_paid_kopecks = await conn.fetchval(
+                """SELECT COALESCE(SUM(amount), 0)
+                   FROM balance_transactions
+                   WHERE type = 'cashback'"""
+            ) or 0
+
+            cashback_paid = cashback_paid_kopecks / 100.0
+
+            # Чистая прибыль
+            net_profit = referral_revenue - cashback_paid
+
+            # Количество приглашенных пользователей
+            referred_users_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals"
+            ) or 0
+
+            # Количество активных рефералов (с активной подпиской)
+            active_referrals = await conn.fetchval(
+                """SELECT COUNT(DISTINCT r.referred_user_id)
+                   FROM referrals r
+                   JOIN subscriptions s ON r.referred_user_id = s.telegram_id
+                   WHERE s.expires_at > NOW()"""
+            ) or 0
+
+            return {
+                "referral_revenue": referral_revenue,
+                "cashback_paid": cashback_paid,
+                "net_profit": net_profit,
+                "referred_users_count": referred_users_count,
+                "active_referrals": active_referrals,
+            }
     except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
         logger.warning(f"referrals or related tables missing or inaccessible — skipping referral analytics: {e}")
         return {

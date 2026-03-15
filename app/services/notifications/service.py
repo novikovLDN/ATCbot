@@ -325,16 +325,14 @@ async def mark_reminder_sent(
     if conn is None:
         await database.mark_reminder_flag_sent(telegram_id, flag_name)
     else:
-        # Validate flag_name against whitelist (SQL injection protection)
-        if flag_name not in database._ALLOWED_REMINDER_FLAGS:
+        # Use pre-built query (no f-string SQL interpolation)
+        query = database._REMINDER_FLAG_UPDATE_QUERIES.get(flag_name)
+        if query is None:
             raise ValueError(
                 f"Invalid flag_name '{flag_name}'. "
                 f"Allowed: {sorted(database._ALLOWED_REMINDER_FLAGS)}"
             )
-        await conn.execute(
-            f"UPDATE subscriptions SET {flag_name} = TRUE WHERE telegram_id = $1",
-            telegram_id
-        )
+        await conn.execute(query, telegram_id)
 
 
 # ====================================================================================

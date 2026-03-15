@@ -6,15 +6,25 @@ Routes logs by severity for correct container/platform classification:
 - INFO, WARNING → STDOUT (platform shows as [inf])
 - ERROR, CRITICAL → STDERR (platform shows as [err])
 
+Supports two formats:
+- text (default): human-readable for development
+- json: structured JSON for log aggregators (Railway, Datadog, etc.)
+
+Set LOG_FORMAT=json environment variable to enable JSON logging.
+
 POOL STABILITY: Uses QueueHandler + QueueListener so the event loop never
 blocks on stdout/stderr. If stdout blocks, only the listener thread blocks,
 not the main event loop or watchdog exit path.
 """
 
 import atexit
+import json as json_module
 import logging
+import os
 import queue
 import sys
+import traceback
+from datetime import datetime, timezone
 from logging.handlers import QueueHandler, QueueListener
 
 
@@ -32,6 +42,25 @@ class MaxLevelFilter(logging.Filter):
         return record.levelno <= self.max_level
 
 
+class JSONFormatter(logging.Formatter):
+    """Structured JSON log formatter for production log aggregators."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            log_entry["exception"] = {
+                "type": record.exc_info[0].__name__,
+                "message": str(record.exc_info[1]),
+                "traceback": traceback.format_exception(*record.exc_info),
+            }
+        return json_module.dumps(log_entry, ensure_ascii=False, default=str)
+
+
 # Module-level listener so it can be stopped on shutdown
 _log_listener: QueueListener | None = None
 
@@ -40,6 +69,8 @@ def setup_logging():
     """
     Configure logging: QueueHandler on root logger; QueueListener in background
     thread with StreamHandlers (same format and routing as before).
+
+    Set LOG_FORMAT=json for structured JSON output (recommended for production).
 
     Event loop never blocks on I/O for logging; watchdog exit cannot be
     blocked by logging. Must be called before any logger is used.
@@ -50,9 +81,13 @@ def setup_logging():
     root_logger.setLevel(logging.INFO)
     root_logger.handlers.clear()
 
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    log_format = os.getenv("LOG_FORMAT", "text").lower()
+    if log_format == "json":
+        formatter = JSONFormatter()
+    else:
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
 
     # Handlers that run in the listener thread (same format and routing as before)
     stdout_handler = logging.StreamHandler(sys.stdout)
