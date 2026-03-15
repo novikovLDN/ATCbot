@@ -484,7 +484,7 @@ async def init_db() -> bool:
                 id SERIAL PRIMARY KEY,
                 purchase_id TEXT UNIQUE NOT NULL,
                 telegram_id BIGINT NOT NULL,
-                tariff TEXT NOT NULL CHECK (tariff IN ('basic', 'plus')),
+                tariff TEXT NOT NULL CHECK (tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate')),
                 period_days INTEGER NOT NULL,
                 price_kopecks INTEGER NOT NULL,
                 promo_code TEXT,

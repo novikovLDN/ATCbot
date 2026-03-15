@@ -126,10 +126,6 @@ def validate_callback_data(callback_data: Optional[str]) -> Tuple[bool, Optional
         if re.match(pattern, callback_data):
             return True, None
     
-    # Admin callbacks are validated separately (authorization check)
-    if callback_data.startswith("admin_"):
-        return True, None  # Will be validated by authorization guard
-    
     return False, f"Callback data does not match allowed patterns: {callback_data[:50]}"
 
 

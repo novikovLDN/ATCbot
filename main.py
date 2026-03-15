@@ -223,6 +223,9 @@ async def main():
             await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
             logger.info("Advisory lock acquired")
         except Exception as e:
+            if config.IS_PROD:
+                logger.critical("Advisory lock not acquired in PROD — another instance may be running: %s", e)
+                sys.exit(1)
             logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
             if instance_lock_conn:
                 await pool.release(instance_lock_conn)

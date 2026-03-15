@@ -351,7 +351,7 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
         elif source == "auto_renew":
             transaction_type = "subscription_payment"
         elif source == "refund":
-            transaction_type = "topup"
+            transaction_type = "refund"
         await c.execute(
             """INSERT INTO balance_transactions (user_id, amount, type, source, description)
                VALUES ($1, $2, $3, $4, $5)""",

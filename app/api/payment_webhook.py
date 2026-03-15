@@ -49,10 +49,10 @@ async def _handle_platega_webhook(request: Request):
 
     except ImportError:
         logger.error("platega_service not available")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
     except Exception as e:
         logger.exception(f"Platega webhook error: {e}")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
 
 
 @router.post("/webhooks/platega")
@@ -87,10 +87,10 @@ async def _handle_cryptobot_webhook(request: Request):
 
     except ImportError:
         logger.error("cryptobot_service not available")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
     except Exception as e:
         logger.exception(f"CryptoBot webhook error: {e}")
-        return JSONResponse({"status": "error"})
+        return JSONResponse({"status": "error"}, status_code=500)
 
 
 @router.post("/webhooks/cryptobot")

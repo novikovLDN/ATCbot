@@ -75,7 +75,7 @@ async def _run_health_check(bot: Bot) -> None:
                 logger.error("HEALTH_CHECK unexpected_result=%s", result)
     except Exception as e:
         logger.error("HEALTH_CHECK db_error=%s", e)
-        await _send_admin_alert(bot, f"🚨 DB health check failed: {e}")
+        await _send_admin_alert(bot, f"🚨 DB health check failed: {type(e).__name__}")
 
     # Redis health check (if configured)
     try:

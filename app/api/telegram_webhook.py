@@ -3,6 +3,7 @@ Telegram webhook endpoint.
 Receives updates from Telegram and feeds them to aiogram Dispatcher.
 """
 import asyncio
+import hmac
 import logging
 import time
 from fastapi import APIRouter, Request, Response, Header
@@ -38,7 +39,10 @@ async def telegram_webhook(
         logger.error("WEBHOOK_SECRET not configured")
         return Response(status_code=503)
 
-    if x_telegram_bot_api_secret_token != config.WEBHOOK_SECRET:
+    if not hmac.compare_digest(
+        (x_telegram_bot_api_secret_token or "").encode(),
+        config.WEBHOOK_SECRET.encode(),
+    ):
         logger.warning(
             "WEBHOOK_SECRET_MISMATCH ip=%s",
             request.client.host if request.client else "unknown"

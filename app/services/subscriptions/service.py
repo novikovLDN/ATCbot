@@ -521,7 +521,7 @@ async def renew_subscription(
             telegram_id=telegram_id,
             tariff=tariff,
             period_days=period_days,
-            price_kopecks=int(amount_rubles * 100),
+            price_kopecks=round(amount_rubles * 100),
             promo_code=None  # Renewals don't use promo codes
         )
         

@@ -59,7 +59,7 @@ async def cmd_start(message: Message, state: FSMContext):
         keyboard = await get_main_menu_keyboard(language, message.from_user.id)
         await message.answer(text, reply_markup=keyboard)
         return
-    """Обработчик команды /start"""
+    # Обработчик команды /start
     telegram_id = message.from_user.id
     # Safe username resolution: username or first_name or localized fallback
     user = await database.get_user(telegram_id)
