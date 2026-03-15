@@ -50,8 +50,7 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(callback.from_user.id)
 
-    text = i18n_get_text(language, "main.welcome")
-    text = await format_text_with_incident(text, language)
+    text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
     await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
 
@@ -68,10 +67,22 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    text = i18n_get_text(language, "main.welcome")
-    text = await format_text_with_incident(text, language)
+    text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+
+async def _get_main_text(telegram_id: int, language: str) -> str:
+    """Определяет текст главного экрана: обычный или бизнес."""
+    try:
+        sub = await database.get_subscription(telegram_id)
+        sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
+        if config.is_biz_tariff(sub_type):
+            return i18n_get_text(language, "biz.main_screen")
+    except Exception:
+        pass
+    text = i18n_get_text(language, "main.welcome")
+    return await format_text_with_incident(text, language)
 
 
 @router.callback_query(F.data == "menu_ecosystem")
@@ -92,6 +103,83 @@ async def callback_ecosystem(callback: CallbackQuery):
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
+
+
+@router.callback_query(F.data == "biz_profile")
+async def callback_biz_profile(callback: CallbackQuery):
+    """🏢 Мой бизнес — профиль бизнес-подписчика"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(callback.from_user.id)
+    await show_profile(callback, language)
+
+
+@router.callback_query(F.data == "biz_ecosystem")
+async def callback_biz_ecosystem(callback: CallbackQuery):
+    """🌐 Экосистема для бизнес-пользователей"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "biz.ecosystem_text")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+
+@router.callback_query(F.data == "biz_control_panel")
+async def callback_biz_control_panel(callback: CallbackQuery):
+    """🎛 Панель управления"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    text = i18n_get_text(language, "biz.control_panel_title")
+
+    sub = await database.get_subscription(telegram_id)
+    vpn_key = sub.get("vpn_key", "") if sub else ""
+    if vpn_key:
+        text += f"\n\n🔗 Ваша ссылка подключения готова."
+
+    from app.handlers.common.keyboards import get_biz_control_panel_keyboard
+    keyboard = get_biz_control_panel_keyboard(language)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+
+@router.callback_query(F.data == "biz_copy_login")
+async def callback_biz_copy_login(callback: CallbackQuery):
+    """📋 Скопировать логин (VPN ключ)"""
+    telegram_id = callback.from_user.id
+    sub = await database.get_subscription(telegram_id)
+    vpn_key = sub.get("vpn_key", "") if sub else ""
+    if vpn_key:
+        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+        await callback.answer("Скопируйте ссылку выше")
+    else:
+        await callback.answer("Ключ не найден", show_alert=True)
+
+
+@router.callback_query(F.data == "biz_copy_password")
+async def callback_biz_copy_password(callback: CallbackQuery):
+    """🔑 Скопировать пароль (VPN ключ Plus)"""
+    telegram_id = callback.from_user.id
+    sub = await database.get_subscription(telegram_id)
+    vpn_key = sub.get("vpn_key", "") if sub else ""
+    if vpn_key:
+        await callback.message.answer(f"<code>{vpn_key}</code>", parse_mode="HTML")
+        await callback.answer("Скопируйте ссылку выше")
+    else:
+        await callback.answer("Ключ не найден", show_alert=True)
 
 
 @router.callback_query(F.data == "menu_settings")
@@ -162,12 +250,6 @@ async def callback_instruction(callback: CallbackQuery):
     from app.handlers.common.screens import _open_instruction_screen
     await _open_instruction_screen(callback, callback.bot)
 
-
-@router.callback_query(F.data == "menu_support")
-async def callback_support(callback: CallbackQuery):
-    """Поддержка. Entry from inline button."""
-    from app.handlers.common.screens import _open_support_screen
-    await _open_support_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data == "go_profile", StateFilter(default_state))

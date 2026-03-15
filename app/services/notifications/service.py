@@ -342,8 +342,6 @@ async def mark_reminder_sent(
 # ====================================================================================
 
 def format_referral_notification_text(
-    referred_username: Optional[str],
-    referred_id: int,
     purchase_amount: float,
     cashback_amount: float,
     cashback_percent: int,
@@ -351,14 +349,15 @@ def format_referral_notification_text(
     referrals_needed: int,
     action_type: str,
     subscription_period: Optional[str] = None,
-    language: str = "en"
+    language: str = "en",
+    # Legacy parameters — ignored, kept for backward compatibility
+    referred_username: Optional[str] = None,
+    referred_id: int = 0,
 ) -> str:
     """
     Format referral cashback notification text.
     """
     from app.i18n import get_text as i18n_get_text
-
-    referred_display = f"@{referred_username}" if referred_username else f"ID: {referred_id}"
 
     if referrals_needed > 0:
         if language == "ru":
@@ -380,16 +379,14 @@ def format_referral_notification_text(
     else:
         progress_text = i18n_get_text(language, "referral.cashback_max_level")
 
-    title = i18n_get_text(language, "referral.cashback_title", action_type=action_type)
-    referred_line = i18n_get_text(language, "referral.cashback_referred", referred=referred_display)
+    title = i18n_get_text(language, "referral.cashback_title")
     amount_line = i18n_get_text(
         language,
         "referral.cashback_amount",
-        action_type=action_type,
         amount=purchase_amount
     )
 
-    notification_text = f"{title}\n\n{referred_line}\n{amount_line}\n"
+    notification_text = f"{title}\n\n{amount_line}\n"
 
     if subscription_period:
         period_line = i18n_get_text(
@@ -408,12 +405,12 @@ def format_referral_notification_text(
 
     level_line = i18n_get_text(language, "referral.cashback_level", percent=cashback_percent)
     balance_line = i18n_get_text(language, "referral.cashback_balance_auto")
-    
+
     notification_text += (
         f"{reward_line}\n\n"
         f"{level_line}\n"
         f"{progress_text}\n\n"
         f"{balance_line}"
     )
-    
+
     return notification_text

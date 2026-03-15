@@ -18,7 +18,9 @@ class BroadcastCreate(StatesGroup):
     waiting_for_message = State()
     waiting_for_message_a = State()
     waiting_for_message_b = State()
-    waiting_for_type = State()
+    waiting_for_emoji = State()
+    waiting_for_buttons = State()
+    waiting_for_discount = State()
     waiting_for_segment = State()
     waiting_for_confirm = State()
 
@@ -102,6 +104,15 @@ class AdminCreatePromocode(StatesGroup):
 
 
 class PurchaseState(StatesGroup):
+    choose_tariff = State()
+    choose_biz_tier = State()
+    choose_country = State()
+    choose_period = State()
+    choose_payment_method = State()
+    processing_payment = State()
+
+
+class GiftState(StatesGroup):
     choose_tariff = State()
     choose_period = State()
     choose_payment_method = State()

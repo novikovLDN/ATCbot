@@ -374,7 +374,7 @@ async def _attempt_activation_no_conn_hold(
 
     # Phase 2: HTTP call with NO DB connection held.
     tariff = (subscription_row.get("subscription_type") or "basic").strip().lower()
-    if tariff not in ("basic", "plus"):
+    if tariff not in config.VALID_SUBSCRIPTION_TYPES:
         tariff = "basic"
     new_uuid = database._generate_subscription_uuid()
     try:

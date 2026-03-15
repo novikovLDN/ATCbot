@@ -6,6 +6,7 @@ import logging
 from datetime import timedelta
 from typing import Union
 
+import config
 import database
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -17,11 +18,10 @@ from app.services.subscriptions.service import (
     get_subscription_status,
     check_and_disable_expired_subscription as check_subscription_expiry_service,
 )
-from app.handlers.common.utils import safe_edit_text, detect_platform
+from app.handlers.common.utils import safe_edit_text, detect_platform, sanitize_display_name
 from app.handlers.common.keyboards import (
     get_about_keyboard,
     get_instruction_keyboard,
-    get_support_keyboard,
     get_profile_keyboard,
 )
 from app.handlers.common.states import PurchaseState
@@ -66,7 +66,7 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
     if subscription:
         subscription_type = (subscription.get("subscription_type") or "basic").strip().lower()
         vpn_key = subscription.get("vpn_key")
-    if subscription_type not in ("basic", "plus"):
+    if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
         subscription_type = "basic"
     text = i18n_get_text(language, "instruction._text", "instruction_text")
     await safe_edit_text(
@@ -75,20 +75,6 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
         bot=bot
     )
 
-
-async def _open_support_screen(event: Union[Message, CallbackQuery], bot: Bot):
-    """Поддержка. Reusable for callback and /help command."""
-    if isinstance(event, CallbackQuery):
-        try:
-            await event.answer()
-        except Exception:
-            pass
-
-    msg = event.message if isinstance(event, CallbackQuery) else event
-    telegram_id = event.from_user.id
-    language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "main.support_text", "support_text")
-    await safe_edit_text(msg, text, reply_markup=get_support_keyboard(language), bot=bot)
 
 
 async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
@@ -147,6 +133,12 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         else:
             next_level_line = i18n_get_text(language, "referral.max_level_reached")
         
+        # Генерируем реферальную ссылку для share URL
+        bot_info = await bot.get_me()
+        referral_link = f"https://t.me/{bot_info.username}?start=ref_{telegram_id}"
+        from urllib.parse import quote
+        share_url = f"https://t.me/share/url?url={quote(referral_link)}"
+
         # Новый формат текста с разделёнными метриками
         text = (
             f"{i18n_get_text(language, 'referral.screen_title')}\n\n"
@@ -162,7 +154,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "referral.share_button"),
-                callback_data="share_referral_link"
+                url=share_url
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "referral.stats_button"),
@@ -175,15 +167,20 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         ])
         
         file_id = get_loyalty_screen_attachment(current_level_name)
+        photo_sent = False
         if file_id:
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=file_id,
-                caption=text,
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
-        else:
+            try:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file_id,
+                    caption=text,
+                    reply_markup=keyboard,
+                    parse_mode=None,
+                )
+                photo_sent = True
+            except Exception as photo_err:
+                logger.warning(f"Failed to send loyalty photo for user={telegram_id}, falling back to text: {photo_err}")
+        if not photo_sent:
             await bot.send_message(
                 chat_id=chat_id,
                 text=text,
@@ -234,7 +231,12 @@ async def show_profile(message_or_query, language: str):
 
         from_user = message_or_query.from_user
         raw_name = getattr(from_user, "first_name", None) or from_user.username or user.get("first_name") or user.get("username")
-        display_name = raw_name or i18n_get_text(language, "profile.default_name")
+        # Санитизация имени: запрещённые слова → «Пользователь»
+        if raw_name:
+            sanitized = sanitize_display_name(raw_name)
+            display_name = sanitized if sanitized else i18n_get_text(language, "common.user")
+        else:
+            display_name = i18n_get_text(language, "common.user")
 
         # Получаем баланс
         balance_rubles = await database.get_user_balance(telegram_id)
@@ -248,8 +250,38 @@ async def show_profile(message_or_query, language: str):
 
         auto_renew = bool(subscription and subscription.get("auto_renew"))
         sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
-        if sub_type not in ("basic", "plus"):
+        if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
+
+        # Бизнес-профиль: специальный экран для biz_* подписок
+        if config.is_biz_tariff(sub_type) and has_active_subscription:
+            from app.handlers.common.keyboards import get_biz_profile_keyboard
+            specs = config.BIZ_TIER_SPECS.get(sub_type, {})
+            country_code = subscription.get("country") or "nl"
+            country_info = config.BIZ_COUNTRIES.get(country_code, config.BIZ_COUNTRIES["nl"])
+            tariff_names = {
+                "biz_starter": "Starter", "biz_team": "Team", "biz_business": "Business",
+                "biz_pro": "Pro", "biz_enterprise": "Enterprise", "biz_ultimate": "Ultimate",
+            }
+            tariff_label = tariff_names.get(sub_type, "Business")
+            date_str = format_date_ru(expires_at)
+            text = i18n_get_text(language, "biz.profile_title") + "\n\n"
+            text += i18n_get_text(language, "biz.profile_welcome", name=display_name) + "\n\n"
+            text += i18n_get_text(language, "biz.profile_info",
+                date=date_str,
+                tariff=tariff_label,
+                balance=balance_str,
+                country=f"{country_info['flag']} {country_info['name']}",
+                cpu=specs.get("cpu", "?"),
+                ram=specs.get("ram", "?"),
+                traffic=specs.get("traffic", "?"),
+            )
+            keyboard = get_biz_profile_keyboard(language)
+            try:
+                await send_func(text, reply_markup=keyboard, parse_mode="HTML")
+            except Exception:
+                await send_func(text, reply_markup=keyboard)
+            return
 
         # Карточка профиля: единый формат
         text = (
@@ -260,7 +292,12 @@ async def show_profile(message_or_query, language: str):
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
             text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
-            tariff_label = "Plus" if sub_type == "plus" else "Basic"
+            if config.is_biz_tariff(sub_type):
+                tariff_label = "Business"
+            elif sub_type == "plus":
+                tariff_label = "Plus"
+            else:
+                tariff_label = "Basic"
             text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
             if auto_renew and expires_at:
                 renewal_window = timedelta(hours=6)
@@ -328,10 +365,9 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     await state.set_state(PurchaseState.choose_tariff)
     
     text = (
-        f"💎 Тарифы Atlas Secure\n\n\n"
+        f"💎 Тарифы Atlas Secure\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
-        f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"{i18n_get_text(language, 'buy.tariff_corporate')}"
+        f"{i18n_get_text(language, 'buy.tariff_plus')}"
     )
     
     # Получаем текущую подписку для динамических кнопок

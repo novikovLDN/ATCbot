@@ -153,7 +153,7 @@ async def remove_uuid(uuid: str) -> None:
     except vpn_utils.AuthError as e:
         # Authentication errors are critical
         raise VPNRemovalError(f"VPN API authentication failed: {str(e)}") from e
-    except vpn_utils.TimeoutError as e:
+    except vpn_utils.VPNTimeoutError as e:
         # Timeout errors
         raise VPNRemovalError(f"VPN API timeout: {str(e)}") from e
     except vpn_utils.VPNAPIError as e:

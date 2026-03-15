@@ -37,26 +37,21 @@ def get_renewal_keyboard(language: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+def _buy_keyboard(language: str, text_key: str) -> InlineKeyboardMarkup:
+    """Single CTA keyboard with configurable button text."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n.get_text(language, text_key), callback_data="menu_buy_vpn")]
+    ])
+
+
 def get_subscription_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для оформления подписки"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n.get_text(language, "main.buy"),
-            callback_data="menu_buy_vpn"
-        )]
-    ])
-    return keyboard
+    return _buy_keyboard(language, "main.buy")
 
 
 def get_tariff_1_month_keyboard(language: str) -> InlineKeyboardMarkup:
-    """Клавиатура для подписки на 1 месяц (унифицирована с стандартными CTA)"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n.get_text(language, "main.buy"),
-            callback_data="menu_buy_vpn"
-        )]
-    ])
-    return keyboard
+    """Клавиатура для подписки на 1 месяц"""
+    return _buy_keyboard(language, "main.buy")
 
 
 
@@ -69,7 +64,7 @@ async def send_smart_reminders(bot: Bot):
         if not subscriptions:
             return
         
-        logger.info(f"Found {len(subscriptions)} subscriptions for reminders check")
+        logger.info("Found %d subscriptions for reminders check", len(subscriptions))
         
         for subscription in subscriptions:
             telegram_id = subscription["telegram_id"]
@@ -81,7 +76,7 @@ async def send_smart_reminders(bot: Bot):
                 if not decision.should_send:
                     # Skip this subscription (already sent, not in time window, etc.)
                     if decision.reason:
-                        logger.debug(f"Skipping reminder for user {telegram_id}: {decision.reason}")
+                        logger.debug("Skipping reminder for user %s: %s", telegram_id, decision.reason)
                     continue
 
                 # Idempotency: skip if reminder sent recently (container restart guard)
@@ -92,7 +87,7 @@ async def send_smart_reminders(bot: Bot):
                         last_at = last_reminder_at if last_reminder_at.tzinfo else last_reminder_at.replace(tzinfo=timezone.utc)
                         delta = datetime.now(timezone.utc) - last_at
                         if 0 <= delta.total_seconds() < REMINDER_IDEMPOTENCY_WINDOW.total_seconds():
-                            logger.debug(f"Skipping reminder for user {telegram_id}: last_reminder_at within idempotency window")
+                            logger.debug("Skipping reminder for user %s: last_reminder_at within idempotency window", telegram_id)
                             continue
                     except (TypeError, AttributeError):
                         pass
@@ -148,11 +143,11 @@ async def send_smart_reminders(bot: Bot):
                         audit_message
                     )
                     
-                    logger.info(f"Reminder ({reminder_type.value}) sent to user {telegram_id}")
+                    logger.info("Reminder (%s) sent to user %s", reminder_type.value, telegram_id)
                 
             except Exception as e:
                 # Ошибка для одного пользователя не должна ломать цикл
-                logger.error(f"Error sending reminder to user {telegram_id}: {e}", exc_info=True)
+                logger.error("Error sending reminder to user %s: %s", telegram_id, e, exc_info=True)
                 continue
                 
     except Exception as e:
@@ -194,9 +189,9 @@ async def reminders_task(bot: Bot):
         except asyncio.CancelledError:
             logger.info("Reminders task cancelled")
             iteration_outcome = "cancelled"
-            break
+            raise
         except Exception as e:
-            logger.error(f"reminders: Unexpected error in task loop: {type(e).__name__}: {str(e)[:100]}")
+            logger.error("reminders: Unexpected error in task loop: %s: %.100s", type(e).__name__, str(e))
             logger.debug("reminders: Full traceback for task loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)

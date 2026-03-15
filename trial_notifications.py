@@ -27,6 +27,25 @@ logger = logging.getLogger(__name__)
 
 # Singleton guard: предотвращает повторный запуск scheduler
 _TRIAL_SCHEDULER_STARTED = False
+_TRIAL_SCHEDULER_LOCK = asyncio.Lock()
+
+# SECURITY: Whitelist of allowed trial notification DB flag names.
+# Prevents SQL injection via f-string column name interpolation.
+_ALLOWED_TRIAL_FLAGS = frozenset({
+    "trial_notif_6h_sent",
+    "trial_notif_60h_sent",
+    "trial_notif_71h_sent",
+})
+
+
+def _validate_trial_flag(flag_name: str) -> str:
+    """Validate db_flag against whitelist. Raises ValueError if invalid."""
+    if flag_name not in _ALLOWED_TRIAL_FLAGS:
+        raise ValueError(
+            f"Invalid trial flag_name '{flag_name}'. "
+            f"Allowed: {sorted(_ALLOWED_TRIAL_FLAGS)}"
+        )
+    return flag_name
 
 # Расписание уведомлений получается из service layer
 TRIAL_NOTIFICATION_SCHEDULE = trial_service.get_notification_schedule()
@@ -163,6 +182,7 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 notification_flags = {
                     "trial_notif_6h_sent": row.get("trial_notif_6h_sent", False),
                     "trial_notif_60h_sent": row.get("trial_notif_60h_sent", False),
+                    "trial_notif_71h_sent": row.get("trial_notif_71h_sent", False),
                 }
                 for notification in TRIAL_NOTIFICATION_SCHEDULE:
                     try:
@@ -211,9 +231,10 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
         )
         timing = trial_service.calculate_trial_timing(trial_expires_at, now)
         async with pool.acquire() as conn:
+            final_flag = _validate_trial_flag(final_reminder_config['db_flag'])
             if success:
                 await conn.execute(
-                    f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
+                    f"UPDATE subscriptions SET {final_flag} = TRUE "
                     "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
                     telegram_id
                 )
@@ -223,7 +244,7 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 )
             elif status == "failed_permanently":
                 await conn.execute(
-                    f"UPDATE subscriptions SET {final_reminder_config['db_flag']} = TRUE "
+                    f"UPDATE subscriptions SET {final_flag} = TRUE "
                     "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
                     telegram_id
                 )
@@ -244,10 +265,11 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
         )
         timing = trial_service.calculate_trial_timing(trial_expires_at, now)
+        validated_flag = _validate_trial_flag(db_flag)
         if success:
             async with pool.acquire() as conn:
                 await conn.execute(
-                    f"UPDATE subscriptions SET {db_flag} = TRUE "
+                    f"UPDATE subscriptions SET {validated_flag} = TRUE "
                     "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
                     telegram_id
                 )
@@ -258,7 +280,7 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
         elif status == "failed_permanently":
             async with pool.acquire() as conn:
                 await conn.execute(
-                    f"UPDATE subscriptions SET {db_flag} = TRUE "
+                    f"UPDATE subscriptions SET {validated_flag} = TRUE "
                     "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
                     telegram_id
                 )
@@ -561,14 +583,13 @@ async def run_trial_scheduler(bot: Bot):
     Если scheduler уже запущен, повторные вызовы игнорируются.
     """
     global _TRIAL_SCHEDULER_STARTED
-    
-    # Singleton guard: предотвращаем повторный запуск
-    if _TRIAL_SCHEDULER_STARTED:
-        logger.warning("Trial notifications scheduler already running, skipping duplicate start")
-        return
-    
-    # Устанавливаем флаг перед запуском
-    _TRIAL_SCHEDULER_STARTED = True
+
+    # Singleton guard: предотвращаем повторный запуск (task-safe via lock)
+    async with _TRIAL_SCHEDULER_LOCK:
+        if _TRIAL_SCHEDULER_STARTED:
+            logger.warning("Trial notifications scheduler already running, skipping duplicate start")
+            return
+        _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
     
     # Prevent worker burst at startup

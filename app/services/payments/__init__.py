@@ -5,7 +5,6 @@ This package provides business logic for payment processing, verification, and f
 """
 
 from app.services.payments.service import (
-    create_invoice,
     mark_payment_paid,
     mark_payment_failed,
     verify_payment_payload,
@@ -26,7 +25,6 @@ from app.services.payments.exceptions import (
 )
 
 __all__ = [
-    "create_invoice",
     "mark_payment_paid",
     "mark_payment_failed",
     "verify_payment_payload",

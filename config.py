@@ -60,7 +60,7 @@ print(f"INFO: Config loaded for environment: {APP_ENV.upper()}", flush=True)
 # ====================================================================================
 # Secrets are validated at startup and never logged.
 # Required secrets: BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL
-# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, CRYPTOBOT_TOKEN (via env prefix)
+# Optional secrets: TG_PROVIDER_TOKEN, XRAY_API_KEY, PLATEGA_SECRET (via env prefix)
 # ====================================================================================
 
 # Telegram Bot Token (получить у @BotFather)
@@ -96,11 +96,189 @@ TARIFFS = {
         90: {"price": 699},      # 3 месяца
         180: {"price": 1199},    # 6 месяцев
         365: {"price": 2299},    # 12 месяцев
-    }
+    },
+    # --- Бизнес-тарифы: выделенные VPN-серверы ---
+    # 2 vCPU · 8 GB RAM · 20 TB трафик · до 5 пользователей
+    "biz_starter": {
+        30: {"price": 2900},     # 1 месяц
+        180: {"price": 14900},   # 6 месяцев
+        365: {"price": 24900},   # 12 месяцев
+        730: {"price": 42900},   # 24 месяца
+    },
+    # 4 vCPU · 16 GB RAM · 20 TB трафик · до 15 пользователей
+    "biz_team": {
+        30: {"price": 5500},
+        180: {"price": 28900},
+        365: {"price": 48900},
+        730: {"price": 84900},
+    },
+    # 8 vCPU · 32 GB RAM · 30 TB трафик · до 50 пользователей
+    "biz_business": {
+        30: {"price": 10900},
+        180: {"price": 56900},
+        365: {"price": 96900},
+        730: {"price": 169900},
+    },
+    # 16 vCPU · 64 GB RAM · 40 TB трафик · до 100 пользователей
+    "biz_pro": {
+        30: {"price": 21500},
+        180: {"price": 109900},
+        365: {"price": 189900},
+        730: {"price": 329900},
+    },
+    # 32 vCPU · 128 GB RAM · 50 TB трафик · до 250 пользователей
+    "biz_enterprise": {
+        30: {"price": 42900},
+        180: {"price": 219900},
+        365: {"price": 379900},
+        730: {"price": 659900},
+    },
+    # 48 vCPU · 192 GB RAM · 60 TB трафик · до 500 пользователей
+    "biz_ultimate": {
+        30: {"price": 64900},
+        180: {"price": 329900},
+        365: {"price": 569900},
+        730: {"price": 989900},
+    },
 }
+
+# Список всех бизнес-тарифов (для проверок)
+BIZ_TARIFFS = ("biz_starter", "biz_team", "biz_business", "biz_pro", "biz_enterprise", "biz_ultimate")
+
+# Все допустимые типы подписок (для валидации в БД и хендлерах)
+VALID_SUBSCRIPTION_TYPES = ("basic", "plus") + BIZ_TARIFFS
+
+def is_biz_tariff(tariff: str) -> bool:
+    """Проверяет, является ли тариф бизнес-тарифом."""
+    return tariff in BIZ_TARIFFS
+
+def tariff_for_vpn_api(tariff: str) -> str:
+    """Маппинг тарифа на VPN API тип (basic/plus). Бизнес → plus."""
+    if tariff in BIZ_TARIFFS:
+        return "plus"
+    if tariff == "plus":
+        return "plus"
+    return "basic"
+
+# --- Страны для бизнес-тарифов ---
+# Ценовые множители относительно базовой цены (Амстердам = 1.0)
+# Основаны на реальной стоимости инфраструктуры в регионе + 10% выше конкурентов
+BIZ_COUNTRIES = {
+    "nl": {
+        "name": "Амстердам",
+        "flag": "🇳🇱",
+        "multiplier": 1.0,  # Базовая цена (Hetzner NL)
+    },
+    "ru": {
+        "name": "Россия",
+        "flag": "🇷🇺",
+        "multiplier": 0.90,  # Selectel/Timeweb дешевле, но +10% над рынком
+    },
+    "uk": {
+        "name": "Великобритания",
+        "flag": "🇬🇧",
+        "multiplier": 1.20,  # UK дороже на ~20% (AWS/Vultr London)
+    },
+    "fr": {
+        "name": "Франция",
+        "flag": "🇫🇷",
+        "multiplier": 1.05,  # OVH Франция, чуть дороже NL
+    },
+    "us": {
+        "name": "США",
+        "flag": "🇺🇸",
+        "multiplier": 1.15,  # US дороже (Vultr/DO East Coast)
+    },
+}
+
+# Конфигурации серверов для бизнес-тарифов (для отображения в профиле)
+BIZ_TIER_SPECS = {
+    "biz_starter":    {"cpu": 2,  "ram": 8,   "traffic": 20, "users": 5},
+    "biz_team":       {"cpu": 4,  "ram": 16,  "traffic": 20, "users": 15},
+    "biz_business":   {"cpu": 8,  "ram": 32,  "traffic": 30, "users": 50},
+    "biz_pro":        {"cpu": 16, "ram": 64,  "traffic": 40, "users": 100},
+    "biz_enterprise": {"cpu": 32, "ram": 128, "traffic": 50, "users": 250},
+    "biz_ultimate":   {"cpu": 48, "ram": 192, "traffic": 60, "users": 500},
+}
+
+def get_biz_price(tariff: str, period_days: int, country: str = "nl") -> int:
+    """Получить цену бизнес-тарифа для конкретной страны (в рублях)."""
+    if tariff not in TARIFFS or period_days not in TARIFFS[tariff]:
+        return 0
+    base_price = TARIFFS[tariff][period_days]["price"]
+    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+    return int(round(base_price * multiplier / 100) * 100)  # Округление до сотен
+
+def get_biz_price_stars(tariff: str, period_days: int, country: str = "nl") -> int:
+    """Получить цену бизнес-тарифа в Stars для конкретной страны."""
+    if tariff not in TARIFFS_STARS or period_days not in TARIFFS_STARS[tariff]:
+        return 0
+    base_price = TARIFFS_STARS[tariff][period_days]["price"]
+    multiplier = BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+    return int(round(base_price * multiplier))
+
+# Тарифы для оплаты Telegram Stars (цены в Stars, +70% от рублёвых)
+# 1 Star ≈ 1.85 RUB (курс приблизительный, цены округлены)
+TARIFFS_STARS = {
+    "basic": {
+        30: {"price": 140},      # 149₽ × 1.7 / 1.85 ≈ 137 → 140⭐
+        90: {"price": 370},      # 399₽ × 1.7 / 1.85 ≈ 367 → 370⭐
+        180: {"price": 690},     # 749₽ × 1.7 / 1.85 ≈ 688 → 690⭐
+        365: {"price": 1290},    # 1399₽ × 1.7 / 1.85 ≈ 1285 → 1290⭐
+    },
+    "plus": {
+        30: {"price": 275},      # 299₽ × 1.7 / 1.85 ≈ 275⭐
+        90: {"price": 645},      # 699₽ × 1.7 / 1.85 ≈ 642 → 645⭐
+        180: {"price": 1100},    # 1199₽ × 1.7 / 1.85 ≈ 1102 → 1100⭐
+        365: {"price": 2115},    # 2299₽ × 1.7 / 1.85 ≈ 2113 → 2115⭐
+    },
+    # Бизнес-тарифы Stars (price × 1.7 / 1.85, округление вверх)
+    "biz_starter": {
+        30: {"price": 2665},     # 2900 × 1.7 / 1.85 ≈ 2665⭐
+        180: {"price": 13690},   # 14900 × 1.7 / 1.85 ≈ 13689⭐
+        365: {"price": 22865},   # 24900 × 1.7 / 1.85 ≈ 22865⭐
+        730: {"price": 39405},   # 42900 × 1.7 / 1.85 ≈ 39405⭐
+    },
+    "biz_team": {
+        30: {"price": 5054},
+        180: {"price": 26551},
+        365: {"price": 44919},
+        730: {"price": 78000},
+    },
+    "biz_business": {
+        30: {"price": 10014},
+        180: {"price": 52270},
+        365: {"price": 89027},
+        730: {"price": 156100},
+    },
+    "biz_pro": {
+        30: {"price": 19757},
+        180: {"price": 100981},
+        365: {"price": 174519},
+        730: {"price": 303081},
+    },
+    "biz_enterprise": {
+        30: {"price": 39405},
+        180: {"price": 202054},
+        365: {"price": 349027},
+        730: {"price": 606243},
+    },
+    "biz_ultimate": {
+        30: {"price": 59627},
+        180: {"price": 303081},
+        365: {"price": 523581},
+        730: {"price": 909297},
+    },
+}
+
+# Время жизни инвойса (в секундах). После истечения инвойс удаляется.
+INVOICE_TIMEOUT_SECONDS = 900  # 15 минут
 
 # Суммы пополнения баланса (в рублях)
 BALANCE_TOPUP_AMOUNTS = [250, 750, 999]
+
+# Суммы пополнения баланса (в Stars, +70% от рублёвых)
+BALANCE_TOPUP_AMOUNTS_STARS = [230, 690, 920]
 
 # Реквизиты СБП (для оплаты)
 SBP_DETAILS = {
@@ -112,9 +290,6 @@ SBP_DETAILS = {
 # Поддержка
 SUPPORT_EMAIL = "support@example.com"
 SUPPORT_TELEGRAM = "@support"
-
-# Файл с VPN-ключами (DEPRECATED - больше не используется, ключи создаются через Xray API)
-VPN_KEYS_FILE = "vpn_keys.txt"
 
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)
 # В PROD: ОБЯЗАТЕЛЕН (иначе платежи не работают)
@@ -156,21 +331,26 @@ else:
     print("INFO: ARCH_MODE: API_ONLY_VLESS_GENERATION (REALITY + XTLS Vision)", flush=True)
 
 # Xray sync worker: sync DB subscriptions to Xray (default false for production safety)
-XRAY_SYNC_ENABLED = os.getenv("XRAY_SYNC_ENABLED", "false").lower() == "true"
+XRAY_SYNC_ENABLED = env("XRAY_SYNC_ENABLED", default="false").lower() == "true"
 
 # Bot uses ONLY XRAY_API_URL and XRAY_API_KEY.
 # Port, SNI, public key, short id, fingerprint belong to API server only.
 # Bot receives vless_link from API — never generates links locally.
 
-# Crypto Bot (Telegram Crypto Pay) Configuration
-# All CryptoBot vars use env() prefix: STAGE_CRYPTOBOT_* or PROD_CRYPTOBOT_*
-CRYPTOBOT_TOKEN = env("CRYPTOBOT_TOKEN")
-CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
-CRYPTOBOT_WEBHOOK_SECRET = env("CRYPTOBOT_WEBHOOK_SECRET")
-CRYPTOBOT_ASSETS_STR = env("CRYPTOBOT_ASSETS", default="USDT,TON,BTC")
-CRYPTOBOT_ALLOWED_ASSETS = [a.strip().upper() for a in CRYPTOBOT_ASSETS_STR.split(",") if a.strip()]
+# Platega (SBP) Configuration
+# СБП оплата через Platega.io — наценка +11%
+PLATEGA_MERCHANT_ID = env("PLATEGA_MERCHANT_ID", default="")
+PLATEGA_SECRET = env("PLATEGA_SECRET")
+PLATEGA_API_URL = env("PLATEGA_API_URL") or "https://app.platega.io"
+# Процент наценки для СБП (11%)
+SBP_MARKUP_PERCENT = 11
 
-# Public base URL for webhooks (Railway + Cloudflare). Required for Crypto Pay webhook.
+# CryptoBot (Crypto Pay) Configuration
+# Криптовалютная оплата через @CryptoBot
+CRYPTOBOT_API_TOKEN = env("CRYPTOBOT_API_TOKEN", default="")
+CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
+
+# Public base URL for webhooks (Railway + Cloudflare). Required for payment webhooks.
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
 

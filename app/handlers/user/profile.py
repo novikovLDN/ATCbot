@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 @user_router.message(Command("profile"))
 async def cmd_profile(message: Message):
     """Обработчик команды /profile"""
+    if message.chat.type != "private":
+        return
     # SAFE STARTUP GUARD: Проверка готовности БД
     if not await ensure_db_ready_message(message):
         return

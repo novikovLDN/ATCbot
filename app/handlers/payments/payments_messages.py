@@ -52,17 +52,37 @@ logger = logging.getLogger(__name__)
 
 @payments_router.pre_checkout_query()
 async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
-    """Подтверждение платежа перед списанием. КРИТИЧНО: ответить ok=True в течение таймаута Telegram."""
-    # КРИТИЧНО: Сначала отвечаем Telegram — иначе платеж не пройдет
-    await pre_checkout_query.answer(ok=True)
+    """Подтверждение платежа перед списанием. КРИТИЧНО: ответить в течение таймаута Telegram (10 сек)."""
     payload = pre_checkout_query.invoice_payload or ""
     telegram_id = pre_checkout_query.from_user.id if pre_checkout_query.from_user else 0
-    purchase_id = payload.split(":", 1)[1] if payload.startswith("purchase:") else payload
+    is_stars = (pre_checkout_query.currency == "XTR")
+    log_amount = pre_checkout_query.total_amount if is_stars else (pre_checkout_query.total_amount / 100 if pre_checkout_query.total_amount else 0)
+
+    # Валидация purchase payload — отклоняем если pending_purchase истёк или не найден
+    if payload.startswith("purchase:"):
+        purchase_id = payload.split(":", 1)[1]
+        try:
+            pending = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=True)
+            if not pending:
+                logger.warning(
+                    "PRE_CHECKOUT_REJECTED purchase_id=%s telegram_id=%s reason=expired_or_not_found",
+                    purchase_id, telegram_id,
+                )
+                await pre_checkout_query.answer(ok=False, error_message="Invoice expired. Please create a new one.")
+                return
+        except Exception as e:
+            logger.error("PRE_CHECKOUT_DB_ERROR purchase_id=%s error=%s", purchase_id, e)
+            # В случае ошибки БД — пропускаем, чтобы не блокировать платёж
+    else:
+        purchase_id = payload
+
+    await pre_checkout_query.answer(ok=True)
     logger.info(
-        "PRE_CHECKOUT_RECEIVED purchase_id=%s telegram_id=%s amount=%s",
+        "PRE_CHECKOUT_APPROVED purchase_id=%s telegram_id=%s amount=%s %s",
         purchase_id,
         telegram_id,
-        pre_checkout_query.total_amount / 100 if pre_checkout_query.total_amount else 0,
+        log_amount,
+        "XTR" if is_stars else "RUB",
     )
 
 
@@ -89,6 +109,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
     - Очищает FSM state после успешной активации
     - Отправляет VPN ключ пользователю
     """
+    start_time = time.time()
+
     # STEP 4 — PART A: INPUT TRUST BOUNDARIES
     # Validate telegram_id
     telegram_id = message.from_user.id
@@ -193,7 +215,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "main.support_button", "support_button"),
-                callback_data="menu_support"
+                url="https://t.me/asc_support"
             )]
         ])
         
@@ -212,10 +234,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
         return
     
     telegram_id = message.from_user.id
-    
+
     # STEP 2 — OBSERVABILITY: Structured logging for handler entry
     # PART B — CORRELATION IDS: Use message_id for correlation tracking
-    start_time = time.time()
     message_id = str(message.message_id) if hasattr(message, 'message_id') and message.message_id else None
     correlation_id = log_handler_entry(
         handler_name="process_successful_payment",
@@ -234,17 +255,27 @@ async def process_successful_payment(message: Message, state: FSMContext):
     payment = message.successful_payment
     payload = payment.invoice_payload
     
+    # Определяем, является ли оплата через Telegram Stars
+    is_stars_payment = (payment.currency == "XTR")
+
     # КРИТИЧНО: Логируем получение события оплаты от Telegram
     purchase_id_from_payload = payload.split(":", 1)[1] if payload and payload.startswith("purchase:") else payload
+    if is_stars_payment:
+        log_amount = payment.total_amount if payment.total_amount else 0
+        log_currency = "XTR"
+    else:
+        log_amount = payment.total_amount / 100.0 if payment.total_amount else 0
+        log_currency = "RUB"
     logger.info(
-        "SUCCESSFUL_PAYMENT_RECEIVED purchase_id=%s telegram_id=%s amount=%s RUB",
+        "SUCCESSFUL_PAYMENT_RECEIVED purchase_id=%s telegram_id=%s amount=%s %s",
         purchase_id_from_payload,
         telegram_id,
-        payment.total_amount / 100.0 if payment.total_amount else 0,
+        log_amount,
+        log_currency,
     )
     logger.info(
-        f"payment_event_received: provider=telegram_payment, user={telegram_id}, "
-        f"payload={payload}, amount={payment.total_amount / 100.0:.2f} RUB, "
+        f"payment_event_received: provider={'telegram_stars' if is_stars_payment else 'telegram_payment'}, "
+        f"user={telegram_id}, payload={payload}, amount={log_amount} {log_currency}, "
         f"currency={payment.currency}"
     )
     
@@ -254,7 +285,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
         
         if payload_info.payload_type == "balance_topup":
             # Пополнение баланса - используем payment service
-            payment_amount_rubles = payment.total_amount / 100.0
+            # Для Stars: используем рублёвую сумму из payload (Stars — это конвертация, баланс в рублях)
+            # Для RUB: total_amount в копейках, делим на 100
+            if is_stars_payment:
+                payment_amount_rubles = payload_info.amount if payload_info.amount else payment.total_amount
+            else:
+                payment_amount_rubles = payment.total_amount / 100.0
             
             # КРИТИЧНО: Извлекаем provider_charge_id для идемпотентности
             # Telegram гарантирует уникальность telegram_payment_charge_id
@@ -268,13 +304,19 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 await message.answer(error_text)
                 return
             
+            topup_provider = "telegram_stars" if is_stars_payment else "telegram"
+            topup_description = (
+                "Пополнение баланса через Telegram Stars"
+                if is_stars_payment
+                else "Пополнение баланса через Telegram Payments"
+            )
             try:
                 result = await payment_service.finalize_balance_topup_payment(
                     telegram_id=telegram_id,
                     amount_rubles=payment_amount_rubles,
-                    provider="telegram",
+                    provider=topup_provider,
                     provider_charge_id=provider_charge_id,
-                    description="Пополнение баланса через Telegram Payments",
+                    description=topup_description,
                     correlation_id=str(message.message_id)
                 )
             except PaymentFinalizationError as e:
@@ -485,7 +527,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
     tariff_type = pending_purchase["tariff"]
     period_days = pending_purchase["period_days"]
     promo_code_used = pending_purchase.get("promo_code")
-    payment_amount_rubles = payment.total_amount / 100.0
+    # Для Stars: total_amount = кол-во Stars напрямую; для RUB: total_amount в копейках
+    payment_amount_rubles = payment.total_amount if is_stars_payment else payment.total_amount / 100.0
     
     # КРИТИЧНО: Логируем верификацию платежа
     logger.info(
@@ -501,12 +544,59 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"Payment received with valid pending purchase: purchase_id={purchase_id}, amount={payment_amount_rubles:.2f} RUB"
         )
         
+    # Проверяем, является ли это подарочной подпиской
+    is_gift_purchase = pending_purchase.get("purchase_type") == "gift"
+
+    if is_gift_purchase:
+        # Подарочная подписка — финализируем напрямую через database
+        payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
+        try:
+            gift_result = await database.finalize_purchase(
+                purchase_id=purchase_id,
+                payment_provider=payment_provider_name,
+                amount_rubles=payment_amount_rubles,
+            )
+            if gift_result and gift_result.get("is_gift") and gift_result.get("gift_code"):
+                from app.handlers.callbacks.gift import _send_gift_success
+                await _send_gift_success(
+                    bot=message.bot,
+                    telegram_id=telegram_id,
+                    language=language,
+                    gift_code=gift_result["gift_code"],
+                    tariff=gift_result["gift_tariff"],
+                    period_days=gift_result["gift_period_days"],
+                )
+                logger.info(
+                    f"GIFT_PAYMENT_FINALIZED purchase_id={purchase_id} user={telegram_id} "
+                    f"code={gift_result['gift_code']}"
+                )
+                await state.clear()
+                duration_ms = (time.time() - start_time) * 1000
+                log_handler_exit(
+                    handler_name="process_successful_payment",
+                    outcome="success",
+                    telegram_id=telegram_id,
+                    operation="payment_finalization",
+                    duration_ms=duration_ms,
+                    payment_type="gift_subscription",
+                )
+                return
+            else:
+                logger.error(f"Gift finalization returned unexpected result: {gift_result}")
+                await message.answer(i18n_get_text(language, "errors.payment_processing"))
+                return
+        except Exception as e:
+            logger.exception(f"Gift payment finalization failed: user={telegram_id}, error={e}")
+            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+            return
+
     # Finalize subscription payment through payment service
+    payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:
         result = await payment_service.finalize_subscription_payment(
             purchase_id=purchase_id,
             telegram_id=telegram_id,
-            payment_provider="telegram_payment",
+            payment_provider=payment_provider_name,
             amount_rubles=payment_amount_rubles
         )
         
@@ -515,7 +605,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         vpn_key = result.vpn_key
         is_renewal = result.is_renewal
         subscription_type = (getattr(result, "subscription_type", None) or "basic").strip().lower()
-        if subscription_type not in ("basic", "plus"):
+        if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
         vpn_key_plus = getattr(result, "vpn_key_plus", None)
         
@@ -540,7 +630,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),
-                    callback_data="menu_support"
+                    url="https://t.me/asc_support"
                 )]
             ])
             
@@ -689,37 +779,26 @@ async def process_successful_payment(message: Message, state: FSMContext):
             reason="unexpected_error"
         )
         return
-        
-        # КРИТИЧНО: VPN ключ отправляется СРАЗУ после успешной финализации платежа
-        # Валидация уже выполнена внутри finalize_purchase - здесь только отправка
-        # КРИТИЧНО: Это гарантирует что пользователь ВСЕГДА получит VPN ключ после оплаты
-        
-        # CRITICAL FIX: Промокод уже потреблен в finalize_purchase внутри транзакции
-        # Здесь только логируем использование для статистики
-        if promo_code_used:
-            try:
-                # Получаем данные промокода для логирования
-                promo_data = await database.get_promo_code(promo_code_used)
-                if promo_data:
-                    discount_percent = promo_data["discount_percent"]
-                    
-                    # Рассчитываем price_before (базовая цена тарифа)
-                    base_price = config.TARIFFS[tariff_type][period_days]["price"]
-                    price_before = base_price
-                    price_after = payment_amount_rubles
-                    
-                    # Логируем использование промокода (уже потреблен в finalize_purchase)
-                    await database.log_promo_code_usage(
-                        promo_code=promo_code_used,
-                        telegram_id=telegram_id,
-                        tariff=f"{tariff_type}_{period_days}",
-                        discount_percent=discount_percent,
-                        price_before=price_before,
-                        price_after=price_after
-                    )
-            except Exception as e:
-                logger.error(f"Error logging promocode usage: {e}")
-    
+
+    # Промокод уже потреблен в finalize_purchase внутри транзакции
+    # Здесь только логируем использование для статистики
+    if promo_code_used:
+        try:
+            promo_data = await database.get_promo_code(promo_code_used)
+            if promo_data:
+                discount_percent = promo_data["discount_percent"]
+                base_price = config.TARIFFS[tariff_type][period_days]["price"]
+                await database.log_promo_code_usage(
+                    promo_code=promo_code_used,
+                    telegram_id=telegram_id,
+                    tariff=f"{tariff_type}_{period_days}",
+                    discount_percent=discount_percent,
+                    price_before=base_price,
+                    price_after=payment_amount_rubles
+                )
+        except Exception as e:
+            logger.error(f"Error logging promocode usage: {e}")
+
     # КРИТИЧНО: VPN ключ уже валидирован в finalize_purchase
     # Здесь только отправка пользователю - это атомарная операция после успешного платежа
     expires_str = expires_at.strftime("%d.%m.%Y")
@@ -758,14 +837,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
         except Exception as e:
             logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
     else:
-        if is_renewal:
-            tariff_label = "Plus" if subscription_type == "plus" else "Basic"
-            text = f"✅ Подписка продлена\n📦/⭐️ Тариф: {tariff_label}\n📅 До: {expires_str}"
+        if config.is_biz_tariff(subscription_type):
+            tariff_label, tariff_emoji = "Business", "🏢"
+        elif subscription_type == "plus":
+            tariff_label, tariff_emoji = "Plus", "⭐️"
         else:
-            if subscription_type == "plus":
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
-            else:
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+            tariff_label, tariff_emoji = "Basic", "📦"
+        if is_renewal:
+            text = f"✅ Подписка продлена\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
+        else:
+            text = f"🎉 Добро пожаловать в Atlas Secure!\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
         keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
         try:
             degradation = ""
@@ -797,13 +878,6 @@ async def process_successful_payment(message: Message, state: FSMContext):
         logger.error(
             f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
         )
-    try:
-        current_state = await state.get_state()
-        if current_state is not None:
-            await state.clear()
-            logger.debug(f"FSM state cleared after successful payment: user={telegram_id}, was_state={current_state}")
-    except Exception as e:
-        logger.debug(f"FSM state clear failed (may be already clear): {e}")
 
     logger.info(
         f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "

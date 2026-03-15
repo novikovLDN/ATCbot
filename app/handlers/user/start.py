@@ -63,6 +63,7 @@ async def cmd_start(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     # Safe username resolution: username or first_name or localized fallback
     user = await database.get_user(telegram_id)
+    is_new_user = user is None
     start_language = await resolve_user_language(telegram_id)
     username = safe_resolve_username(message.from_user, start_language, telegram_id)
     # Ограничиваем длину для БД
@@ -87,6 +88,83 @@ async def cmd_start(message: Message, state: FSMContext):
                     referral_code, telegram_id
                 )
     
+    # GIFT ACTIVATION: Обработка подарочной ссылки /start gift_XXXXX
+    if message.text:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1 and start_parts[1].startswith("gift_"):
+            gift_code = start_parts[1][5:]  # Убираем "gift_" префикс
+            if gift_code and len(gift_code) <= 20 and gift_code.isalnum():
+                try:
+                    activation_result = await database.activate_gift_subscription(
+                        gift_code=gift_code,
+                        activated_by=telegram_id,
+                    )
+                    language = await resolve_user_language(telegram_id)
+
+                    if activation_result["success"]:
+                        tariff = activation_result["tariff"]
+                        period_days = activation_result["period_days"]
+                        tariff_name = "Basic" if tariff == "basic" else "Plus"
+                        months = period_days // 30
+                        if months == 1:
+                            period_text = "1 месяц"
+                        elif months in (2, 3, 4):
+                            period_text = f"{months} месяца"
+                        else:
+                            period_text = f"{months} месяцев"
+
+                        if is_new_user:
+                            # Новый пользователь: приветствие + активация + выбор языка
+                            text = i18n_get_text(
+                                language, "gift.activated_welcome",
+                                tariff_name=tariff_name,
+                                period=period_text,
+                            )
+                            await message.answer(
+                                text,
+                                reply_markup=get_language_keyboard(language),
+                                parse_mode="HTML",
+                            )
+                        else:
+                            # Существующий пользователь: активация + главное меню
+                            text = i18n_get_text(
+                                language, "gift.activated",
+                                tariff_name=tariff_name,
+                                period=period_text,
+                            )
+                            keyboard = await get_main_menu_keyboard(language, telegram_id)
+                            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                        logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code} new_user={is_new_user}")
+                        return
+                    else:
+                        error = activation_result.get("error", "unknown")
+                        error_keys = {
+                            "not_found": "gift.error_not_found",
+                            "already_activated": "gift.error_already_activated",
+                            "expired": "gift.error_expired",
+                            "self_activation": "gift.error_self_activation",
+                            "invalid_status": "gift.error_invalid",
+                        }
+                        error_key = error_keys.get(error, "gift.error_invalid")
+                        text = i18n_get_text(language, error_key)
+                        if is_new_user:
+                            keyboard = get_language_keyboard(language)
+                        else:
+                            keyboard = await get_main_menu_keyboard(language, telegram_id)
+                        await message.answer(text, reply_markup=keyboard)
+                        logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={gift_code} error={error}")
+                        return
+                except Exception as e:
+                    logger.exception(f"Gift activation error: user={telegram_id}, code={gift_code}, error={e}")
+                    language = await resolve_user_language(telegram_id)
+                    text = i18n_get_text(language, "gift.error_invalid")
+                    if is_new_user:
+                        keyboard = get_language_keyboard(language)
+                    else:
+                        keyboard = await get_main_menu_keyboard(language, telegram_id)
+                    await message.answer(text, reply_markup=keyboard)
+                    return
+
     # 1. REFERRAL REGISTRATION: Process on FIRST interaction
     # This uses the new deterministic referral service
     referral_result = await process_referral_on_first_interaction(message, telegram_id)
@@ -96,25 +174,12 @@ async def cmd_start(message: Message, state: FSMContext):
         try:
             referrer_id = referral_result.get("referrer_id")
             if referrer_id:
-                # Get referrer info
-                referrer_user = await database.get_user(referrer_id)
-                referrer_username = referrer_user.get("username") if referrer_user else None
                 referrer_language = await resolve_user_language(referrer_id)
-                
-                # Get referred user info (safe: username or first_name or fallback)
-                referred_username = username  # Already resolved via safe_resolve_username
-                # Format display name: add @ prefix if username exists and doesn't have it
-                user_fallback_text = i18n_get_text(referrer_language, "common.user")
-                if referred_username and not referred_username.startswith("ID:") and referred_username != user_fallback_text:
-                    referred_display = f"@{referred_username}" if not referred_username.startswith("@") else referred_username
-                else:
-                    referred_display = referred_username
-                
+
                 first_payment_msg = i18n_get_text(referrer_language, "referral.first_payment_notification")
                 title = i18n_get_text(referrer_language, "referral.registered_title")
-                user_line = i18n_get_text(referrer_language, "referral.registered_user", user=referred_display)
                 date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now(timezone.utc).strftime('%d.%m.%Y %H:%M'))
-                notification_text = f"{title}\n\n{user_line}\n{date_line}\n\n{first_payment_msg}"
+                notification_text = f"{title}\n\n{date_line}\n\n{first_payment_msg}"
                 
                 await message.bot.send_message(
                     chat_id=referrer_id,
@@ -131,7 +196,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 "NOTIFICATION_FAILED",
                 extra={
                     "type": "referral_registration",
-                    "referrer": referrer_id,
+                    "referrer": referral_result.get("referrer_id"),
                     "referred": telegram_id,
                     "error": str(e)
                 }

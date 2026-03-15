@@ -23,6 +23,10 @@ START_RATE_LIMIT_MAX = 5
 FLOOD_BAN_THRESHOLD = 60
 FLOOD_BAN_DURATION = 300  # 5 минут
 
+# SECURITY: Maximum tracked users to prevent memory exhaustion during DDoS
+MAX_TRACKED_USERS = 50_000
+MAX_BANNED_USERS = 10_000
+
 
 class GlobalRateLimitMiddleware(BaseMiddleware):
     """Per-user rate limiting + temporary ban for aggressive flooding."""
@@ -34,7 +38,8 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
 
     def _cleanup_old(self):
         now = time.monotonic()
-        if now - self._last_cleanup < 300:
+        # SECURITY: Run cleanup every 60 seconds (was 300s — too long under DDoS)
+        if now - self._last_cleanup < 60:
             return
         self._last_cleanup = now
 
@@ -54,6 +59,31 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
         ]
         for uid in expired:
             del self._banned_users[uid]
+
+        # SECURITY: Emergency eviction if dict grows too large (DDoS protection)
+        if len(self._user_requests) > MAX_TRACKED_USERS:
+            # Evict oldest half by last-activity time
+            sorted_users = sorted(
+                self._user_requests.items(),
+                key=lambda item: item[1][-1] if item[1] else 0,
+            )
+            evict_count = len(sorted_users) // 2
+            for uid, _ in sorted_users[:evict_count]:
+                del self._user_requests[uid]
+            logger.warning(
+                "RATE_LIMIT_EMERGENCY_EVICTION evicted=%d remaining=%d",
+                evict_count,
+                len(self._user_requests),
+            )
+
+        if len(self._banned_users) > MAX_BANNED_USERS:
+            # Keep only the newest bans
+            sorted_bans = sorted(
+                self._banned_users.items(), key=lambda item: item[1]
+            )
+            evict_count = len(sorted_bans) // 2
+            for uid, _ in sorted_bans[:evict_count]:
+                del self._banned_users[uid]
 
     def _is_rate_limited(self, user_id: int, is_start: bool = False) -> bool:
         now = time.monotonic()

@@ -17,7 +17,7 @@ router = APIRouter()
 _bot = None
 _dp = None
 
-# Liveness heartbeat — updated on every incoming Telegram update.
+# Liveness heartbeat — updated on every authenticated Telegram update.
 # Imported by main.py watchdog to track "last sign of life from Telegram".
 last_webhook_update_at: float = time.monotonic()
 
@@ -33,11 +33,7 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
-    # Update liveness heartbeat FIRST (before any validation) — H3 fix
-    global last_webhook_update_at
-    last_webhook_update_at = time.monotonic()
-
-    # Validate secret token
+    # Validate secret token FIRST (before heartbeat — reject unauthorized requests early)
     if not config.WEBHOOK_SECRET:
         logger.error("WEBHOOK_SECRET not configured")
         return Response(status_code=503)
@@ -49,12 +45,36 @@ async def telegram_webhook(
         )
         return Response(status_code=403)
 
-    # Parse and feed update to aiogram with timeout — C2 fix
+    # Update liveness heartbeat AFTER validation (only for authenticated requests)
+    global last_webhook_update_at
+    last_webhook_update_at = time.monotonic()
+
+    # SECURITY: Reject oversized request bodies (DDoS / memory exhaustion protection)
+    # Telegram updates are typically < 10 KB; 1 MB is a generous upper bound.
+    MAX_BODY_SIZE = 1 * 1024 * 1024  # 1 MB
+    content_length = request.headers.get("content-length")
+    try:
+        if content_length and int(content_length) > MAX_BODY_SIZE:
+            logger.warning(
+                "WEBHOOK_BODY_TOO_LARGE ip=%s content_length=%s",
+                request.client.host if request.client else "unknown",
+                content_length,
+            )
+            return Response(status_code=413)
+    except (ValueError, TypeError):
+        logger.warning(
+            "WEBHOOK_INVALID_CONTENT_LENGTH ip=%s content_length=%s",
+            request.client.host if request.client else "unknown",
+            content_length,
+        )
+        return Response(status_code=400)
+
+    # Parse and feed update to aiogram with timeout
     try:
         body = await request.json()
         update = Update.model_validate(body)
         logger.debug("WEBHOOK_UPDATE update_id=%s", update.update_id)
-        
+
         # Wrap handler execution with timeout (25s — Railway request timeout is 30s)
         try:
             await asyncio.wait_for(

@@ -23,11 +23,27 @@ import httpx
 import logging
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
+import weakref
 import config
 from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
+
+# Store references to fire-and-forget tasks to prevent "Task exception was never retrieved"
+_background_tasks: weakref.WeakSet = weakref.WeakSet()
+
+
+def _fire_and_forget(coro) -> None:
+    """Schedule a coroutine as a background task with proper error handling."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            task = asyncio.create_task(coro)
+            _background_tasks.add(task)
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+    except Exception as e:
+        logger.warning(f"Failed to schedule background task: {e}")
 
 # Explicit timeout for all VPN API calls (connect, read, write, pool)
 VPN_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
@@ -42,7 +58,7 @@ class VPNAPIError(Exception):
     pass
 
 
-class TimeoutError(VPNAPIError):
+class VPNTimeoutError(VPNAPIError):
     """Таймаут при обращении к VPN API"""
     pass
 
@@ -92,8 +108,9 @@ async def check_xray_health() -> bool:
     health_url = f"{api_url}/health"
     
     try:
+        headers = {"X-API-Key": config.XRAY_API_KEY}
         async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
-            response = await client.get(health_url)
+            response = await client.get(health_url, headers=headers)
             if response.status_code == 200:
                 logger.debug("XRAY health check: SUCCESS")
                 return True
@@ -201,8 +218,10 @@ async def add_vless_user(
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
 
-    assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
-    assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
+    if subscription_end.tzinfo is None:
+        raise ValueError("subscription_end must be timezone-aware")
+    if subscription_end.tzinfo != timezone.utc:
+        raise ValueError("subscription_end must be UTC")
     url = f"{api_url}/add-user"
     headers = {
         "X-API-Key": config.XRAY_API_KEY,
@@ -216,9 +235,7 @@ async def add_vless_user(
 
     if not uuid or not str(uuid).strip():
         raise ValueError("add_vless_user requires uuid; DB is source of truth")
-    tariff_normalized = (tariff or "basic").strip().lower()
-    if tariff_normalized not in ("basic", "plus"):
-        tariff_normalized = "basic"
+    tariff_normalized = config.tariff_for_vpn_api((tariff or "basic").strip().lower())
     expiry_ms = int(subscription_end.timestamp() * 1000) if subscription_end else 0
     json_body: dict = {
         "uuid": str(uuid).strip(),
@@ -302,7 +319,7 @@ async def add_vless_user(
         # basic_link = vpn_key (always), plus_link = vpn_key_plus (only for plus)
         api_tariff = (data.get("tariff") or tariff_normalized).strip().lower()
         if api_tariff not in ("basic", "plus"):
-            api_tariff = tariff_normalized
+            api_tariff = tariff_normalized  # API returns basic/plus only
         basic_link = data.get("basic_link")
         plus_link = data.get("plus_link")  # None for basic
         if not basic_link:
@@ -324,19 +341,16 @@ async def add_vless_user(
 
         try:
             import database
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(
-                    database._log_vpn_lifecycle_audit_async(
-                        action="vpn_add_user",
-                        telegram_id=0,
-                        uuid=returned_uuid,
-                        source=None,
-                        result="success",
-                        details="UUID from Xray (source of truth)"
-                    )
+            _fire_and_forget(
+                database._log_vpn_lifecycle_audit_async(
+                    action="vpn_add_user",
+                    telegram_id=0,
+                    uuid=returned_uuid,
+                    source=None,
+                    result="success",
+                    details="UUID from Xray (source of truth)"
                 )
+            )
         except Exception as e:
             logger.warning(f"Failed to log VPN add_user audit (non-blocking): {e}")
 
@@ -372,8 +386,8 @@ async def upgrade_vless_user(uuid: str) -> Dict[str, str]:
     _validate_uuid_no_prefix(uuid_clean)
     api_url = config.XRAY_API_URL.rstrip("/")
     url = f"{api_url}/upgrade-to-plus/{uuid_clean}"
-    headers = {"x-api-key": config.XRAY_API_KEY}
-    try:
+    headers = {"X-API-Key": config.XRAY_API_KEY}
+    async def _make_request():
         async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=headers)
         if response.status_code in (401, 403):
@@ -383,6 +397,16 @@ async def upgrade_vless_user(uuid: str) -> Dict[str, str]:
         if 400 <= response.status_code < 500:
             raise InvalidResponseError(f"Client error: status={response.status_code}, response={response.text[:200]}")
         response.raise_for_status()
+        return response
+
+    try:
+        response = await retry_async(
+            _make_request,
+            retries=MAX_RETRIES,
+            base_delay=RETRY_DELAY,
+            max_delay=5.0,
+            retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
+        )
         data = response.json()
         if not isinstance(data, dict):
             raise InvalidResponseError(f"Invalid response type: expected dict, got {type(data)}")
@@ -418,19 +442,28 @@ async def remove_plus_inbound(uuid: str) -> bool:
     _validate_uuid_no_prefix(uuid_clean)
     api_url = config.XRAY_API_URL.rstrip("/")
     url = f"{api_url}/remove-plus/{uuid_clean}"
-    headers = {"x-api-key": config.XRAY_API_KEY}
-    try:
+    headers = {"X-API-Key": config.XRAY_API_KEY}
+    async def _make_request():
         async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=headers)
         if response.status_code in (401, 403):
             raise AuthError(f"Authentication error: status={response.status_code}")
         if response.status_code == 404:
-            # Idempotent: already removed
             logger.info(f"XRAY_REMOVE_PLUS uuid={uuid_clean[:8]}... status=404 (not_found)")
-            return True
+            return response
         if 400 <= response.status_code < 500:
             raise InvalidResponseError(f"Client error: status={response.status_code}, response={response.text[:200]}")
         response.raise_for_status()
+        return response
+
+    try:
+        response = await retry_async(
+            _make_request,
+            retries=MAX_RETRIES,
+            base_delay=RETRY_DELAY,
+            max_delay=5.0,
+            retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
+        )
         logger.info(f"XRAY_REMOVE_PLUS uuid={uuid_clean[:8]}... status={response.status_code}")
         return True
     except (AuthError, InvalidResponseError):
@@ -510,8 +543,10 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
         logger.error(error_msg)
         raise ValueError(error_msg)
     _validate_uuid_no_prefix(uuid)
-    assert subscription_end.tzinfo is not None, "subscription_end must be timezone-aware"
-    assert subscription_end.tzinfo == timezone.utc, "subscription_end must be UTC"
+    if subscription_end.tzinfo is None:
+        raise ValueError("subscription_end must be timezone-aware")
+    if subscription_end.tzinfo != timezone.utc:
+        raise ValueError("subscription_end must be UTC")
     uuid_clean = str(uuid).strip()
     logger.info(f"UUID_AUDIT_UPDATE_REQUEST [uuid={repr(uuid_clean)}]")
     
@@ -690,19 +725,16 @@ async def remove_vless_user(uuid: str) -> None:
                 # UUID already removed - successful operation (idempotency)
                 try:
                     import database
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.create_task(
-                            database._log_vpn_lifecycle_audit_async(
-                                action="vpn_remove_user",
-                                telegram_id=0,
-                                uuid=uuid_clean,
-                                source=None,
-                                result="success",
-                                details="UUID already removed (idempotent)"
-                            )
+                    _fire_and_forget(
+                        database._log_vpn_lifecycle_audit_async(
+                            action="vpn_remove_user",
+                            telegram_id=0,
+                            uuid=uuid_clean,
+                            source=None,
+                            result="success",
+                            details="UUID already removed (idempotent)"
                         )
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to log VPN remove_user audit (non-blocking): {e}")
                 # Return special marker for 404 (idempotent success)
@@ -738,19 +770,16 @@ async def remove_vless_user(uuid: str) -> None:
         # Note: Full audit log will be written by caller with correct telegram_id and source
         try:
             import database
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(
-                    database._log_vpn_lifecycle_audit_async(
-                        action="vpn_remove_user",
-                        telegram_id=0,  # Will be updated by caller
-                        uuid=uuid_clean,
-                        source=None,  # Will be updated by caller
-                        result="success",
-                        details="UUID removed via VPN API"
-                    )
+            _fire_and_forget(
+                database._log_vpn_lifecycle_audit_async(
+                    action="vpn_remove_user",
+                    telegram_id=0,  # Will be updated by caller
+                    uuid=uuid_clean,
+                    source=None,  # Will be updated by caller
+                    result="success",
+                    details="UUID removed via VPN API"
                 )
+            )
         except Exception as e:
             logger.warning(f"Failed to log VPN remove_user audit (non-blocking): {e}")
         
@@ -813,7 +842,7 @@ async def safe_remove_vless_user_with_retry(uuid: str, *, max_retries: int = 3) 
     raise VPNAPIError(f"Orphan cleanup failed after {max_retries} retries: {last_error}") from last_error
 
 
-async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: datetime) -> str:
+async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: datetime) -> Tuple[str, str]:
     """
     Перевыпустить VPN доступ: удалить старый UUID и создать новый.
     

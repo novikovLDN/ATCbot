@@ -113,16 +113,17 @@ async def main():
     logger.info(f"Using DATABASE_URL from {config.APP_ENV.upper()}_DATABASE_URL")
     logger.info(f"Using ADMIN_TELEGRAM_ID from {config.APP_ENV.upper()}_ADMIN_TELEGRAM_ID")
 
-    # Defensive: payments enabled but no CryptoBot token → will silently disable
+    # Log payment providers status
     flags = get_feature_flags()
-    if flags.payments_enabled and not config.CRYPTOBOT_TOKEN:
-        logger.warning("PAYMENTS_ENABLED_BUT_NO_CRYPTOBOT_TOKEN — CryptoBot disabled until token is set")
+    if flags.payments_enabled:
+        import platega_service
+        logger.info("PAYMENT_PROVIDERS: platega=%s", platega_service.is_enabled())
 
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
     if config.REDIS_URL:
         storage = RedisStorage.from_url(config.REDIS_URL)
-        logger.info("FSM_STORAGE=redis url_prefix=%s", config.REDIS_URL[:20])
+        logger.info("FSM_STORAGE=redis (configured)")
     else:
         storage = MemoryStorage()
         logger.warning("FSM_STORAGE=memory — states will be lost on restart")
@@ -132,6 +133,10 @@ async def main():
     # Pass bot and dp to webhook handler
     from app.api import telegram_webhook as tg_webhook_module
     tg_webhook_module.setup(bot, dp)
+
+    # Pass bot to payment webhook handlers
+    from app.api import payment_webhook as pay_webhook_module
+    pay_webhook_module.setup(bot)
 
     # Global concurrency limiter for update processing
     MAX_CONCURRENT_UPDATES = int(os.getenv("MAX_CONCURRENT_UPDATES", "20"))
@@ -454,19 +459,6 @@ async def main():
     xray_sync_task = await start_xray_sync_safe(bot)
     if xray_sync_task:
         background_tasks.append(xray_sync_task)
-    
-    # Запуск фоновой задачи для автоматической проверки CryptoBot платежей (только если БД готова)
-    crypto_watcher_task = None
-    if database.DB_READY:
-        try:
-            import crypto_payment_watcher
-            crypto_watcher_task = asyncio.create_task(crypto_payment_watcher.crypto_payment_watcher_task(bot))
-            background_tasks.append(crypto_watcher_task)
-            logger.info("Crypto payment watcher task started")
-        except Exception as e:
-            logger.warning(f"Crypto payment watcher task skipped: {e}")
-    else:
-        logger.warning("Crypto payment watcher task skipped (DB not ready)")
     
     # Bot initialization complete
     if database.DB_READY:

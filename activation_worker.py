@@ -199,20 +199,20 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             language = await resolve_user_language(telegram_id)
                             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
                             sub_type = (subscription_check.get("subscription_type") or "basic").strip().lower()
-                            if sub_type not in ("basic", "plus"):
+                            if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
                                 sub_type = "basic"
-                            if sub_type == "plus":
-                                text = (
-                                    "🎉 Добро пожаловать в Atlas Secure!\n"
-                                    "⭐️ Тариф: Plus\n"
-                                    f"📅 До: {expires_str}"
-                                )
+                            if config.is_biz_tariff(sub_type):
+                                tariff_label = "Business"
+                            elif sub_type == "plus":
+                                tariff_label = "Plus"
                             else:
-                                text = (
-                                    "🎉 Добро пожаловать в Atlas Secure!\n"
-                                    "📦 Тариф: Basic\n"
-                                    f"📅 До: {expires_str}"
-                                )
+                                tariff_label = "Basic"
+                            tariff_emoji = "🏢" if config.is_biz_tariff(sub_type) else ("⭐️" if sub_type == "plus" else "📦")
+                            text = (
+                                "🎉 Добро пожаловать в Atlas Secure!\n"
+                                f"{tariff_emoji} Тариф: {tariff_label}\n"
+                                f"📅 До: {expires_str}"
+                            )
                             keyboard = get_connect_keyboard()
                             await safe_send_message(
                                 bot, telegram_id, text,

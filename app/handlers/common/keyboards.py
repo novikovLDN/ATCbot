@@ -10,6 +10,9 @@ import database
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 
 from app.i18n import get_text as i18n_get_text
+from app.services.trials import service as trial_service
+
+logger = logging.getLogger(__name__)
 
 MINI_APP_URL = "https://atlas-miniapp-production-3495.up.railway.app"
 
@@ -33,9 +36,6 @@ def get_connect_keyboard():
         )],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile")],
     ])
-from app.services.trials import service as trial_service
-
-logger = logging.getLogger(__name__)
 
 
 def get_language_keyboard(language: str = "ru"):
@@ -72,6 +72,20 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     - Нет активной подписки
     - Нет платных подписок в истории (source='payment')
     """
+    # Проверяем бизнес-подписку для специального меню
+    is_biz_user = False
+    subscription = None
+    if telegram_id and database.DB_READY:
+        try:
+            subscription = await database.get_subscription(telegram_id)
+            sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
+            is_biz_user = config.is_biz_tariff(sub_type)
+        except Exception as e:
+            logger.warning(f"Error checking subscription for main menu: {e}")
+
+    if is_biz_user:
+        return _get_biz_main_menu_keyboard(language)
+
     buttons = []
 
     if telegram_id and database.DB_READY:
@@ -89,34 +103,33 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=i18n_get_text(language, "main.profile"),
         callback_data="menu_profile"
     )])
-    # Динамическая кнопка покупки
-    if telegram_id and database.DB_READY:
-        try:
-            subscription = await database.get_subscription(telegram_id)
-            if subscription and subscription.get("subscription_type"):
-                buy_text = i18n_get_text(language, "main.buy_renew")
-            else:
-                buy_text = i18n_get_text(language, "main.buy_new")
-        except Exception as e:
-            logger.warning(f"Error getting subscription for buy button: {e}")
-            buy_text = i18n_get_text(language, "main.buy_new")
+    # Динамическая кнопка покупки + подарить подписку в одном ряду
+    if subscription and subscription.get("subscription_type"):
+        buy_text = i18n_get_text(language, "main.buy_renew")
+    elif telegram_id and database.DB_READY and not subscription:
+        buy_text = i18n_get_text(language, "main.buy_new")
     else:
         buy_text = i18n_get_text(language, "main.buy_new")
-    buttons.append([InlineKeyboardButton(
-        text=buy_text,
-        callback_data="menu_buy_vpn"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.instruction"),
-        callback_data="menu_instruction"
-    )])
+    buttons.append([
+        InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
+            callback_data="gift_subscription"
+        ),
+    ])
+    buttons.append([
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "main.instruction"),
+            callback_data="menu_instruction"
+        ),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
+            callback_data="games_menu"
+        ),
+    ])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.referral"),
         callback_data="menu_referral"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.game", "Игры 🎮"),
-        callback_data="games_menu"
     )])
     buttons.append([
         InlineKeyboardButton(
@@ -125,7 +138,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
-            callback_data="menu_support"
+            url="https://t.me/asc_support"
         ),
     ])
     buttons.append([InlineKeyboardButton(
@@ -134,6 +147,76 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     )])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура главного меню для бизнес-пользователей."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_my_business"),
+            callback_data="biz_profile"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_control_panel"),
+            callback_data="biz_control_panel"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_ecosystem"),
+            callback_data="biz_ecosystem"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_personal_manager"),
+            url="https://t.me/asc_support"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.settings", "main.settings"),
+            callback_data="menu_settings"
+        )],
+    ])
+
+
+def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура профиля для бизнес-подписки."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_renew_config"),
+            callback_data="menu_buy_vpn"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_topup"),
+            callback_data="topup_balance"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_connect"),
+            web_app=WebAppInfo(url="https://app.atlassecure.io/connect")
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main"
+        )],
+    ])
+
+
+def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура панели управления для бизнес-подписки."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_copy_login"),
+            callback_data="biz_copy_login"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_copy_password"),
+            callback_data="biz_copy_password"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "biz.btn_personal_manager"),
+            url="https://t.me/asc_support"
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main"
+        )],
+    ])
 
 
 def get_back_keyboard(language: str):
@@ -177,6 +260,11 @@ def get_profile_keyboard(
             text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
         )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
+        callback_data="my_gifts:0"
+    )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back", "← Назад"),
@@ -293,7 +381,7 @@ def get_pending_payment_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            callback_data="menu_support"
+            url="https://t.me/asc_support"
         )],
     ])
 
@@ -325,29 +413,17 @@ def get_service_status_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            callback_data="menu_support"
-        )],
-    ])
-
-
-def get_support_keyboard(language: str):
-    """Клавиатура раздела 'Поддержка'"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "support.write_button"),
             url="https://t.me/asc_support"
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
     ])
+
+
 
 
 def get_instruction_screen_keyboard(language: str, subscription_type: str = "basic"):
     """Клавиатура экрана «Инструкция»: кнопки копирования ключа по тарифу + Назад."""
     subscription_type = (subscription_type or "basic").strip().lower()
-    if subscription_type not in ("basic", "plus"):
+    if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
         subscription_type = "basic"
 
     if subscription_type == "plus":
@@ -413,7 +489,7 @@ def get_instruction_keyboard(
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            callback_data="menu_support"
+            url="https://t.me/asc_support"
         )
     ])
 

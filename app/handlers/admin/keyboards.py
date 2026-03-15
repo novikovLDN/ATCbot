@@ -8,22 +8,37 @@ from app.i18n import get_text as i18n_get_text
 
 
 def get_admin_dashboard_keyboard(language: str = "ru"):
-    """Клавиатура главного экрана админ-дашборда"""
+    """Клавиатура главного экрана админ-дашборда (сгруппирована по категориям)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        # — Обзор —
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.dashboard"), callback_data="admin:dashboard")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.stats"), callback_data="admin:stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.analytics"), callback_data="admin:analytics")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.metrics"), callback_data="admin:metrics")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit")],
+        # — Аналитика и статистика —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.stats"), callback_data="admin:stats"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.analytics"), callback_data="admin:analytics"),
+        ],
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.metrics"), callback_data="admin:metrics"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats"),
+        ],
+        # — Управление пользователями —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management"),
+        ],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast")],
+        # — Маркетинг —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode"),
+        ],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode")],
+        # — Система —
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit"),
+        ],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
     ])
     return keyboard
 
@@ -79,6 +94,8 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
         # Кнопка выдачи средств
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
+        # Кнопка удаления пользователя из БД
+        buttons.append([InlineKeyboardButton(text="🗑 Удалить из БД", callback_data=f"admin:delete_user:{user_id}")])
     buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
@@ -104,6 +121,7 @@ def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False,
         else:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
+        buttons.append([InlineKeyboardButton(text="🗑 Удалить из БД", callback_data=f"admin:delete_user:{user_id}")])
     buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -135,16 +153,24 @@ def get_broadcast_test_type_keyboard(language: str = "ru"):
     return keyboard
 
 
-def get_broadcast_type_keyboard(language: str = "ru"):
-    """Клавиатура выбора типа уведомления"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_info"), callback_data="broadcast_type:info")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_maintenance"), callback_data="broadcast_type:maintenance")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_security"), callback_data="broadcast_type:security")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._type_promo"), callback_data="broadcast_type:promo")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
-    ])
-    return keyboard
+def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
+    """Клавиатура выбора кнопок для уведомления"""
+    selected = selected or []
+    buttons = [
+        ("🛒 Купить", "buy"),
+        ("🎁 Купить со скидкой", "promo_buy"),
+        ("📢 Наш канал", "channel"),
+        ("💬 Поддержка", "support"),
+        ("👥 Пригласить друга", "referral"),
+    ]
+    rows = []
+    for label, key in buttons:
+        check = "✅ " if key in selected else ""
+        rows.append([InlineKeyboardButton(text=f"{check}{label}", callback_data=f"broadcast_btn:{key}")])
+    rows.append([InlineKeyboardButton(text="✅ Готово", callback_data="broadcast_btn:done")])
+    rows.append([InlineKeyboardButton(text="⏭ Без кнопок", callback_data="broadcast_btn:none")])
+    rows.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_broadcast_segment_keyboard(language: str = "ru"):
@@ -152,6 +178,7 @@ def get_broadcast_segment_keyboard(language: str = "ru"):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_all"), callback_data="broadcast_segment:all_users")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_active"), callback_data="broadcast_segment:active_subscriptions")],
+        [InlineKeyboardButton(text="🚫 Без подписки", callback_data="broadcast_segment:no_subscription")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
     return keyboard

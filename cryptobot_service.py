@@ -1,466 +1,299 @@
 """
-Crypto Bot (Telegram Crypto Pay) Integration
+CryptoBot (Crypto Pay) Integration
 
-Handles invoice creation and webhook processing for cryptocurrency payments.
-Configuration: Token/webhook/API URL resolved via config.py only (Railway env-safe).
+Handles cryptocurrency payment creation and webhook processing via @CryptoBot API.
+Configuration: CRYPTOBOT_API_TOKEN / CRYPTOBOT_API_URL resolved via config.py only.
+
+API docs: https://help.crypt.bot/crypto-pay-api
 """
 import config
-import json
-import hmac
+import database
 import hashlib
+import hmac
+import json
 import logging
-from typing import Optional, Dict, Any
+from typing import Dict, Any
+
 import httpx
-from aiohttp import web
 from aiogram import Bot
 from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
-# Configuration — single source: config.py (STAGE_CRYPTOBOT_* / PROD_CRYPTOBOT_*)
-CRYPTOBOT_TOKEN = config.CRYPTOBOT_TOKEN
-CRYPTOBOT_WEBHOOK_SECRET = config.CRYPTOBOT_WEBHOOK_SECRET
+CRYPTOBOT_API_TOKEN = config.CRYPTOBOT_API_TOKEN
 CRYPTOBOT_API_URL = config.CRYPTOBOT_API_URL
-
-ALLOWED_ASSETS = ["USDT", "TON", "BTC"]
-
-
-class CryptoBotError(Exception):
-    """Base class for Crypto Bot API errors"""
-    pass
-
-
-class CryptoBotAuthError(CryptoBotError):
-    """Authentication error (401, 403)"""
-    pass
-
-
-class CryptoBotInvalidResponseError(CryptoBotError):
-    """Invalid response error (4xx)"""
-    pass
 
 
 def is_enabled() -> bool:
-    """Check if Crypto Bot is configured"""
-    return bool(CRYPTOBOT_TOKEN and CRYPTOBOT_WEBHOOK_SECRET)
+    """Check if CryptoBot is configured (API token present)."""
+    return bool(CRYPTOBOT_API_TOKEN)
 
 
-def _get_auth_headers() -> Dict[str, str]:
-    """Get authentication headers for Crypto Bot API"""
+def _get_headers() -> Dict[str, str]:
+    """Get authentication headers for Crypto Pay API."""
     return {
-        "Crypto-Pay-API-Token": CRYPTOBOT_TOKEN,
-        "Content-Type": "application/json"
+        "Crypto-Pay-API-Token": CRYPTOBOT_API_TOKEN,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
-
-
-def _verify_webhook_signature(payload: bytes, signature: str) -> bool:
-    """
-    Verify webhook signature using HMAC-SHA256
-    
-    Args:
-        payload: Raw request body
-        signature: Signature from X-Crypto-Pay-API-Signature header
-        
-    Returns:
-        True if signature is valid
-    """
-    if not CRYPTOBOT_WEBHOOK_SECRET:
-        return False
-    
-    expected_signature = hmac.new(
-        CRYPTOBOT_WEBHOOK_SECRET.encode(),
-        payload,
-        hashlib.sha256
-    ).hexdigest()
-    
-    return hmac.compare_digest(expected_signature, signature)
 
 
 async def create_invoice(
-    telegram_id: int,
-    tariff: str,
-    period_days: int,
     amount_rubles: float,
+    description: str,
     purchase_id: str,
-    asset: str = "USDT",
-    description: str = ""
+    expires_in: int = 1800,
 ) -> Dict[str, Any]:
     """
-    Create invoice via Crypto Bot API
-    
+    Create a cryptocurrency payment invoice via CryptoBot API.
+
+    Uses currency_type=fiat with fiat=RUB so the user pays the equivalent
+    in any supported crypto (USDT, TON, BTC, etc.).
+
     Args:
-        telegram_id: User Telegram ID
-        tariff: Tariff type (basic/plus)
-        period_days: Subscription period in days
-        amount_rubles: Amount in rubles
-        purchase_id: Purchase session ID
-        asset: Cryptocurrency asset (USDT/TON/BTC)
+        amount_rubles: Payment amount in RUB
         description: Invoice description
-        
+        purchase_id: Internal purchase ID (stored in payload)
+        expires_in: Invoice expiration in seconds (default 30 min)
+
     Returns:
-        Invoice data with invoice_id and pay_url
-        
-    Raises:
-        Exception on API errors
+        {"invoice_id": int, "mini_app_invoice_url": str, "web_app_invoice_url": str}
     """
     if not is_enabled():
-        raise Exception("Crypto Bot not configured")
-    
-    if asset not in ALLOWED_ASSETS:
-        raise ValueError(f"Invalid asset: {asset}. Allowed: {ALLOWED_ASSETS}")
-    
-    payload_data = {
-        "purchase_id": purchase_id,
-        "telegram_user_id": telegram_id,
-        "tariff": tariff,
-        "period_days": period_days,
-    }
-    
+        raise Exception("CryptoBot not configured")
+
     request_body = {
-        "amount": round(float(amount_rubles), 2),
+        "currency_type": "fiat",
         "fiat": "RUB",
-        "asset": asset,
-        "payload": json.dumps(payload_data, ensure_ascii=False),
-        "description": description[:250] if description else f"Atlas Secure VPN {tariff} {period_days} days",
-        "allow_comments": False,
-        "allow_anonymous": False,
+        "accepted_assets": "USDT,TON,BTC,ETH,LTC,TRX",
+        "amount": str(round(amount_rubles, 2)),
+        "description": description[:1024] if description else "Atlas Secure VPN",
+        "payload": json.dumps({"purchase_id": purchase_id}),
+        "expires_in": expires_in,
     }
-    
-    # Use centralized retry utility for HTTP calls (only retries transient errors)
+
     async def _make_request():
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{CRYPTOBOT_API_URL}/createInvoice",
-                headers=_get_auth_headers(),
-                json=request_body
+                headers=_get_headers(),
+                json=request_body,
             )
-            # Convert 401/403 to AuthError (should NOT be retried)
-            if response.status_code == 401 or response.status_code == 403:
-                error_msg = f"Authentication error: status={response.status_code}, response={response.text[:200]}"
-                logger.error(f"Crypto Bot API error: {error_msg}")
-                raise CryptoBotAuthError(error_msg)
-            
-            # Convert 4xx to InvalidResponseError (should NOT be retried)
-            if 400 <= response.status_code < 500:
-                error_msg = f"Client error: status={response.status_code}, response={response.text[:200]}"
-                logger.error(f"Crypto Bot API error: {error_msg}")
-                raise CryptoBotInvalidResponseError(error_msg)
-            
-            # Only 5xx/timeout/network errors will be retried
             if response.status_code != 200:
-                # Let httpx raise HTTPStatusError for 5xx, which will be retried
-                response.raise_for_status()
+                logger.error(
+                    f"CryptoBot API error: status={response.status_code}, "
+                    f"response={response.text[:300]}"
+                )
+                raise Exception(f"CryptoBot API error: {response.status_code}")
             return response
-    
-    response = await retry_async(
-        _make_request,
-        retries=2,
-        base_delay=0.5,
-        max_delay=3.0,
-        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
-    )
-    
-    data = response.json()
-    if not data.get("ok"):
-        error_msg = data.get("error", {}).get("name", "Unknown error")
-        raise Exception(f"Crypto Bot API error: {error_msg}")
-    
-    result = data.get("result", {})
-    if not result.get("invoice_id") or not result.get("pay_url"):
-        raise Exception("Invalid response from Crypto Bot API: missing invoice_id or pay_url")
-    
-    return result
 
-
-async def create_balance_invoice(
-    telegram_id: int,
-    amount_rubles: float,
-    description: str = ""
-) -> Dict[str, Any]:
-    """
-    Create balance top-up invoice via Crypto Bot API
-    
-    Args:
-        telegram_id: User Telegram ID
-        amount_rubles: Amount in rubles
-        description: Invoice description
-        
-    Returns:
-        Invoice data with invoice_id and pay_url
-        
-    Raises:
-        Exception on API errors
-    """
-    if not is_enabled():
-        raise Exception("Crypto Bot not configured")
-    
-    import time
-    timestamp = int(time.time())
-    payload_data = {
-        "telegram_user_id": telegram_id,
-        "amount": amount_rubles,
-        "type": "balance_topup",
-        "timestamp": timestamp,
-    }
-    
-    request_body = {
-        "amount": round(float(amount_rubles), 2),
-        "fiat": "RUB",
-        "asset": "USDT",
-        "payload": json.dumps(payload_data, ensure_ascii=False),
-        "description": description[:250] if description else f"Пополнение баланса {amount_rubles} RUB",
-        "allow_comments": False,
-        "allow_anonymous": False,
-    }
-    
-    # Use centralized retry utility for HTTP calls (only retries transient errors)
-    async def _make_request():
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{CRYPTOBOT_API_URL}/createInvoice",
-                headers=_get_auth_headers(),
-                json=request_body
-            )
-            # Convert 401/403 to AuthError (should NOT be retried)
-            if response.status_code == 401 or response.status_code == 403:
-                error_msg = f"Authentication error: status={response.status_code}, response={response.text[:200]}"
-                logger.error(f"Crypto Bot API error: {error_msg}")
-                raise CryptoBotAuthError(error_msg)
-            
-            # Convert 4xx to InvalidResponseError (should NOT be retried)
-            if 400 <= response.status_code < 500:
-                error_msg = f"Client error: status={response.status_code}, response={response.text[:200]}"
-                logger.error(f"Crypto Bot API error: {error_msg}")
-                raise CryptoBotInvalidResponseError(error_msg)
-            
-            # Only 5xx/timeout/network errors will be retried
-            if response.status_code != 200:
-                # Let httpx raise HTTPStatusError for 5xx, which will be retried
-                response.raise_for_status()
-            return response
-    
     response = await retry_async(
         _make_request,
         retries=2,
         base_delay=1.0,
         max_delay=5.0,
-        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError)
+        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
     )
-    
+
     data = response.json()
     if not data.get("ok"):
-        error_msg = data.get("error", {}).get("name", "Unknown error")
-        raise Exception(f"Crypto Bot API error: {error_msg}")
-    
-    result = data.get("result", {})
-    if not result.get("invoice_id") or not result.get("pay_url"):
-        raise Exception("Invalid response from Crypto Bot API: missing invoice_id or pay_url")
-    
-    return result
+        error = data.get("error", {})
+        raise Exception(f"CryptoBot API error: {error}")
+
+    result = data["result"]
+    invoice_id = result["invoice_id"]
+    mini_app_url = result.get("mini_app_invoice_url", "")
+    web_app_url = result.get("web_app_invoice_url", "")
+    pay_url = mini_app_url or web_app_url
+
+    if not pay_url:
+        raise Exception(f"CryptoBot API: missing payment URL in response: {result}")
+
+    logger.info(
+        f"CryptoBot invoice created: invoice_id={invoice_id}, "
+        f"amount={amount_rubles} RUB, purchase_id={purchase_id}"
+    )
+
+    return {
+        "invoice_id": invoice_id,
+        "mini_app_invoice_url": mini_app_url,
+        "web_app_invoice_url": web_app_url,
+        "pay_url": pay_url,
+    }
 
 
-async def handle_webhook(request: web.Request, bot: Bot) -> web.Response:
+def verify_webhook_signature(raw_body: bytes, signature: str) -> bool:
     """
-    Handle Crypto Bot webhook
-    
-    Requirements:
-    - Always returns 200 OK
-    - Validates webhook signature
-    - Processes only invoice_paid events
-    - Idempotent: duplicate payments are ignored
+    Verify CryptoBot webhook signature.
+
+    The signature is HMAC-SHA-256 of the raw body,
+    with the secret key being SHA-256 hash of the API token.
     """
-    if not is_enabled():
-        logger.warning("Crypto Bot webhook received but service is disabled")
-        return web.json_response({"status": "disabled"}, status=200)
-    
+    if not CRYPTOBOT_API_TOKEN:
+        return False
+    secret = hashlib.sha256(CRYPTOBOT_API_TOKEN.encode("utf-8")).digest()
+    computed = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(computed, signature)
+
+
+async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: Bot) -> dict:
+    """
+    Process CryptoBot webhook data (framework-agnostic).
+
+    Args:
+        headers: Request headers dict
+        raw_body: Raw request body bytes (for signature verification)
+        body: Parsed JSON body
+        bot: Bot instance for sending messages
+
+    Returns:
+        Response dict with "status" key
+    """
     if not database.DB_READY:
-        logger.warning("Crypto Bot webhook: DB not ready")
-        return web.json_response({"status": "degraded"}, status=200)
-    
+        logger.warning("CryptoBot webhook: DB not ready")
+        return {"status": "degraded"}
+
     # Verify signature
-    signature = request.headers.get("X-Crypto-Pay-API-Signature", "")
-    if not signature:
-        logger.warning("Crypto Bot webhook: missing signature")
-        return web.json_response({"status": "unauthorized"}, status=200)
-    
-    try:
-        body_bytes = await request.read()
-        if not _verify_webhook_signature(body_bytes, signature):
-            logger.warning("Crypto Bot webhook: invalid signature")
-            return web.json_response({"status": "unauthorized"}, status=200)
-        
-        body = json.loads(body_bytes.decode())
-    except Exception as e:
-        logger.error(f"Crypto Bot webhook: invalid JSON: {e}")
-        return web.json_response({"status": "invalid"}, status=200)
-    
-    # Process only invoice_paid events
+    signature = headers.get("crypto-pay-api-signature", "")
+    if not verify_webhook_signature(raw_body, signature):
+        logger.warning("CryptoBot webhook: signature verification failed")
+        return {"status": "unauthorized"}
+
     update_type = body.get("update_type")
     if update_type != "invoice_paid":
-        logger.debug(f"Crypto Bot webhook: ignored update_type={update_type}")
-        return web.json_response({"status": "ignored"}, status=200)
-    
-    invoice = body.get("payload", {})
-    invoice_id = invoice.get("invoice_id")
-    status = invoice.get("status")
-    
+        logger.info(f"CryptoBot webhook: ignoring update_type={update_type}")
+        return {"status": "ignored"}
+
+    payload_obj = body.get("payload", {})
+    invoice_id = payload_obj.get("invoice_id")
+    status = payload_obj.get("status")
+
+    logger.info(
+        f"CryptoBot webhook received: invoice_id={invoice_id}, status={status}"
+    )
+
     if status != "paid":
-        logger.info(f"Crypto Bot webhook: invoice not paid, status={status}, invoice_id={invoice_id}")
-        return web.json_response({"status": "ignored"}, status=200)
-    
-    # Parse payload — support both formats:
-    # 1) JSON: {"purchase_id":"...","telegram_user_id":123,"tariff":"basic","period_days":30}
-    # 2) String: "purchase:{purchase_id}" (from payments/cryptobot flow)
-    payload_raw = invoice.get("payload")
-    if not payload_raw:
-        logger.error(f"Crypto Bot webhook: missing payload, invoice_id={invoice_id}")
-        return web.json_response({"status": "invalid"}, status=200)
-    
+        logger.info(f"CryptoBot webhook: ignoring status={status}")
+        return {"status": "ignored"}
+
+    # Extract purchase_id from invoice payload
+    invoice_payload_raw = payload_obj.get("payload")
     purchase_id = None
-    telegram_id = None
-    pending_purchase = None
-    
-    try:
-        payload_data = json.loads(payload_raw)
-        if isinstance(payload_data, dict):
+
+    if invoice_payload_raw:
+        try:
+            if isinstance(invoice_payload_raw, str):
+                payload_data = json.loads(invoice_payload_raw)
+            else:
+                payload_data = invoice_payload_raw
             purchase_id = payload_data.get("purchase_id")
-            telegram_id = payload_data.get("telegram_user_id")
-            if telegram_id is not None:
-                telegram_id = int(telegram_id)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
-    
-    if not purchase_id and isinstance(payload_raw, str) and payload_raw.startswith("purchase:"):
-        purchase_id = payload_raw.split(":", 1)[1].strip()
-    
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     if not purchase_id:
-        logger.error(f"Crypto Bot webhook: could not extract purchase_id from payload: {payload_raw[:100]}")
-        return web.json_response({"status": "invalid"}, status=200)
-    
-    # Get pending purchase — by purchase_id only when telegram_id unknown (payload format 2)
-    import database
-    logger.info(f"Crypto Bot webhook: looking for purchase: purchase_id={purchase_id}")
-    if telegram_id is not None:
-        pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
-    else:
-        pending_purchase = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
-    
-    if pending_purchase:
-        telegram_id = pending_purchase["telegram_id"]
+        logger.error(f"CryptoBot webhook: could not extract purchase_id, payload={invoice_payload_raw}")
+        return {"status": "invalid"}
+
+    # Look up pending purchase
+    pending_purchase = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+
     if not pending_purchase:
-        logger.warning(f"Crypto Bot webhook: pending purchase not found: purchase_id={purchase_id}, user={telegram_id}")
-        return web.json_response({"status": "not_found"}, status=200)
-    
+        logger.warning(f"CryptoBot webhook: purchase not found: purchase_id={purchase_id}")
+        return {"status": "not_found"}
+
+    telegram_id = pending_purchase["telegram_id"]
     purchase_status = pending_purchase.get("status")
+
     if purchase_status != "pending":
-        logger.info(f"Crypto Bot webhook: purchase already processed: purchase_id={purchase_id}, status={purchase_status}")
-        return web.json_response({"status": "already_processed"}, status=200)
-    
-    logger.info(f"Crypto Bot webhook: valid pending purchase found: purchase_id={purchase_id}, user={telegram_id}, tariff={pending_purchase.get('tariff')}, period_days={pending_purchase.get('period_days')}")
-    
-    # Get payment amount from invoice (Crypto Pay may return fiat in USD or RUB)
-    amount_obj = invoice.get("amount") or {}
-    fiat_obj = (amount_obj.get("fiat") or {}) if isinstance(amount_obj, dict) else {}
-    amount_value = float(fiat_obj.get("value", 0) or 0)
-    fiat_currency = (fiat_obj.get("currency") or "RUB").upper()
-    if amount_value > 0 and fiat_currency == "USD":
-        from payments.cryptobot import RUB_TO_USD_RATE
-        amount_rubles = amount_value * RUB_TO_USD_RATE
-    else:
-        amount_rubles = amount_value if amount_value > 0 else 0
+        logger.info(
+            f"CryptoBot webhook: purchase already processed: "
+            f"purchase_id={purchase_id}, status={purchase_status}"
+        )
+        return {"status": "already_processed"}
+
+    # Get payment amount in RUB
+    amount_rubles = float(payload_obj.get("amount", 0))
     if amount_rubles <= 0:
         amount_rubles = pending_purchase["price_kopecks"] / 100.0
-    
-    # КРИТИЧНО: Логируем получение события оплаты от Crypto Bot
+
     logger.info(
-        f"payment_event_received: provider=cryptobot, user={telegram_id}, invoice_id={invoice_id}, "
-        f"purchase_id={purchase_id}, amount={amount_rubles:.2f} RUB, "
-        f"status=paid, update_type=invoice_paid"
+        f"payment_event_received: provider=cryptobot, user={telegram_id}, "
+        f"invoice_id={invoice_id}, purchase_id={purchase_id}, "
+        f"amount={amount_rubles:.2f} RUB"
     )
-    
-    # КРИТИЧНО: Проверка суммы платежа перед активацией
-    expected_amount_rubles = pending_purchase["price_kopecks"] / 100.0
-    amount_diff = abs(amount_rubles - expected_amount_rubles)
-    
-    if amount_diff > 1.0:
-        logger.error(
-            f"payment_rejected: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
-            f"reason=amount_mismatch, expected={expected_amount_rubles:.2f} RUB, "
-            f"actual={amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB"
-        )
-        return web.json_response({"status": "amount_mismatch"}, status=200)
-    
-    logger.info(
-        f"payment_verified: provider=cryptobot, user={telegram_id}, purchase_id={purchase_id}, "
-        f"amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status=pending"
-    )
-    
-    # ЕДИНАЯ ФУНКЦИЯ ФИНАЛИЗАЦИИ ПОКУПКИ
-    # Все операции в одной транзакции: pending_purchase → paid, payment → approved, subscription activated
+
+    # Finalize purchase
     try:
-        logger.info(f"Crypto Bot webhook: calling finalize_purchase: purchase_id={purchase_id}, provider=cryptobot, amount={amount_rubles} RUB")
         result = await database.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider="cryptobot",
             amount_rubles=amount_rubles,
-            invoice_id=invoice_id
+            invoice_id=str(invoice_id),
         )
-        
+
         if not result or not result.get("success"):
-            error_msg = f"finalize_purchase returned invalid result: {result}"
-            logger.error(f"Crypto Bot webhook: {error_msg}")
-            raise Exception(error_msg)
-        
+            logger.error(f"CryptoBot webhook: finalize_purchase failed: {result}")
+            raise Exception(f"finalize_purchase returned invalid result: {result}")
+
         payment_id = result["payment_id"]
         expires_at = result.get("expires_at")
-        vpn_key = result.get("vpn_key")
         is_balance_topup = result.get("is_balance_topup", False)
-        
-        # Send confirmation to user
+
         from app.services.language_service import resolve_user_language
         from app.i18n import get_text as i18n_get_text
-        
+
         language = await resolve_user_language(telegram_id)
-        
+
         if is_balance_topup:
             topup_amount = result.get("amount", amount_rubles)
             text = i18n_get_text(language, "main.balance_topup_success", amount=topup_amount)
-            await bot.send_message(telegram_id, text, parse_mode="HTML")
-            logger.info(f"Crypto Bot payment processed (balance topup): user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, amount={topup_amount} RUB")
+            try:
+                await bot.send_message(telegram_id, text, parse_mode="HTML")
+            except Exception as send_err:
+                logger.warning(f"CryptoBot: failed to send topup confirmation to user={telegram_id}: {send_err}")
         else:
-            logger.info(f"Crypto Bot webhook: purchase_finalized: purchase_id={purchase_id}, payment_id={payment_id}, expires_at={expires_at.isoformat() if expires_at else None}")
             expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
             subscription_type = (result.get("subscription_type") or "basic").strip().lower()
-            if subscription_type not in ("basic", "plus"):
+            if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
                 subscription_type = "basic"
-            if subscription_type == "plus":
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n⭐️ Тариф: Plus\n📅 До: {expires_str}"
+            if config.is_biz_tariff(subscription_type):
+                _label, _emoji = "Business", "🏢"
+            elif subscription_type == "plus":
+                _label, _emoji = "Plus", "⭐️"
             else:
-                text = f"🎉 Добро пожаловать в Atlas Secure!\n📦 Тариф: Basic\n📅 До: {expires_str}"
+                _label, _emoji = "Basic", "📦"
+            text = i18n_get_text(
+                language, "payment.crypto_success",
+                f"🎉 Оплата получена!\n{_emoji} Тариф: {_label}\n📅 До: {expires_str}",
+                tariff_icon=_emoji,
+                tariff=_label,
+                date=expires_str,
+            )
+
             from app.handlers.common.keyboards import get_connect_keyboard
-            await bot.send_message(telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML")
-            logger.info(f"Crypto Bot payment processed successfully: user={telegram_id}, payment_id={payment_id}, invoice_id={invoice_id}, purchase_id={purchase_id}, subscription_activated=True")
-        
+            try:
+                await bot.send_message(
+                    telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML"
+                )
+            except Exception as send_err:
+                logger.warning(f"CryptoBot: failed to send subscription confirmation to user={telegram_id}: {send_err}")
+
+        logger.info(
+            f"CryptoBot payment processed: user={telegram_id}, payment_id={payment_id}, "
+            f"purchase_id={purchase_id}"
+        )
+
     except ValueError as e:
-        # Pending purchase уже обработан или не найден - это нормально при повторных callback
-        logger.info(f"Crypto Bot webhook: purchase already processed (ValueError): purchase_id={purchase_id}, error={e}")
-        return web.json_response({"status": "already_processed"}, status=200)
+        logger.info(
+            f"CryptoBot webhook: purchase already processed (ValueError): "
+            f"purchase_id={purchase_id}, error={e}"
+        )
+        return {"status": "already_processed"}
     except Exception as e:
-        logger.exception(f"Crypto Bot webhook: finalize_purchase failed: user={telegram_id}, purchase_id={purchase_id}, error={e}")
-        # Payment remains in 'pending' status for manual review
-        return web.json_response({"status": "error"}, status=200)
-    
-    return web.json_response({"status": "ok"}, status=200)
+        logger.exception(
+            f"CryptoBot webhook: finalize_purchase failed: user={telegram_id}, "
+            f"purchase_id={purchase_id}, error={e}"
+        )
+        return {"status": "error"}
 
-
-async def register_webhook_route(app: web.Application, bot: Bot):
-    """Register Crypto Bot webhook route. Also registers unified /webhook/payment."""
-    async def webhook_handler(request: web.Request) -> web.Response:
-        return await handle_webhook(request, bot)
-
-    # Primary: Crypto Pay API uses this URL (configure in @CryptoBot)
-    app.router.add_post("/webhooks/cryptobot", webhook_handler)
-    # Unified: Single entry point for payment webhooks (routes by X-Crypto-Pay-API-Signature)
-    app.router.add_post("/webhook/payment", webhook_handler)
-    logger.info("Crypto Bot webhook registered: POST /webhooks/cryptobot, POST /webhook/payment")
-
+    return {"status": "ok"}
