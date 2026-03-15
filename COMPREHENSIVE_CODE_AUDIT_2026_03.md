@@ -1192,3 +1192,46 @@ Admin handlers импортируют из `admin/keyboards.py` (более по
 **Рекомендация:** Добавить `jitter_s = random.uniform(5, 60)` как в остальных воркерах.
 
 **Обновлённая статистика: +2 HIGH, +2 MED = 38 critical/high, 87 medium, 4 low — 129 issues total.**
+
+---
+
+# ДОПОЛНЕНИЕ 10. ТЕСТЫ — РАСШИРЕННЫЙ АНАЛИЗ
+
+### [T-HIGH-1] Неверная assertion в тесте webhook-подписей
+**Файл:** `tests/test_webhook_signatures.py:173`
+```python
+assert result["status"] != "unauthorized"  # Должно быть == "unauthorized"
+```
+**Проблема:** Тест `test_valid_auth_headers_accepted` передаёт `"wrong-secret"`, но проверяет `!= "unauthorized"`. Тест пройдёт при ЛЮБОМ статусе кроме "unauthorized" (включая "error", "ok", и т.д.). Если код не проверяет секрет — тест всё равно пройдёт.
+**Рекомендация:** Исправить на `assert result["status"] == "unauthorized"` или создать отдельный тест для валидных и невалидных секретов.
+
+### [T-HIGH-2] Функция should_expire_trial не тестируется
+**Файл:** `tests/services/test_trials.py`
+**Проблема:** Функция `should_expire_trial` импортирована (строка 15), но ни один тест её не вызывает. Комментарий на строке 45-46 признаёт: "requires database connection... better tested as integration test" — но интеграционного теста тоже нет.
+**Рекомендация:** Создать тест с мокированной БД или integration-тест.
+
+### [T-HIGH-3] Миграция 021 — swap PK без блокировки таблицы
+**Файл:** `migrations/021_promo_lifecycle_schema.sql:40-56`
+**Проблема:** DROP CONSTRAINT (PK) → ADD CONSTRAINT (новый PK). Между этими операциями параллельные INSERT могут создать дубликаты. PostgreSQL не блокирует INSERT во время DDL на constraint (ACCESS EXCLUSIVE lock берётся на каждый ALTER отдельно).
+**Рекомендация:** Обернуть в `LOCK TABLE promo_codes IN ACCESS EXCLUSIVE MODE` перед DROP или выполнять в одном ALTER.
+
+### [T-MED-2] CI не запускает миграции
+**Файл:** `.github/workflows/ci.yml:53-54`
+**Проблема:** PostgreSQL запускается как сервис, но `migrations.py` никогда не вызывается. Все тесты работают на моках. SQL-ошибки в миграциях (несуществующие столбцы, дубли UUID) не обнаруживаются в CI.
+**Рекомендация:** Добавить шаг `python migrations.py` перед запуском тестов. Добавить хотя бы один тест, проверяющий что миграции проходят на чистой БД.
+
+### [T-MED-3] Отсутствуют тестовые зависимости
+**Файл:** `requirements.txt`
+**Проблема:** Нет `pytest-cov` (coverage), `freezegun` (time mocking), `pytest-timeout`. Невозможно измерить покрытие, тесты могут зависать бесконечно.
+**Рекомендация:** Добавить `pytest-cov>=5.0`, `pytest-timeout>=2.3`, `freezegun>=1.4`.
+
+### [T-MED-4] Несогласованность ключа и часов в trial schedule
+**Файл:** `tests/services/test_trials.py:183`
+```python
+assert schedule[1]["key"] == "trial.notification_60h"  # 60h
+assert schedule[1]["hours"] == 48  # 48 часов, не 60
+```
+**Проблема:** Ключ i18n говорит "60h" (2.5 дня), но `hours=48` (2 дня). Либо ключ неверный, либо часы.
+**Рекомендация:** Проверить бизнес-требования и унифицировать.
+
+**Обновлённая статистика: +3 HIGH, +3 MED = 41 critical/high, 90 medium, 4 low — 135 issues total.**
