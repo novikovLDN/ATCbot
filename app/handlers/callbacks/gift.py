@@ -210,7 +210,7 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
     import cryptobot_service
     if cryptobot_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.crypto", "₿ Криптовалюта"),
+            text=i18n_get_text(language, "payment.crypto", "🌎 CryptoBot"),
             callback_data="gift_pay:crypto"
         )])
 

@@ -476,7 +476,7 @@ LANG = {
     'payment.sbp_waiting': "🏦 SBP Payment\n\nAmount: {amount:.2f} ₽ (including +11% fee)\n\n⏳ Follow the link to pay. Access will be granted automatically after confirmation.",
     'payment.sbp_pay_button': "🏦 Pay via SBP",
     'payment.sbp_unavailable': "SBP payment is temporarily unavailable",
-    'payment.crypto': "₿ Cryptocurrency",
+    'payment.crypto': "🌎 CryptoBot",
     'payment.crypto_waiting': "₿ Cryptocurrency Payment\n\nAmount: {amount:.2f} ₽\n\n⏳ Follow the link to pay via @CryptoBot.\nYour subscription will be activated automatically after confirmation.",
     'payment.crypto_pay_button': "₿ Pay via CryptoBot",
     'payment.crypto_unavailable': "Cryptocurrency payment is temporarily unavailable",
