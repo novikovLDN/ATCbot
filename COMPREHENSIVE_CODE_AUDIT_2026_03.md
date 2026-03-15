@@ -749,7 +749,9 @@ await callback.answer(
 | Производительность | 0 | 6 | 1 |
 | Workers | 0 | 4 | 0 |
 | Архитектура | 0 | 18 | 0 |
-| **Итого** | **22** | **61** | **3** |
+| Миграции | 2 | 4 | 0 |
+| Тесты | 2 | 1 | 1 |
+| **Итого** | **26** | **66** | **4** |
 
 > Примечание: "Безопасность (HIGH)" — это проблемы высокой серьёзности, не дотягивающие до CRIT, но требующие срочного внимания (admin auth bypass, brute force, missing signature validation).
 
@@ -808,3 +810,108 @@ await callback.answer(
 - pytest из production [S-MED-7], Refund как topup [A-11]
 - [A-15] — _REISSUE_LOCKS unbounded, [S-MED-10], [S-MED-11]
 - [A-16] — Audit failure cascade, [A-17] — Error disclosure, [A-18] — Logging format
+
+---
+
+# ДОПОЛНЕНИЕ 3. МИГРАЦИИ, ТЕСТЫ И СХЕМА БД
+
+## D3.1 МИГРАЦИИ
+
+### [M-CRIT-1] Дублированный номер миграции 006
+**Файлы:** `migrations/006_add_subscription_fields.sql`, `migrations/006_broadcast_discounts.sql`
+**Проблема:** Два файла с одинаковым номером 006. Порядок выполнения зависит от алфавитной сортировки (`006_add_subscription_fields` → `006_broadcast_discounts`), что ненадёжно. Если runner использует другую стратегию сортировки — одна из миграций может не выполниться или выполниться в неверном порядке.
+**Рекомендация:** Переименовать `006_broadcast_discounts.sql` в `006b_broadcast_discounts.sql` или в следующий свободный номер.
+
+### [M-CRIT-2] Пропущенные номера миграций: 011 и 030
+**Файлы:** отсутствуют `011_*.sql` и `030_*.sql`
+**Проблема:** Последовательность идёт 010 → 012 и 029 → 031. Если migration runner проверяет непрерывность номеров, он может зависнуть или выдать ошибку. Также это затрудняет аудит — неясно, были ли миграции удалены или никогда не существовали.
+**Рекомендация:** Задокументировать пропуски в `migrations/README.md` или создать файлы-заглушки (`011_placeholder.sql`, `030_placeholder.sql`) с комментарием "intentionally skipped".
+
+### [M-MED-1] Отсутствие rollback/DOWN секций
+**Файлы:** все 34 миграции
+**Проблема:** Ни одна миграция не содержит секции DOWN/ROLLBACK. При необходимости откатить изменение схемы — только ручное вмешательство.
+**Рекомендация:** Добавить DOWN-секции хотя бы для критических миграций (CREATE TABLE, ALTER TABLE). Для idempotent миграций с `IF NOT EXISTS` это менее критично.
+
+### [M-MED-2] CHECK constraint на tariff блокирует расширение тарифов
+**Файл:** `migrations/004_add_pending_purchases.sql:20`, `migrations/017_add_purchase_type_for_balance_topup.sql:30`
+```sql
+CHECK (tariff IN ('basic', 'plus'))
+CHECK (tariff IS NULL OR tariff IN ('basic', 'plus'))
+```
+**Проблема:** Business-тариф и любой новый тариф не пройдёт CHECK constraint. Это уже отмечено как [L-CRIT-6], но важно что constraint задан в двух разных миграциях — нужно менять оба.
+**Связано с:** [L-CRIT-6]
+
+### [M-MED-3] Смешанные типы для денежных значений
+**Файлы:** `migrations/001_init.sql`, `migrations/002_add_balance.sql`
+**Проблема:** `payments.amount` — `INTEGER`, `users.balance` — `INTEGER`, но `balance_transactions.amount` — `NUMERIC`. Смешение INTEGER (копейки) и NUMERIC (рубли с дробной частью) создаёт путаницу и риск ошибок при расчётах.
+**Рекомендация:** Стандартизировать: все суммы хранить в INTEGER (копейки) ИЛИ NUMERIC(12,2) (рубли). Добавить комментарии к столбцам с указанием единиц.
+
+### [M-MED-4] Отсутствие FOREIGN KEY между основными таблицами
+**Проблема:** FK определены только для `broadcast_stats → broadcasts` и `broadcast_discounts → broadcasts`. Нет FK:
+- `payments.telegram_id → users.telegram_id`
+- `subscriptions.telegram_id → users.telegram_id`
+- `referrals.referrer_id → users.telegram_id`
+- `pending_purchases.telegram_id → users.telegram_id`
+**Следствие:** Возможно создание "осиротевших" записей (payments для несуществующего пользователя). Также отсутствие FK лишает БД возможности автоматического каскадного удаления.
+**Рекомендация:** Добавить FK с `ON DELETE CASCADE` или `ON DELETE SET NULL` в зависимости от бизнес-логики. Или документировать решение не использовать FK как architectural decision.
+
+## D3.2 ТЕСТЫ
+
+### [T-CRIT-1] No-op тест: TestExpiredSubscriptionRemoved
+**Файл:** `tests/integration/test_vpn_entitlement.py:104-146`
+**Проблема:** Тест `test_fast_expiry_cleanup_calls_remove_for_expired` устанавливает все моки, но фактическое тело теста — `pass` (строка 143). Финальный assert — `assert True` (строка 146). Тест всегда проходит, ничего не проверяя.
+```python
+with patch("fast_expiry_cleanup.database._from_db_utc", side_effect=lambda x: x):
+    pass  # Structural test; full run would need event loop
+assert True
+```
+**Рекомендация:** Реализовать тест или пометить `@pytest.mark.skip(reason="not implemented")` чтобы не создавать ложное ощущение покрытия.
+
+### [T-CRIT-2] Тесты не запускаются из-за config import
+**Проблема:** При запуске `pytest` — crash на `config.py` из-за `PROD_BOT_TOKEN environment variable is not set!`. Модуль `config.py` вызывает `sys.exit(1)` при отсутствии обязательных env vars, что делает невозможным запуск тестов без полного production окружения.
+**Рекомендация:**
+1. Использовать `conftest.py` с `monkeypatch` для установки env vars до импорта config
+2. Или обернуть `sys.exit()` в config.py проверкой `if not os.getenv("TESTING")`
+3. Или использовать `.env.test` файл с mock-значениями
+
+### [T-MED-1] Массовые пробелы в тестовом покрытии
+**Проблема:** Не существует тестов для:
+- Referral system (регистрация рефералов, cashback расчёт, циклические рефералы)
+- Promo codes (создание, применение, лимиты использования, сроки)
+- Balance operations (пополнение, списание, транзакции)
+- Broadcast system (отправка, сегментация, шаблоны)
+- VPN key management (создание, перевыпуск, удаление)
+- Auto-renewal worker (продление, ошибки, нотификации)
+- Farm game (посадка, сбор, гниение, нотификации)
+- Games (bowling, dice, bomber — cooldowns, rewards)
+- Admin operations (grant access, switch tariff, finance)
+
+Из ~60+ модулей в проекте тесты покрывают только 5 файлов:
+- `test_webhook_signatures.py`
+- `services/test_admin.py`
+- `services/test_payments.py`
+- `services/test_subscriptions.py`
+- `services/test_trials.py`
+- `integration/test_vpn_entitlement.py` (частично no-op)
+
+### [T-LOW-1] Неиспользуемые fixtures в conftest.py
+**Файл:** `tests/conftest.py:62-74`
+**Проблема:** `mock_database` fixture определён, но не используется ни в одном тесте (тесты напрямую патчат `database` модуль через `unittest.mock.patch`).
+**Рекомендация:** Удалить неиспользуемые fixtures или переписать тесты для их использования.
+
+## D3.3 Обновлённые приоритеты
+
+### P0 (добавления):
+- [T-CRIT-2] — Исправить запуск тестов (без тестов невозможна CI/CD)
+
+### P1 (добавления):
+- [M-CRIT-1] — Дублированный номер миграции 006
+- [M-CRIT-2] — Задокументировать пропущенные номера миграций
+- [T-CRIT-1] — Исправить или удалить no-op тест
+
+### P2 (добавления):
+- [M-MED-1] — Добавить rollback секции
+- [M-MED-3] — Стандартизировать типы для денежных столбцов
+- [M-MED-4] — Добавить FOREIGN KEY
+- [T-MED-1] — Написать тесты для критических бизнес-модулей
+- [T-LOW-1] — Очистить conftest.py
