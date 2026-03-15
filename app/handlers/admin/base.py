@@ -82,8 +82,9 @@ async def callback_admin_dashboard(callback: CallbackQuery):
                 text += f"🆕 Новых: {daily.get('new_users', 0)} польз. | {daily.get('new_subscriptions', 0)} подп.\n"
                 text += f"💳 Платежей: {daily.get('payments_count', 0)}\n"
             except Exception as stats_err:
-                logger.warning(f"Failed to load dashboard metrics: {stats_err}")
-                text += "\n⚠️ Не удалось загрузить метрики\n"
+                logger.exception(f"Failed to load dashboard metrics: {stats_err}")
+                err_short = str(stats_err)[:120]
+                text += f"\n⚠️ Не удалось загрузить метрики\n<code>{err_short}</code>\n"
 
         # Uptime
         start_time = get_bot_start_time()
@@ -101,7 +102,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
 
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
 
         await database._log_audit_event_atomic_standalone(
