@@ -174,14 +174,14 @@ class RateLimiter:
             if bucket.consume(1):
                 return True, None
             else:
-                remaining = bucket.get_remaining()
-                wait_seconds = int((1.0 - remaining) / bucket.refill_rate) if bucket.refill_rate > 0 else config.window_seconds
-                
+                # Calculate wait time: time until at least 1 token refills
+                wait_seconds = max(1, int(1.0 / bucket.refill_rate)) if bucket.refill_rate > 0 else config.window_seconds
+
                 logger.warning(
                     f"[RATE_LIMIT] Rate limit exceeded: user={telegram_id}, action={action_key}, "
                     f"limit={config.max_requests}/{config.window_seconds}s, wait={wait_seconds}s"
                 )
-                
+
                 return False, f"Слишком много запросов. Попробуйте через {wait_seconds} секунд."
     
     def get_status(self, telegram_id: int, action_key: str) -> Dict[str, Any]:
