@@ -2148,12 +2148,12 @@ async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
         
         # Новые подписки
         new_subscriptions = await conn.fetchval(
-            """SELECT COUNT(*) 
-               FROM subscriptions 
-               WHERE created_at >= $1 AND created_at < $2""",
+            """SELECT COUNT(*)
+               FROM subscriptions
+               WHERE activated_at >= $1 AND activated_at < $2""",
             start_naive, end_naive
         ) or 0
-        
+
         return {
             "date": start_date.strftime("%Y-%m-%d"),
             "revenue": revenue,
@@ -2214,12 +2214,12 @@ async def get_monthly_summary(year: int, month: int) -> Dict[str, Any]:
         
         # Новые подписки
         new_subscriptions = await conn.fetchval(
-            """SELECT COUNT(*) 
-               FROM subscriptions 
-               WHERE created_at >= $1 AND created_at < $2""",
+            """SELECT COUNT(*)
+               FROM subscriptions
+               WHERE activated_at >= $1 AND activated_at < $2""",
             start_naive, end_naive
         ) or 0
-        
+
         return {
             "year": year,
             "month": month,
