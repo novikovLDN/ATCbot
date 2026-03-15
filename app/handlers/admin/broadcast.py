@@ -119,7 +119,7 @@ def _build_broadcast_reply_markup(
         elif btn == "channel":
             rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
         elif btn == "support":
-            rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/ATC_support")])
+            rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")])
         elif btn == "referral":
             if user_id and bot_username:
                 from urllib.parse import quote

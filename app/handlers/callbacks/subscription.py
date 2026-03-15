@@ -299,7 +299,7 @@ async def callback_vip_access(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.contact_manager_button"),
-            url="https://t.me/asc_support"
+            url="https://t.me/Atlas_SupportSecurity"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
