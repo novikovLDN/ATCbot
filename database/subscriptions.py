@@ -2856,7 +2856,13 @@ async def get_admin_stats() -> Dict[str, int]:
         - total_payments: всего платежей
         - approved_payments: подтверждённых платежей
     """
+    if not _core.DB_READY:
+        logger.warning("DB not ready, get_admin_stats skipped")
+        return {"total_users": 0, "active_subscriptions": 0, "expired_subscriptions": 0, "total_payments": 0, "approved_payments": 0}
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_admin_stats skipped")
+        return {"total_users": 0, "active_subscriptions": 0, "expired_subscriptions": 0, "total_payments": 0, "approved_payments": 0}
     async with pool.acquire() as conn:
         now = datetime.now(timezone.utc)
         

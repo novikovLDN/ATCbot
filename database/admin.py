@@ -2093,20 +2093,28 @@ async def get_referral_analytics() -> Dict[str, Any]:
 async def get_daily_summary(date: Optional[datetime] = None) -> Dict[str, Any]:
     """
     Получить ежедневную сводку
-    
+
     Args:
         date: Дата для сводки (если None, используется сегодня)
-    
+
     Returns:
         Словарь с ключами: revenue, payments_count, new_users, new_subscriptions
     """
+    _empty = {"date": "", "revenue": 0.0, "payments_count": 0, "new_users": 0, "new_subscriptions": 0}
+    if not _core.DB_READY:
+        logger.warning("DB not ready, get_daily_summary skipped")
+        return _empty
+
     if date is None:
         date = datetime.now(timezone.utc)
-    
+
     start_date = date.replace(hour=0, minute=0, second=0, microsecond=0)
     end_date = start_date + timedelta(days=1)
-    
+
     pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_daily_summary skipped")
+        return _empty
     async with pool.acquire() as conn:
         start_naive = _to_db_utc(start_date)
         end_naive = _to_db_utc(end_date)
