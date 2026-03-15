@@ -78,6 +78,23 @@ if x_telegram_bot_api_secret_token != config.WEBHOOK_SECRET:
 **Проблема:** Print-ы на уровне модуля выводятся при каждом импорте, включая тесты. Не критично для безопасности, но шумно.
 **Рекомендация:** Перевести на logging.
 
+### [S-MED-6] Referral код формата `ref_<telegram_id>` — enumerable
+**Файл:** `app/services/referrals/service.py:72`
+**Проблема:** Реферальный код напрямую содержит Telegram ID пользователя (`ref_123456`). Любой может перебором угадывать валидные реферальные коды.
+**Рекомендация:** Использовать opaque токены (hash или random UUID) вместо прямого Telegram ID.
+
+### [S-MED-7] confirmation.py — hardcoded Russian fallback в i18n_get_text
+**Файл:** `app/services/payments/confirmation.py:182`
+```python
+text = i18n_get_text(
+    language, "payment.success",
+    f"🎉 Оплата получена!\n{_emoji} Тариф: {_label}\n📅 До: {expires_str}",
+    ...
+)
+```
+**Проблема:** Если i18n ключ `payment.success` отсутствует в языке пользователя, отображается русский fallback. Нерусскоязычные пользователи увидят русский текст.
+**Рекомендация:** Убрать hardcoded fallback, полагаться на i18n fallback chain (язык → EN → ключ).
+
 ---
 
 # ЧАСТЬ 2. КОРРЕКТНОСТЬ ЛОГИКИ
@@ -168,6 +185,29 @@ await message.answer(text, reply_markup=get_language_keyboard("ru"))
 ```
 **Проблема:** Даже для существующих пользователей, которые уже выбрали язык, при /start всегда показывается экран выбора языка. Это может раздражать.
 **Рекомендация:** Для существующих пользователей показывать главное меню, выбор языка — только для новых.
+
+### [L-CRIT-5] Float-to-kopeck конвертация теряет точность
+**Файл:** `app/services/subscriptions/service.py:524`
+```python
+price_kopecks=int(amount_rubles * 100)
+```
+**Проблема:** IEEE 754 floating point: `int(0.29 * 100)` = `28` вместо `29`. Для некоторых сумм пользователь недоплатит 1 копейку, что может сломать amount validation.
+**Рекомендация:** Использовать `round(amount_rubles * 100)` или работать исключительно в копейках (int) по всей цепочке.
+
+### [L-MED-6] VPN client extend_user — telegram_id=0 пропускает DB update
+**Файл:** `app/services/vpn_client.py:157-158`
+**Проблема:** `if telegram_id:` falsy-check. `telegram_id=0` пройдёт как False, DB update будет пропущен, VPN обновится без синхронизации с БД.
+**Рекомендация:** Использовать `if telegram_id is not None:`.
+
+### [L-MED-7] Referral loop detection — только один уровень глубины
+**Файл:** `app/services/referrals/service.py:133-144`
+**Проблема:** Проверка цикла рефералов только на один уровень (A→B, B→A). Цепочка A→B→C→A не детектируется.
+**Рекомендация:** Рекурсивная проверка до 5 уровней или SQL CTE с ограничением глубины.
+
+### [L-MED-8] Дублирование DB запроса в referral service
+**Файл:** `app/services/referrals/service.py:116,132`
+**Проблема:** `referrer_user` получается дважды с одним и тем же ID — на строке 116 и 132. Избыточный DB-запрос.
+**Рекомендация:** Использовать результат первого запроса.
 
 ### [L-MED-5] Reminders worker проверяет подписки каждые 45 минут
 **Файл:** `reminders.py:213`
@@ -285,6 +325,33 @@ return [dict(row) for row in rows]
 **Проблема:** Много lazy imports внутри функций. Это допустимо для избежания circular imports, но затрудняет чтение.
 **Рекомендация:** Оставить как есть — circular imports реальная проблема в этом проекте.
 
+### [A-5] confirmation.py нарушает архитектуру service layer
+**Файл:** `app/services/payments/confirmation.py:13,188`
+**Проблема:** Service layer импортирует `from aiogram import Bot` и `from app.handlers.common.keyboards`. Все другие сервисы декларируют "No aiogram imports", этот — нарушает.
+**Рекомендация:** Вынести отправку уведомлений из confirmation.py в handler layer. Сервис должен возвращать результат, а handler — отправлять сообщение.
+
+### [A-6] PaymentFinalizationError дублируется в двух модулях
+**Файлы:** `app/services/payments/exceptions.py`, `app/services/subscriptions/exceptions.py`
+**Проблема:** Один и тот же exception class определён в двух модулях. Если один бросается, а другой ловится — exception не поймается.
+**Рекомендация:** Определить в одном месте, реэкспортировать из другого.
+
+### [A-7] Dead code — неиспользуемые exception classes
+**Файлы:** Разные
+- `ActivationMaxAttemptsReachedError` — определён, но нигде не поднимается
+- `PaymentAlreadyProcessedError` — определён, но нигде не поднимается
+- `ReminderType.REMINDER_6H` — определён, но не используется в `should_send_reminder()`
+**Рекомендация:** Удалить или начать использовать.
+
+### [A-8] Language resolution — нет кэширования
+**Файл:** `app/services/language_service.py:26`
+**Проблема:** `resolve_user_language()` вызывает `database.get_user()` на каждый вызов. При 10 вызовах в одном handler flow — 10 DB запросов для одного и того же telegram_id.
+**Рекомендация:** Добавить in-memory кэш с TTL 60 секунд или передавать language через middleware.
+
+### [A-9] Admin overview — 6 последовательных DB запросов
+**Файл:** `app/services/admin/service.py:60-112`
+**Проблема:** `get_admin_user_overview()` делает 6 последовательных DB вызовов: `get_user`, `get_subscription`, `get_user_extended_stats`, `get_user_discount`, `is_vip_user`, `is_trial_available`.
+**Рекомендация:** Использовать `asyncio.gather()` для параллельного выполнения.
+
 ---
 
 # ЧАСТЬ 7. ПРЕДЛОЖЕНИЯ ПО ТЕКСТАМ
@@ -349,11 +416,12 @@ return [dict(row) for row in rows]
 
 | Категория | Критические | Средние | Низкие |
 |-----------|-------------|---------|--------|
-| Безопасность | 3 | 5 | 2 |
-| Корректность логики | 4 | 5 | 0 |
+| Безопасность | 3 | 7 | 2 |
+| Корректность логики | 5 | 8 | 0 |
 | Производительность | 0 | 3 | 1 |
 | Workers | 0 | 3 | 0 |
-| **Итого** | **7** | **16** | **3** |
+| Архитектура | 0 | 9 | 0 |
+| **Итого** | **8** | **30** | **3** |
 
 ## Приоритеты исправления
 
@@ -361,15 +429,22 @@ return [dict(row) for row in rows]
 1. [S-CRIT-2] — Webhook 200 при ошибке может терять платежи
 2. [L-CRIT-3] — Нелокализованные уведомления автопродления
 3. [L-CRIT-4] — Нелокализованные уведомления активации
+4. [L-CRIT-5] — Float-to-kopeck потеря точности (финансовая ошибка)
 
 ### P1 (В ближайшие спринты):
 1. [S-CRIT-1] — Platega webhook аутентификация
 2. [S-CRIT-3] — MINI_APP_URL в config
 3. [S-MED-5] — Advisory lock enforcement
-4. [L-CRIT-1] — Проверить единицы баланса в auto_renewal
-5. [L-CRIT-2] — create_payment всегда 30 дней
+4. [S-MED-6] — Referral код enumerable
+5. [L-CRIT-1] — Проверить единицы баланса в auto_renewal
+6. [L-CRIT-2] — create_payment всегда 30 дней
+7. [A-5] — confirmation.py нарушает архитектуру service layer
+8. [A-6] — Дублирование PaymentFinalizationError
 
 ### P2 (При рефакторинге):
 - Все средние проблемы безопасности и корректности
 - Производительность export и metrics queries
 - Workers consistency
+- Dead code cleanup [A-7]
+- Language caching [A-8]
+- Admin overview parallelization [A-9]
