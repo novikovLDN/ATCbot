@@ -1,7 +1,8 @@
 """
 Database operations: Admin, Analytics, Broadcasts, Exports, Gifts, VIP, Discounts.
 
-All shared state (DB_READY, get_pool, helpers) imported from database.core.
+All shared state (get_pool, helpers) imported from database.core.
+DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
 Cross-module calls use lazy imports to avoid circular dependencies.
 """
 import asyncpg
@@ -12,8 +13,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import config
 import vpn_utils
+import database.core as _core
 from database.core import (
-    DB_READY, get_pool,
+    get_pool,
     _to_db_utc, _from_db_utc, _ensure_utc,
     _generate_subscription_uuid, safe_int,
     retry_async,
@@ -32,7 +34,7 @@ async def expire_old_pending_purchases() -> int:
         Количество истёкших покупок
     """
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, expire_old_pending_purchases skipped")
         return 0
     pool = await get_pool()
@@ -97,7 +99,7 @@ async def get_subscription_history(telegram_id: int, limit: int = 5) -> list:
         Список словарей с записями истории, отсортированные по created_at DESC
     """
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_subscription_history skipped")
         return []
     pool = await get_pool()
@@ -224,7 +226,7 @@ async def get_last_audit_logs(limit: int = 10) -> list:
     Returns:
         Список словарей с записями audit_log, отсортированных по created_at DESC
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_last_audit_logs skipped")
         return []
     
@@ -453,7 +455,7 @@ async def get_eligible_no_subscription_broadcast_users() -> list:
     Eligible = no active paid subscription, no active trial, is_reachable=TRUE.
     Returns list of dicts with telegram_id. Defensive: fallback if is_reachable missing.
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_eligible_no_subscription_broadcast_users skipped")
         return []
     pool = await get_pool()
@@ -526,7 +528,7 @@ async def insert_admin_broadcast_record(
     fail_count: int = 0
 ) -> Optional[int]:
     """Insert admin_broadcasts record. Returns id or None."""
-    if not DB_READY:
+    if not _core.DB_READY:
         return None
     try:
         pool = await get_pool()
@@ -549,7 +551,7 @@ async def insert_admin_broadcast_record(
 
 async def update_admin_broadcast_record(broadcast_id: int, success_count: int, fail_count: int) -> None:
     """Update admin_broadcasts record after completion."""
-    if not DB_READY or broadcast_id is None:
+    if not _core.DB_READY or broadcast_id is None:
         return
     try:
         pool = await get_pool()
@@ -668,7 +670,7 @@ async def get_incident_settings() -> Dict[str, Any]:
     Returns:
         Словарь с is_active и incident_text
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_incident_settings skipped")
         return {"is_active": False, "incident_text": None}
     
@@ -699,7 +701,7 @@ async def set_incident_mode(is_active: bool, incident_text: Optional[str] = None
         is_active: Активен ли режим инцидента
         incident_text: Текст инцидента (опционально)
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), set_incident_mode skipped")
         return
     

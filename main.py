@@ -124,6 +124,16 @@ async def main():
     if config.REDIS_URL:
         storage = RedisStorage.from_url(config.REDIS_URL)
         logger.info("FSM_STORAGE=redis (configured)")
+        # Validate Redis connectivity at startup
+        try:
+            from app.utils.redis_client import ping as redis_ping
+            redis_ok = await redis_ping()
+            if redis_ok:
+                logger.info("REDIS_CONNECTIVITY=ok")
+            else:
+                logger.warning("REDIS_CONNECTIVITY=failed — FSM storage may not work")
+        except Exception as e:
+            logger.warning("REDIS_CONNECTIVITY_CHECK error=%s", e)
     else:
         storage = MemoryStorage()
         logger.warning("FSM_STORAGE=memory — states will be lost on restart")
@@ -622,6 +632,13 @@ async def main():
             finally:
                 instance_lock_conn = None
         
+        # Close Redis client
+        try:
+            from app.utils.redis_client import close as redis_close
+            await redis_close()
+        except Exception as e:
+            logger.debug(f"Error closing Redis client: {e}")
+
         # Close DB pool
         try:
             await database.close_pool()

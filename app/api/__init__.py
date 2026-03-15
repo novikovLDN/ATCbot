@@ -47,12 +47,16 @@ async def health():
     1. database.DB_READY flag (safe-startup guard)
     2. Connection pool availability
     3. Actual DB connectivity via SELECT 1
+    4. Redis connectivity (if configured)
 
     Returns:
-        200 {"status": "ok", "database": "connected"} — all checks passed
-        503 {"status": "degraded", ...}                — DB not ready or check failed
+        200 {"status": "ok", ...}      — all checks passed
+        503 {"status": "degraded", ...} — DB or Redis not ready
     """
     import database
+    from app.utils.redis_client import ping as redis_ping, is_configured as redis_configured
+
+    result_body = {}
 
     # Check 1: DB_READY flag
     if not database.DB_READY:
@@ -85,6 +89,7 @@ async def health():
             result = await conn.fetchval("SELECT 1")
         if result != 1:
             raise ValueError(f"unexpected SELECT 1 result: {result}")
+        result_body["database"] = "connected"
     except Exception as e:
         logger.error("HEALTH_ENDPOINT db_query_error=%s", e)
         return JSONResponse(
@@ -92,4 +97,16 @@ async def health():
             status_code=503,
         )
 
-    return JSONResponse({"status": "ok", "database": "connected"})
+    # Check 4: Redis connectivity (if configured)
+    if redis_configured():
+        redis_ok = await redis_ping()
+        result_body["redis"] = "connected" if redis_ok else "unavailable"
+        if not redis_ok:
+            logger.warning("HEALTH_ENDPOINT redis=unavailable")
+            return JSONResponse(
+                {"status": "degraded", **result_body},
+                status_code=503,
+            )
+
+    result_body["status"] = "ok"
+    return JSONResponse(result_body)
