@@ -54,7 +54,7 @@ async def health_check_task(bot: Bot) -> None:
 
 
 async def _run_health_check(bot: Bot) -> None:
-    """Check DB connectivity. Alert admin if down."""
+    """Check DB and Redis connectivity. Alert admin if down."""
     if not database.DB_READY:
         logger.warning("HEALTH_CHECK db_ready=False")
         await _send_admin_alert(bot, "⚠️ Bot running in degraded mode (DB unavailable)")
@@ -70,9 +70,22 @@ async def _run_health_check(bot: Bot) -> None:
         async with pool.acquire() as conn:
             result = await conn.fetchval("SELECT 1")
             if result == 1:
-                logger.info("HEALTH_CHECK status=ok")
+                logger.info("HEALTH_CHECK db=ok")
             else:
                 logger.error("HEALTH_CHECK unexpected_result=%s", result)
     except Exception as e:
         logger.error("HEALTH_CHECK db_error=%s", e)
         await _send_admin_alert(bot, f"🚨 DB health check failed: {e}")
+
+    # Redis health check (if configured)
+    try:
+        from app.utils.redis_client import ping as redis_ping, is_configured as redis_configured
+        if redis_configured():
+            redis_ok = await redis_ping()
+            if redis_ok:
+                logger.info("HEALTH_CHECK redis=ok")
+            else:
+                logger.warning("HEALTH_CHECK redis=unavailable")
+                await _send_admin_alert(bot, "⚠️ Redis health check failed — FSM states may be lost")
+    except Exception as e:
+        logger.warning("HEALTH_CHECK redis_check_error=%s", e)

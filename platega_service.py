@@ -212,6 +212,3 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     )
 
 
-async def register_webhook_route(app, bot: Bot):
-    """Register Platega webhook route (legacy aiohttp — unused when running on FastAPI)."""
-    logger.info("Platega webhook registered via FastAPI: POST /webhooks/platega")

@@ -1,7 +1,8 @@
 """
 Database operations: Users, Balance, Farm, Withdrawals, Referrals.
 
-All shared state (DB_READY, get_pool, helpers) imported from database.core.
+All shared state (get_pool, helpers) imported from database.core.
+DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
 """
 import asyncpg
 import base64
@@ -12,8 +13,9 @@ import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, List
 import config
+import database.core as _core
 from database.core import (
-    DB_READY, get_pool, safe_int,
+    get_pool, safe_int,
     _to_db_utc, _from_db_utc, _ensure_utc,
     retry_async,
 )
@@ -23,7 +25,7 @@ logger = logging.getLogger(__name__)
 async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить пользователя по Telegram ID"""
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_user skipped")
         return None
     pool = await get_pool()
@@ -49,7 +51,7 @@ async def get_user_balance(telegram_id: int) -> float:
     """
     from decimal import Decimal
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_user_balance skipped")
         return 0.0
     pool = await get_pool()
@@ -90,7 +92,7 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
     amount_kopecks = round(amount * 100)
     
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, increase_balance skipped")
         return False
 
@@ -149,7 +151,7 @@ async def get_farm_data(telegram_id: int) -> Tuple[List[Dict[str, Any]], int, in
     Returns:
         Tuple of (farm_plots: list, plot_count: int, balance: int in kopecks)
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_farm_data skipped")
         return ([], 1, 0)
     
@@ -231,7 +233,7 @@ async def save_farm_plots(telegram_id: int, farm_plots: List[Dict[str, Any]]) ->
         telegram_id: Telegram ID пользователя
         farm_plots: Список объектов грядок
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, save_farm_plots skipped")
         return
     
@@ -255,7 +257,7 @@ async def update_farm_plot_count(telegram_id: int, count: int) -> None:
         telegram_id: Telegram ID пользователя
         count: Новое количество грядок
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, update_farm_plot_count skipped")
         return
     
@@ -279,7 +281,7 @@ async def get_users_with_active_farm() -> List[Dict[str, Any]]:
     Returns:
         List of user dicts with telegram_id, farm_plots, farm_plot_count
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_users_with_active_farm skipped")
         return []
     
@@ -321,7 +323,7 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
     amount_kopecks = round(amount * 100)
     
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, decrease_balance skipped")
         return False
 
@@ -398,7 +400,7 @@ async def log_balance_transaction(telegram_id: int, amount: float, transaction_t
     amount_kopecks = round(amount * 100)
     
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, log_balance_transaction skipped")
         return False
     pool = await get_pool()
@@ -445,7 +447,7 @@ async def create_withdrawal_request(
     if amount_kopecks <= 0:
         logger.error(f"Invalid amount_kopecks for create_withdrawal_request: {amount_kopecks}")
         return None
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, create_withdrawal_request skipped")
         return None
     pool = await get_pool()
@@ -506,7 +508,7 @@ async def create_withdrawal_request(
 
 async def get_withdrawal_request(wid: int) -> Optional[Dict[str, Any]]:
     """Получить заявку на вывод по ID."""
-    if not DB_READY:
+    if not _core.DB_READY:
         return None
     pool = await get_pool()
     if pool is None:
@@ -518,7 +520,7 @@ async def get_withdrawal_request(wid: int) -> Optional[Dict[str, Any]]:
 
 async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
     """Подтвердить заявку (status=approved). Средства уже списаны при создании."""
-    if not DB_READY:
+    if not _core.DB_READY:
         return False
     pool = await get_pool()
     if pool is None:
@@ -547,7 +549,7 @@ async def approve_withdrawal_request(wid: int, processed_by: int) -> bool:
 
 async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
     """Отклонить заявку и вернуть средства на баланс."""
-    if not DB_READY:
+    if not _core.DB_READY:
         return False
     pool = await get_pool()
     if pool is None:
@@ -679,7 +681,7 @@ async def create_user(telegram_id: int, username: Optional[str] = None, language
 
 async def find_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
     """Найти пользователя по referral_code"""
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), find_user_by_referral_code skipped")
         return None
     
@@ -712,7 +714,7 @@ async def register_referral(referrer_user_id: int, referred_user_id: int) -> boo
     Returns:
         True если регистрация успешна, False если уже зарегистрирован или ошибка
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), register_referral skipped")
         return False
     
@@ -836,7 +838,7 @@ async def mark_referral_active(referred_user_id: int, conn: Optional[asyncpg.Con
     Returns:
         True если успешно, False иначе
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), mark_referral_active skipped")
         return False
     
@@ -903,7 +905,7 @@ async def get_referral_stats(telegram_id: int) -> Dict[str, int]:
     Returns:
         Словарь с ключами: total_referred, total_rewarded
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_referral_stats skipped")
         return {"total_referred": 0, "total_rewarded": 0}
     
@@ -950,7 +952,7 @@ async def get_referral_cashback_percent(partner_id: int) -> int:
     
     SAFE: Всегда возвращает валидный процент, даже если данных нет
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_referral_cashback_percent skipped")
         return 10
     
@@ -1028,7 +1030,7 @@ async def get_referral_level_info(partner_id: int) -> Dict[str, Any]:
     
     SAFE: Всегда возвращает валидный словарь с безопасными значениями по умолчанию
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_referral_level_info skipped")
         return {
             "current_level": 10,
@@ -1158,7 +1160,7 @@ async def get_referral_metrics(user_id: int) -> Dict[str, int]:
             "active_paid_referrals": int  # Активных с подпиской
         }
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         return {
             "total_referrals": 0,
             "active_paid_referrals": 0
@@ -1297,7 +1299,7 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "remaining_connections": int  # До следующего уровня
         }
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         return {
             "total_invited": 0,
             "active_paid_referrals": 0,

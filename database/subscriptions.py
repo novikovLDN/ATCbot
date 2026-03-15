@@ -1,7 +1,8 @@
 """
 Database operations: Subscriptions, Payments, Trials, Access, Purchase flow, Promo codes, Reminders.
 
-All shared state (DB_READY, get_pool, helpers) imported from database.core.
+All shared state (get_pool, helpers) imported from database.core.
+DB_READY accessed via _core.DB_READY to get live value (not stale import-time copy).
 Cross-module calls (increase_balance, process_referral_reward) use lazy imports.
 """
 import asyncpg
@@ -14,8 +15,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import config
 import vpn_utils
+import database.core as _core
 from database.core import (
-    DB_READY, get_pool,
+    get_pool,
     _to_db_utc, _from_db_utc, _ensure_utc,
     _normalize_subscription_row, _generate_subscription_uuid,
     safe_int, mark_payment_notification_sent,
@@ -30,7 +32,7 @@ logger = logging.getLogger(__name__)
 async def get_pending_payment_by_user(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить pending платеж пользователя"""
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_pending_payment_by_user skipped")
         return None
     pool = await get_pool()
@@ -186,7 +188,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     Returns:
         True если подписка была отключена, False если подписка активна или отсутствует
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, check_and_disable_expired_subscription skipped")
         return False
     pool = await get_pool()
@@ -305,7 +307,7 @@ async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     await check_and_disable_expired_subscription(telegram_id)
     
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_subscription skipped")
         return None
     pool = await get_pool()
@@ -327,7 +329,7 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
     Возвращает подписку, если она существует, даже если expires_at <= now.
     """
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_subscription_any skipped")
         return None
     pool = await get_pool()
@@ -353,7 +355,7 @@ async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: O
     Returns:
         Обновлённая строка подписки или None, если активной подписки нет.
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, admin_switch_tariff skipped")
         return None
     pool = await get_pool()
@@ -893,7 +895,7 @@ async def _log_audit_event_atomic_standalone(
         details: Дополнительные детали действия (опционально, JSON string)
         correlation_id: Correlation ID for tracing (optional)
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), audit log skipped")
         return
     
@@ -2204,7 +2206,7 @@ async def get_subscriptions_needing_reminder() -> list:
     - expires_at <= now + 3 days
     """
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_subscriptions_needing_reminder skipped")
         return []
     now = datetime.now(timezone.utc)
@@ -2270,7 +2272,7 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
 
 async def mark_user_unreachable(telegram_id: int) -> None:
     """Mark user as unreachable (chat not found, blocked). Background workers filter by is_reachable."""
-    if not DB_READY:
+    if not _core.DB_READY:
         return
     try:
         pool = await get_pool()
@@ -2289,7 +2291,7 @@ async def mark_user_unreachable(telegram_id: int) -> None:
 
 async def update_last_reminder_at(subscription_id: int) -> None:
     """Update last_reminder_at for idempotency guard (container restart protection)."""
-    if not DB_READY:
+    if not _core.DB_READY:
         return
     try:
         pool = await get_pool()
@@ -2434,7 +2436,7 @@ async def create_promocode_atomic(
     Returns:
         ID созданного промокода или None при конфликте/ошибке
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, create_promocode_atomic skipped")
         return None
     pool = await get_pool()
@@ -2535,7 +2537,7 @@ async def deactivate_promocode(promo_id: Optional[int] = None, code: Optional[st
     Деактивировать промокод: UPDATE is_active=false, deleted_at=now().
     Передайте promo_id (предпочтительно) или code. Логирует PROMO_DEACTIVATED.
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         return False
     pool = await get_pool()
     if pool is None:
@@ -2635,7 +2637,7 @@ async def validate_promocode_atomic(code: str) -> Dict[str, Any]:
     Returns:
         {"success": bool, "promo_data": Optional[Dict], "error": Optional[str]}
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         return {"success": False, "promo_data": None, "error": "invalid"}
     pool = await get_pool()
     if pool is None:
@@ -2666,7 +2668,7 @@ async def consume_promocode_atomic(code: str, telegram_id: int) -> None:
     Raises:
         ValueError: Если промокод не найден, уже исчерпан или невалиден
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         raise ValueError("PROMO_DB_NOT_READY")
     
     pool = await get_pool()
@@ -2808,7 +2810,7 @@ async def get_subscriptions_for_reminders() -> list:
     Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
     """
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_subscriptions_for_reminders skipped")
         return []
     pool = await get_pool()
@@ -2919,7 +2921,7 @@ async def get_admin_referral_stats(
         - current_cashback_percent: Текущий процент кешбэка
         - first_referral_date: Дата первого приглашения
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_admin_referral_stats skipped")
         return []
     
@@ -3093,7 +3095,7 @@ async def get_admin_referral_detail(referrer_id: int) -> Optional[Dict[str, Any]
           - cashback_amount: Сумма кешбэка (рубли)
           - purchase_id: ID платежа
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_admin_referral_detail skipped")
         return None
     
@@ -3186,7 +3188,7 @@ async def get_referral_overall_stats(
         - total_cashback_paid: Общий выплаченный кешбэк (рубли)
         - avg_cashback_per_referrer: Средний кешбэк на реферера (рубли)
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready (degraded mode), get_referral_overall_stats skipped")
         return {
             "total_referrers": 0,
@@ -3646,7 +3648,7 @@ async def get_pending_purchase(purchase_id: str, telegram_id: int, check_expiry:
         Словарь с данными покупки, если валидна, иначе None
     """
     # Защита от работы с неинициализированной БД
-    if not DB_READY:
+    if not _core.DB_READY:
         logger.warning("DB not ready, get_pending_purchase skipped")
         return None
     pool = await get_pool()
@@ -3687,7 +3689,7 @@ async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = Fals
     Returns:
         Словарь с данными покупки или None
     """
-    if not DB_READY:
+    if not _core.DB_READY:
         return None
     pool = await get_pool()
     if pool is None:
