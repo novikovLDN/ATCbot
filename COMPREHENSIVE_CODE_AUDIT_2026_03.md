@@ -1151,3 +1151,44 @@ Admin handlers импортируют из `admin/keyboards.py` (более по
 **Рекомендация:** Задокументировать pre-migration проверку: `SELECT DISTINCT date_part('timezone', expires_at) FROM subscriptions`.
 
 **Обновлённая статистика: +2 HIGH, +1 MED = 36 critical/high, 85 medium, 4 low — 125 issues total.**
+
+---
+
+# ДОПОЛНЕНИЕ 9. I18N — ДОПОЛНИТЕЛЬНЫЕ НАХОДКИ (WORKER NOTIFICATIONS)
+
+### [I18N-HIGH-1] Хардкод русского текста в уведомлениях воркеров
+**Файлы:**
+- `auto_renewal.py:339-341` — уведомление о продлении подписки
+- `auto_renewal.py:239,268,289` — описания транзакций баланса
+- `activation_worker.py:212-215` — welcome-сообщение для новых подписчиков
+- `app/workers/farm_notifications.py:71-101` — 3 уведомления фермы (созрели/предупреждение/сгнили)
+- `app/workers/farm_notifications.py:25-30` — русские имена растений в PLANT_TYPES fallback
+
+**Проблема:** Эти воркеры отправляют уведомления пользователям с хардкод-текстом на русском. Пользователи с en/de/uz/tj/kk/ar языком получат русские сообщения. farm_notifications — наиболее критичный случай: 7+ строк хардкода.
+**Рекомендация:** Загружать `lang` пользователя из БД и вызывать `get_text(lang, key)` для всех user-facing строк. Создать соответствующие i18n-ключи во всех языковых файлах.
+
+### [I18N-HIGH-2] Placeholder mismatch в games.dice_success
+**Файлы:** `app/i18n/ru.py` vs `app/i18n/en.py`
+**Проблема:** EN-версия использует `{value}`, RU-версия использует `{date}` и `{value}`. Если код вызывает `get_text("ru", "games.dice_success", value=x)` без `date`, форматирование выбросит `KeyError`.
+**Рекомендация:** Унифицировать плейсхолдеры во всех языковых файлах.
+
+### [I18N-MED-5] 5 ключей отсутствуют в ru.py
+**Файл:** `app/i18n/ru.py`
+**Ключи:**
+- `payment.success_welcome_basic`
+- `payment.success_welcome_plus`
+- `referral.cashback_referred`
+- `referral.registered_user`
+- `referral.trial_activated_user`
+
+**Проблема:** Эти ключи есть в EN, но отсутствуют в RU. Fallback на английский — не критично, но нарушает UX для русскоязычных пользователей.
+**Рекомендация:** Добавить переводы в ru.py.
+
+### [W-MED-1] Отсутствие jitter при старте reminders и farm_notifications
+**Файлы:**
+- `reminders.py:160` — фиксированный `sleep(60)`
+- `app/workers/farm_notifications.py:114` — фиксированный `sleep(60)`
+**Проблема:** Все остальные воркеры используют `random.uniform(5, 60)` jitter, эти два — нет. При одновременном рестарте контейнеров оба проснутся ровно через 60с, создав пиковую нагрузку на пул.
+**Рекомендация:** Добавить `jitter_s = random.uniform(5, 60)` как в остальных воркерах.
+
+**Обновлённая статистика: +2 HIGH, +2 MED = 38 critical/high, 87 medium, 4 low — 129 issues total.**
