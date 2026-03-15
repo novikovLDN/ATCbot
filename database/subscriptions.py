@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import random
+import string
 import uuid as uuid_lib
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
@@ -66,6 +67,7 @@ async def create_payment(telegram_id: int, tariff: str) -> Optional[int]:
     base_price = tariff_data.get("price", 149)
     
     # ПРИОРИТЕТ 1: Проверяем VIP-статус (высший приоритет)
+    from database.admin import is_vip_user, get_user_discount
     is_vip = await is_vip_user(telegram_id)
     discount_applied = None
     discount_type = None
@@ -2238,13 +2240,29 @@ async def mark_reminder_sent(telegram_id: int):
         )
 
 
-# Whitelist допустимых flag_name для mark_reminder_flag_sent (SQL injection protection)
-_ALLOWED_REMINDER_FLAGS = frozenset({
-    "reminder_3d_sent",
-    "reminder_24h_sent",
-    "reminder_3h_sent",
-    "reminder_6h_sent",
-})
+# SECURITY: Pre-built SQL queries for each reminder flag.
+# Eliminates f-string SQL interpolation — only static SQL strings are used.
+_REMINDER_FLAG_UPDATE_QUERIES = {
+    "reminder_3d_sent": (
+        "UPDATE subscriptions SET reminder_3d_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
+    "reminder_24h_sent": (
+        "UPDATE subscriptions SET reminder_24h_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
+    "reminder_3h_sent": (
+        "UPDATE subscriptions SET reminder_3h_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
+    "reminder_6h_sent": (
+        "UPDATE subscriptions SET reminder_6h_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
+}
+
+# Expose frozenset for external validation (used by app/services/notifications/service.py)
+_ALLOWED_REMINDER_FLAGS = frozenset(_REMINDER_FLAG_UPDATE_QUERIES.keys())
 
 
 async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
@@ -2257,17 +2275,15 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
     Raises:
         ValueError: если flag_name не в whitelist
     """
-    if flag_name not in _ALLOWED_REMINDER_FLAGS:
+    query = _REMINDER_FLAG_UPDATE_QUERIES.get(flag_name)
+    if query is None:
         raise ValueError(
             f"Invalid flag_name '{flag_name}'. "
             f"Allowed: {sorted(_ALLOWED_REMINDER_FLAGS)}"
         )
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            f"UPDATE subscriptions SET {flag_name} = TRUE, last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1",
-            telegram_id
-        )
+        await conn.execute(query, telegram_id)
 
 
 async def mark_user_unreachable(telegram_id: int) -> None:
@@ -3508,12 +3524,13 @@ async def calculate_final_price(
     has_promo = promo_data is not None
     
     # ПРИОРИТЕТ 1: VIP-статус (только если нет промокода)
-    is_vip = await is_vip_user(telegram_id) if not has_promo else False
-    
+    from database.admin import is_vip_user as _is_vip, get_user_discount as _get_discount
+    is_vip = await _is_vip(telegram_id) if not has_promo else False
+
     # ПРИОРИТЕТ 2: Персональная скидка (только если нет промокода и VIP)
     personal_discount = None
     if not has_promo and not is_vip:
-        personal_discount = await get_user_discount(telegram_id)
+        personal_discount = await _get_discount(telegram_id)
     
     # Применяем скидку в порядке приоритета
     discount_amount_kopecks = 0
@@ -4039,6 +4056,7 @@ async def finalize_purchase(
                         raise Exception(f"Failed to create payment record for gift: purchase_id={purchase_id}")
 
                     # Создаём подарочную подписку
+                    from database.admin import generate_gift_code
                     gift_code = generate_gift_code()
                     gift_expires = now_utc + timedelta(days=90)
                     await conn.execute(

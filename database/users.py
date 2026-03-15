@@ -1608,6 +1608,7 @@ async def process_referral_reward(
             f"purchase={amount_rubles:.2f} RUB, reward={reward_amount_rubles:.2f} RUB "
             f"({reward_amount_kopecks} kopecks), paid_referrals_count={paid_referrals_count}"
         )
+        from database.subscriptions import _log_audit_event_atomic
         await _log_audit_event_atomic(
             conn,
             "referral_reward",

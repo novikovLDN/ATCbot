@@ -30,8 +30,10 @@ from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
 
-# Store references to fire-and-forget tasks to prevent "Task exception was never retrieved"
-_background_tasks: weakref.WeakSet = weakref.WeakSet()
+# Store strong references to fire-and-forget tasks to prevent GC and ensure
+# "Task exception was never retrieved" warnings are suppressed.
+# Tasks auto-remove on completion via done_callback.
+_background_tasks: set = set()
 
 
 def _fire_and_forget(coro) -> None:
@@ -41,7 +43,13 @@ def _fire_and_forget(coro) -> None:
         if loop.is_running():
             task = asyncio.create_task(coro)
             _background_tasks.add(task)
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+
+            def _task_done(t):
+                _background_tasks.discard(t)
+                if not t.cancelled() and t.exception():
+                    logger.warning(f"Background VPN audit task failed: {t.exception()}")
+
+            task.add_done_callback(_task_done)
     except Exception as e:
         logger.warning(f"Failed to schedule background task: {e}")
 

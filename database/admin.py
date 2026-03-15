@@ -494,6 +494,7 @@ async def get_eligible_no_subscription_broadcast_users() -> list:
 
 async def check_user_still_eligible_for_no_sub_broadcast(conn, telegram_id: int, now: datetime) -> bool:
     """Race-condition re-check before sending. Returns True if still eligible."""
+    from database.subscriptions import get_active_paid_subscription
     paid = await get_active_paid_subscription(conn, telegram_id, now)
     if paid:
         return False
@@ -1084,6 +1085,7 @@ async def finalize_balance_purchase(
                 
                 # STEP 1.5: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
                 if promo_code:
+                    from database.subscriptions import _consume_promo_in_transaction
                     await _consume_promo_in_transaction(conn, promo_code, telegram_id, None)
                 
                 # STEP 2: Активируем подписку

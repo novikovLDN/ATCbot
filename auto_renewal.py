@@ -261,13 +261,25 @@ async def process_auto_renewals(bot: Bot):
                                     f"Auto-renewal ERROR: UUID was regenerated instead of renewal! "
                                     f"user={telegram_id}, action={action_type}, has_vless_url={result.get('vless_url') is not None}"
                                 )
-                                await database.increase_balance(
+                                refund_ok = await database.increase_balance(
                                     telegram_id=telegram_id,
                                     amount=amount_rubles,
                                     source="refund",
                                     description=f"Возврат средств: ошибка автопродления (UUID пересоздан)",
                                     conn=conn
                                 )
+                                if not refund_ok:
+                                    logger.critical(
+                                        f"REFUND_FAILED: user={telegram_id}, amount={amount_rubles} RUB, "
+                                        f"reason=UUID_regenerated, refund_returned=False"
+                                    )
+                                    from app.services.admin_alerts import alert_payment_failure
+                                    await alert_payment_failure(
+                                        bot, "auto_renewal", telegram_id,
+                                        f"refund_uuid_regen_{telegram_id}",
+                                        RuntimeError(f"Refund failed after UUID regeneration, amount={amount_rubles}"),
+                                        is_transient=False,
+                                    )
                                 continue
                             
                             subscription_row = await conn.fetchrow(
@@ -282,13 +294,25 @@ async def process_auto_renewals(bot: Bot):
                             
                             if expires_at is None:
                                 logger.error(f"Failed to renew subscription for auto-renewal: user={telegram_id}, expires_at=None")
-                                await database.increase_balance(
+                                refund_ok = await database.increase_balance(
                                     telegram_id=telegram_id,
                                     amount=amount_rubles,
                                     source="refund",
                                     description=f"Возврат средств за неудачное автопродление",
                                     conn=conn
                                 )
+                                if not refund_ok:
+                                    logger.critical(
+                                        f"REFUND_FAILED: user={telegram_id}, amount={amount_rubles} RUB, "
+                                        f"reason=expires_at_None, refund_returned=False"
+                                    )
+                                    from app.services.admin_alerts import alert_payment_failure
+                                    await alert_payment_failure(
+                                        bot, "auto_renewal", telegram_id,
+                                        f"refund_renewal_fail_{telegram_id}",
+                                        RuntimeError(f"Refund failed after renewal failure, amount={amount_rubles}"),
+                                        is_transient=False,
+                                    )
                                 continue
                             
                             tariff_str = f"{tariff_type}_{period_days}"
