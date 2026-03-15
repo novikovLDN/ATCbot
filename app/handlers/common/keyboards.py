@@ -14,7 +14,7 @@ from app.services.trials import service as trial_service
 
 logger = logging.getLogger(__name__)
 
-MINI_APP_URL = "https://atlas-miniapp-production.up.railway.app"
+MINI_APP_URL = "https://atlas-miniapp-production-3495.up.railway.app"
 
 
 def get_connect_button():
