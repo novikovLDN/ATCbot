@@ -527,7 +527,17 @@ async def init_db() -> bool:
         except Exception:
             # Columns may already exist or migration handles this
             pass
-        
+
+        # SECURITY: Unique constraint on purchase_id for approved/paid payments (idempotency)
+        try:
+            await conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_unique_purchase_approved
+                ON payments(purchase_id)
+                WHERE purchase_id IS NOT NULL AND status IN ('approved', 'paid')
+            """)
+        except Exception:
+            pass
+
         # Таблица subscriptions
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (

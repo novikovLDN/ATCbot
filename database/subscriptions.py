@@ -3967,14 +3967,16 @@ async def finalize_purchase(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Pre-fetch (read-only, outside transaction) for two-phase activation
+        # Pre-fetch with FOR UPDATE SKIP LOCKED to prevent concurrent finalization
+        # SECURITY: Row-level lock ensures only one webhook can process a purchase at a time
         pending_row = await conn.fetchrow(
-            "SELECT * FROM pending_purchases WHERE purchase_id = $1",
+            "SELECT * FROM pending_purchases WHERE purchase_id = $1 FOR UPDATE SKIP LOCKED",
             purchase_id
         )
         if not pending_row:
-            error_msg = f"Pending purchase not found: purchase_id={purchase_id}"
-            logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found, {error_msg}")
+            # Could be not found OR locked by another concurrent finalization
+            error_msg = f"Pending purchase not found or locked: purchase_id={purchase_id}"
+            logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found_or_locked, {error_msg}")
             raise ValueError(error_msg)
         pending_purchase = dict(pending_row)
         telegram_id = pending_purchase["telegram_id"]
@@ -3993,11 +3995,14 @@ async def finalize_purchase(
         is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
         is_gift_purchase = (purchase_type == "gift")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
-        if amount_diff > 1.0:
+        # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
+        # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
+        max_tolerance = max(0.50, expected_amount_rubles * 0.005)
+        if amount_diff > max_tolerance:
             error_msg = (
                 f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
                 f"expected={expected_amount_rubles:.2f} RUB, actual={amount_rubles:.2f} RUB, "
-                f"diff={amount_diff:.2f} RUB"
+                f"diff={amount_diff:.2f} RUB (tolerance={max_tolerance:.2f} RUB)"
             )
             logger.error(f"finalize_purchase: PAYMENT_AMOUNT_MISMATCH: {error_msg}")
             raise ValueError(error_msg)
@@ -4307,15 +4312,15 @@ async def finalize_purchase(
                         raise Exception(error_msg)
                 
                     # API is source of truth — vpn_key from API, no local validation
-                    # STEP 6: Обновляем payment → approved
+                    # STEP 6: Потребляем промокод ПЕРЕД approve (если consumption упадёт — payment не будет approved)
+                    if promo_code:
+                        await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
+
+                    # STEP 7: Обновляем payment → approved (ПОСЛЕ promo consumption для атомарности)
                     await conn.execute(
                         "UPDATE payments SET status = 'approved' WHERE id = $1",
                         payment_id
                     )
-                
-                    # STEP 7: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
-                    if promo_code:
-                        await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
                 
                     # STEP 8: Обрабатываем реферальный кешбэк
                     # Обработка реферального кешбэка внутри той же транзакции

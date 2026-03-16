@@ -1616,13 +1616,23 @@ async def process_referral_reward(
         )
         
         # 9. Создаём запись в referral_rewards (история начислений)
-        # Если это упадет - исключение пробросится вверх, транзакция откатится
-        await conn.execute(
+        # SECURITY: ON CONFLICT предотвращает повторное начисление при race condition
+        insert_result = await conn.execute(
             """INSERT INTO referral_rewards
                (referrer_id, buyer_id, purchase_id, purchase_amount, percent, reward_amount)
-               VALUES ($1, $2, $3, $4, $5, $6)""",
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (buyer_id, purchase_id) DO NOTHING""",
             referrer_id, buyer_id, purchase_id, purchase_amount_kopecks, effective_percent, reward_amount_kopecks
         )
+        if insert_result == "INSERT 0":
+            # Race condition: another concurrent transaction already inserted this reward
+            logger.warning(
+                f"REFERRAL_REWARD_DUPLICATE_PREVENTED: buyer_id={buyer_id}, purchase_id={purchase_id} "
+                f"(concurrent insert detected, rolling back balance credit)"
+            )
+            raise ValueError(
+                f"Duplicate referral reward prevented for buyer_id={buyer_id}, purchase_id={purchase_id}"
+            )
         
         # 10. Логируем событие
         details = (

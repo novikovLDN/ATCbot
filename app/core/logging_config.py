@@ -22,6 +22,7 @@ import json as json_module
 import logging
 import os
 import queue
+import re
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -40,6 +41,52 @@ class MaxLevelFilter(logging.Filter):
 
     def filter(self, record):
         return record.levelno <= self.max_level
+
+
+class PIISanitizingFilter(logging.Filter):
+    """
+    SECURITY: Sanitize PII from log messages and exception tracebacks.
+
+    Masks VPN keys (vless://...), long tokens, and other sensitive data
+    that might leak through exception tracebacks in production logs.
+    """
+
+    # Patterns to sanitize (compiled once for performance)
+    _PATTERNS = [
+        # VLESS keys: vless://uuid@host:port?...#name
+        (re.compile(r'vless://[^\s"\']+', re.IGNORECASE), 'vless://***REDACTED***'),
+        # Bearer tokens
+        (re.compile(r'Bearer\s+[A-Za-z0-9._\-]+', re.IGNORECASE), 'Bearer ***'),
+        # Bot tokens: 123456:ABC-DEF...
+        (re.compile(r'\b\d{8,10}:[A-Za-z0-9_\-]{30,50}\b'), '***BOT_TOKEN***'),
+        # Database URLs: postgresql://user:pass@host/db
+        (re.compile(r'postgresql://[^\s"\']+', re.IGNORECASE), 'postgresql://***REDACTED***'),
+        # UUID values in arguments (only in traceback context, 36 chars)
+        (re.compile(r'uuid=["\']?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}["\']?', re.IGNORECASE),
+         'uuid=***'),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Sanitize PII in log message and exception info."""
+        if record.args:
+            # Sanitize formatted message args
+            record.msg = self._sanitize(record.getMessage())
+            record.args = None
+
+        if isinstance(record.msg, str):
+            record.msg = self._sanitize(record.msg)
+
+        if record.exc_text:
+            record.exc_text = self._sanitize(record.exc_text)
+
+        return True
+
+    @classmethod
+    def _sanitize(cls, text: str) -> str:
+        """Apply all sanitization patterns."""
+        for pattern, replacement in cls._PATTERNS:
+            text = pattern.sub(replacement, text)
+        return text
 
 
 class JSONFormatter(logging.Formatter):
@@ -98,6 +145,11 @@ def setup_logging():
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(logging.ERROR)
     stderr_handler.setFormatter(formatter)
+
+    # SECURITY: Add PII sanitizing filter to prevent sensitive data in logs
+    pii_filter = PIISanitizingFilter()
+    stdout_handler.addFilter(pii_filter)
+    stderr_handler.addFilter(pii_filter)
 
     log_queue = queue.Queue()
     root_logger.addHandler(QueueHandler(log_queue))

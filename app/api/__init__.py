@@ -108,5 +108,26 @@ async def health():
                 status_code=503,
             )
 
+    # Check 5: Payment providers status (non-blocking, informational)
+    payment_providers = {}
+    try:
+        import platega_service
+        payment_providers["platega"] = "enabled" if platega_service.is_enabled() else "disabled"
+    except Exception:
+        payment_providers["platega"] = "import_error"
+    try:
+        import cryptobot_service
+        payment_providers["cryptobot"] = "enabled" if cryptobot_service.is_enabled() else "disabled"
+    except Exception:
+        payment_providers["cryptobot"] = "import_error"
+
+    # Check 6: VPN API status
+    try:
+        import config as _cfg
+        payment_providers["vpn_api"] = "enabled" if _cfg.VPN_ENABLED else "disabled"
+    except Exception:
+        payment_providers["vpn_api"] = "unknown"
+
+    result_body["payment_providers"] = payment_providers
     result_body["status"] = "ok"
     return JSONResponse(result_body)
