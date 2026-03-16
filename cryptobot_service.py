@@ -199,9 +199,22 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
     telegram_id = lookup["telegram_id"]
 
     # Get payment amount in RUB
-    amount_rubles = float(payload_obj.get("amount", 0))
-    if amount_rubles <= 0:
-        amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    raw_amount = float(payload_obj.get("amount", 0))
+    expected_amount = pending_purchase["price_kopecks"] / 100.0
+    if raw_amount <= 0:
+        logger.warning(
+            f"CryptoBot webhook: amount missing or zero, using stored price. "
+            f"purchase_id={purchase_id}, raw_amount={raw_amount}, expected={expected_amount}"
+        )
+        amount_rubles = expected_amount
+    elif abs(raw_amount - expected_amount) > 1.0:
+        logger.warning(
+            f"CryptoBot webhook: amount mismatch. purchase_id={purchase_id}, "
+            f"webhook_amount={raw_amount}, expected={expected_amount}"
+        )
+        amount_rubles = raw_amount
+    else:
+        amount_rubles = raw_amount
 
     logger.info(
         f"payment_event_received: provider=cryptobot, user={telegram_id}, "

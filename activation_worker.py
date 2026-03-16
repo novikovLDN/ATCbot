@@ -160,7 +160,11 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                     logger.critical(f"ACTIVATION_DB_FAILURE: Failed to mark expired subscription as failed: sub={subscription_id}, error={e}")
                     from app.services.admin_alerts import alert_subscription_failure
                     await alert_subscription_failure(
-                        bot, telegram_id, f"mark_expired_failed (sub={subscription_id})", e
+                        bot, telegram_id, f"mark_expired_failed (sub={subscription_id})", e,
+                        amount_rubles=pending_sub.amount_rubles,
+                        tariff=pending_sub.subscription_type,
+                        period_days=pending_sub.period_days,
+                        subscription_id=subscription_id,
                     )
             else:
                 logger.info(
@@ -278,10 +282,17 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             )
                             try:
                                 admin_lang = "ru"
+                                from datetime import datetime, timezone as _tz
+                                _now_str = datetime.now(_tz.utc).strftime("%d.%m.%Y %H:%M UTC")
+                                _tariff_line = f"\nТариф: {pending_sub.subscription_type or 'N/A'}"
+                                _amount_line = f"\nСумма: {pending_sub.amount_rubles} RUB" if pending_sub.amount_rubles else ""
+                                _period_line = f"\nСрок: {pending_sub.period_days} дн." if pending_sub.period_days else ""
                                 admin_message = (
                                     f"{i18n.get_text(admin_lang, 'admin.activation_error_title')}\n\n"
+                                    f"Дата: {_now_str}\n"
                                     f"{i18n.get_text(admin_lang, 'admin.activation_error_subscription_id', subscription_id=subscription_id)}\n"
-                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}\n"
+                                    f"{i18n.get_text(admin_lang, 'admin.activation_error_user', telegram_id=telegram_id)}"
+                                    f"{_tariff_line}{_amount_line}{_period_line}\n"
                                     f"{i18n.get_text(admin_lang, 'admin.activation_error_attempts', attempts=new_attempts, max_attempts=MAX_ACTIVATION_ATTEMPTS)}\n"
                                     f"{i18n.get_text(admin_lang, 'admin.activation_error_error', error_msg=error_msg)}\n\n"
                                     f"{i18n.get_text(admin_lang, 'admin.activation_error_status')}\n"
@@ -305,7 +316,11 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                         )
                         from app.services.admin_alerts import alert_subscription_failure
                         await alert_subscription_failure(
-                            bot, telegram_id, f"activation_db_update (sub={subscription_id})", db_error
+                            bot, telegram_id, f"activation_db_update (sub={subscription_id})", db_error,
+                            amount_rubles=pending_sub.amount_rubles,
+                            tariff=pending_sub.subscription_type,
+                            period_days=pending_sub.period_days,
+                            subscription_id=subscription_id,
                         )
                 except ActivationFailedError as e:
                     error_msg = str(e)
@@ -331,7 +346,11 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                         )
                         from app.services.admin_alerts import alert_subscription_failure
                         await alert_subscription_failure(
-                            bot, telegram_id, f"activation_db_update_2 (sub={subscription_id})", db_error
+                            bot, telegram_id, f"activation_db_update_2 (sub={subscription_id})", db_error,
+                            amount_rubles=pending_sub.amount_rubles,
+                            tariff=pending_sub.subscription_type,
+                            period_days=pending_sub.period_days,
+                            subscription_id=subscription_id,
                         )
 
             # Connection released before sleep — no conn held during asyncio.sleep
@@ -455,6 +474,11 @@ async def activation_worker_task(bot: Bot):
             logger.debug("activation_worker: Full traceback for task loop", exc_info=True)
             outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "activation_worker", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000

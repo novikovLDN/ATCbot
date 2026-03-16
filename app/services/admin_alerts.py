@@ -13,6 +13,7 @@ Rate-limited per category to prevent alert storms.
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import config
@@ -75,8 +76,20 @@ async def send_alert(
         logger.info(f"ADMIN_ALERT_SENT category={category}")
         return True
     except Exception as e:
-        logger.warning(f"ADMIN_ALERT_FAILED category={category} error={e}")
-        return False
+        logger.error(f"ADMIN_ALERT_FAILED category={category} error={e}")
+        # Single retry after 2s for transient Telegram errors
+        try:
+            await asyncio.sleep(2)
+            await asyncio.wait_for(
+                bot.send_message(config.ADMIN_TELEGRAM_ID, full_message),
+                timeout=10.0,
+            )
+            _last_alert_at[category] = now
+            logger.info(f"ADMIN_ALERT_SENT_RETRY category={category}")
+            return True
+        except Exception as retry_err:
+            logger.error(f"ADMIN_ALERT_RETRY_FAILED category={category} error={retry_err}")
+            return False
 
 
 _CATEGORY_HEADERS = {
@@ -98,19 +111,36 @@ async def alert_payment_failure(
     purchase_id: str,
     error: Exception,
     is_transient: bool = False,
+    *,
+    amount_rubles: Optional[float] = None,
+    tariff: Optional[str] = None,
+    period_days: Optional[int] = None,
 ) -> bool:
     """Alert admin about payment processing failure."""
     severity = "TRANSIENT" if is_transient else "PERMANENT"
     retry = "Provider will retry." if is_transient else "NEEDS MANUAL CHECK!"
+    now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    details = (
+        f"[{severity}]\n"
+        f"Date: {now_str}\n"
+        f"Provider: {provider}\n"
+        f"User TG ID: {telegram_id}\n"
+        f"Purchase: {purchase_id}\n"
+    )
+    if amount_rubles is not None:
+        details += f"Amount: {amount_rubles} RUB\n"
+    if tariff:
+        details += f"Tariff: {tariff}\n"
+    if period_days is not None:
+        details += f"Period: {period_days} days\n"
+    details += (
+        f"Error: {type(error).__name__}: {str(error)[:200]}\n"
+        f"{retry}"
+    )
     return await send_alert(
         bot,
         "payment",
-        f"[{severity}]\n"
-        f"Provider: {provider}\n"
-        f"User: {telegram_id}\n"
-        f"Purchase: {purchase_id}\n"
-        f"Error: {type(error).__name__}: {str(error)[:200]}\n"
-        f"{retry}",
+        details,
         force=not is_transient,  # permanent failures always alert
     )
 
@@ -120,14 +150,32 @@ async def alert_subscription_failure(
     telegram_id: int,
     action: str,
     error: Exception,
+    *,
+    amount_rubles: Optional[float] = None,
+    tariff: Optional[str] = None,
+    period_days: Optional[int] = None,
+    subscription_id: Optional[int] = None,
 ) -> bool:
     """Alert admin about subscription activation/renewal failure."""
+    now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    details = (
+        f"Action: {action}\n"
+        f"Date: {now_str}\n"
+        f"User TG ID: {telegram_id}\n"
+    )
+    if subscription_id is not None:
+        details += f"Subscription ID: {subscription_id}\n"
+    if amount_rubles is not None:
+        details += f"Amount: {amount_rubles} RUB\n"
+    if tariff:
+        details += f"Tariff: {tariff}\n"
+    if period_days is not None:
+        details += f"Period: {period_days} days\n"
+    details += f"Error: {type(error).__name__}: {str(error)[:200]}"
     return await send_alert(
         bot,
         "subscription",
-        f"Action: {action}\n"
-        f"User: {telegram_id}\n"
-        f"Error: {type(error).__name__}: {str(error)[:200]}",
+        details,
     )
 
 
@@ -152,14 +200,32 @@ async def alert_vpn_api_failure(
     operation: str,
     telegram_id: int,
     error: Exception,
+    *,
+    amount_rubles: Optional[float] = None,
+    tariff: Optional[str] = None,
+    period_days: Optional[int] = None,
+    subscription_id: Optional[int] = None,
 ) -> bool:
     """Alert admin about VPN API failure affecting a user."""
+    now_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M UTC")
+    details = (
+        f"Operation: {operation}\n"
+        f"Date: {now_str}\n"
+        f"User TG ID: {telegram_id}\n"
+    )
+    if subscription_id is not None:
+        details += f"Subscription ID: {subscription_id}\n"
+    if amount_rubles is not None:
+        details += f"Amount: {amount_rubles} RUB\n"
+    if tariff:
+        details += f"Tariff: {tariff}\n"
+    if period_days is not None:
+        details += f"Period: {period_days} days\n"
+    details += f"Error: {type(error).__name__}: {str(error)[:200]}"
     return await send_alert(
         bot,
         "vpn_api",
-        f"Operation: {operation}\n"
-        f"User: {telegram_id}\n"
-        f"Error: {type(error).__name__}: {str(error)[:200]}",
+        details,
     )
 
 

@@ -666,6 +666,11 @@ async def run_trial_scheduler(bot: Bot):
             logger.debug("trial_notifications: Full traceback for scheduler loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "trial_notifications", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000

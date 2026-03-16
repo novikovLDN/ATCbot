@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 @user_router.message(Command("language"))
 async def cmd_language(message: Message, bot: Bot):
     """Обработчик команды /language — открывает экран выбора языка"""
+    if message.chat.type != "private":
+        return
     if not await ensure_db_ready_message(message):
         return
     

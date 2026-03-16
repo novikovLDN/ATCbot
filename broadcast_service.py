@@ -165,6 +165,6 @@ async def run_no_subscription_broadcast(
                 _format_completion_message(result),
             )
         except Exception as e:
-            logger.warning(f"Failed to notify admin of broadcast completion: {e}")
+            logger.error(f"Failed to notify admin of broadcast completion: {e}")
 
     return result

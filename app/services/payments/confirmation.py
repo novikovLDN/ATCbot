@@ -98,7 +98,11 @@ async def process_confirmed_payment(
             f"purchase_id={purchase_id}, error={type(e).__name__}: {e}"
         )
         from app.services.admin_alerts import alert_payment_failure
-        await alert_payment_failure(bot, provider, telegram_id, purchase_id, e, is_transient=True)
+        tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+        await alert_payment_failure(
+            bot, provider, telegram_id, purchase_id, e, is_transient=True,
+            amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+        )
         raise TransientPaymentError(
             f"Transient DB error during payment: {type(e).__name__}"
         ) from e
@@ -108,7 +112,11 @@ async def process_confirmed_payment(
             f"purchase_id={purchase_id}, error={e}"
         )
         from app.services.admin_alerts import alert_payment_failure
-        await alert_payment_failure(bot, provider, telegram_id, purchase_id, e, is_transient=False)
+        tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+        await alert_payment_failure(
+            bot, provider, telegram_id, purchase_id, e, is_transient=False,
+            amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
+        )
         return {"status": "error"}
 
     return {"status": "ok"}
@@ -162,6 +170,20 @@ async def lookup_pending_purchase(
         "purchase": pending_purchase,
         "telegram_id": telegram_id,
     }
+
+
+async def _lookup_purchase_tariff(purchase_id: str) -> tuple:
+    """Look up tariff and period_days from pending_purchases for alert context.
+
+    Returns (tariff, period_days) or (None, None) on any failure.
+    """
+    try:
+        row = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+        if row:
+            return row.get("tariff"), row.get("period_days")
+    except Exception:
+        pass
+    return None, None
 
 
 async def _send_confirmation(

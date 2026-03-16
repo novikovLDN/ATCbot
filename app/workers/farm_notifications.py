@@ -73,7 +73,7 @@ async def farm_notifications_iteration(bot: Bot):
                         parse_mode="HTML"
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send ready notification to {telegram_id}: {e}")
+                    logger.warning(f"Failed to send farm ready notification to {telegram_id}: {e}")
             
             # B: 12h warning
             if dead_at and now >= (dead_at - timedelta(hours=12)) and not plot.get("notified_12h"):
@@ -87,7 +87,7 @@ async def farm_notifications_iteration(bot: Bot):
                         parse_mode="HTML"
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send 12h warning to {telegram_id}: {e}")
+                    logger.warning(f"Failed to send farm 12h warning to {telegram_id}: {e}")
             
             # C: Dead notification
             if dead_at and now >= dead_at and not plot.get("notified_dead"):
@@ -102,7 +102,7 @@ async def farm_notifications_iteration(bot: Bot):
                         parse_mode="HTML"
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send dead notification to {telegram_id}: {e}")
+                    logger.warning(f"Failed to send farm dead notification to {telegram_id}: {e}")
         
         if changed:
             await database.save_farm_plots(telegram_id, farm_plots)
@@ -147,6 +147,11 @@ async def farm_notifications_task(bot: Bot):
             logger.debug("farm_notifications: Full traceback for task loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "farm_notifications", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             duration_ms = int((time.time() - iteration_start_time) * 1000)
             log_worker_iteration_end(
