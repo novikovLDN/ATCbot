@@ -1623,7 +1623,7 @@ async def process_referral_reward(
             """INSERT INTO referral_rewards
                (referrer_id, buyer_id, purchase_id, purchase_amount, percent, reward_amount)
                VALUES ($1, $2, $3, $4, $5, $6)
-               ON CONFLICT (buyer_id, purchase_id) DO NOTHING""",
+               ON CONFLICT (buyer_id, purchase_id) WHERE purchase_id IS NOT NULL DO NOTHING""",
             referrer_id, buyer_id, purchase_id, purchase_amount_kopecks, effective_percent, reward_amount_kopecks
         )
         if insert_result == "INSERT 0":
@@ -1672,7 +1672,7 @@ async def process_referral_reward(
                 
     except (asyncpg.UniqueViolationError, asyncpg.ForeignKeyViolationError, 
             asyncpg.NotNullViolationError, asyncpg.CheckViolationError,
-            asyncpg.ConnectionError, asyncpg.TimeoutError) as e:
+            asyncpg.PostgresConnectionError, asyncpg.InterfaceError, asyncpg.TimeoutError) as e:
         # FINANCIAL ERRORS: Database constraint violations, connection issues
         # These MUST propagate to cause transaction rollback
         logger.error(
