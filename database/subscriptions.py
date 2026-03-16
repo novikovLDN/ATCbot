@@ -3967,14 +3967,16 @@ async def finalize_purchase(
 
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Pre-fetch (read-only, outside transaction) for two-phase activation
+        # Pre-fetch with FOR UPDATE SKIP LOCKED to prevent concurrent finalization
+        # SECURITY: Row-level lock ensures only one webhook can process a purchase at a time
         pending_row = await conn.fetchrow(
-            "SELECT * FROM pending_purchases WHERE purchase_id = $1",
+            "SELECT * FROM pending_purchases WHERE purchase_id = $1 FOR UPDATE SKIP LOCKED",
             purchase_id
         )
         if not pending_row:
-            error_msg = f"Pending purchase not found: purchase_id={purchase_id}"
-            logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found, {error_msg}")
+            # Could be not found OR locked by another concurrent finalization
+            error_msg = f"Pending purchase not found or locked: purchase_id={purchase_id}"
+            logger.error(f"finalize_purchase: payment_rejected: reason=purchase_not_found_or_locked, {error_msg}")
             raise ValueError(error_msg)
         pending_purchase = dict(pending_row)
         telegram_id = pending_purchase["telegram_id"]
@@ -3993,11 +3995,14 @@ async def finalize_purchase(
         is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
         is_gift_purchase = (purchase_type == "gift")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
-        if amount_diff > 1.0:
+        # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
+        # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
+        max_tolerance = max(0.50, expected_amount_rubles * 0.005)
+        if amount_diff > max_tolerance:
             error_msg = (
                 f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "
                 f"expected={expected_amount_rubles:.2f} RUB, actual={amount_rubles:.2f} RUB, "
-                f"diff={amount_diff:.2f} RUB"
+                f"diff={amount_diff:.2f} RUB (tolerance={max_tolerance:.2f} RUB)"
             )
             logger.error(f"finalize_purchase: PAYMENT_AMOUNT_MISMATCH: {error_msg}")
             raise ValueError(error_msg)
@@ -4246,145 +4251,150 @@ async def finalize_purchase(
                     logger.error(f"finalize_purchase: {error_msg}")
                     raise Exception(error_msg)
             
-            # Проверяем action для обработки pending activation
-            action = grant_result.get("action")
-            is_renewal = action == "renewal"
+                # Проверяем action для обработки pending activation
+                action = grant_result.get("action")
+                is_renewal = action == "renewal"
             
-            # PENDING ACTIVATION: Если action == 'pending_activation', это ожидаемое поведение
-            # VPN ключ будет создан позже activation_worker'ом
-            if action == "pending_activation":
-                logger.info(
-                    f"finalize_purchase: PENDING_ACTIVATION_ACCEPTED [purchase_id={purchase_id}, user={telegram_id}]"
-                )
+                # PENDING ACTIVATION: Если action == 'pending_activation', это ожидаемое поведение
+                # VPN ключ будет создан позже activation_worker'ом
+                if action == "pending_activation":
+                    logger.info(
+                        f"finalize_purchase: PENDING_ACTIVATION_ACCEPTED [purchase_id={purchase_id}, user={telegram_id}]"
+                    )
                 
-                # Обновляем payment → approved
-                await conn.execute(
-                    "UPDATE payments SET status = 'approved' WHERE id = $1",
-                    payment_id
-                )
+                    # Обновляем payment → approved
+                    await conn.execute(
+                        "UPDATE payments SET status = 'approved' WHERE id = $1",
+                        payment_id
+                    )
                 
-                ret_val = {
-                    "success": True,
-                    "payment_id": payment_id,
-                    "expires_at": expires_at,
-                    "vpn_key": None,
-                    "activation_status": "pending",
-                    "is_renewal": False
-                }
-            else:
-                # Получаем VPN ключ для нормальной активации
-                vpn_key = grant_result.get("vless_url")
+                    ret_val = {
+                        "success": True,
+                        "payment_id": payment_id,
+                        "expires_at": expires_at,
+                        "vpn_key": None,
+                        "activation_status": "pending",
+                        "is_renewal": False
+                    }
+                else:
+                    # Получаем VPN ключ для нормальной активации
+                    vpn_key = grant_result.get("vless_url")
                 
-                if not vpn_key:
-                    # Renewal: get vpn_key from subscription (API is source of truth, no local generation)
-                    if is_renewal:
-                        vpn_key = grant_result.get("vpn_key")
-                        if not vpn_key:
-                            subscription_row = await conn.fetchrow(
-                                "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
-                                telegram_id
-                            )
-                            vpn_key = subscription_row["vpn_key"] if subscription_row and subscription_row.get("vpn_key") else ""
-                        if not vpn_key:
+                    if not vpn_key:
+                        # Renewal: get vpn_key from subscription (API is source of truth, no local generation)
+                        if is_renewal:
+                            vpn_key = grant_result.get("vpn_key")
+                            if not vpn_key:
+                                subscription_row = await conn.fetchrow(
+                                    "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                                    telegram_id
+                                )
+                                vpn_key = subscription_row["vpn_key"] if subscription_row and subscription_row.get("vpn_key") else ""
+                            if not vpn_key:
+                                error_msg = (
+                                    f"Renewal: no vpn_key in subscription or grant_result. "
+                                    f"Bot MUST use vless_link from API only. purchase_id={purchase_id}, user={telegram_id}"
+                                )
+                                logger.error(f"finalize_purchase: {error_msg}")
+                                raise Exception(error_msg)
+                        else:
+                            # New issuance: vless_url must come from grant_access (API response)
                             error_msg = (
-                                f"Renewal: no vpn_key in subscription or grant_result. "
-                                f"Bot MUST use vless_link from API only. purchase_id={purchase_id}, user={telegram_id}"
+                                f"No VPN key from API: purchase_id={purchase_id}, user={telegram_id}. "
+                                "API must return vless_link. Bot MUST NOT generate links."
                             )
                             logger.error(f"finalize_purchase: {error_msg}")
                             raise Exception(error_msg)
-                    else:
-                        # New issuance: vless_url must come from grant_access (API response)
-                        error_msg = (
-                            f"No VPN key from API: purchase_id={purchase_id}, user={telegram_id}. "
-                            "API must return vless_link. Bot MUST NOT generate links."
-                        )
+                
+                    if not vpn_key:
+                        error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
                         logger.error(f"finalize_purchase: {error_msg}")
                         raise Exception(error_msg)
                 
-                if not vpn_key:
-                    error_msg = f"VPN key is empty: purchase_id={purchase_id}, user={telegram_id}"
-                    logger.error(f"finalize_purchase: {error_msg}")
-                    raise Exception(error_msg)
-                
-                # API is source of truth — vpn_key from API, no local validation
-                # STEP 6: Обновляем payment → approved
-                await conn.execute(
-                    "UPDATE payments SET status = 'approved' WHERE id = $1",
-                    payment_id
-                )
-                
-                # STEP 7: Потребляем промокод (если был использован) - atomic UPDATE ... RETURNING
-                if promo_code:
-                    await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
-                
-                # STEP 8: Обрабатываем реферальный кешбэк
-                # Обработка реферального кешбэка внутри той же транзакции
-                # FINANCIAL errors будут проброшены и откатят всю транзакцию
-                # BUSINESS errors вернут success=False и покупка продолжится без награды
-                from database.users import process_referral_reward as _prr
-                referral_reward_result = await _prr(
-                    buyer_id=telegram_id,
-                    purchase_id=purchase_id,
-                    amount_rubles=amount_rubles,
-                    conn=conn
-                )
-                
-                if referral_reward_result.get("success"):
-                    logger.info(
-                        f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, "
-                        f"user={telegram_id}, referrer={referral_reward_result.get('referrer_id')}, "
-                        f"amount={referral_reward_result.get('reward_amount')} RUB"
-                    )
-                else:
-                    # BUSINESS LOGIC ERROR: Reward skipped but purchase continues
-                    reason = referral_reward_result.get("reason", "unknown")
-                    logger.info(
-                        f"finalize_purchase: Purchase finalized without referral reward: "
-                        f"purchase_id={purchase_id}, user={telegram_id}, reason={reason}"
-                    )
-                
-                # КРИТИЧНО: Логируем активацию подписки и выдачу ключа для аудита
-                logger.info(
-                    f"subscription_activated: purchase_id={purchase_id}, user={telegram_id}, "
-                    f"provider={payment_provider}, payment_id={payment_id}, "
-                    f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}"
-                )
-                
-                logger.info(
-                    f"vpn_key_issued: purchase_id={purchase_id}, user={telegram_id}, "
-                    f"provider={payment_provider}, payment_id={payment_id}, "
-                    f"vpn_key_length={len(vpn_key)}, is_renewal={is_renewal}"
-                )
-                
-                logger.info(
-                    f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, provider={payment_provider}, "
-                    f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
-                    f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}, subscription_activated=True, vpn_key_issued=True]"
-                )
+                    # API is source of truth — vpn_key from API, no local validation
+                    # STEP 6: Потребляем промокод ПЕРЕД approve (если consumption упадёт — payment не будет approved)
+                    if promo_code:
+                        await _consume_promo_in_transaction(conn, promo_code, telegram_id, purchase_id)
 
-                subscription_type_ret = (grant_result.get("subscription_type") or "basic").strip().lower()
-                if subscription_type_ret not in config.VALID_SUBSCRIPTION_TYPES:
-                    subscription_type_ret = "basic"
-                if is_renewal:
-                    sub_row = await conn.fetchrow(
-                        "SELECT subscription_type FROM subscriptions WHERE telegram_id = $1",
-                        telegram_id
+                    # STEP 7: Обновляем payment → approved (ПОСЛЕ promo consumption для атомарности)
+                    await conn.execute(
+                        "UPDATE payments SET status = 'approved' WHERE id = $1",
+                        payment_id
                     )
-                    if sub_row and sub_row.get("subscription_type"):
-                        subscription_type_ret = (sub_row["subscription_type"] or "basic").strip().lower()
+                
+                    # STEP 8: Обрабатываем реферальный кешбэк
+                    # Обработка реферального кешбэка внутри той же транзакции
+                    # FINANCIAL errors будут проброшены и откатят всю транзакцию
+                    # BUSINESS errors вернут success=False и покупка продолжится без награды
+                    from database.users import process_referral_reward as _prr
+                    referral_reward_result = await _prr(
+                        buyer_id=telegram_id,
+                        purchase_id=purchase_id,
+                        amount_rubles=amount_rubles,
+                        conn=conn
+                    )
+                
+                    if referral_reward_result.get("success"):
+                        logger.info(
+                            f"finalize_purchase: referral_reward_processed: purchase_id={purchase_id}, "
+                            f"user={telegram_id}, referrer={referral_reward_result.get('referrer_id')}, "
+                            f"amount={referral_reward_result.get('reward_amount')} RUB"
+                        )
+                    else:
+                        # BUSINESS LOGIC ERROR: Reward skipped but purchase continues
+                        reason = referral_reward_result.get("reason", "unknown")
+                        logger.info(
+                            f"finalize_purchase: Purchase finalized without referral reward: "
+                            f"purchase_id={purchase_id}, user={telegram_id}, reason={reason}"
+                        )
+                
+                    # КРИТИЧНО: Логируем активацию подписки и выдачу ключа для аудита
+                    logger.info(
+                        f"subscription_activated: purchase_id={purchase_id}, user={telegram_id}, "
+                        f"provider={payment_provider}, payment_id={payment_id}, "
+                        f"expires_at={expires_at.isoformat()}, is_renewal={is_renewal}"
+                    )
+                
+                    logger.info(
+                        f"vpn_key_issued: purchase_id={purchase_id}, user={telegram_id}, "
+                        f"provider={payment_provider}, payment_id={payment_id}, "
+                        f"vpn_key_length={len(vpn_key)}, is_renewal={is_renewal}"
+                    )
+                
+                    logger.info(
+                        f"finalize_purchase: SUCCESS [purchase_id={purchase_id}, user={telegram_id}, provider={payment_provider}, "
+                        f"payment_id={payment_id}, expires_at={expires_at.isoformat()}, "
+                        f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}, subscription_activated=True, vpn_key_issued=True]"
+                    )
 
-                vpn_key_plus_ret = grant_result.get("vpn_key_plus") or grant_result.get("vless_url_plus")
-                ret_val = {
-                    "success": True,
-                    "payment_id": payment_id,
-                    "expires_at": expires_at,
-                    "vpn_key": vpn_key,
-                    "vpn_key_plus": vpn_key_plus_ret,
-                    "is_renewal": is_renewal,
-                    "subscription_type": subscription_type_ret,
-                    "referral_reward": referral_reward_result,
-                    "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
-                }
+                    raw_subscription_type = grant_result.get("subscription_type")
+                    subscription_type_ret = (raw_subscription_type or "basic").strip().lower()
+                    if subscription_type_ret not in config.VALID_SUBSCRIPTION_TYPES:
+                        logger.warning(
+                            f"TARIFF_TYPE_COERCED: purchase_id={purchase_id}, user={telegram_id}, "
+                            f"raw_value='{raw_subscription_type}', coerced_to='basic'"
+                        )
+                        subscription_type_ret = "basic"
+                    if is_renewal:
+                        sub_row = await conn.fetchrow(
+                            "SELECT subscription_type FROM subscriptions WHERE telegram_id = $1",
+                            telegram_id
+                        )
+                        if sub_row and sub_row.get("subscription_type"):
+                            subscription_type_ret = (sub_row["subscription_type"] or "basic").strip().lower()
+
+                    vpn_key_plus_ret = grant_result.get("vpn_key_plus") or grant_result.get("vless_url_plus")
+                    ret_val = {
+                        "success": True,
+                        "payment_id": payment_id,
+                        "expires_at": expires_at,
+                        "vpn_key": vpn_key,
+                        "vpn_key_plus": vpn_key_plus_ret,
+                        "is_renewal": is_renewal,
+                        "subscription_type": subscription_type_ret,
+                        "referral_reward": referral_reward_result,
+                        "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
+                    }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
             if uuid_to_cleanup_on_failure:

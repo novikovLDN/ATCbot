@@ -46,7 +46,7 @@ CLEANUP_INTERVAL_SECONDS = max(60, min(300, CLEANUP_INTERVAL_SECONDS))
 MINIMUM_SAFE_SLEEP_ON_FAILURE = 10  # seconds
 
 
-async def fast_expiry_cleanup_task():
+async def fast_expiry_cleanup_task(bot=None):
     """
     Fast Expiry Cleanup Task
     

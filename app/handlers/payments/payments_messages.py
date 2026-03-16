@@ -368,22 +368,30 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )]
             ])
             
-            await message.answer(text, reply_markup=keyboard)
-            
-            # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
+            # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой, чтобы при краше между send и mark
+            # не было дубля уведомления. Лучше потерять уведомление, чем отправить дважды.
             try:
                 sent = await database.mark_payment_notification_sent(payment_id)
-                if sent:
-                    logger.info(
-                        f"NOTIFICATION_SENT [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
-                    )
-                else:
+                if not sent:
                     logger.warning(
                         f"NOTIFICATION_FLAG_ALREADY_SET [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
                     )
+                    return  # Already sent by another handler/retry
             except Exception as e:
                 logger.error(
                     f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+                )
+                # Continue to send — better to risk duplicate than to lose notification entirely
+
+            try:
+                await message.answer(text, reply_markup=keyboard)
+                logger.info(
+                    f"NOTIFICATION_SENT [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
+                )
+            except Exception as e:
+                logger.error(
+                    f"NOTIFICATION_SEND_FAILED [type=balance_topup, payment_id={payment_id}, "
+                    f"user={telegram_id}, error={e}] (notification flagged but message not delivered)"
                 )
             
             # Отправляем уведомление о кешбэке (если начислен)
@@ -634,6 +642,24 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )]
             ])
             
+            # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой, чтобы при краше не было дубля
+            try:
+                sent = await database.mark_payment_notification_sent(payment_id)
+                if not sent:
+                    logger.warning(
+                        f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success_pending, payment_id={payment_id}, user={telegram_id}]"
+                    )
+                    # Already sent — skip to FSM cleanup
+                    try:
+                        current_state = await state.get_state()
+                        if current_state is not None:
+                            await state.clear()
+                    except Exception:
+                        pass
+                    return
+            except Exception as e:
+                logger.error(f"Failed to mark pending activation notification as sent: {e}")
+
             try:
                 await message.answer(
                     pending_text,
@@ -641,20 +667,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     parse_mode="HTML"
                 )
                 logger.info(
-                    f"Pending activation message sent: user={telegram_id}, payment_id={payment_id}, purchase_id={purchase_id}, expires_at={expires_str}"
+                    f"NOTIFICATION_SENT [type=payment_success_pending, payment_id={payment_id}, user={telegram_id}, purchase_id={purchase_id}, expires_at={expires_str}]"
                 )
             except Exception as e:
                 logger.error(f"Failed to send pending activation message: user={telegram_id}, error={e}")
-            
-            # Помечаем уведомление как отправленное
-            try:
-                sent = await database.mark_payment_notification_sent(payment_id)
-                if sent:
-                    logger.info(
-                        f"NOTIFICATION_SENT [type=payment_success_pending, payment_id={payment_id}, user={telegram_id}, purchase_id={purchase_id}]"
-                    )
-            except Exception as e:
-                logger.error(f"Failed to mark pending activation notification as sent: {e}")
             
             # Очищаем FSM state
             try:
@@ -894,6 +910,21 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     callback_data="menu_profile"
                 )],
             ])
+        # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой (mark-before-send pattern)
+        # При краше между mark и send — уведомление потеряно, но не дублировано
+        try:
+            sent = await database.mark_payment_notification_sent(payment_id)
+            if not sent:
+                logger.warning(
+                    f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
+                )
+                # Already sent by concurrent handler — skip
+                return
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+            )
+
         try:
             degradation = ""
             try:
@@ -902,28 +933,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
             except NameError:
                 pass
             await message.answer(text + degradation, reply_markup=keyboard, parse_mode="HTML")
+            logger.info(
+                f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
+                f"purchase_id={purchase_id}]"
+            )
         except Exception as e:
             logger.error(f"Failed to send payment success message: user={telegram_id}, error={e}")
             try:
                 await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
             except Exception as fallback_err:
                 logger.error(f"Fallback also failed: user={telegram_id}, error={fallback_err}")
-
-    try:
-        sent = await database.mark_payment_notification_sent(payment_id)
-        if sent:
-            logger.info(
-                f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
-                f"purchase_id={purchase_id}]"
-            )
-        else:
-            logger.warning(
-                f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
-            )
-    except Exception as e:
-        logger.error(
-            f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
-        )
 
     logger.info(
         f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "

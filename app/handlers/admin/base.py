@@ -14,7 +14,7 @@ import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
-from app.utils.security import require_admin
+from app.utils.security import require_admin, admin_only
 from app.handlers.admin.keyboards import get_admin_dashboard_keyboard, get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.states import AdminCreatePromocode
@@ -25,29 +25,20 @@ logger = logging.getLogger(__name__)
 
 
 @admin_base_router.message(Command("admin"))
+@admin_only
 async def cmd_admin(message: Message):
     """Административный дашборд"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        logging.warning(f"Unauthorized admin dashboard attempt by user {message.from_user.id}")
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        return
-    
     language = await resolve_user_language(message.from_user.id)
     text = i18n_get_text(language, "admin.dashboard_title")
     await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language))
 
 
 @admin_base_router.callback_query(F.data == "admin:dashboard")
+@admin_only
 async def callback_admin_dashboard(callback: CallbackQuery):
     """
     Admin Dashboard — rich real-time overview with key metrics.
     """
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
-        return
-
     try:
         from app.core.system_state import recalculate_from_runtime, SystemSeverity
 
