@@ -14,6 +14,7 @@ from aiogram.exceptions import TelegramRetryAfter
 
 import config
 import database
+from database.core import _to_db_utc
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.utils import safe_edit_text
@@ -603,7 +604,7 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
             promo_id = await conn.fetchval(
                 "INSERT INTO cashback_promotions (multiplier, starts_at, ends_at, created_by) "
                 "VALUES (2, $1, $2, $3) RETURNING id",
-                starts_at, ends_at, callback.from_user.id
+                _to_db_utc(starts_at), _to_db_utc(ends_at), callback.from_user.id
             )
 
         # Get all users with active subscriptions
@@ -615,7 +616,7 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
                 await conn.execute(
                     "INSERT INTO user_cashback_multipliers (telegram_id, multiplier, promo_id, starts_at, ends_at) "
                     "VALUES ($1, 2, $2, $3, $4)",
-                    user_id, promo_id, starts_at, ends_at
+                    user_id, promo_id, _to_db_utc(starts_at), _to_db_utc(ends_at)
                 )
 
         # Send notifications
