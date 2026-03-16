@@ -106,7 +106,11 @@ async def callback_topup_amount(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
     
     # Извлекаем сумму из callback_data
-    amount_str = callback.data.split(":")[1]
+    parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+    amount_str = parts[1]
     try:
         amount = int(amount_str)
     except ValueError:
@@ -250,7 +254,7 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
         await state.clear()
         return
-    amount_kopecks = int(amount * 100)
+    amount_kopecks = round(amount * 100)
     raw_username = callback.from_user.username
     sanitized_username = sanitize_display_name(raw_username) if raw_username else None
     wid = await database.create_withdrawal_request(telegram_id, sanitized_username or raw_username, amount_kopecks, requisites)
@@ -562,6 +566,19 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 )]
             ])
             
+            # ИДЕМПОТЕНТНОСТЬ: mark-before-send pattern
+            try:
+                sent = await database.mark_payment_notification_sent(payment_id)
+                if not sent:
+                    logger.warning(
+                        f"NOTIFICATION_FLAG_ALREADY_SET [type=balance_purchase_pending, payment_id={payment_id}, user={telegram_id}]"
+                    )
+                    await state.set_state(None)
+                    await state.clear()
+                    return
+            except Exception as e:
+                logger.error(f"Failed to mark pending activation notification as sent: {e}")
+
             try:
                 await callback.message.answer(
                     pending_text,
@@ -569,20 +586,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     parse_mode="HTML"
                 )
                 logger.info(
-                    f"Pending activation message sent: user={telegram_id}, payment_id={payment_id}, expires_at={expires_str}"
+                    f"NOTIFICATION_SENT [type=balance_purchase_pending, payment_id={payment_id}, user={telegram_id}, expires_at={expires_str}]"
                 )
             except Exception as e:
                 logger.error(f"Failed to send pending activation message: user={telegram_id}, error={e}")
-            
-            # Помечаем уведомление как отправленное
-            try:
-                sent = await database.mark_payment_notification_sent(payment_id)
-                if sent:
-                    logger.info(
-                        f"NOTIFICATION_SENT [type=balance_purchase_pending, payment_id={payment_id}, user={telegram_id}]"
-                    )
-            except Exception as e:
-                logger.error(f"Failed to mark pending activation notification as sent: {e}")
             
             await state.set_state(None)
             await state.clear()
@@ -645,27 +652,27 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     text = f"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"
                 else:
                     text = i18n_get_text(language, "payment.success_welcome_basic", date=expires_str)
-            try:
-                await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-            except Exception as e:
-                logger.error(f"Failed to send success message: user={telegram_id}, error={e}")
-
-        # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
+        # ИДЕМПОТЕНТНОСТЬ: mark-before-send pattern
         try:
             sent = await database.mark_payment_notification_sent(payment_id)
-            if sent:
-                logger.info(
-                    f"NOTIFICATION_SENT [type=balance_purchase, payment_id={payment_id}, user={telegram_id}, "
-                    f"scenario={'renewal' if is_renewal else 'first_purchase'}]"
-                )
-            else:
+            if not sent:
                 logger.warning(
                     f"NOTIFICATION_FLAG_ALREADY_SET [type=balance_purchase, payment_id={payment_id}, user={telegram_id}]"
                 )
+                return
         except Exception as e:
             logger.error(
                 f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
             )
+
+        try:
+            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+            logger.info(
+                f"NOTIFICATION_SENT [type=balance_purchase, payment_id={payment_id}, user={telegram_id}, "
+                f"scenario={'renewal' if is_renewal else 'first_purchase'}]"
+            )
+        except Exception as e_send:
+            logger.error(f"Failed to send success message: user={telegram_id}, error={e_send}")
         
         logger.info(
             f"Subscription activated from balance: user={telegram_id}, "

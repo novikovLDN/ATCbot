@@ -1,0 +1,118 @@
+# ──────────────────────────────────────────────────────────────
+# CD Pipeline — deploys to production/staging after CI passes
+# Triggers on push to main (prod) and stage (staging)
+# ──────────────────────────────────────────────────────────────
+name: Deploy
+
+on:
+  push:
+    branches: [main, stage]
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false  # never cancel a running deploy
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  # ── Wait for CI to pass ────────────────────────────────────
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for CI workflow
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          running-workflow-name: "CI Gate"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 15
+          check-regexp: "^(Lint|Tests|Docker Build|Migration Integrity)"
+
+  # ── Deploy to staging ──────────────────────────────────────
+  deploy-staging:
+    name: Deploy Staging
+    needs: ci-gate
+    if: github.ref_name == 'stage'
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.STAGING_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "⚠ STAGING_DEPLOY_HOOK_URL not configured, skipping deploy"
+            echo "Configure this secret to enable automatic staging deployments"
+            exit 0
+          fi
+          echo "Deploying ${{ github.sha }} to staging..."
+          curl -sf -X POST "$DEPLOY_HOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{"ref":"${{ github.sha }}","environment":"staging"}' \
+            --max-time 30 --retry 3 --retry-delay 5
+          echo "Staging deploy triggered."
+
+  # ── Deploy to production ───────────────────────────────────
+  deploy-production:
+    name: Deploy Production
+    needs: ci-gate
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to production
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.PRODUCTION_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "⚠ PRODUCTION_DEPLOY_HOOK_URL not configured, skipping deploy"
+            echo "Configure this secret to enable automatic production deployments"
+            exit 0
+          fi
+          echo "Deploying ${{ github.sha }} to production..."
+          curl -sf -X POST "$DEPLOY_HOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d '{"ref":"${{ github.sha }}","environment":"production"}' \
+            --max-time 30 --retry 3 --retry-delay 5
+          echo "Production deploy triggered."
+
+  # ── Post-deploy health check ───────────────────────────────
+  health-check:
+    name: Post-Deploy Health Check
+    needs: [deploy-production, deploy-staging]
+    if: always() && (needs.deploy-production.result == 'success' || needs.deploy-staging.result == 'success')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wait for deployment to stabilize
+        run: sleep 30
+
+      - name: Health check
+        env:
+          HEALTH_URL: ${{ github.ref_name == 'main' && secrets.PRODUCTION_HEALTH_URL || secrets.STAGING_HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "⚠ Health URL not configured, skipping check"
+            exit 0
+          fi
+          echo "Checking health at $HEALTH_URL ..."
+          for i in 1 2 3 4 5; do
+            if curl -sf "$HEALTH_URL" --max-time 10; then
+              echo ""
+              echo "Health check passed (attempt $i)."
+              exit 0
+            fi
+            echo "Attempt $i failed, waiting 10s..."
+            sleep 10
+          done
+          echo "Health check failed after 5 attempts!"
+          exit 1

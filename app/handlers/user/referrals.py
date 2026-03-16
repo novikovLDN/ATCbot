@@ -12,6 +12,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.screens import _open_referral_screen
+from app.utils.referral_link import build_referral_link
 import database
 
 user_router = Router()
@@ -45,9 +46,7 @@ async def callback_copy_referral_link(callback: CallbackQuery):
     try:
         # Получаем username бота для реферальной ссылки
         bot_info = await callback.bot.get_me()
-        bot_username = bot_info.username
-        # Реферальная ссылка: https://t.me/<bot_username>?start=ref_<telegram_id>
-        referral_link = f"https://t.me/{bot_username}?start=ref_{telegram_id}"
+        referral_link = await build_referral_link(telegram_id, bot_info.username)
         
         # Отправляем ссылку отдельным сообщением для копирования (одно нажатие в Telegram)
         await callback.message.answer(
@@ -93,7 +92,7 @@ async def callback_referral_stats(callback: CallbackQuery):
             status_footer = i18n_get_text(language, "referral.max_level_reached")
         
         bot_info = await callback.bot.get_me()
-        referral_link = f"https://t.me/{bot_info.username}?start=ref_{telegram_id}"
+        referral_link = await build_referral_link(telegram_id, bot_info.username)
         
         text = i18n_get_text(
             language,

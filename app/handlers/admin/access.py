@@ -699,17 +699,26 @@ async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMCo
         amount = data.get("grant_amount")
         unit_label = data.get("grant_unit_label", "")
         calculated_days = data.get("grant_calculated_days", 0)
+        grant_unit = data.get("grant_unit", "days")
         if not all([user_id, tariff, calculated_days is not None]):
             await callback.answer("Данные сессии потеряны.", show_alert=True)
             await state.clear()
             return
-        days_int = max(1, int(round(calculated_days)))
-        expires_at, _ = await database.admin_grant_access_atomic(
-            telegram_id=user_id,
-            days=days_int,
-            admin_telegram_id=callback.from_user.id,
-            tariff=tariff,
-        )
+        if grant_unit in ("minutes", "hours") and calculated_days < 1:
+            total_minutes = max(1, int(round(calculated_days * 1440)))
+            expires_at, _ = await database.admin_grant_access_minutes_atomic(
+                telegram_id=user_id,
+                minutes=total_minutes,
+                admin_telegram_id=callback.from_user.id,
+            )
+        else:
+            days_int = max(1, int(round(calculated_days)))
+            expires_at, _ = await database.admin_grant_access_atomic(
+                telegram_id=user_id,
+                days=days_int,
+                admin_telegram_id=callback.from_user.id,
+                tariff=tariff,
+            )
         expires_date = expires_at.strftime("%d.%m.%Y")
         tariff_label = "Basic" if tariff == "basic" else "Plus"
         text_admin = (

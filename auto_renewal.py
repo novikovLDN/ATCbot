@@ -216,12 +216,12 @@ async def process_auto_renewals(bot: Bot):
                         
                         is_vip = await database.is_vip_user(telegram_id, conn=conn)
                         if is_vip:
-                            amount_rubles = float(int(base_price * 0.70))  # 30% скидка
+                            amount_rubles = round(base_price * 0.70, 2)  # 30% скидка
                         else:
                             personal_discount = await database.get_user_discount(telegram_id, conn=conn)
                             if personal_discount:
                                 discount_percent = personal_discount["discount_percent"]
-                                amount_rubles = float(int(base_price * (1 - discount_percent / 100)))
+                                amount_rubles = round(base_price * (1 - discount_percent / 100), 2)
                             else:
                                 amount_rubles = float(base_price)
                         
@@ -261,13 +261,28 @@ async def process_auto_renewals(bot: Bot):
                                     f"Auto-renewal ERROR: UUID was regenerated instead of renewal! "
                                     f"user={telegram_id}, action={action_type}, has_vless_url={result.get('vless_url') is not None}"
                                 )
-                                await database.increase_balance(
+                                refund_ok = await database.increase_balance(
                                     telegram_id=telegram_id,
                                     amount=amount_rubles,
                                     source="refund",
                                     description=f"Возврат средств: ошибка автопродления (UUID пересоздан)",
                                     conn=conn
                                 )
+                                if not refund_ok:
+                                    logger.critical(
+                                        f"REFUND_FAILED: user={telegram_id}, amount={amount_rubles} RUB, "
+                                        f"reason=UUID_regenerated, refund_returned=False"
+                                    )
+                                    from app.services.admin_alerts import alert_payment_failure
+                                    await alert_payment_failure(
+                                        bot, "auto_renewal", telegram_id,
+                                        f"refund_uuid_regen_{telegram_id}",
+                                        RuntimeError(f"Refund failed after UUID regeneration, amount={amount_rubles}"),
+                                        is_transient=False,
+                                        amount_rubles=amount_rubles,
+                                        tariff=tariff_type,
+                                        period_days=period_days,
+                                    )
                                 continue
                             
                             subscription_row = await conn.fetchrow(
@@ -282,19 +297,34 @@ async def process_auto_renewals(bot: Bot):
                             
                             if expires_at is None:
                                 logger.error(f"Failed to renew subscription for auto-renewal: user={telegram_id}, expires_at=None")
-                                await database.increase_balance(
+                                refund_ok = await database.increase_balance(
                                     telegram_id=telegram_id,
                                     amount=amount_rubles,
                                     source="refund",
                                     description=f"Возврат средств за неудачное автопродление",
                                     conn=conn
                                 )
+                                if not refund_ok:
+                                    logger.critical(
+                                        f"REFUND_FAILED: user={telegram_id}, amount={amount_rubles} RUB, "
+                                        f"reason=expires_at_None, refund_returned=False"
+                                    )
+                                    from app.services.admin_alerts import alert_payment_failure
+                                    await alert_payment_failure(
+                                        bot, "auto_renewal", telegram_id,
+                                        f"refund_renewal_fail_{telegram_id}",
+                                        RuntimeError(f"Refund failed after renewal failure, amount={amount_rubles}"),
+                                        is_transient=False,
+                                        amount_rubles=amount_rubles,
+                                        tariff=tariff_type,
+                                        period_days=period_days,
+                                    )
                                 continue
                             
                             tariff_str = f"{tariff_type}_{period_days}"
                             payment_id = await conn.fetchval(
                                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
-                                telegram_id, tariff_str, int(amount_rubles * 100)
+                                telegram_id, tariff_str, round(amount_rubles * 100)
                             )
                             
                             if not payment_id:
@@ -313,6 +343,7 @@ async def process_auto_renewals(bot: Bot):
                             expires_str = expires_at.strftime("%d.%m.%Y")
                             duration_days = duration.days
                             # Собираем payload для Phase B (после commit) — без Telegram и без вложенного acquire
+                            xray_sync_info = result.get("renewal_xray_sync_after_commit")
                             notifications_to_send.append({
                                 "telegram_id": telegram_id,
                                 "payment_id": payment_id,
@@ -322,6 +353,7 @@ async def process_auto_renewals(bot: Bot):
                                 "amount_rubles": amount_rubles,
                                 "tariff_type": tariff_type,
                                 "period_days": period_days,
+                                "xray_sync": xray_sync_info,
                             })
                             logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
 
@@ -330,18 +362,51 @@ async def process_auto_renewals(bot: Bot):
                     
                     except Exception as e:
                         logger.exception(f"Error processing auto-renewal for user {telegram_id}: {e}")
+                        try:
+                            from app.services.admin_alerts import send_alert
+                            await send_alert(
+                                bot, "payment",
+                                f"Auto-renewal processing error\n"
+                                f"User: {telegram_id}\n"
+                                f"Error: {type(e).__name__}: {str(e)[:200]}"
+                            )
+                        except Exception:
+                            pass
 
-            # PHASE B: после commit — только отправка уведомлений и пометка (без финансовых мутаций)
+            # PHASE B: после commit — xray sync + отправка уведомлений (без финансовых мутаций)
             for item in notifications_to_send:
+                # B0: Xray sync deferred from grant_access (must run post-commit)
+                xray_sync = item.get("xray_sync")
+                if xray_sync:
+                    try:
+                        import vpn_utils
+                        await vpn_utils.ensure_user_in_xray(
+                            telegram_id=xray_sync["telegram_id"],
+                            uuid=xray_sync["uuid"],
+                            subscription_end=xray_sync["subscription_end"],
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"AUTO_RENEWAL_XRAY_SYNC_FAILED user={item['telegram_id']} error={e}"
+                        )
                 try:
                     tariff_label = "Plus" if item.get("tariff_type") == "plus" else "Basic"
-                    text = (
-                        "✅ Подписка продлена\n"
-                        f"📦/⭐️ Тариф: {tariff_label}\n"
-                        f"📅 До: {item['expires_str']}"
+                    tariff_emoji = "⭐️" if item.get("tariff_type") == "plus" else "📦"
+                    user_lang = await resolve_user_language(item["telegram_id"])
+                    amount_val = item.get("amount", 0)
+                    # amount may be in kopecks (>1000) or rubles
+                    if amount_val > 1000:
+                        amount_val = amount_val / 100
+                    text = i18n.get_text(
+                        user_lang, "purchase.auto_renewal_success",
+                        tariff_name=f"{tariff_emoji} {tariff_label}",
+                        days=item.get("period_days", 30),
+                        expires_date=item["expires_str"],
+                        amount=amount_val
                     )
-                    from app.handlers.common.keyboards import get_connect_keyboard
-                    keyboard = get_connect_keyboard()
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
+                    ])
                     sent = await safe_send_message(bot, item["telegram_id"], text, reply_markup=keyboard)
                     if sent is None:
                         continue
@@ -373,6 +438,17 @@ async def process_auto_renewals(bot: Bot):
                     logger.error(
                         f"CRITICAL: Failed to send/mark auto-renewal notification: payment_id={item.get('payment_id')}, user={item.get('telegram_id')}, error={e}"
                     )
+                    try:
+                        from app.services.admin_alerts import send_alert
+                        await send_alert(
+                            bot, "payment",
+                            f"Auto-renewal notification failed\n"
+                            f"User: {item.get('telegram_id')}\n"
+                            f"Payment: {item.get('payment_id')}\n"
+                            f"Error: {type(e).__name__}: {str(e)[:200]}"
+                        )
+                    except Exception:
+                        pass
         finally:
             # Release connection (equivalent to __aexit__)
             try:
@@ -486,6 +562,11 @@ async def auto_renewal_task(bot: Bot):
             logger.debug("auto_renewal: Full traceback for task loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "auto_renewal", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             # Always log ITERATION_END so production logs confirm the iteration completed (no indefinite hang)
             duration_ms = (time.time() - iteration_start_time) * 1000

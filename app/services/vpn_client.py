@@ -15,12 +15,15 @@ API endpoints (Xray API / vpn-api):
     GET  /health      — availability check
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 import config
 import vpn_utils
 import database
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -110,6 +113,8 @@ async def create_user(
         if not vless_url and result.get("action") == "renewal":
             # Renewal: use vpn_key from result (stored from API at issuance)
             vless_url = result.get("vpn_key") or ""
+            if not vless_url:
+                logger.warning(f"VPN renewal returned empty vpn_key for user {telegram_id}")
         return {
             "uuid": uuid,
             "config_link": vless_url or "",

@@ -37,6 +37,54 @@ def get_renewal_keyboard(language: str) -> InlineKeyboardMarkup:
     return keyboard
 
 
+def get_renewal_keyboard_7d(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура для напоминания за 7 дней"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "reminder.paid_7d_btn"),
+            callback_data="menu_buy_vpn"
+        )],
+        [InlineKeyboardButton(
+            text="👤 Профиль",
+            callback_data="menu_profile"
+        )],
+    ])
+
+
+def get_renewal_keyboard_3d(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура для напоминания за 3 дня"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "reminder.paid_3d_btn"),
+            callback_data="menu_buy_vpn"
+        )],
+    ])
+
+
+def get_renewal_keyboard_1d(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура для напоминания за 1 день"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "reminder.paid_1d_btn"),
+            callback_data="menu_buy_vpn"
+        )],
+    ])
+
+
+def get_renewal_discount_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура со скидкой 15% за 3 часа до окончания подписки"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "reminder.paid_3h_discount_btn"),
+            callback_data="paid_discount_15"
+        )],
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "subscription.renew"),
+            callback_data="menu_buy_vpn"
+        )],
+    ])
+
+
 def _buy_keyboard(language: str, text_key: str) -> InlineKeyboardMarkup:
     """Single CTA keyboard with configurable button text."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -104,26 +152,36 @@ async def send_smart_reminders(bot: Bot):
                     text = i18n.get_text(language, "reminder.admin_1day_6h")
                     keyboard = get_subscription_keyboard(language)
                     audit_message = "Admin 1-day reminder (6h before expiry)"
-                
+
                 elif reminder_type == ReminderType.ADMIN_7DAYS_24H:
                     text = i18n.get_text(language, "reminder.admin_7days_24h")
                     keyboard = get_tariff_1_month_keyboard(language)
                     audit_message = "Admin 7-day reminder (24h before expiry)"
-                
+
+                elif reminder_type == ReminderType.REMINDER_7D:
+                    text = i18n.get_text(language, "reminder.paid_7d")
+                    keyboard = get_renewal_keyboard_7d(language)
+                    audit_message = "Paid subscription reminder (7d before expiry)"
+
                 elif reminder_type == ReminderType.REMINDER_3D:
-                    text = i18n.get_text(language, "reminder.paid_3d")
-                    keyboard = get_renewal_keyboard(language)
+                    text = i18n.get_text(language, "reminder.paid_3d_new")
+                    keyboard = get_renewal_keyboard_3d(language)
                     audit_message = "Paid subscription reminder (3d before expiry)"
-                
+
+                elif reminder_type == ReminderType.REMINDER_1D:
+                    text = i18n.get_text(language, "reminder.paid_1d")
+                    keyboard = get_renewal_keyboard_1d(language)
+                    audit_message = "Paid subscription reminder (1d before expiry)"
+
                 elif reminder_type == ReminderType.REMINDER_24H:
                     text = i18n.get_text(language, "reminder.paid_24h")
                     keyboard = get_renewal_keyboard(language)
                     audit_message = "Paid subscription reminder (24h before expiry)"
-                
+
                 elif reminder_type == ReminderType.REMINDER_3H:
-                    text = i18n.get_text(language, "reminder.paid_3h")
-                    keyboard = get_renewal_keyboard(language)
-                    audit_message = "Paid subscription reminder (3h before expiry)"
+                    text = i18n.get_text(language, "reminder.paid_3h_special")
+                    keyboard = get_renewal_discount_keyboard(language)
+                    audit_message = "Paid subscription reminder (3h before expiry) with 15% discount"
                 
                 if text and keyboard:
                     # Send reminder (safe_send_message handles chat_not_found, blocked)
@@ -195,6 +253,11 @@ async def reminders_task(bot: Bot):
             logger.debug("reminders: Full traceback for task loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "reminders", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
             duration_ms = int((time.time() - iteration_start_time) * 1000)

@@ -102,8 +102,6 @@ def _build_broadcast_reply_markup(
     buttons: list[str],
     broadcast_id: int,
     discount: int | None = None,
-    user_id: int | None = None,
-    bot_username: str | None = None,
 ) -> InlineKeyboardMarkup | None:
     """Build inline keyboard for broadcast message based on selected buttons."""
     if not buttons:
@@ -121,13 +119,7 @@ def _build_broadcast_reply_markup(
         elif btn == "support":
             rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")])
         elif btn == "referral":
-            if user_id and bot_username:
-                from urllib.parse import quote
-                referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
-                share_url = f"https://t.me/share/url?url={quote(referral_link)}"
-                rows.append([InlineKeyboardButton(text="👥 Пригласить друга", url=share_url)])
-            else:
-                rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="menu_referral")])
+            rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="menu_referral")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -303,11 +295,11 @@ async def callback_admin_broadcast(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._create"), callback_data="broadcast:create")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_stats"), callback_data="broadcast:ab_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:notifications")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
-    
+
     # Логируем действие
     await database._log_audit_event_atomic_standalone("admin_broadcast_view", callback.from_user.id, None, "Admin viewed broadcast section")
 
@@ -679,12 +671,6 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                 final_message = f"{emoji} {title}\n\n{message_text}"
 
         # Build inline keyboard for broadcast message
-        # If referral button is present, we need per-user keyboards with personal share URLs
-        has_referral_btn = "referral" in broadcast_buttons
-        bot_username = None
-        if has_referral_btn:
-            bot_info = await bot.get_me()
-            bot_username = bot_info.username
         reply_markup = _build_broadcast_reply_markup(broadcast_buttons, broadcast_id, broadcast_discount)
 
         # Получаем список пользователей по сегменту
@@ -712,17 +698,9 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             photo_file_id: str | None = None,
             caption: str | None = None,
         ):
-            # Build per-user keyboard if referral button needs personal share URL
-            if has_referral_btn and bot_username:
-                user_markup = _build_broadcast_reply_markup(
-                    broadcast_buttons, broadcast_id, broadcast_discount,
-                    user_id=user_id, bot_username=bot_username,
-                )
-            else:
-                user_markup = reply_markup
             ok = await _safe_send_with_buttons(
                 bot, user_id, msg, semaphore,
-                reply_markup=user_markup,
+                reply_markup=reply_markup,
                 photo_file_id=photo_file_id, caption=caption,
             )
             return (user_id, variant, ok)
@@ -795,8 +773,13 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         await callback.message.edit_text(result_text, reply_markup=keyboard)
         
     except Exception as e:
-        logging.exception(f"Error in broadcast send: {e}")
+        logger.exception(f"Error in broadcast send: {e}")
         await callback.message.answer(f"Ошибка при отправке уведомления: {e}")
+        try:
+            from app.services.admin_alerts import send_alert
+            await send_alert(callback.bot, "worker", f"Broadcast send error: {type(e).__name__}: {str(e)[:200]}")
+        except Exception:
+            pass
     
     finally:
         await state.clear()
@@ -830,7 +813,7 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
         await database._log_audit_event_atomic_standalone("admin_view_ab_stats_list", callback.from_user.id, None, f"Viewed {len(ab_tests)} A/B tests")
     
     except Exception as e:
-        logging.exception(f"Error in callback_broadcast_ab_stats: {e}")
+        logger.exception(f"Error in callback_broadcast_ab_stats: {e}")
         await callback.message.answer(
             i18n_get_text(language, "broadcast._ab_stats_error")
         )
@@ -904,5 +887,5 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         logging.error(f"Error parsing broadcast ID: {e}")
         await callback.message.answer("Ошибка: неверный ID уведомления.")
     except Exception as e:
-        logging.exception(f"Error in callback_broadcast_ab_stat_detail: {e}")
+        logger.exception(f"Error in callback_broadcast_ab_stat_detail: {e}")
         await callback.message.answer("Ошибка при получении статистики A/B теста. Проверь логи.")

@@ -17,7 +17,11 @@ async def resolve_user_language(telegram_id: int) -> str:
 
     This is the ONLY valid way to obtain user language in handlers.
     """
-    user = await database.get_user(telegram_id)
+    try:
+        user = await database.get_user(telegram_id)
+    except Exception as e:
+        logger.warning(f"Failed to get user for language resolution (user={telegram_id}): {e}")
+        return DEFAULT_LANGUAGE
 
     if not user:
         logger.debug(f"[I18N] language resolved: {DEFAULT_LANGUAGE} for user {telegram_id} (no user)")

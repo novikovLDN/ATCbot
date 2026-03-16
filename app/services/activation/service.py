@@ -76,6 +76,9 @@ class PendingSubscription:
     last_activation_error: Optional[str]
     expires_at: Optional[datetime]
     activated_at: Optional[datetime]
+    subscription_type: Optional[str] = None
+    amount_rubles: Optional[float] = None
+    period_days: Optional[int] = None
 
 
 # ====================================================================================
@@ -202,24 +205,38 @@ async def _fetch_pending_subscriptions(
 ) -> List[PendingSubscription]:
     """Internal helper to fetch pending subscriptions"""
     rows = await conn.fetch(
-        """SELECT telegram_id, id, activation_attempts, last_activation_error, expires_at, activated_at
-           FROM subscriptions
-           WHERE activation_status = 'pending'
-             AND activation_attempts < $1
-           ORDER BY id ASC
+        """SELECT s.telegram_id, s.id, s.activation_attempts, s.last_activation_error,
+                  s.expires_at, s.activated_at, s.subscription_type,
+                  lp.price_kopecks, lp.period_days
+           FROM subscriptions s
+           LEFT JOIN LATERAL (
+               SELECT pp.price_kopecks, pp.period_days
+               FROM pending_purchases pp
+               WHERE pp.telegram_id = s.telegram_id
+                 AND pp.status = 'paid'
+               ORDER BY pp.created_at DESC
+               LIMIT 1
+           ) lp ON true
+           WHERE s.activation_status = 'pending'
+             AND s.activation_attempts < $1
+           ORDER BY s.id ASC
            LIMIT $2""",
         max_attempts, limit
     )
-    
+
     result = []
     for row in rows:
+        price_kopecks = row.get("price_kopecks")
         result.append(PendingSubscription(
             subscription_id=row["id"],
             telegram_id=row["telegram_id"],
             activation_attempts=row["activation_attempts"],
             last_activation_error=row.get("last_activation_error"),
             expires_at=database._from_db_utc(row["expires_at"]) if row.get("expires_at") else None,
-            activated_at=database._from_db_utc(row["activated_at"]) if row.get("activated_at") else None
+            activated_at=database._from_db_utc(row["activated_at"]) if row.get("activated_at") else None,
+            subscription_type=row.get("subscription_type"),
+            amount_rubles=price_kopecks / 100.0 if price_kopecks is not None else None,
+            period_days=row.get("period_days"),
         ))
     
     return result
@@ -540,7 +557,8 @@ async def mark_activation_failed(
     new_attempts: int,
     error_msg: str,
     max_attempts: Optional[int] = None,
-    conn: Optional[Any] = None
+    conn: Optional[Any] = None,
+    mark_as_failed: bool = True
 ) -> None:
     """
     Mark activation as failed and update attempt counter.
@@ -563,10 +581,10 @@ async def mark_activation_failed(
             raise ActivationFailedError("Database pool is not available")
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts)
+                await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts, mark_as_failed=mark_as_failed)
     else:
         async with conn.transaction():
-            await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts)
+            await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts, mark_as_failed=mark_as_failed)
 
 
 async def _update_subscription_failed(

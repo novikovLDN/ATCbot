@@ -194,6 +194,10 @@ async def callback_settings(callback: CallbackQuery):
     title = i18n_get_text(language, "main.settings_title", "main.settings_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "lang.change"), callback_data="change_language")],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.ecosystem", "main.ecosystem"),
+            callback_data="menu_ecosystem"
+        )],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     await safe_edit_text(callback.message, title, reply_markup=keyboard, bot=callback.bot)
@@ -241,6 +245,93 @@ async def callback_privacy(callback: CallbackQuery):
 
     text = i18n_get_text(language, "main.privacy_policy_text", "privacy_policy_text")
     await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=callback.bot)
+
+
+@router.callback_query(F.data == "special_offer_buy")
+async def callback_special_offer_buy(callback: CallbackQuery, state: FSMContext):
+    """Спецпредложение -15% — перенаправляет на экран покупки."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+
+    telegram_id = callback.from_user.id
+
+    # Проверяем что спецпредложение еще активно
+    special_offer = await database.get_special_offer_info(telegram_id)
+    if not special_offer:
+        language = await resolve_user_language(telegram_id)
+        await callback.message.answer(
+            "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене."
+        )
+        return
+
+    # Открываем экран покупки — скидка 15% применится автоматически через calculate_final_price
+    from app.handlers.common.screens import _open_buy_screen
+    await _open_buy_screen(callback, callback.bot, state)
+
+
+@router.callback_query(F.data == "trial_discount_15")
+async def callback_trial_discount_15(callback: CallbackQuery, state: FSMContext):
+    """Скидка 15% из уведомления за 3 часа до окончания триала — автоматически применяет скидку"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+
+    try:
+        from datetime import timedelta, timezone
+        from datetime import datetime as dt
+        expires_at = dt.now(timezone.utc) + timedelta(days=7)
+        await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=15,
+            expires_at=expires_at,
+            created_by=0,  # system
+        )
+        await callback.message.answer(
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to apply trial discount for {telegram_id}: {e}")
+
+    from app.handlers.common.screens import _open_buy_screen
+    await _open_buy_screen(callback, callback.bot, state)
+
+
+@router.callback_query(F.data == "paid_discount_15")
+async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
+    """Скидка 15% из уведомления за 3 часа до окончания платной подписки"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+
+    try:
+        from datetime import timedelta, timezone
+        from datetime import datetime as dt
+        expires_at = dt.now(timezone.utc) + timedelta(days=7)
+        await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=15,
+            expires_at=expires_at,
+            created_by=0,  # system
+        )
+        await callback.message.answer(
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to apply paid discount for {telegram_id}: {e}")
+
+    from app.handlers.common.screens import _open_buy_screen
+    await _open_buy_screen(callback, callback.bot, state)
 
 
 @router.callback_query(F.data == "menu_instruction")

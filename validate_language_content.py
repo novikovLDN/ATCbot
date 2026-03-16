@@ -4,6 +4,7 @@ Production-grade i18n validation script.
 Validates app/i18n language files for key consistency and translation quality.
 """
 
+import importlib
 import re
 import sys
 from pathlib import Path
@@ -44,9 +45,9 @@ def load_languages() -> dict[str, dict]:
             print(f"WARNING: {module_path} not found, skipping.", file=sys.stderr)
             continue
         try:
-            ns = {}
-            exec(module_path.read_text(encoding="utf-8"), ns)
-            result[code] = ns.get("LANG", {})
+            module = importlib.import_module(f"app.i18n.{code}")
+            importlib.reload(module)  # ensure fresh load
+            result[code] = getattr(module, "LANG", {})
         except Exception as e:
             print(f"ERROR loading {code}.py: {e}", file=sys.stderr)
             result[code] = {}

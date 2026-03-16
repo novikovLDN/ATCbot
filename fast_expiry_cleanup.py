@@ -46,7 +46,7 @@ CLEANUP_INTERVAL_SECONDS = max(60, min(300, CLEANUP_INTERVAL_SECONDS))
 MINIMUM_SAFE_SLEEP_ON_FAILURE = 10  # seconds
 
 
-async def fast_expiry_cleanup_task():
+async def fast_expiry_cleanup_task(bot=None):
     """
     Fast Expiry Cleanup Task
     
@@ -398,6 +398,11 @@ async def fast_expiry_cleanup_task():
                 logger.debug("fast_expiry_cleanup: Full traceback for task loop", exc_info=True)
                 outcome = "failed"
                 iteration_error_type = classify_error(e)
+                try:
+                    from app.services.admin_alerts import alert_worker_failure
+                    await alert_worker_failure(bot, "fast_expiry_cleanup", e, iteration=iteration_number)
+                except Exception:
+                    pass
             finally:
                 # H2 fix: ITERATION_END always fires in finally block
                 duration_ms = (time.time() - iteration_start_time) * 1000

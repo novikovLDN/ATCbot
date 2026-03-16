@@ -126,10 +126,6 @@ def validate_callback_data(callback_data: Optional[str]) -> Tuple[bool, Optional
         if re.match(pattern, callback_data):
             return True, None
     
-    # Admin callbacks are validated separately (authorization check)
-    if callback_data.startswith("admin_"):
-        return True, None  # Will be validated by authorization guard
-    
     return False, f"Callback data does not match allowed patterns: {callback_data[:50]}"
 
 
@@ -221,14 +217,14 @@ def is_admin(telegram_id: int) -> bool:
 
 def require_admin(telegram_id: int) -> Tuple[bool, Optional[str]]:
     """
-    Require admin authorization.
-    
+    Require admin authorization (function form).
+
     STEP 4 — PART B: AUTHORIZATION GUARDS
     Explicit guard that fails closed.
-    
+
     Args:
         telegram_id: Telegram ID to check
-        
+
     Returns:
         Tuple of (is_authorized, error_message)
     """
@@ -237,8 +233,49 @@ def require_admin(telegram_id: int) -> Tuple[bool, Optional[str]]:
             f"[SECURITY_WARNING] Unauthorized admin access attempt: telegram_id={telegram_id}"
         )
         return False, "Access denied"
-    
+
     return True, None
+
+
+def admin_only(func):
+    """
+    Decorator for aiogram handlers that enforces admin-only access.
+
+    Works with both Message and CallbackQuery handlers.
+    Centralizes authorization check — prevents forgotten auth checks on new endpoints.
+
+    Usage:
+        @router.message(Command("admin"))
+        @admin_only
+        async def cmd_admin(message: Message):
+            ...
+    """
+    @wraps(func)
+    async def wrapper(event, *args, **kwargs):
+        from aiogram.types import Message, CallbackQuery
+
+        user_id = event.from_user.id if event.from_user else None
+        if not user_id or not is_admin(user_id):
+            logger.warning(
+                f"[SECURITY_WARNING] Unauthorized admin access blocked by @admin_only: "
+                f"telegram_id={user_id}, handler={func.__name__}"
+            )
+            try:
+                from app.i18n import get_text as i18n_get_text
+                from app.services.language_service import resolve_user_language
+                language = await resolve_user_language(user_id) if user_id else "ru"
+                deny_text = i18n_get_text(language, "admin.access_denied")
+            except Exception:
+                deny_text = "Access denied"
+
+            if isinstance(event, CallbackQuery):
+                await event.answer(deny_text, show_alert=True)
+            elif isinstance(event, Message):
+                await event.answer(deny_text)
+            return
+
+        return await func(event, *args, **kwargs)
+    return wrapper
 
 
 def owns_resource(telegram_id: int, resource_telegram_id: int) -> bool:

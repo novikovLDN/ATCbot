@@ -46,8 +46,8 @@ async def notify_admin_degraded_mode(bot: Bot):
     try:
         if config.ADMIN_TELEGRAM_ID:
             language = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to resolve admin language, using default: {e}")
 
     message = get_text(language, "admin.degraded_mode")
     
@@ -82,8 +82,8 @@ async def notify_admin_recovered(bot: Bot):
     try:
         if config.ADMIN_TELEGRAM_ID:
             language = await resolve_user_language(config.ADMIN_TELEGRAM_ID)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to resolve admin language, using default: {e}")
 
     message = get_text(language, "admin.recovered")
     

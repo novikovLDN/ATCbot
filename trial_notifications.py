@@ -29,23 +29,42 @@ logger = logging.getLogger(__name__)
 _TRIAL_SCHEDULER_STARTED = False
 _TRIAL_SCHEDULER_LOCK = asyncio.Lock()
 
-# SECURITY: Whitelist of allowed trial notification DB flag names.
-# Prevents SQL injection via f-string column name interpolation.
-_ALLOWED_TRIAL_FLAGS = frozenset({
-    "trial_notif_6h_sent",
-    "trial_notif_60h_sent",
-    "trial_notif_71h_sent",
-})
+# SECURITY: Pre-built SQL queries for each trial flag.
+# Eliminates f-string SQL interpolation entirely — only static SQL strings are used.
+_TRIAL_FLAG_UPDATE_QUERIES = {
+    "trial_notif_6h_sent": (
+        "UPDATE subscriptions SET trial_notif_6h_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
+    "trial_notif_60h_sent": (
+        "UPDATE subscriptions SET trial_notif_60h_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
+    "trial_notif_71h_sent": (
+        "UPDATE subscriptions SET trial_notif_71h_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
+    # New trial notification flags (24h and 3h before expiry)
+    "trial_notif_24h_sent": (
+        "UPDATE subscriptions SET trial_notif_24h_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
+    "trial_notif_3h_sent": (
+        "UPDATE subscriptions SET trial_notif_3h_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
+}
 
 
-def _validate_trial_flag(flag_name: str) -> str:
-    """Validate db_flag against whitelist. Raises ValueError if invalid."""
-    if flag_name not in _ALLOWED_TRIAL_FLAGS:
+def _get_trial_flag_query(flag_name: str) -> str:
+    """Get pre-built SQL query for trial flag. Raises ValueError if invalid."""
+    query = _TRIAL_FLAG_UPDATE_QUERIES.get(flag_name)
+    if query is None:
         raise ValueError(
             f"Invalid trial flag_name '{flag_name}'. "
-            f"Allowed: {sorted(_ALLOWED_TRIAL_FLAGS)}"
+            f"Allowed: {sorted(_TRIAL_FLAG_UPDATE_QUERIES)}"
         )
-    return flag_name
+    return query
 
 # Расписание уведомлений получается из service layer
 TRIAL_NOTIFICATION_SCHEDULE = trial_service.get_notification_schedule()
@@ -62,6 +81,21 @@ BATCH_YIELD_SLEEP = 0  # asyncio.sleep(0) for cooperative yield
 def get_trial_buy_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для покупки доступа (в уведомлениях trial)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "main.buy"),
+            callback_data="menu_buy_vpn"
+        )]
+    ])
+    return keyboard
+
+
+def get_trial_discount_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура с кнопкой скидки 15% для триала (за 3ч до окончания)"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "trial.reminder_3h_discount_btn"),
+            callback_data="trial_discount_15"
+        )],
         [InlineKeyboardButton(
             text=i18n.get_text(language, "main.buy"),
             callback_data="menu_buy_vpn"
@@ -126,9 +160,9 @@ async def send_trial_notification(
 async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: datetime):
     """Process trial notifications for a single user. Acquires and releases DB connection internally."""
     telegram_id = row["telegram_id"]
-    trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
-    subscription_expires_at = database._from_db_utc(row["subscription_expires_at"]) if row["subscription_expires_at"] else None
-    paid_subscription_expires_at = database._from_db_utc(row["paid_subscription_expires_at"]) if row.get("paid_subscription_expires_at") else None
+    trial_expires_at = database._from_db_utc(row.get("trial_expires_at")) if row.get("trial_expires_at") else None
+    subscription_expires_at = database._from_db_utc(row.get("subscription_expires_at")) if row.get("subscription_expires_at") else None
+    paid_subscription_expires_at = database._from_db_utc(row.get("paid_subscription_expires_at")) if row.get("paid_subscription_expires_at") else None
 
     if paid_subscription_expires_at:
         logger.info(
@@ -141,6 +175,46 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
 
     if not trial_expires_at or not subscription_expires_at:
         return
+
+    # === NEW TRIAL NOTIFICATION SCHEDULE (24h and 3h before expiry) ===
+    timing = trial_service.calculate_trial_timing(trial_expires_at, now)
+    hours_until_expiry = timing["hours_until_expiry"]
+
+    # Trial 24h reminder (between 24h and 23h before expiry)
+    if 23 <= hours_until_expiry <= 25:
+        if not row.get("trial_notif_24h_sent", False):
+            language = await resolve_user_language(telegram_id)
+            text = i18n.get_text(language, "trial.reminder_24h")
+            keyboard = get_trial_buy_keyboard(language)
+            success, status = await send_trial_notification(bot, pool, telegram_id, "trial.reminder_24h", has_button=True)
+            if success or status == "failed_permanently":
+                flag_query = _get_trial_flag_query("trial_notif_24h_sent")
+                async with pool.acquire() as conn:
+                    await conn.execute(flag_query, telegram_id)
+                logger.info(f"trial_reminder_24h_sent: user={telegram_id}, hours_until_expiry={hours_until_expiry:.1f}")
+            return
+
+    # Trial 3h reminder — with 15% discount (between 3h and 2.5h before expiry)
+    if 2.5 <= hours_until_expiry <= 3.5:
+        if not row.get("trial_notif_3h_sent", False):
+            language = await resolve_user_language(telegram_id)
+            text = i18n.get_text(language, "trial.reminder_3h")
+            keyboard = get_trial_discount_keyboard(language)
+            sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+            if sent is not None:
+                await asyncio.sleep(0.05)
+                flag_query = _get_trial_flag_query("trial_notif_3h_sent")
+                async with pool.acquire() as conn:
+                    await conn.execute(flag_query, telegram_id)
+                logger.info(f"trial_reminder_3h_sent: user={telegram_id}, hours_until_expiry={hours_until_expiry:.1f}, discount=15%")
+            elif sent is None:
+                # Permanently failed
+                flag_query = _get_trial_flag_query("trial_notif_3h_sent")
+                async with pool.acquire() as conn:
+                    await conn.execute(flag_query, telegram_id)
+            return
+
+    # === LEGACY TRIAL NOTIFICATION SCHEDULE (kept for backward compatibility) ===
 
     # Phase 1: Read phase — collect all decisions with a short-lived DB connection
     should_send_final = False
@@ -231,23 +305,15 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
         )
         timing = trial_service.calculate_trial_timing(trial_expires_at, now)
         async with pool.acquire() as conn:
-            final_flag = _validate_trial_flag(final_reminder_config['db_flag'])
+            final_flag_query = _get_trial_flag_query(final_reminder_config['db_flag'])
             if success:
-                await conn.execute(
-                    f"UPDATE subscriptions SET {final_flag} = TRUE "
-                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                    telegram_id
-                )
+                await conn.execute(final_flag_query, telegram_id)
                 logger.info(
                     f"trial_reminder_sent: user={telegram_id}, notification=final_6h_before_expiry, "
                     f"hours_until_expiry={timing['hours_until_expiry']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
                 )
             elif status == "failed_permanently":
-                await conn.execute(
-                    f"UPDATE subscriptions SET {final_flag} = TRUE "
-                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                    telegram_id
-                )
+                await conn.execute(final_flag_query, telegram_id)
                 logger.warning(
                     f"trial_reminder_failed_permanently: user={telegram_id}, notification=final_6h_before_expiry, "
                     f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, will_not_retry=True"
@@ -265,25 +331,17 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
             bot, pool, telegram_id, payload["notification_key"], payload["has_button"]
         )
         timing = trial_service.calculate_trial_timing(trial_expires_at, now)
-        validated_flag = _validate_trial_flag(db_flag)
+        flag_query = _get_trial_flag_query(db_flag)
         if success:
             async with pool.acquire() as conn:
-                await conn.execute(
-                    f"UPDATE subscriptions SET {validated_flag} = TRUE "
-                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                    telegram_id
-                )
+                await conn.execute(flag_query, telegram_id)
             logger.info(
                 f"trial_reminder_sent: user={telegram_id}, notification={notification['key']}, "
                 f"hours_since_activation={timing['hours_since_activation']:.1f}h, sent_at={datetime.now(timezone.utc).isoformat()}"
             )
         elif status == "failed_permanently":
             async with pool.acquire() as conn:
-                await conn.execute(
-                    f"UPDATE subscriptions SET {validated_flag} = TRUE "
-                    "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'",
-                    telegram_id
-                )
+                await conn.execute(flag_query, telegram_id)
             logger.warning(
                 f"trial_reminder_failed_permanently: user={telegram_id}, notification={notification['key']}, "
                 f"reason=forbidden_or_blocked, failed_at={datetime.now(timezone.utc).isoformat()}, "
@@ -325,6 +383,8 @@ async def process_trial_notifications(bot: Bot):
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
+                       COALESCE(s.trial_notif_24h_sent, FALSE) as trial_notif_24h_sent,
+                       COALESCE(s.trial_notif_3h_sent, FALSE) as trial_notif_3h_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
@@ -348,6 +408,8 @@ async def process_trial_notifications(bot: Bot):
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
+                       COALESCE(s.trial_notif_24h_sent, FALSE) as trial_notif_24h_sent,
+                       COALESCE(s.trial_notif_3h_sent, FALSE) as trial_notif_3h_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
@@ -622,11 +684,11 @@ async def run_trial_scheduler(bot: Bot):
                     f"[FEATURE_FLAG] Background workers disabled, skipping iteration in trial_notifications "
                     f"(iteration={iteration_number})"
                 )
-                outcome = "skipped"
+                iteration_outcome = "skipped"
                 reason = "background_workers_enabled=false"
                 log_worker_iteration_end(
                     worker_name="trial_notifications",
-                    outcome=outcome,
+                    outcome=iteration_outcome,
                     items_processed=0,
                     duration_ms=(time.time() - iteration_start_time) * 1000,
                     reason=reason,
@@ -672,6 +734,11 @@ async def run_trial_scheduler(bot: Bot):
             logger.debug("trial_notifications: Full traceback for scheduler loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "trial_notifications", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000

@@ -59,7 +59,7 @@ async def cmd_start(message: Message, state: FSMContext):
         keyboard = await get_main_menu_keyboard(language, message.from_user.id)
         await message.answer(text, reply_markup=keyboard)
         return
-    """Обработчик команды /start"""
+    # Обработчик команды /start
     telegram_id = message.from_user.id
     # Safe username resolution: username or first_name or localized fallback
     user = await database.get_user(telegram_id)
@@ -165,9 +165,20 @@ async def cmd_start(message: Message, state: FSMContext):
                     await message.answer(text, reply_markup=keyboard)
                     return
 
-    # 1. REFERRAL REGISTRATION: Process on FIRST interaction
-    # This uses the new deterministic referral service
-    referral_result = await process_referral_on_first_interaction(message, telegram_id)
+    # 1. REFERRAL REGISTRATION: Process ONLY for new users
+    # Protects against: self-referral and existing users clicking referral links later
+    referral_result = None
+    if is_new_user:
+        referral_result = await process_referral_on_first_interaction(message, telegram_id)
+    else:
+        # Existing user clicked a referral link — ignore and log
+        if message.text:
+            start_parts = message.text.strip().split(maxsplit=1)
+            if len(start_parts) > 1 and start_parts[1].startswith("ref_"):
+                logger.warning(
+                    "REFERRAL_BLOCKED_EXISTING_USER user=%s payload=%s",
+                    telegram_id, start_parts[1][:30]
+                )
     
     # Send notification to referrer if just registered
     if referral_result and referral_result.get("should_notify"):
@@ -203,5 +214,5 @@ async def cmd_start(message: Message, state: FSMContext):
             )
     
     # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
-    text = i18n_get_text("ru", "lang.select_title")
-    await message.answer(text, reply_markup=get_language_keyboard("ru"))
+    text = i18n_get_text(start_language, "lang.select_title")
+    await message.answer(text, reply_markup=get_language_keyboard(start_language))

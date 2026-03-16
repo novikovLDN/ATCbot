@@ -124,6 +124,18 @@ async def main():
     if config.REDIS_URL:
         storage = RedisStorage.from_url(config.REDIS_URL)
         logger.info("FSM_STORAGE=redis (configured)")
+        # Validate Redis connectivity at startup
+        try:
+            from app.utils.redis_client import ping as redis_ping
+            redis_ok = await redis_ping()
+            if redis_ok:
+                logger.info("REDIS_CONNECTIVITY=ok")
+            else:
+                raise RuntimeError("Redis ping returned False — FSM storage will not work")
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Redis connectivity check failed: {type(e).__name__}: {e}") from e
     else:
         storage = MemoryStorage()
         logger.warning("FSM_STORAGE=memory — states will be lost on restart")
@@ -213,6 +225,9 @@ async def main():
             await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
             logger.info("Advisory lock acquired")
         except Exception as e:
+            if config.IS_PROD:
+                logger.critical("Advisory lock not acquired in PROD — another instance may be running: %s", e)
+                sys.exit(1)
             logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
             if instance_lock_conn:
                 await pool.release(instance_lock_conn)
@@ -337,7 +352,7 @@ async def main():
                             logger.info("Reminders task started (recovered)")
                         
                         if fast_cleanup_task is None and recovered_tasks["fast_cleanup"] is None:
-                            t = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+                            t = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
                             recovered_tasks["fast_cleanup"] = t
                             background_tasks.append(t)
                             logger.info("Fast expiry cleanup task started (recovered)")
@@ -405,7 +420,7 @@ async def main():
     # Запуск фоновой задачи для быстрой очистки истёкших подписок (только если БД готова)
     fast_cleanup_task = None
     if database.DB_READY:
-        fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+        fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
         background_tasks.append(fast_cleanup_task)
         logger.info("Fast expiry cleanup task started")
     else:
@@ -516,6 +531,11 @@ async def main():
         except Exception as e:
             logger.error("WEBHOOK_SET_FAILED url=%s error=%s", config.WEBHOOK_URL, e)
             logger.exception("Failed to set webhook - full traceback:")
+            try:
+                from app.services.admin_alerts import send_alert
+                await send_alert(bot, "worker", f"BOT STARTUP FAILED: Webhook set failed\nError: {type(e).__name__}: {str(e)[:200]}", force=True)
+            except Exception:
+                pass
             sys.exit(1)
 
         # Verify webhook was registered correctly
@@ -526,6 +546,11 @@ async def main():
                     "WEBHOOK_VERIFICATION_FAILED expected=%s got=%s",
                     config.WEBHOOK_URL, wh_info.url
                 )
+                try:
+                    from app.services.admin_alerts import send_alert
+                    await send_alert(bot, "worker", f"BOT STARTUP FAILED: Webhook URL mismatch\nExpected: {config.WEBHOOK_URL}\nGot: {wh_info.url}", force=True)
+                except Exception:
+                    pass
                 sys.exit(1)
             logger.info("WEBHOOK_VERIFIED url=%s", wh_info.url)
             
@@ -541,6 +566,11 @@ async def main():
         except Exception as e:
             logger.error("WEBHOOK_VERIFICATION_FAILED error=%s", e)
             logger.exception("Failed to verify webhook - full traceback:")
+            try:
+                from app.services.admin_alerts import send_alert
+                await send_alert(bot, "worker", f"BOT STARTUP FAILED: Webhook verification failed\nError: {type(e).__name__}: {str(e)[:200]}", force=True)
+            except Exception:
+                pass
             sys.exit(1)
 
         # Start uvicorn serving FastAPI
@@ -622,6 +652,13 @@ async def main():
             finally:
                 instance_lock_conn = None
         
+        # Close Redis client
+        try:
+            from app.utils.redis_client import close as redis_close
+            await redis_close()
+        except Exception as e:
+            logger.debug(f"Error closing Redis client: {e}")
+
         # Close DB pool
         try:
             await database.close_pool()

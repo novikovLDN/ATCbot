@@ -14,7 +14,7 @@ from app.services.trials import service as trial_service
 
 logger = logging.getLogger(__name__)
 
-MINI_APP_URL = "https://atlas-miniapp-production-3495.up.railway.app"
+MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
 
 
 def get_connect_button():
@@ -67,17 +67,19 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         language: Язык пользователя
         telegram_id: Telegram ID пользователя (обязательно для проверки trial availability)
 
-    Кнопка "Пробный период 3 дня" показывается ТОЛЬКО если:
-    - trial_used_at IS NULL
-    - Нет активной подписки
-    - Нет платных подписок в истории (source='payment')
+    Логика первой кнопки (3 состояния):
+    1. Новый пользователь (trial доступен) → "Пробный период 3 дня"
+    2. Активная подписка → "🚀 Подключиться" (WebApp)
+    3. Подписка истекла + спецпредложение → "🔥 -15% | ⏳ Xд Yч"
     """
     # Проверяем бизнес-подписку для специального меню
     is_biz_user = False
     subscription = None
+    has_active_sub = False
     if telegram_id and database.DB_READY:
         try:
             subscription = await database.get_subscription(telegram_id)
+            has_active_sub = subscription is not None
             sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
             is_biz_user = config.is_biz_tariff(sub_type)
         except Exception as e:
@@ -88,16 +90,49 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
     buttons = []
 
-    if telegram_id and database.DB_READY:
+    # === ПЕРВАЯ КНОПКА: 3 состояния ===
+    if has_active_sub:
+        # Состояние 2: Активная подписка → "Подключиться" (WebApp)
+        buttons.append([InlineKeyboardButton(
+            text="🚀 Подключиться",
+            web_app=WebAppInfo(url=MINI_APP_URL),
+        )])
+    elif telegram_id and database.DB_READY:
+        # Проверяем trial
+        trial_available = False
         try:
-            is_available = await trial_service.is_trial_available(telegram_id)
-            if is_available:
-                buttons.append([InlineKeyboardButton(
-                    text=i18n_get_text(language, "trial.button"),
-                    callback_data="activate_trial"
-                )])
+            trial_available = await trial_service.is_trial_available(telegram_id)
         except Exception as e:
             logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
+
+        if trial_available:
+            # Состояние 1: Новый пользователь → "Пробный период"
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "trial.button"),
+                callback_data="activate_trial"
+            )])
+        else:
+            # Проверяем спецпредложение для истекших подписок
+            offer_shown = False
+            try:
+                special_offer = await database.get_special_offer_info(telegram_id)
+                if special_offer:
+                    # Состояние 3: Спецпредложение -15% с таймером
+                    remaining = special_offer["remaining_text"]
+                    buttons.append([InlineKeyboardButton(
+                        text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
+                        callback_data="special_offer_buy"
+                    )])
+                    offer_shown = True
+            except Exception as e:
+                logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
+
+            if not offer_shown:
+                # Предложение истекло или отсутствует — кнопка «Купить подписку»
+                buttons.append([InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy_new"),
+                    callback_data="menu_buy_vpn"
+                )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.profile"),
@@ -120,7 +155,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.instruction"),
-            callback_data="menu_instruction"
+            web_app=WebAppInfo(url=f"{MINI_APP_URL}?startapp=guide"),
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
@@ -132,10 +167,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         callback_data="menu_referral"
     )])
     buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.ecosystem", "main.ecosystem"),
-            callback_data="menu_ecosystem"
-        ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
             url="https://t.me/Atlas_SupportSecurity"
@@ -248,14 +279,9 @@ def get_profile_keyboard(
 
     buttons.append([
         InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"),
-        InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw_start"),
     ])
 
     if has_active_subscription:
-        buttons.append([InlineKeyboardButton(
-            text="🚀 Подключиться",
-            web_app=WebAppInfo(url=MINI_APP_URL),
-        )])
         buttons.append([InlineKeyboardButton(
             text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
@@ -340,50 +366,6 @@ async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str =
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_payment_method_keyboard(language: str):
-    """Клавиатура выбора способа оплаты"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.test", "payment_test"),
-            callback_data="payment_test"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.sbp", "payment_sbp"),
-            callback_data="payment_sbp"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_buy_vpn"
-        )],
-    ])
-
-
-def get_sbp_payment_keyboard(language: str):
-    """Клавиатура для оплаты СБП"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.paid_button", "paid_button"),
-            callback_data="payment_paid"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
-    ])
-
-
-def get_pending_payment_keyboard(language: str):
-    """Клавиатура после нажатия 'Я оплатил'"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/Atlas_SupportSecurity"
-        )],
-    ])
 
 
 def get_about_keyboard(language: str):
@@ -420,26 +402,6 @@ def get_service_status_keyboard(language: str):
 
 
 
-def get_instruction_screen_keyboard(language: str, subscription_type: str = "basic"):
-    """Клавиатура экрана «Инструкция»: кнопки копирования ключа по тарифу + Назад."""
-    subscription_type = (subscription_type or "basic").strip().lower()
-    if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
-        subscription_type = "basic"
-
-    if subscription_type == "plus":
-        buttons = [
-            [InlineKeyboardButton(text="🇩🇪 Скопировать Atlas DE", callback_data="copy_key")],
-            [InlineKeyboardButton(text="⚪️ Скопировать White List", callback_data="copy_key_plus")],
-        ]
-    else:
-        buttons = [
-            [InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")],
-        ]
-    buttons.append([
-        InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_profile")
-    ])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 
 def get_instruction_keyboard(
     language: str,
@@ -447,52 +409,18 @@ def get_instruction_keyboard(
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
 ):
-    """Клавиатура экрана 'Инструкция': платформы и «Скопировать ключ»."""
+    """Клавиатура экрана 'Инструкция': кнопка перехода в мини-приложение + Назад."""
+    guide_url = f"{MINI_APP_URL}?startapp=guide"
     buttons = [
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_android", "🤖 Android"),
-                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_desktop", "💻 Windows"),
-                url="https://www.mediafire.com/folder/lpcbgr4ox8u5x/Atlas_Secure"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_ios", "📱 iOS"),
-                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_macos", "🍎 MacOS"),
-                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_tv", "📺 TV"),
-                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
-            ),
-        ],
-    ]
-    buttons.append([InlineKeyboardButton(
-        text="🚀 Подключиться",
-        web_app=WebAppInfo(url=MINI_APP_URL),
-    )])
-    buttons.append([
-        InlineKeyboardButton(
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "instruction._open_guide", "📖 Инструкция по установке"),
+            web_app=WebAppInfo(url=guide_url),
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
-        )
-    ])
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/Atlas_SupportSecurity"
-        )
-    ])
-
+        )],
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -655,17 +583,3 @@ def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False,
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
-    """Клавиатура для администратора (подтверждение/отклонение платежа)"""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "admin.confirm", "admin_confirm"),
-                callback_data=f"approve_payment:{payment_id}"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "admin.reject", "admin_reject"),
-                callback_data=f"reject_payment:{payment_id}"
-            ),
-        ],
-    ])

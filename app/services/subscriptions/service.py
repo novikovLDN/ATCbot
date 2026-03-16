@@ -136,6 +136,16 @@ async def create_subscription_purchase(
         if price_kopecks <= 0:
             raise PurchaseCreationError(f"Invalid price: {price_kopecks} kopecks")
 
+        # SECURITY: Block new subscription purchases when VPN is disabled
+        # Balance top-ups and gifts are still allowed
+        if not config.VPN_ENABLED:
+            logger.warning(
+                f"PURCHASE_BLOCKED_VPN_DISABLED user={telegram_id} tariff={tariff} period_days={period_days}"
+            )
+            raise PurchaseCreationError(
+                "VPN service is temporarily unavailable. Please try again later."
+            )
+
         purchase_id = await database.create_pending_purchase(
             telegram_id=telegram_id,
             tariff=tariff,
@@ -521,7 +531,7 @@ async def renew_subscription(
             telegram_id=telegram_id,
             tariff=tariff,
             period_days=period_days,
-            price_kopecks=int(amount_rubles * 100),
+            price_kopecks=round(amount_rubles * 100),
             promo_code=None  # Renewals don't use promo codes
         )
         

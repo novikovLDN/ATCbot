@@ -23,6 +23,4 @@ class PurchaseCreationError(SubscriptionServiceError):
     pass
 
 
-class PaymentFinalizationError(SubscriptionServiceError):
-    """Raised when payment finalization fails"""
-    pass
+from app.services.payments.exceptions import PaymentFinalizationError  # noqa: F401 — re-export, single source of truth

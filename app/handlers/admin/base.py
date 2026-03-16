@@ -14,7 +14,7 @@ import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
-from app.utils.security import require_admin
+from app.utils.security import require_admin, admin_only
 from app.handlers.admin.keyboards import get_admin_dashboard_keyboard, get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.states import AdminCreatePromocode
@@ -25,36 +25,39 @@ logger = logging.getLogger(__name__)
 
 
 @admin_base_router.message(Command("admin"))
+@admin_only
 async def cmd_admin(message: Message):
     """Административный дашборд"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        logging.warning(f"Unauthorized admin dashboard attempt by user {message.from_user.id}")
-        language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
-        return
-    
     language = await resolve_user_language(message.from_user.id)
     text = i18n_get_text(language, "admin.dashboard_title")
     await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language))
 
 
 @admin_base_router.callback_query(F.data == "admin:dashboard")
+@admin_only
 async def callback_admin_dashboard(callback: CallbackQuery):
     """
     Admin Dashboard — rich real-time overview with key metrics.
     """
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
-        return
-
     try:
+        from app.core.system_state import recalculate_from_runtime, SystemSeverity
+
+        system_state = recalculate_from_runtime()
+        severity = system_state.get_severity()
+        severity_map = {
+            SystemSeverity.GREEN: "🟢 OK",
+            SystemSeverity.YELLOW: "🟡 DEGRADED",
+            SystemSeverity.RED: "🔴 CRITICAL",
+        }
+
+        def _icon(comp):
+            return {"healthy": "✅", "degraded": "⚠️", "unavailable": "❌"}.get(comp.status.value, "❓")
+
         db_ready = database.DB_READY
-        status = "✅ OK" if db_ready else "⚠️ DEGRADED"
 
         text = f"📊 Admin Dashboard\n\n"
-        text += f"Статус: {status}\n"
-        text += f"База данных: {'✅' if db_ready else '❌'} | VPN API: {'✅' if config.VPN_ENABLED else '⚠️'}\n"
+        text += f"Статус: {severity_map[severity]}\n"
+        text += f"БД: {_icon(system_state.database)} | VPN: {_icon(system_state.vpn_api)} | Платежи: {_icon(system_state.payments)}\n"
 
         # Key metrics (if DB is ready)
         if db_ready:
@@ -70,8 +73,9 @@ async def callback_admin_dashboard(callback: CallbackQuery):
                 text += f"🆕 Новых: {daily.get('new_users', 0)} польз. | {daily.get('new_subscriptions', 0)} подп.\n"
                 text += f"💳 Платежей: {daily.get('payments_count', 0)}\n"
             except Exception as stats_err:
-                logger.warning(f"Failed to load dashboard metrics: {stats_err}")
-                text += "\n⚠️ Не удалось загрузить метрики\n"
+                logger.exception(f"Failed to load dashboard metrics: {stats_err}")
+                err_short = str(stats_err)[:120]
+                text += f"\n⚠️ Не удалось загрузить метрики\n<code>{err_short}</code>\n"
 
         # Uptime
         start_time = get_bot_start_time()
@@ -89,7 +93,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
 
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
 
         await database._log_audit_event_atomic_standalone(
@@ -468,45 +472,79 @@ async def callback_admin_promocode_cancel(callback: CallbackQuery, state: FSMCon
 async def callback_admin_system(callback: CallbackQuery):
     """
     PART A.3: Admin system status dashboard with severity and error summary.
+    Uses SystemState for accurate runtime health display.
     """
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
     try:
-        # Simple system status check
-        db_ready = database.DB_READY
-        status_emoji = "✅" if db_ready else "⚠️"
-        status_text = "OK" if db_ready else "DEGRADED"
-        
+        from app.core.system_state import recalculate_from_runtime, SystemSeverity
+
+        # Build real SystemState from runtime
+        system_state = recalculate_from_runtime()
+
         # Count pending activations
         pending_activations = 0
-        try:
-            pool = await database.get_pool()
-            async with pool.acquire() as conn:
-                pending_activations = await conn.fetchval(
-                    "SELECT COUNT(*) FROM subscriptions WHERE activation_status = 'pending'"
-                ) or 0
-        except Exception:
-            pass
-        
-        text = f"{status_emoji} Система ({status_text})\n\n"
-        
-        # Component summary
+        if database.DB_READY:
+            try:
+                pool = await database.get_pool()
+                if pool:
+                    async with pool.acquire() as conn:
+                        pending_activations = await conn.fetchval(
+                            "SELECT COUNT(*) FROM subscriptions WHERE activation_status = 'pending'"
+                        ) or 0
+            except Exception:
+                pass
+
+        severity = system_state.get_severity(pending_activations=pending_activations)
+        severity_map = {
+            SystemSeverity.GREEN: ("🟢", "OK"),
+            SystemSeverity.YELLOW: ("🟡", "DEGRADED"),
+            SystemSeverity.RED: ("🔴", "CRITICAL"),
+        }
+        sev_emoji, sev_label = severity_map[severity]
+
+        text = f"{sev_emoji} Система ({sev_label})\n\n"
+
+        # Component statuses
+        def _comp_icon(comp):
+            from app.core.system_state import ComponentStatus
+            return {"healthy": "✅", "degraded": "⚠️", "unavailable": "❌"}.get(comp.status.value, "❓")
+
         text += "📊 Компоненты:\n"
-        text += f"  • База данных: {'✅ Ready' if db_ready else '❌ Not Ready'}\n"
-        text += f"  • VPN API: {'✅ Enabled' if config.VPN_ENABLED else '⚠️ Disabled'}\n"
-        text += f"  • Ожидающих активаций: {pending_activations}\n\n"
-        
-        if not db_ready:
+        text += f"  • База данных: {_comp_icon(system_state.database)} {system_state.database.status.value.upper()}\n"
+        text += f"  • VPN API: {_comp_icon(system_state.vpn_api)} {system_state.vpn_api.status.value.upper()}\n"
+        text += f"  • Платежи: {_comp_icon(system_state.payments)} {system_state.payments.status.value.upper()}\n"
+
+        # Redis status
+        try:
+            from app.utils.redis_client import ping as redis_ping, is_configured as redis_configured
+            if redis_configured():
+                redis_ok = await redis_ping()
+                text += f"  • Redis: {'✅ HEALTHY' if redis_ok else '⚠️ UNAVAILABLE'}\n"
+            else:
+                text += f"  • Redis: ⚠️ НЕ НАСТРОЕН (FSM в памяти)\n"
+        except Exception:
+            text += f"  • Redis: ❓ ОШИБКА ПРОВЕРКИ\n"
+
+        if pending_activations > 0:
+            text += f"  • Ожидающих активаций: {pending_activations}\n"
+        text += "\n"
+
+        # Error summary from SystemState
+        errors = system_state.get_error_summary()
+        if errors:
             text += "⚠️ Проблемы:\n"
-            text += "  • База данных недоступна\n"
-            text += "    → Бот работает в деградированном режиме\n\n"
+            for err in errors:
+                text += f"  • {err['component']}: {err['reason']}\n"
+                text += f"    → {err['impact']}\n"
+            text += "\n"
         else:
             text += "✅ Проблем не обнаружено\n\n"
 
-        # Uptime (via runtime_context — no cross-module globals)
+        # Uptime
         start_time = get_bot_start_time()
         if start_time:
             uptime_seconds = int(
@@ -519,27 +557,25 @@ async def callback_admin_system(callback: CallbackQuery):
         uptime_minutes = (uptime_seconds % 3600) // 60
         uptime_str = f"{uptime_days}д {uptime_hours}ч {uptime_minutes}м"
         text += f"⏱ Время работы: {uptime_str}"
-        logger.info("SYSTEM_PANEL_REQUESTED uptime_seconds=%s", uptime_seconds)
-        
-        # PART C.5: Add test menu button
-        user = await database.get_user(callback.from_user.id)
+        logger.info("SYSTEM_PANEL_REQUESTED severity=%s uptime_seconds=%s", severity.value, uptime_seconds)
+
         language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:system")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_menu"), callback_data="admin:test_menu")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
-        
+
         await safe_edit_text(callback.message, text, reply_markup=keyboard)
         await callback.answer()
-        
-        # Логируем просмотр системной информации
+
         await database._log_audit_event_atomic_standalone(
-            "admin_view_system", 
-            callback.from_user.id, 
-            None, 
-            "Admin viewed system status"
+            "admin_view_system",
+            callback.from_user.id,
+            None,
+            f"Admin viewed system status: severity={severity.value}"
         )
-        
+
     except Exception as e:
         logging.exception(f"Error in callback_admin_system: {e}")
         await callback.answer("Ошибка при получении системной информации", show_alert=True)

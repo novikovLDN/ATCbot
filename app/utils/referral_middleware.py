@@ -56,7 +56,12 @@ async def process_referral_on_first_interaction(
     
     if not referral_code:
         return None
-    
+
+    # Length validation
+    if len(referral_code) > 64:
+        logger.warning(f"Referral code too long ({len(referral_code)} chars), ignoring for user={telegram_id}")
+        return None
+
     # Process referral registration
     result = await process_referral_registration(telegram_id, referral_code)
     

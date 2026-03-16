@@ -597,15 +597,29 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
         if amount <= 0:
             await message.answer("❌ Сумма должна быть положительным числом.\n\nВведите сумму в рублях:")
             return
-        
+
+        # SECURITY: Limit single admin balance adjustment to prevent accidental/malicious large credits
+        ADMIN_MAX_SINGLE_CREDIT = 50000  # 50,000 RUB max per operation
+        if amount > ADMIN_MAX_SINGLE_CREDIT:
+            await message.answer(
+                f"❌ Максимальная сумма одной операции: {ADMIN_MAX_SINGLE_CREDIT:.0f} ₽\n\n"
+                f"Для сумм свыше {ADMIN_MAX_SINGLE_CREDIT:.0f} ₽ выполните несколько операций.\n"
+                f"Введите сумму в рублях:"
+            )
+            logger.warning(
+                f"ADMIN_CREDIT_LIMIT_EXCEEDED: admin={message.from_user.id}, "
+                f"attempted_amount={amount:.2f}, limit={ADMIN_MAX_SINGLE_CREDIT}"
+            )
+            return
+
         data = await state.get_data()
         target_user_id = data.get("target_user_id")
-        
+
         if not target_user_id:
             await message.answer("Ошибка: пользователь не найден. Начните заново.")
             await state.clear()
             return
-        
+
         # Сохраняем сумму и показываем подтверждение
         await state.update_data(amount=amount)
         
@@ -765,6 +779,20 @@ async def process_admin_debit_amount(message: Message, state: FSMContext):
         if amount <= 0:
             await message.answer("❌ Сумма должна быть положительной.")
             return
+
+        # SECURITY: Limit single admin debit to prevent accidental large debits
+        ADMIN_MAX_SINGLE_DEBIT = 50000  # 50,000 RUB max per operation
+        if amount > ADMIN_MAX_SINGLE_DEBIT:
+            await message.answer(
+                f"❌ Максимальная сумма одной операции: {ADMIN_MAX_SINGLE_DEBIT:.0f} ₽\n"
+                f"Введите сумму в рублях:"
+            )
+            logger.warning(
+                f"ADMIN_DEBIT_LIMIT_EXCEEDED: admin={message.from_user.id}, "
+                f"attempted_amount={amount:.2f}, limit={ADMIN_MAX_SINGLE_DEBIT}"
+            )
+            return
+
         data = await state.get_data()
         target_user_id = data.get("target_user_id")
         if not target_user_id:

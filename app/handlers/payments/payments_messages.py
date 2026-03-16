@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.filters import StateFilter
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery, WebAppInfo
 from aiogram.fsm.context import FSMContext
 
 import database
@@ -368,22 +368,30 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )]
             ])
             
-            await message.answer(text, reply_markup=keyboard)
-            
-            # ИДЕМПОТЕНТНОСТЬ: Помечаем уведомление как отправленное (после успешной отправки)
+            # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой, чтобы при краше между send и mark
+            # не было дубля уведомления. Лучше потерять уведомление, чем отправить дважды.
             try:
                 sent = await database.mark_payment_notification_sent(payment_id)
-                if sent:
-                    logger.info(
-                        f"NOTIFICATION_SENT [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
-                    )
-                else:
+                if not sent:
                     logger.warning(
                         f"NOTIFICATION_FLAG_ALREADY_SET [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
                     )
+                    return  # Already sent by another handler/retry
             except Exception as e:
                 logger.error(
                     f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+                )
+                # Continue to send — better to risk duplicate than to lose notification entirely
+
+            try:
+                await message.answer(text, reply_markup=keyboard)
+                logger.info(
+                    f"NOTIFICATION_SENT [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
+                )
+            except Exception as e:
+                logger.error(
+                    f"NOTIFICATION_SEND_FAILED [type=balance_topup, payment_id={payment_id}, "
+                    f"user={telegram_id}, error={e}] (notification flagged but message not delivered)"
                 )
             
             # Отправляем уведомление о кешбэке (если начислен)
@@ -634,6 +642,24 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )]
             ])
             
+            # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой, чтобы при краше не было дубля
+            try:
+                sent = await database.mark_payment_notification_sent(payment_id)
+                if not sent:
+                    logger.warning(
+                        f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success_pending, payment_id={payment_id}, user={telegram_id}]"
+                    )
+                    # Already sent — skip to FSM cleanup
+                    try:
+                        current_state = await state.get_state()
+                        if current_state is not None:
+                            await state.clear()
+                    except Exception:
+                        pass
+                    return
+            except Exception as e:
+                logger.error(f"Failed to mark pending activation notification as sent: {e}")
+
             try:
                 await message.answer(
                     pending_text,
@@ -641,20 +667,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     parse_mode="HTML"
                 )
                 logger.info(
-                    f"Pending activation message sent: user={telegram_id}, payment_id={payment_id}, purchase_id={purchase_id}, expires_at={expires_str}"
+                    f"NOTIFICATION_SENT [type=payment_success_pending, payment_id={payment_id}, user={telegram_id}, purchase_id={purchase_id}, expires_at={expires_str}]"
                 )
             except Exception as e:
                 logger.error(f"Failed to send pending activation message: user={telegram_id}, error={e}")
-            
-            # Помечаем уведомление как отправленное
-            try:
-                sent = await database.mark_payment_notification_sent(payment_id)
-                if sent:
-                    logger.info(
-                        f"NOTIFICATION_SENT [type=payment_success_pending, payment_id={payment_id}, user={telegram_id}, purchase_id={purchase_id}]"
-                    )
-            except Exception as e:
-                logger.error(f"Failed to mark pending activation notification as sent: {e}")
             
             # Очищаем FSM state
             try:
@@ -843,11 +859,72 @@ async def process_successful_payment(message: Message, state: FSMContext):
             tariff_label, tariff_emoji = "Plus", "⭐️"
         else:
             tariff_label, tariff_emoji = "Basic", "📦"
+
+        # Build period string
+        period_str = ""
+        if period_days:
+            if period_days == 30:
+                period_str = "1 месяц"
+            elif period_days == 90:
+                period_str = "3 месяца"
+            elif period_days == 180:
+                period_str = "6 месяцев"
+            elif period_days == 365:
+                period_str = "1 год"
+            else:
+                period_str = f"{period_days} дней"
+
+        from app.i18n import get_text as _i18n_get
+        from app.handlers.common.keyboards import MINI_APP_URL
         if is_renewal:
-            text = f"✅ Подписка продлена\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
+            text = _i18n_get(language, "purchase.success_renewal",
+                             tariff_name=f"{tariff_emoji} {tariff_label}",
+                             period=period_str,
+                             expires_date=expires_str)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_renewal_btn_profile"),
+                    callback_data="menu_profile"
+                )],
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_renewal_btn_main"),
+                    callback_data="menu_main"
+                )],
+            ])
         else:
-            text = f"🎉 Добро пожаловать в Atlas Secure!\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
-        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
+            text = _i18n_get(language, "purchase.success_first",
+                             tariff_name=f"{tariff_emoji} {tariff_label}",
+                             period=period_str,
+                             expires_date=expires_str)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_first_btn_connect"),
+                    web_app=WebAppInfo(url=MINI_APP_URL),
+                )],
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_first_btn_instruction"),
+                    callback_data="menu_instruction"
+                )],
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_first_btn_profile"),
+                    callback_data="menu_profile"
+                )],
+            ])
+        # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой (mark-before-send pattern)
+        # При краше между mark и send — уведомление потеряно, но не дублировано
+        try:
+            sent = await database.mark_payment_notification_sent(payment_id)
+            if not sent:
+                logger.warning(
+                    f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
+                )
+                # Already sent by concurrent handler — skip
+                return
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
+            )
+
         try:
             degradation = ""
             try:
@@ -856,28 +933,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
             except NameError:
                 pass
             await message.answer(text + degradation, reply_markup=keyboard, parse_mode="HTML")
+            logger.info(
+                f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
+                f"purchase_id={purchase_id}]"
+            )
         except Exception as e:
             logger.error(f"Failed to send payment success message: user={telegram_id}, error={e}")
             try:
                 await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
             except Exception as fallback_err:
                 logger.error(f"Fallback also failed: user={telegram_id}, error={fallback_err}")
-
-    try:
-        sent = await database.mark_payment_notification_sent(payment_id)
-        if sent:
-            logger.info(
-                f"NOTIFICATION_SENT [type=payment_success, payment_id={payment_id}, user={telegram_id}, "
-                f"purchase_id={purchase_id}]"
-            )
-        else:
-            logger.warning(
-                f"NOTIFICATION_FLAG_ALREADY_SET [type=payment_success, payment_id={payment_id}, user={telegram_id}]"
-            )
-    except Exception as e:
-        logger.error(
-            f"CRITICAL: Failed to mark notification as sent: payment_id={payment_id}, user={telegram_id}, error={e}"
-        )
 
     logger.info(
         f"process_successful_payment: VPN_KEY_SENT [user={telegram_id}, payment_id={payment_id}, "

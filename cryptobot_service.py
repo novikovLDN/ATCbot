@@ -155,6 +155,9 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
 
     # Verify signature
     signature = headers.get("crypto-pay-api-signature", "")
+    if not signature:
+        logger.warning("CryptoBot webhook: missing signature header")
+        return {"status": "unauthorized"}
     if not verify_webhook_signature(raw_body, signature):
         logger.warning("CryptoBot webhook: signature verification failed")
         return {"status": "unauthorized"}
@@ -176,45 +179,42 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
         logger.info(f"CryptoBot webhook: ignoring status={status}")
         return {"status": "ignored"}
 
-    # Extract purchase_id from invoice payload
-    invoice_payload_raw = payload_obj.get("payload")
-    purchase_id = None
+    # Delegate to shared confirmation logic
+    from app.services.payments.confirmation import (
+        extract_purchase_id, lookup_pending_purchase, process_confirmed_payment,
+    )
 
-    if invoice_payload_raw:
-        try:
-            if isinstance(invoice_payload_raw, str):
-                payload_data = json.loads(invoice_payload_raw)
-            else:
-                payload_data = invoice_payload_raw
-            purchase_id = payload_data.get("purchase_id")
-        except (json.JSONDecodeError, TypeError):
-            pass
+    invoice_payload_raw = payload_obj.get("payload")
+    purchase_id = extract_purchase_id(invoice_payload_raw)
 
     if not purchase_id:
         logger.error(f"CryptoBot webhook: could not extract purchase_id, payload={invoice_payload_raw}")
         return {"status": "invalid"}
 
-    # Look up pending purchase
-    pending_purchase = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+    lookup = await lookup_pending_purchase("cryptobot", purchase_id)
+    if lookup["status"] != "ok":
+        return lookup
 
-    if not pending_purchase:
-        logger.warning(f"CryptoBot webhook: purchase not found: purchase_id={purchase_id}")
-        return {"status": "not_found"}
-
-    telegram_id = pending_purchase["telegram_id"]
-    purchase_status = pending_purchase.get("status")
-
-    if purchase_status != "pending":
-        logger.info(
-            f"CryptoBot webhook: purchase already processed: "
-            f"purchase_id={purchase_id}, status={purchase_status}"
-        )
-        return {"status": "already_processed"}
+    pending_purchase = lookup["purchase"]
+    telegram_id = lookup["telegram_id"]
 
     # Get payment amount in RUB
-    amount_rubles = float(payload_obj.get("amount", 0))
-    if amount_rubles <= 0:
-        amount_rubles = pending_purchase["price_kopecks"] / 100.0
+    raw_amount = float(payload_obj.get("amount", 0))
+    expected_amount = pending_purchase["price_kopecks"] / 100.0
+    if raw_amount <= 0:
+        logger.warning(
+            f"CryptoBot webhook: amount missing or zero, using stored price. "
+            f"purchase_id={purchase_id}, raw_amount={raw_amount}, expected={expected_amount}"
+        )
+        amount_rubles = expected_amount
+    elif abs(raw_amount - expected_amount) > 1.0:
+        logger.warning(
+            f"CryptoBot webhook: amount mismatch. purchase_id={purchase_id}, "
+            f"webhook_amount={raw_amount}, expected={expected_amount}"
+        )
+        amount_rubles = raw_amount
+    else:
+        amount_rubles = raw_amount
 
     logger.info(
         f"payment_event_received: provider=cryptobot, user={telegram_id}, "
@@ -222,78 +222,11 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
         f"amount={amount_rubles:.2f} RUB"
     )
 
-    # Finalize purchase
-    try:
-        result = await database.finalize_purchase(
-            purchase_id=purchase_id,
-            payment_provider="cryptobot",
-            amount_rubles=amount_rubles,
-            invoice_id=str(invoice_id),
-        )
-
-        if not result or not result.get("success"):
-            logger.error(f"CryptoBot webhook: finalize_purchase failed: {result}")
-            raise Exception(f"finalize_purchase returned invalid result: {result}")
-
-        payment_id = result["payment_id"]
-        expires_at = result.get("expires_at")
-        is_balance_topup = result.get("is_balance_topup", False)
-
-        from app.services.language_service import resolve_user_language
-        from app.i18n import get_text as i18n_get_text
-
-        language = await resolve_user_language(telegram_id)
-
-        if is_balance_topup:
-            topup_amount = result.get("amount", amount_rubles)
-            text = i18n_get_text(language, "main.balance_topup_success", amount=topup_amount)
-            try:
-                await bot.send_message(telegram_id, text, parse_mode="HTML")
-            except Exception as send_err:
-                logger.warning(f"CryptoBot: failed to send topup confirmation to user={telegram_id}: {send_err}")
-        else:
-            expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "N/A"
-            subscription_type = (result.get("subscription_type") or "basic").strip().lower()
-            if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
-                subscription_type = "basic"
-            if config.is_biz_tariff(subscription_type):
-                _label, _emoji = "Business", "🏢"
-            elif subscription_type == "plus":
-                _label, _emoji = "Plus", "⭐️"
-            else:
-                _label, _emoji = "Basic", "📦"
-            text = i18n_get_text(
-                language, "payment.crypto_success",
-                f"🎉 Оплата получена!\n{_emoji} Тариф: {_label}\n📅 До: {expires_str}",
-                tariff_icon=_emoji,
-                tariff=_label,
-                date=expires_str,
-            )
-
-            from app.handlers.common.keyboards import get_connect_keyboard
-            try:
-                await bot.send_message(
-                    telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML"
-                )
-            except Exception as send_err:
-                logger.warning(f"CryptoBot: failed to send subscription confirmation to user={telegram_id}: {send_err}")
-
-        logger.info(
-            f"CryptoBot payment processed: user={telegram_id}, payment_id={payment_id}, "
-            f"purchase_id={purchase_id}"
-        )
-
-    except ValueError as e:
-        logger.info(
-            f"CryptoBot webhook: purchase already processed (ValueError): "
-            f"purchase_id={purchase_id}, error={e}"
-        )
-        return {"status": "already_processed"}
-    except Exception as e:
-        logger.exception(
-            f"CryptoBot webhook: finalize_purchase failed: user={telegram_id}, "
-            f"purchase_id={purchase_id}, error={e}"
-        )
-        return {"status": "error"}
-
-    return {"status": "ok"}
+    return await process_confirmed_payment(
+        provider="cryptobot",
+        purchase_id=purchase_id,
+        amount_rubles=amount_rubles,
+        invoice_id=str(invoice_id),
+        telegram_id=telegram_id,
+        bot=bot,
+    )
