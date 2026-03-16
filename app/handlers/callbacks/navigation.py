@@ -243,6 +243,33 @@ async def callback_privacy(callback: CallbackQuery):
     await safe_edit_text(callback.message, text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=callback.bot)
 
 
+@router.callback_query(F.data == "special_offer_buy")
+async def callback_special_offer_buy(callback: CallbackQuery, state: FSMContext):
+    """Спецпредложение -15% — перенаправляет на экран покупки."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+
+    telegram_id = callback.from_user.id
+
+    # Проверяем что спецпредложение еще активно
+    special_offer = await database.get_special_offer_info(telegram_id)
+    if not special_offer:
+        language = await resolve_user_language(telegram_id)
+        await callback.message.answer(
+            "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене."
+        )
+        return
+
+    # Открываем экран покупки — скидка 15% применится автоматически через calculate_final_price
+    from app.handlers.common.screens import _open_buy_screen
+    await _open_buy_screen(callback, callback.bot, state)
+
+
 @router.callback_query(F.data == "menu_instruction")
 @router.callback_query(F.data == "instruction")
 async def callback_instruction(callback: CallbackQuery):
