@@ -113,6 +113,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             )])
         else:
             # Проверяем спецпредложение для истекших подписок
+            offer_shown = False
             try:
                 special_offer = await database.get_special_offer_info(telegram_id)
                 if special_offer:
@@ -122,8 +123,16 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                         text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
                         callback_data="special_offer_buy"
                     )])
+                    offer_shown = True
             except Exception as e:
                 logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
+
+            if not offer_shown:
+                # Предложение истекло или отсутствует — кнопка «Купить подписку»
+                buttons.append([InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy_new"),
+                    callback_data="menu_buy_vpn"
+                )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.profile"),

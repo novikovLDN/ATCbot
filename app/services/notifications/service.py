@@ -34,12 +34,17 @@ logger = logging.getLogger(__name__)
 
 class ReminderType(Enum):
     """Types of reminders"""
+    REMINDER_7D = "reminder_7d"  # 7 days before expiry (paid subscriptions)
     REMINDER_3D = "reminder_3d"  # 3 days before expiry (paid subscriptions)
+    REMINDER_1D = "reminder_1d"  # 1 day before expiry (paid subscriptions)
     REMINDER_24H = "reminder_24h"  # 24 hours before expiry
-    REMINDER_3H = "reminder_3h"  # 3 hours before expiry (paid subscriptions)
+    REMINDER_3H = "reminder_3h"  # 3 hours before expiry (paid subscriptions) — special 15% offer
     REMINDER_6H = "reminder_6h"  # 6 hours before expiry (admin 1-day grants)
     ADMIN_1DAY_6H = "admin_1day_6h"  # 6 hours before expiry (admin 1-day grants)
     ADMIN_7DAYS_24H = "admin_7days_24h"  # 24 hours before expiry (admin 7-day grants)
+    # Trial reminders
+    TRIAL_24H = "trial_24h"  # 24 hours before trial expiry
+    TRIAL_3H = "trial_3h"  # 3 hours before trial expiry — 15% discount
 
 
 # ====================================================================================
@@ -194,50 +199,45 @@ def should_send_reminder(
     
     # PAID SUBSCRIPTIONS
     else:
+        # Reminder at 7 days
+        if is_within_time_window(time_until_expiry, timedelta(days=7), timedelta(hours=3)):
+            if subscription.get("reminder_7d_sent", False):
+                return ReminderDecision(
+                    should_send=False,
+                    reminder_type=ReminderType.REMINDER_7D,
+                    reason="Reminder already sent (reminder_7d_sent flag)"
+                )
+            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_7D)
+
         # Reminder at 3 days
-        if is_within_time_window(time_until_expiry, timedelta(days=3), timedelta(hours=2.4)):
-            # Check idempotency
+        elif is_within_time_window(time_until_expiry, timedelta(days=3), timedelta(hours=2.4)):
             if subscription.get("reminder_3d_sent", False):
                 return ReminderDecision(
                     should_send=False,
                     reminder_type=ReminderType.REMINDER_3D,
                     reason="Reminder already sent (reminder_3d_sent flag)"
                 )
-            
-            return ReminderDecision(
-                should_send=True,
-                reminder_type=ReminderType.REMINDER_3D
-            )
-        
-        # Reminder at 24 hours
+            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_3D)
+
+        # Reminder at 1 day (24 hours)
         elif is_within_time_window(time_until_expiry, timedelta(hours=24), timedelta(hours=1)):
-            # Check idempotency
-            if subscription.get("reminder_24h_sent", False):
+            if subscription.get("reminder_1d_sent", False):
                 return ReminderDecision(
                     should_send=False,
-                    reminder_type=ReminderType.REMINDER_24H,
-                    reason="Reminder already sent (reminder_24h_sent flag)"
+                    reminder_type=ReminderType.REMINDER_1D,
+                    reason="Reminder already sent (reminder_1d_sent flag)"
                 )
-            
-            return ReminderDecision(
-                should_send=True,
-                reminder_type=ReminderType.REMINDER_24H
-            )
-        
-        # Reminder at 3 hours
+            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_1D)
+
+        # Reminder at 3 hours — special 15% discount offer
         elif is_within_time_window(time_until_expiry, timedelta(hours=3), timedelta(hours=0.5)):
-            # Check idempotency
             if subscription.get("reminder_3h_sent", False):
                 return ReminderDecision(
                     should_send=False,
                     reminder_type=ReminderType.REMINDER_3H,
                     reason="Reminder already sent (reminder_3h_sent flag)"
                 )
-            
-            return ReminderDecision(
-                should_send=True,
-                reminder_type=ReminderType.REMINDER_3H
-            )
+            return ReminderDecision(should_send=True, reminder_type=ReminderType.REMINDER_3H)
     
     # No reminder should be sent
     return ReminderDecision(
@@ -258,12 +258,16 @@ def get_reminder_flag_name(reminder_type: ReminderType) -> str:
         Database flag name (e.g., "reminder_3d_sent")
     """
     mapping = {
+        ReminderType.REMINDER_7D: "reminder_7d_sent",
         ReminderType.REMINDER_3D: "reminder_3d_sent",
+        ReminderType.REMINDER_1D: "reminder_1d_sent",
         ReminderType.REMINDER_24H: "reminder_24h_sent",
         ReminderType.REMINDER_3H: "reminder_3h_sent",
         ReminderType.REMINDER_6H: "reminder_6h_sent",
         ReminderType.ADMIN_1DAY_6H: "reminder_6h_sent",
         ReminderType.ADMIN_7DAYS_24H: "reminder_24h_sent",
+        ReminderType.TRIAL_24H: "trial_notif_24h_sent",
+        ReminderType.TRIAL_3H: "trial_notif_3h_sent",
     }
     
     return mapping.get(reminder_type, "reminder_sent")

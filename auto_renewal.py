@@ -391,13 +391,22 @@ async def process_auto_renewals(bot: Bot):
                         )
                 try:
                     tariff_label = "Plus" if item.get("tariff_type") == "plus" else "Basic"
-                    text = (
-                        "✅ Подписка продлена\n"
-                        f"📦/⭐️ Тариф: {tariff_label}\n"
-                        f"📅 До: {item['expires_str']}"
+                    tariff_emoji = "⭐️" if item.get("tariff_type") == "plus" else "📦"
+                    user_lang = await resolve_user_language(item["telegram_id"])
+                    amount_val = item.get("amount", 0)
+                    # amount may be in kopecks (>1000) or rubles
+                    if amount_val > 1000:
+                        amount_val = amount_val / 100
+                    text = i18n.get_text(
+                        user_lang, "purchase.auto_renewal_success",
+                        tariff_name=f"{tariff_emoji} {tariff_label}",
+                        days=item.get("period_days", 30),
+                        expires_date=item["expires_str"],
+                        amount=amount_val
                     )
-                    from app.handlers.common.keyboards import get_connect_keyboard
-                    keyboard = get_connect_keyboard()
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
+                    ])
                     sent = await safe_send_message(bot, item["telegram_id"], text, reply_markup=keyboard)
                     if sent is None:
                         continue

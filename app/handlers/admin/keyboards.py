@@ -27,12 +27,12 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management"),
         ],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
-        # — Маркетинг —
+        # — Маркетинг и уведомления —
+        [InlineKeyboardButton(text="📣 Центр уведомлений", callback_data="admin:notifications")],
         [
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.broadcast"), callback_data="admin:broadcast"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats"),
         ],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats")],
         # — Система —
         [
             InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system"),

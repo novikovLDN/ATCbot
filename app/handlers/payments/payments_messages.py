@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from aiogram import Router, F
 from aiogram.filters import StateFilter
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, PreCheckoutQuery, WebAppInfo
 from aiogram.fsm.context import FSMContext
 
 import database
@@ -843,11 +843,57 @@ async def process_successful_payment(message: Message, state: FSMContext):
             tariff_label, tariff_emoji = "Plus", "⭐️"
         else:
             tariff_label, tariff_emoji = "Basic", "📦"
+
+        # Build period string
+        period_str = ""
+        if period_days:
+            if period_days == 30:
+                period_str = "1 месяц"
+            elif period_days == 90:
+                period_str = "3 месяца"
+            elif period_days == 180:
+                period_str = "6 месяцев"
+            elif period_days == 365:
+                period_str = "1 год"
+            else:
+                period_str = f"{period_days} дней"
+
+        from app.i18n import get_text as _i18n_get
+        from app.handlers.common.keyboards import MINI_APP_URL
         if is_renewal:
-            text = f"✅ Подписка продлена\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
+            text = _i18n_get(language, "purchase.success_renewal",
+                             tariff_name=f"{tariff_emoji} {tariff_label}",
+                             period=period_str,
+                             expires_date=expires_str)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_renewal_btn_profile"),
+                    callback_data="menu_profile"
+                )],
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_renewal_btn_main"),
+                    callback_data="menu_main"
+                )],
+            ])
         else:
-            text = f"🎉 Добро пожаловать в Atlas Secure!\n{tariff_emoji} Тариф: {tariff_label}\n📅 До: {expires_str}"
-        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
+            text = _i18n_get(language, "purchase.success_first",
+                             tariff_name=f"{tariff_emoji} {tariff_label}",
+                             period=period_str,
+                             expires_date=expires_str)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_first_btn_connect"),
+                    web_app=WebAppInfo(url=MINI_APP_URL),
+                )],
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_first_btn_instruction"),
+                    callback_data="menu_instruction"
+                )],
+                [InlineKeyboardButton(
+                    text=_i18n_get(language, "purchase.success_first_btn_profile"),
+                    callback_data="menu_profile"
+                )],
+            ])
         try:
             degradation = ""
             try:

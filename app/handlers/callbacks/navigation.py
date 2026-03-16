@@ -270,6 +270,66 @@ async def callback_special_offer_buy(callback: CallbackQuery, state: FSMContext)
     await _open_buy_screen(callback, callback.bot, state)
 
 
+@router.callback_query(F.data == "trial_discount_15")
+async def callback_trial_discount_15(callback: CallbackQuery, state: FSMContext):
+    """Скидка 15% из уведомления за 3 часа до окончания триала — автоматически применяет скидку"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+
+    try:
+        from datetime import timedelta, timezone
+        from datetime import datetime as dt
+        expires_at = dt.now(timezone.utc) + timedelta(days=7)
+        await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=15,
+            expires_at=expires_at,
+            created_by=0,  # system
+        )
+        await callback.message.answer(
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to apply trial discount for {telegram_id}: {e}")
+
+    from app.handlers.common.screens import _open_buy_screen
+    await _open_buy_screen(callback, callback.bot, state)
+
+
+@router.callback_query(F.data == "paid_discount_15")
+async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
+    """Скидка 15% из уведомления за 3 часа до окончания платной подписки"""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+
+    try:
+        from datetime import timedelta, timezone
+        from datetime import datetime as dt
+        expires_at = dt.now(timezone.utc) + timedelta(days=7)
+        await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=15,
+            expires_at=expires_at,
+            created_by=0,  # system
+        )
+        await callback.message.answer(
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to apply paid discount for {telegram_id}: {e}")
+
+    from app.handlers.common.screens import _open_buy_screen
+    await _open_buy_screen(callback, callback.bot, state)
+
+
 @router.callback_query(F.data == "menu_instruction")
 @router.callback_query(F.data == "instruction")
 async def callback_instruction(callback: CallbackQuery):

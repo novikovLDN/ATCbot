@@ -2330,8 +2330,16 @@ async def mark_reminder_sent(telegram_id: int):
 # SECURITY: Pre-built SQL queries for each reminder flag.
 # Eliminates f-string SQL interpolation — only static SQL strings are used.
 _REMINDER_FLAG_UPDATE_QUERIES = {
+    "reminder_7d_sent": (
+        "UPDATE subscriptions SET reminder_7d_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
     "reminder_3d_sent": (
         "UPDATE subscriptions SET reminder_3d_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
+    "reminder_1d_sent": (
+        "UPDATE subscriptions SET reminder_1d_sent = TRUE, "
         "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
     ),
     "reminder_24h_sent": (
@@ -2344,6 +2352,14 @@ _REMINDER_FLAG_UPDATE_QUERIES = {
     ),
     "reminder_6h_sent": (
         "UPDATE subscriptions SET reminder_6h_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
+    "trial_notif_24h_sent": (
+        "UPDATE subscriptions SET trial_notif_24h_sent = TRUE, "
+        "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
+    ),
+    "trial_notif_3h_sent": (
+        "UPDATE subscriptions SET trial_notif_3h_sent = TRUE, "
         "last_reminder_at = (NOW() AT TIME ZONE 'UTC') WHERE telegram_id = $1"
     ),
 }
