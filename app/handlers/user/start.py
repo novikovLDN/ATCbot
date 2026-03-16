@@ -165,9 +165,20 @@ async def cmd_start(message: Message, state: FSMContext):
                     await message.answer(text, reply_markup=keyboard)
                     return
 
-    # 1. REFERRAL REGISTRATION: Process on FIRST interaction
-    # This uses the new deterministic referral service
-    referral_result = await process_referral_on_first_interaction(message, telegram_id)
+    # 1. REFERRAL REGISTRATION: Process ONLY for new users
+    # Protects against: self-referral and existing users clicking referral links later
+    referral_result = None
+    if is_new_user:
+        referral_result = await process_referral_on_first_interaction(message, telegram_id)
+    else:
+        # Existing user clicked a referral link — ignore and log
+        if message.text:
+            start_parts = message.text.strip().split(maxsplit=1)
+            if len(start_parts) > 1 and start_parts[1].startswith("ref_"):
+                logger.warning(
+                    "REFERRAL_BLOCKED_EXISTING_USER user=%s payload=%s",
+                    telegram_id, start_parts[1][:30]
+                )
     
     # Send notification to referrer if just registered
     if referral_result and referral_result.get("should_notify"):
