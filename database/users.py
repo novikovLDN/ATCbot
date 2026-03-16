@@ -679,6 +679,33 @@ async def create_user(telegram_id: int, username: Optional[str] = None, language
             )
 
 
+async def get_user_referral_code(telegram_id: int) -> Optional[str]:
+    """Get the opaque referral_code for a user, generating one if missing."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            code = await conn.fetchval(
+                "SELECT referral_code FROM users WHERE telegram_id = $1",
+                telegram_id,
+            )
+            if code:
+                return code
+            # Generate and persist if missing
+            code = generate_referral_code(telegram_id)
+            await conn.execute(
+                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
+                code, telegram_id,
+            )
+            return code
+    except Exception as e:
+        logger.warning("get_user_referral_code error: %s", type(e).__name__)
+        return None
+
+
 async def find_user_by_referral_code(referral_code: str) -> Optional[Dict[str, Any]]:
     """Найти пользователя по referral_code"""
     if not _core.DB_READY:

@@ -13,6 +13,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 
 from app.i18n import get_text as i18n_get_text
+from app.utils.referral_link import build_referral_link
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions.service import (
     get_subscription_status,
@@ -126,7 +127,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         
         # Генерируем реферальную ссылку для share URL
         bot_info = await bot.get_me()
-        referral_link = f"https://t.me/{bot_info.username}?start=ref_{telegram_id}"
+        referral_link = await build_referral_link(telegram_id, bot_info.username)
         from urllib.parse import quote
         share_url = f"https://t.me/share/url?url={quote(referral_link)}"
 

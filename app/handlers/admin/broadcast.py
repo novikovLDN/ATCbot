@@ -27,6 +27,7 @@ from app.handlers.admin.keyboards import (
 )
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready_message
+from app.utils.referral_link import build_referral_link
 
 admin_broadcast_router = Router()
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ def _build_broadcast_reply_markup(
         elif btn == "referral":
             if user_id and bot_username:
                 from urllib.parse import quote
-                referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+                referral_link = await build_referral_link(user_id, bot_username)
                 share_url = f"https://t.me/share/url?url={quote(referral_link)}"
                 rows.append([InlineKeyboardButton(text="👥 Пригласить друга", url=share_url)])
             else:
