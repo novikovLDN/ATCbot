@@ -12,6 +12,7 @@ from typing import Optional
 from urllib.parse import quote
 import logging
 import database
+from app.utils.referral_link import build_referral_link
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ async def send_referral_cashback_notification(
         # Build share button with referrer's referral link
         from app.i18n import get_text as i18n_get_text
         bot_info = await bot.get_me()
-        referral_link = f"https://t.me/{bot_info.username}?start=ref_{referrer_id}"
+        referral_link = await build_referral_link(referrer_id, bot_info.username)
         share_url = f"https://t.me/share/url?url={quote(referral_link)}"
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[

@@ -59,7 +59,9 @@ async def process_referral_registration(
             "reason": "no_referral_code"
         }
     
-    # Extract telegram_id from referral code (format: "ref_<telegram_id>")
+    # Extract referrer from referral code
+    # New format: "ref_<opaque_code>" (6-char hash)
+    # Legacy format: "ref_<telegram_id>" (numeric)
     if not referral_code.startswith("ref_"):
         return {
             "success": False,
@@ -67,10 +69,27 @@ async def process_referral_registration(
             "referrer_id": None,
             "reason": "invalid_referral_code_format"
         }
-    
+
+    code_payload = referral_code[4:]
+    referrer_telegram_id = None
+
+    # Try legacy format first (numeric telegram_id)
     try:
-        referrer_telegram_id = int(referral_code[4:])
+        maybe_id = int(code_payload)
+        # Verify this is actually a user, not a hash that happens to be numeric
+        legacy_user = await database.get_user(maybe_id)
+        if legacy_user:
+            referrer_telegram_id = maybe_id
     except (ValueError, TypeError):
+        pass
+
+    # Try opaque code lookup
+    if referrer_telegram_id is None:
+        referrer_by_code = await database.find_user_by_referral_code(code_payload)
+        if referrer_by_code:
+            referrer_telegram_id = referrer_by_code.get("telegram_id")
+
+    if referrer_telegram_id is None:
         return {
             "success": False,
             "state": ReferralState.NONE,
@@ -111,8 +130,7 @@ async def process_referral_registration(
             "reason": "referrer_id_already_set"
         }
     
-    # Verify referrer exists - use telegram_id directly (not referral_code lookup)
-    # The referral_code format is "ref_<telegram_id>", so we already have the ID
+    # Verify referrer exists
     referrer_user = await database.get_user(referrer_telegram_id)
     if not referrer_user:
         logger.warning(
@@ -125,11 +143,10 @@ async def process_referral_registration(
             "referrer_id": None,
             "reason": "referrer_not_found"
         }
-    
+
     referrer_user_id = referrer_telegram_id
-    
-    # Check for referral loop
-    referrer_user = await database.get_user(referrer_user_id)
+
+    # Check for referral loop (reuse referrer_user from above)
     if referrer_user:
         referrer_referrer = referrer_user.get("referrer_id") or referrer_user.get("referred_by")
         if referrer_referrer == telegram_id:

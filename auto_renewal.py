@@ -216,12 +216,12 @@ async def process_auto_renewals(bot: Bot):
                         
                         is_vip = await database.is_vip_user(telegram_id, conn=conn)
                         if is_vip:
-                            amount_rubles = float(int(base_price * 0.70))  # 30% скидка
+                            amount_rubles = round(base_price * 0.70, 2)  # 30% скидка
                         else:
                             personal_discount = await database.get_user_discount(telegram_id, conn=conn)
                             if personal_discount:
                                 discount_percent = personal_discount["discount_percent"]
-                                amount_rubles = float(int(base_price * (1 - discount_percent / 100)))
+                                amount_rubles = round(base_price * (1 - discount_percent / 100), 2)
                             else:
                                 amount_rubles = float(base_price)
                         
@@ -324,7 +324,7 @@ async def process_auto_renewals(bot: Bot):
                             tariff_str = f"{tariff_type}_{period_days}"
                             payment_id = await conn.fetchval(
                                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
-                                telegram_id, tariff_str, int(amount_rubles * 100)
+                                telegram_id, tariff_str, round(amount_rubles * 100)
                             )
                             
                             if not payment_id:

@@ -254,7 +254,7 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
         await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
         await state.clear()
         return
-    amount_kopecks = int(amount * 100)
+    amount_kopecks = round(amount * 100)
     raw_username = callback.from_user.username
     sanitized_username = sanitize_display_name(raw_username) if raw_username else None
     wid = await database.create_withdrawal_request(telegram_id, sanitized_username or raw_username, amount_kopecks, requisites)

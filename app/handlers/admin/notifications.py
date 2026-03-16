@@ -19,6 +19,7 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.admin.keyboards import get_admin_back_keyboard
+from app.utils.referral_link import build_referral_link
 
 admin_notifications_router = Router()
 logger = logging.getLogger(__name__)
@@ -636,7 +637,7 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
                     start_date=start_date_str, end_date=end_date_str
                 )
 
-                referral_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+                referral_link = await build_referral_link(user_id, bot_username)
                 share_url = f"https://t.me/share/url?url={quote(referral_link)}"
 
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
