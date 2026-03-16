@@ -210,19 +210,25 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         )
 
         expires_str = subscription_end.strftime("%d.%m.%Y")
-        success_text = (
-            "🎉 Добро пожаловать в Atlas Secure!\n"
-            "📦 Тариф: Basic (пробный)\n"
-            f"📅 До: {expires_str}"
-        )
+        success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str)
         try:
             if _degradation_notice:
                 success_text += "\n\n⏳ Возможны небольшие задержки"
         except NameError:
             pass
 
-        from app.handlers.common.keyboards import get_connect_keyboard
-        await callback.message.answer(success_text, parse_mode="HTML", reply_markup=get_connect_keyboard())
+        from app.handlers.common.keyboards import get_connect_keyboard, MINI_APP_URL
+        trial_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "trial.activated_btn_connect"),
+                web_app=__import__('aiogram.types', fromlist=['WebAppInfo']).WebAppInfo(url=MINI_APP_URL),
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "trial.activated_btn_profile"),
+                callback_data="menu_profile"
+            )],
+        ])
+        await callback.message.answer(success_text, parse_mode="HTML", reply_markup=trial_keyboard)
 
         # Обновляем главное меню (кнопка trial должна исчезнуть)
         text = i18n_get_text(language, "main.welcome")

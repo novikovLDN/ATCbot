@@ -1540,9 +1540,31 @@ async def process_referral_reward(
             next_level_threshold = None
             referrals_needed = 0
         
+        # 5b. Проверяем активный множитель кешбэка (x2 промо-акция)
+        cashback_multiplier = 1
+        try:
+            multiplier_row = await conn.fetchrow(
+                """SELECT multiplier FROM user_cashback_multipliers
+                   WHERE telegram_id = $1
+                   AND starts_at <= NOW() AND ends_at > NOW()
+                   ORDER BY multiplier DESC LIMIT 1""",
+                referrer_id
+            )
+            if multiplier_row:
+                cashback_multiplier = multiplier_row["multiplier"]
+                logger.info(
+                    f"CASHBACK_MULTIPLIER_ACTIVE [referrer={referrer_id}, "
+                    f"multiplier=x{cashback_multiplier}, base_percent={percent}%]"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to check cashback multiplier for {referrer_id}: {e}")
+
+        # Применяем множитель к проценту
+        effective_percent = percent * cashback_multiplier
+
         # 6. Рассчитываем сумму кешбэка (в копейках)
         purchase_amount_kopecks = round(amount_rubles * 100)
-        reward_amount_kopecks = int(purchase_amount_kopecks * percent / 100)
+        reward_amount_kopecks = int(purchase_amount_kopecks * effective_percent / 100)
         reward_amount_rubles = reward_amount_kopecks / 100.0
         
         if reward_amount_kopecks <= 0:
@@ -1584,26 +1606,28 @@ async def process_referral_reward(
         
         # 8. Записываем транзакцию баланса
         # Если это упадет - исключение пробросится вверх, транзакция откатится
+        multiplier_note = f" (x{cashback_multiplier})" if cashback_multiplier > 1 else ""
         await conn.execute(
             """INSERT INTO balance_transactions (user_id, amount, type, source, description, related_user_id)
                VALUES ($1, $2, $3, $4, $5, $6)""",
             referrer_id, reward_amount_kopecks, "cashback", "referral",
-            f"Реферальный кешбэк {percent}% за оплату пользователя {buyer_id}",
+            f"Реферальный кешбэк {effective_percent}%{multiplier_note} за оплату пользователя {buyer_id}",
             buyer_id
         )
         
         # 9. Создаём запись в referral_rewards (история начислений)
         # Если это упадет - исключение пробросится вверх, транзакция откатится
         await conn.execute(
-            """INSERT INTO referral_rewards 
+            """INSERT INTO referral_rewards
                (referrer_id, buyer_id, purchase_id, purchase_amount, percent, reward_amount)
                VALUES ($1, $2, $3, $4, $5, $6)""",
-            referrer_id, buyer_id, purchase_id, purchase_amount_kopecks, percent, reward_amount_kopecks
+            referrer_id, buyer_id, purchase_id, purchase_amount_kopecks, effective_percent, reward_amount_kopecks
         )
         
         # 10. Логируем событие
         details = (
-            f"Referral reward awarded: referrer={referrer_id} ({percent}%), "
+            f"Referral reward awarded: referrer={referrer_id} ({effective_percent}%"
+            f"{multiplier_note}), "
             f"buyer={buyer_id}, purchase_id={purchase_id}, "
             f"purchase={amount_rubles:.2f} RUB, reward={reward_amount_rubles:.2f} RUB "
             f"({reward_amount_kopecks} kopecks), paid_referrals_count={paid_referrals_count}"
@@ -1619,19 +1643,14 @@ async def process_referral_reward(
         
         logger.info(
             f"REFERRAL_REWARD_APPLIED [referrer={referrer_id}, buyer={buyer_id}, "
-            f"purchase_id={purchase_id}, percent={percent}%, amount={reward_amount_rubles:.2f} RUB, "
-            f"paid_referrals_count={paid_referrals_count}]"
+            f"purchase_id={purchase_id}, percent={effective_percent}%{multiplier_note}, "
+            f"amount={reward_amount_rubles:.2f} RUB, paid_referrals_count={paid_referrals_count}]"
         )
-        logger.info(
-            f"Referral reward awarded: referrer={referrer_id}, buyer={buyer_id}, "
-            f"percent={percent}%, amount={reward_amount_rubles:.2f} RUB, "
-            f"paid_referrals_count={paid_referrals_count}"
-        )
-        
+
         return {
             "success": True,
             "referrer_id": referrer_id,
-            "percent": percent,
+            "percent": effective_percent,
             "reward_amount": reward_amount_rubles,
             "paid_referrals_count": paid_referrals_count,
             "next_level_threshold": next_level_threshold,

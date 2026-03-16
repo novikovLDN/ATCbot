@@ -44,6 +44,15 @@ _TRIAL_FLAG_UPDATE_QUERIES = {
         "UPDATE subscriptions SET trial_notif_71h_sent = TRUE "
         "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
     ),
+    # New trial notification flags (24h and 3h before expiry)
+    "trial_notif_24h_sent": (
+        "UPDATE subscriptions SET trial_notif_24h_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
+    "trial_notif_3h_sent": (
+        "UPDATE subscriptions SET trial_notif_3h_sent = TRUE "
+        "WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'"
+    ),
 }
 
 
@@ -72,6 +81,21 @@ BATCH_YIELD_SLEEP = 0  # asyncio.sleep(0) for cooperative yield
 def get_trial_buy_keyboard(language: str) -> InlineKeyboardMarkup:
     """Клавиатура для покупки доступа (в уведомлениях trial)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "main.buy"),
+            callback_data="menu_buy_vpn"
+        )]
+    ])
+    return keyboard
+
+
+def get_trial_discount_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Клавиатура с кнопкой скидки 15% для триала (за 3ч до окончания)"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n.get_text(language, "trial.reminder_3h_discount_btn"),
+            callback_data="trial_discount_15"
+        )],
         [InlineKeyboardButton(
             text=i18n.get_text(language, "main.buy"),
             callback_data="menu_buy_vpn"
@@ -151,6 +175,46 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
 
     if not trial_expires_at or not subscription_expires_at:
         return
+
+    # === NEW TRIAL NOTIFICATION SCHEDULE (24h and 3h before expiry) ===
+    timing = trial_service.calculate_trial_timing(trial_expires_at, now)
+    hours_until_expiry = timing["hours_until_expiry"]
+
+    # Trial 24h reminder (between 24h and 23h before expiry)
+    if 23 <= hours_until_expiry <= 25:
+        if not row.get("trial_notif_24h_sent", False):
+            language = await resolve_user_language(telegram_id)
+            text = i18n.get_text(language, "trial.reminder_24h")
+            keyboard = get_trial_buy_keyboard(language)
+            success, status = await send_trial_notification(bot, pool, telegram_id, "trial.reminder_24h", has_button=True)
+            if success or status == "failed_permanently":
+                flag_query = _get_trial_flag_query("trial_notif_24h_sent")
+                async with pool.acquire() as conn:
+                    await conn.execute(flag_query, telegram_id)
+                logger.info(f"trial_reminder_24h_sent: user={telegram_id}, hours_until_expiry={hours_until_expiry:.1f}")
+            return
+
+    # Trial 3h reminder — with 15% discount (between 3h and 2.5h before expiry)
+    if 2.5 <= hours_until_expiry <= 3.5:
+        if not row.get("trial_notif_3h_sent", False):
+            language = await resolve_user_language(telegram_id)
+            text = i18n.get_text(language, "trial.reminder_3h")
+            keyboard = get_trial_discount_keyboard(language)
+            sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+            if sent is not None:
+                await asyncio.sleep(0.05)
+                flag_query = _get_trial_flag_query("trial_notif_3h_sent")
+                async with pool.acquire() as conn:
+                    await conn.execute(flag_query, telegram_id)
+                logger.info(f"trial_reminder_3h_sent: user={telegram_id}, hours_until_expiry={hours_until_expiry:.1f}, discount=15%")
+            elif sent is None:
+                # Permanently failed
+                flag_query = _get_trial_flag_query("trial_notif_3h_sent")
+                async with pool.acquire() as conn:
+                    await conn.execute(flag_query, telegram_id)
+            return
+
+    # === LEGACY TRIAL NOTIFICATION SCHEDULE (kept for backward compatibility) ===
 
     # Phase 1: Read phase — collect all decisions with a short-lived DB connection
     should_send_final = False
@@ -319,6 +383,8 @@ async def process_trial_notifications(bot: Bot):
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
+                       COALESCE(s.trial_notif_24h_sent, FALSE) as trial_notif_24h_sent,
+                       COALESCE(s.trial_notif_3h_sent, FALSE) as trial_notif_3h_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
@@ -342,6 +408,8 @@ async def process_trial_notifications(bot: Bot):
                        s.id as subscription_id,
                        s.expires_at as subscription_expires_at,
                        s.trial_notif_6h_sent, s.trial_notif_60h_sent, s.trial_notif_71h_sent,
+                       COALESCE(s.trial_notif_24h_sent, FALSE) as trial_notif_24h_sent,
+                       COALESCE(s.trial_notif_3h_sent, FALSE) as trial_notif_3h_sent,
                        paid_s.expires_at as paid_subscription_expires_at
                 FROM users u
                 INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
