@@ -362,6 +362,16 @@ async def process_auto_renewals(bot: Bot):
                     
                     except Exception as e:
                         logger.exception(f"Error processing auto-renewal for user {telegram_id}: {e}")
+                        try:
+                            from app.services.admin_alerts import send_alert
+                            await send_alert(
+                                bot, "payment",
+                                f"Auto-renewal processing error\n"
+                                f"User: {telegram_id}\n"
+                                f"Error: {type(e).__name__}: {str(e)[:200]}"
+                            )
+                        except Exception:
+                            pass
 
             # PHASE B: после commit — xray sync + отправка уведомлений (без финансовых мутаций)
             for item in notifications_to_send:
@@ -543,6 +553,11 @@ async def auto_renewal_task(bot: Bot):
             logger.debug("auto_renewal: Full traceback for task loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "auto_renewal", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             # Always log ITERATION_END so production logs confirm the iteration completed (no indefinite hang)
             duration_ms = (time.time() - iteration_start_time) * 1000

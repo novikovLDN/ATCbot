@@ -474,6 +474,11 @@ async def activation_worker_task(bot: Bot):
             logger.debug("activation_worker: Full traceback for task loop", exc_info=True)
             outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "activation_worker", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             # H2 fix: ITERATION_END always fires in finally block
             duration_ms = (time.time() - iteration_start_time) * 1000

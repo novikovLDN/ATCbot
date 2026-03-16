@@ -147,6 +147,11 @@ async def farm_notifications_task(bot: Bot):
             logger.debug("farm_notifications: Full traceback for task loop", exc_info=True)
             iteration_outcome = "failed"
             iteration_error_type = classify_error(e)
+            try:
+                from app.services.admin_alerts import alert_worker_failure
+                await alert_worker_failure(bot, "farm_notifications", e, iteration=iteration_number)
+            except Exception:
+                pass
         finally:
             duration_ms = int((time.time() - iteration_start_time) * 1000)
             log_worker_iteration_end(
