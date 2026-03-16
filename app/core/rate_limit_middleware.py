@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 30
 
-# Лимит для /start: 5 за 60 секунд
-START_RATE_LIMIT_MAX = 5
+# Лимит для /start: 8 за 60 секунд
+START_RATE_LIMIT_MAX = 8
 
 # Агрессивный флуд: если 60+ запросов за 60 сек → бан на 5 минут
 FLOOD_BAN_THRESHOLD = 60

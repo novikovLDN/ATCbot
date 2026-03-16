@@ -219,7 +219,7 @@ def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_connect"),
-            web_app=WebAppInfo(url="https://app.atlassecure.io/connect")
+            web_app=WebAppInfo(url=MINI_APP_URL)
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
