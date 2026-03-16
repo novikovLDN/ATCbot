@@ -286,6 +286,14 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
+                # Создаем спецпредложение -15% на 3 дня для пользователей с оплаченной подпиской
+                sub_source = subscription.get("source", "")
+                if sub_source == "payment":
+                    try:
+                        await set_special_offer(telegram_id)
+                        logger.info(f"SPECIAL_OFFER_CREATED for user {telegram_id} after paid subscription expired")
+                    except Exception as e:
+                        logger.warning(f"Failed to create special offer for {telegram_id}: {e}")
             elif rows == 0 and subscription_id and uuid_to_remove:
                 logger.debug(
                     "EXPIRY_SKIPPED_RENEWED",
@@ -561,6 +569,85 @@ async def is_trial_available(telegram_id: int) -> bool:
             return False
         
         return True
+
+
+async def set_special_offer(telegram_id: int) -> bool:
+    """Установить спецпредложение для пользователя (3 дня, -15%).
+
+    Вызывается когда подписка истекает (source='payment').
+    """
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    try:
+        async with pool.acquire() as conn:
+            now_db = _to_db_utc(datetime.now(timezone.utc))
+            await conn.execute(
+                "UPDATE users SET special_offer_created_at = $1 WHERE telegram_id = $2",
+                now_db, telegram_id
+            )
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to set special offer for {telegram_id}: {e}")
+        return False
+
+
+async def get_special_offer_info(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Получить информацию о спецпредложении пользователя.
+
+    Returns:
+        Dict с ключами: created_at, expires_at, remaining_seconds, remaining_text
+        или None если спецпредложение не активно или истекло.
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT special_offer_created_at FROM users WHERE telegram_id = $1",
+                telegram_id
+            )
+            if not row or not row["special_offer_created_at"]:
+                return None
+
+            created_at = _from_db_utc(row["special_offer_created_at"])
+            now = datetime.now(timezone.utc)
+            expires_at = created_at + timedelta(days=3)
+            remaining = expires_at - now
+
+            if remaining.total_seconds() <= 0:
+                return None
+
+            total_seconds = int(remaining.total_seconds())
+            days = total_seconds // 86400
+            hours = (total_seconds % 86400) // 3600
+
+            if days > 0:
+                remaining_text = f"{days}д {hours}ч"
+            else:
+                remaining_text = f"{hours}ч"
+
+            return {
+                "created_at": created_at,
+                "expires_at": expires_at,
+                "remaining_seconds": total_seconds,
+                "remaining_text": remaining_text,
+                "discount_percent": 15,
+            }
+    except Exception as e:
+        logger.warning(f"Failed to get special offer for {telegram_id}: {e}")
+        return None
+
+
+async def has_active_special_offer(telegram_id: int) -> bool:
+    """Проверить, есть ли активное спецпредложение."""
+    info = await get_special_offer_info(telegram_id)
+    return info is not None
 
 
 async def get_active_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
@@ -3477,7 +3564,8 @@ async def calculate_final_price(
     - Базовая цена из config.TARIFFS
     - Промокод (высший приоритет)
     - VIP-скидка 30% (если нет промокода)
-    - Персональная скидка (если нет промокода и VIP)
+    - Спецпредложение -15% (если нет промокода и VIP, подписка истекла)
+    - Персональная скидка (если нет промокода, VIP и спецпредложения)
     
     Args:
         telegram_id: Telegram ID пользователя
@@ -3527,17 +3615,22 @@ async def calculate_final_price(
     from database.admin import is_vip_user as _is_vip, get_user_discount as _get_discount
     is_vip = await _is_vip(telegram_id) if not has_promo else False
 
-    # ПРИОРИТЕТ 2: Персональная скидка (только если нет промокода и VIP)
-    personal_discount = None
+    # ПРИОРИТЕТ 2: Спецпредложение -15% (только если нет промокода и VIP)
+    special_offer = None
     if not has_promo and not is_vip:
+        special_offer = await get_special_offer_info(telegram_id)
+
+    # ПРИОРИТЕТ 3: Персональная скидка (только если нет промокода, VIP и спецпредложения)
+    personal_discount = None
+    if not has_promo and not is_vip and not special_offer:
         personal_discount = await _get_discount(telegram_id)
-    
+
     # Применяем скидку в порядке приоритета
     discount_amount_kopecks = 0
     discount_percent = 0
     discount_type = None
     final_price_kopecks = base_price_kopecks
-    
+
     if has_promo:
         discount_percent = promo_data["discount_percent"]
         # КРИТИЧНО: Защита от скидки > 100% - ограничиваем до 100%
@@ -3553,6 +3646,12 @@ async def calculate_final_price(
         discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
         final_price_kopecks = base_price_kopecks - discount_amount_kopecks
         discount_type = "vip"
+        applied_promo_code = None
+    elif special_offer:
+        discount_percent = special_offer["discount_percent"]
+        discount_amount_kopecks = int(base_price_kopecks * discount_percent / 100)
+        final_price_kopecks = base_price_kopecks - discount_amount_kopecks
+        discount_type = "special_offer"
         applied_promo_code = None
     elif personal_discount:
         discount_percent = personal_discount["discount_percent"]

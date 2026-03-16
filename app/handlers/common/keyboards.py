@@ -67,17 +67,19 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         language: Язык пользователя
         telegram_id: Telegram ID пользователя (обязательно для проверки trial availability)
 
-    Кнопка "Пробный период 3 дня" показывается ТОЛЬКО если:
-    - trial_used_at IS NULL
-    - Нет активной подписки
-    - Нет платных подписок в истории (source='payment')
+    Логика первой кнопки (3 состояния):
+    1. Новый пользователь (trial доступен) → "Пробный период 3 дня"
+    2. Активная подписка → "🚀 Подключиться" (WebApp)
+    3. Подписка истекла + спецпредложение → "🔥 -15% | ⏳ Xд Yч"
     """
     # Проверяем бизнес-подписку для специального меню
     is_biz_user = False
     subscription = None
+    has_active_sub = False
     if telegram_id and database.DB_READY:
         try:
             subscription = await database.get_subscription(telegram_id)
+            has_active_sub = subscription is not None
             sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
             is_biz_user = config.is_biz_tariff(sub_type)
         except Exception as e:
@@ -88,16 +90,40 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
     buttons = []
 
-    if telegram_id and database.DB_READY:
+    # === ПЕРВАЯ КНОПКА: 3 состояния ===
+    if has_active_sub:
+        # Состояние 2: Активная подписка → "Подключиться" (WebApp)
+        buttons.append([InlineKeyboardButton(
+            text="🚀 Подключиться",
+            web_app=WebAppInfo(url=MINI_APP_URL),
+        )])
+    elif telegram_id and database.DB_READY:
+        # Проверяем trial
+        trial_available = False
         try:
-            is_available = await trial_service.is_trial_available(telegram_id)
-            if is_available:
-                buttons.append([InlineKeyboardButton(
-                    text=i18n_get_text(language, "trial.button"),
-                    callback_data="activate_trial"
-                )])
+            trial_available = await trial_service.is_trial_available(telegram_id)
         except Exception as e:
             logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
+
+        if trial_available:
+            # Состояние 1: Новый пользователь → "Пробный период"
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "trial.button"),
+                callback_data="activate_trial"
+            )])
+        else:
+            # Проверяем спецпредложение для истекших подписок
+            try:
+                special_offer = await database.get_special_offer_info(telegram_id)
+                if special_offer:
+                    # Состояние 3: Спецпредложение -15% с таймером
+                    remaining = special_offer["remaining_text"]
+                    buttons.append([InlineKeyboardButton(
+                        text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
+                        callback_data="special_offer_buy"
+                    )])
+            except Exception as e:
+                logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.profile"),
