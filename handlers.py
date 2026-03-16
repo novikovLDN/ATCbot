@@ -733,53 +733,6 @@ def get_profile_keyboard(language: str, has_active_subscription: bool = False, a
     return keyboard
 
 
-def get_payment_method_keyboard(language: str):
-    """Клавиатура выбора способа оплаты"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.test", "payment_test"),
-            callback_data="payment_test"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.sbp", "payment_sbp"),
-            callback_data="payment_sbp"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_buy_vpn"
-        )],
-    ])
-    return keyboard
-
-
-def get_sbp_payment_keyboard(language: str):
-    """Клавиатура для оплаты СБП"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.paid_button", "paid_button"),
-            callback_data="payment_paid"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
-    ])
-    return keyboard
-
-
-def get_pending_payment_keyboard(language: str):
-    """Клавиатура после нажатия 'Я оплатил'"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/Atlas_SupportSecurity"
-        )],
-    ])
-    return keyboard
 
 
 def get_about_keyboard(language: str):
@@ -819,61 +772,17 @@ def get_service_status_keyboard(language: str):
 
 
 def get_instruction_keyboard(language: str, platform: str = "unknown"):
-    """
-    Клавиатура экрана 'Инструкция' для v2RayTun.
-    Всегда показываем 5 кнопок: Android, Windows, iOS, MacOS, TV.
-    """
+    """Клавиатура экрана 'Инструкция': кнопка перехода в мини-приложение + Назад."""
     buttons = [
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_android", "🤖 Android"),
-                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_desktop", "💻 Windows"),
-                url="https://www.mediafire.com/folder/lpcbgr4ox8u5x/Atlas_Secure"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_ios", "📱 iOS"),
-                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_macos", "🍎 MacOS"),
-                url="https://apps.apple.com/tr/app/v2raytun/id6476628951"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "instruction._download_tv", "📺 TV"),
-                url="https://play.google.com/store/apps/details?id=com.v2raytun.android"
-            ),
-        ],
-    ]
-    
-    # Кнопка копирования ключа
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "profile.copy_key", "copy_key"),
-            callback_data="copy_vpn_key"
-        ),
-    ])
-    
-    # Кнопки навигации
-    buttons.append([
-        InlineKeyboardButton(
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "instruction._open_guide", "📖 Инструкция по установке"),
+            url="https://t.me/atlassecure_bot/app?startapp=guide"
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
-        )
-    ])
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/Atlas_SupportSecurity"
-        )
-    ])
-    
+        )],
+    ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
 
@@ -1069,21 +978,6 @@ def get_reissue_lock(user_id: int) -> asyncio.Lock:
     return _REISSUE_LOCKS[user_id]
 
 
-def get_admin_payment_keyboard(payment_id: int, language: str = "ru"):
-    """Клавиатура для администратора (подтверждение/отклонение платежа)"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "admin.confirm", "admin_confirm"),
-                callback_data=f"approve_payment:{payment_id}"
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "admin.reject", "admin_reject"),
-                callback_data=f"reject_payment:{payment_id}"
-            ),
-        ],
-    ])
-    return keyboard
 
 
 
