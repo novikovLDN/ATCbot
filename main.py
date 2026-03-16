@@ -352,7 +352,7 @@ async def main():
                             logger.info("Reminders task started (recovered)")
                         
                         if fast_cleanup_task is None and recovered_tasks["fast_cleanup"] is None:
-                            t = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+                            t = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
                             recovered_tasks["fast_cleanup"] = t
                             background_tasks.append(t)
                             logger.info("Fast expiry cleanup task started (recovered)")
@@ -420,7 +420,7 @@ async def main():
     # Запуск фоновой задачи для быстрой очистки истёкших подписок (только если БД готова)
     fast_cleanup_task = None
     if database.DB_READY:
-        fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task())
+        fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
         background_tasks.append(fast_cleanup_task)
         logger.info("Fast expiry cleanup task started")
     else:
