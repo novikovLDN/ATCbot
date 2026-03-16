@@ -4367,8 +4367,13 @@ async def finalize_purchase(
                         f"is_renewal={is_renewal}, vpn_key_length={len(vpn_key)}, subscription_activated=True, vpn_key_issued=True]"
                     )
 
-                    subscription_type_ret = (grant_result.get("subscription_type") or "basic").strip().lower()
+                    raw_subscription_type = grant_result.get("subscription_type")
+                    subscription_type_ret = (raw_subscription_type or "basic").strip().lower()
                     if subscription_type_ret not in config.VALID_SUBSCRIPTION_TYPES:
+                        logger.warning(
+                            f"TARIFF_TYPE_COERCED: purchase_id={purchase_id}, user={telegram_id}, "
+                            f"raw_value='{raw_subscription_type}', coerced_to='basic'"
+                        )
                         subscription_type_ret = "basic"
                     if is_renewal:
                         sub_row = await conn.fetchrow(

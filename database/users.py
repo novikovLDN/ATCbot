@@ -1583,7 +1583,9 @@ async def process_referral_reward(
         
         # FINANCIAL OPERATIONS (raise exceptions on failure, do not catch):
         # 7. Начисляем кешбэк на баланс реферера
-        # CRITICAL: advisory lock per user для защиты от race conditions
+        # CRITICAL: advisory lock per referrer для защиты от race conditions
+        # Consistent with increase_balance() locking pattern — prevents concurrent
+        # balance modifications from different purchases for the same referrer
         await conn.execute(
             "SELECT pg_advisory_xact_lock($1)",
             referrer_id
