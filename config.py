@@ -370,6 +370,10 @@ if not WEBHOOK_SECRET:
 WEBHOOK_PORT = int(os.getenv("PORT") or env("WEBHOOK_PORT") or "8080")
 _log.info("Using WEBHOOK_URL from %s_WEBHOOK_URL", APP_ENV.upper())
 
+# Telegram Mini App deep-link settings (for t.me/<bot>/<app>?startapp=...)
+BOT_USERNAME = env("BOT_USERNAME", default="atlassecure_bot")
+MINI_APP_NAME = env("MINI_APP_NAME", default="app")
+
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 

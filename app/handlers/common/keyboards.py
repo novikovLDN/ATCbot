@@ -419,10 +419,11 @@ def get_instruction_keyboard(
     vpn_key: Optional[str] = None,
 ):
     """Клавиатура экрана 'Инструкция': кнопка перехода в мини-приложение + Назад."""
+    guide_url = f"https://t.me/{config.BOT_USERNAME}/{config.MINI_APP_NAME}?startapp=guide"
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "instruction._open_guide", "📖 Инструкция по установке"),
-            url="https://t.me/atlassecure_bot/app?startapp=guide"
+            url=guide_url,
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
