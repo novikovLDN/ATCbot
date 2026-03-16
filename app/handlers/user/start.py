@@ -203,5 +203,5 @@ async def cmd_start(message: Message, state: FSMContext):
             )
     
     # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
-    text = i18n_get_text("ru", "lang.select_title")
-    await message.answer(text, reply_markup=get_language_keyboard("ru"))
+    text = i18n_get_text(start_language, "lang.select_title")
+    await message.answer(text, reply_markup=get_language_keyboard(start_language))

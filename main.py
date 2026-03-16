@@ -531,6 +531,11 @@ async def main():
         except Exception as e:
             logger.error("WEBHOOK_SET_FAILED url=%s error=%s", config.WEBHOOK_URL, e)
             logger.exception("Failed to set webhook - full traceback:")
+            try:
+                from app.services.admin_alerts import send_alert
+                await send_alert(bot, "worker", f"BOT STARTUP FAILED: Webhook set failed\nError: {type(e).__name__}: {str(e)[:200]}", force=True)
+            except Exception:
+                pass
             sys.exit(1)
 
         # Verify webhook was registered correctly
@@ -541,6 +546,11 @@ async def main():
                     "WEBHOOK_VERIFICATION_FAILED expected=%s got=%s",
                     config.WEBHOOK_URL, wh_info.url
                 )
+                try:
+                    from app.services.admin_alerts import send_alert
+                    await send_alert(bot, "worker", f"BOT STARTUP FAILED: Webhook URL mismatch\nExpected: {config.WEBHOOK_URL}\nGot: {wh_info.url}", force=True)
+                except Exception:
+                    pass
                 sys.exit(1)
             logger.info("WEBHOOK_VERIFIED url=%s", wh_info.url)
             
@@ -556,6 +566,11 @@ async def main():
         except Exception as e:
             logger.error("WEBHOOK_VERIFICATION_FAILED error=%s", e)
             logger.exception("Failed to verify webhook - full traceback:")
+            try:
+                from app.services.admin_alerts import send_alert
+                await send_alert(bot, "worker", f"BOT STARTUP FAILED: Webhook verification failed\nError: {type(e).__name__}: {str(e)[:200]}", force=True)
+            except Exception:
+                pass
             sys.exit(1)
 
         # Start uvicorn serving FastAPI

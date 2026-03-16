@@ -79,7 +79,7 @@ async def get_active_subscriptions_for_export() -> list:
         now = datetime.now(timezone.utc)
         rows = await conn.fetch(
             "SELECT * FROM subscriptions WHERE expires_at > $1 ORDER BY expires_at DESC",
-            now
+            _to_db_utc(now)
         )
         return [dict(row) for row in rows]
 
@@ -462,7 +462,7 @@ async def get_eligible_no_subscription_broadcast_users() -> list:
     if pool is None:
         return []
     async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc)
+        now = _to_db_utc(datetime.now(timezone.utc))
         query_with_reachable = """
             SELECT u.telegram_id
             FROM users u
@@ -583,7 +583,7 @@ async def get_users_by_segment(segment: str) -> list:
             rows = await conn.fetch("SELECT telegram_id FROM users")
             return [row["telegram_id"] for row in rows]
         elif segment == "active_subscriptions":
-            now = datetime.now(timezone.utc)
+            now = _to_db_utc(datetime.now(timezone.utc))
             rows = await conn.fetch(
                 """SELECT DISTINCT u.telegram_id
                    FROM users u
@@ -593,7 +593,7 @@ async def get_users_by_segment(segment: str) -> list:
             )
             return [row["telegram_id"] for row in rows]
         elif segment == "no_subscription":
-            now = datetime.now(timezone.utc)
+            now = _to_db_utc(datetime.now(timezone.utc))
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
                    WHERE NOT EXISTS (

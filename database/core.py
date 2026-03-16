@@ -185,15 +185,7 @@ async def mark_payment_notification_sent(
         pool = await get_pool()
         if pool is None:
             raise RuntimeError("Database pool is not available")
-        # Retry pool.acquire() on transient database errors only
-        conn = await retry_async(
-            lambda: pool.acquire(),
-            retries=2,
-            base_delay=0.5,
-            max_delay=2.0,
-            retry_on=(asyncpg.PostgresError,)
-        )
-        async with conn as new_conn:
+        async with pool.acquire() as new_conn:
             result = await new_conn.execute(
                 "UPDATE payments SET notification_sent = TRUE WHERE id = $1 AND notification_sent = FALSE",
                 payment_id
@@ -225,15 +217,7 @@ async def is_payment_notification_sent(
         pool = await get_pool()
         if pool is None:
             return False
-        # Retry pool.acquire() on transient database errors only
-        conn = await retry_async(
-            lambda: pool.acquire(),
-            retries=2,
-            base_delay=0.5,
-            max_delay=2.0,
-            retry_on=(asyncpg.PostgresError,)
-        )
-        async with conn as new_conn:
+        async with pool.acquire() as new_conn:
             notification_sent = await new_conn.fetchval(
                 "SELECT notification_sent FROM payments WHERE id = $1",
                 payment_id

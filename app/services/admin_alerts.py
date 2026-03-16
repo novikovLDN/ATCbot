@@ -76,8 +76,20 @@ async def send_alert(
         logger.info(f"ADMIN_ALERT_SENT category={category}")
         return True
     except Exception as e:
-        logger.warning(f"ADMIN_ALERT_FAILED category={category} error={e}")
-        return False
+        logger.error(f"ADMIN_ALERT_FAILED category={category} error={e}")
+        # Single retry after 2s for transient Telegram errors
+        try:
+            await asyncio.sleep(2)
+            await asyncio.wait_for(
+                bot.send_message(config.ADMIN_TELEGRAM_ID, full_message),
+                timeout=10.0,
+            )
+            _last_alert_at[category] = now
+            logger.info(f"ADMIN_ALERT_SENT_RETRY category={category}")
+            return True
+        except Exception as retry_err:
+            logger.error(f"ADMIN_ALERT_RETRY_FAILED category={category} error={retry_err}")
+            return False
 
 
 _CATEGORY_HEADERS = {

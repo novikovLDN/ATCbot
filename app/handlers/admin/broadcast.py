@@ -795,8 +795,13 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
         await callback.message.edit_text(result_text, reply_markup=keyboard)
         
     except Exception as e:
-        logging.exception(f"Error in broadcast send: {e}")
+        logger.exception(f"Error in broadcast send: {e}")
         await callback.message.answer(f"Ошибка при отправке уведомления: {e}")
+        try:
+            from app.services.admin_alerts import send_alert
+            await send_alert(callback.bot, "worker", f"Broadcast send error: {type(e).__name__}: {str(e)[:200]}")
+        except Exception:
+            pass
     
     finally:
         await state.clear()
@@ -830,7 +835,7 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
         await database._log_audit_event_atomic_standalone("admin_view_ab_stats_list", callback.from_user.id, None, f"Viewed {len(ab_tests)} A/B tests")
     
     except Exception as e:
-        logging.exception(f"Error in callback_broadcast_ab_stats: {e}")
+        logger.exception(f"Error in callback_broadcast_ab_stats: {e}")
         await callback.message.answer(
             i18n_get_text(language, "broadcast._ab_stats_error")
         )
@@ -904,5 +909,5 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         logging.error(f"Error parsing broadcast ID: {e}")
         await callback.message.answer("Ошибка: неверный ID уведомления.")
     except Exception as e:
-        logging.exception(f"Error in callback_broadcast_ab_stat_detail: {e}")
+        logger.exception(f"Error in callback_broadcast_ab_stat_detail: {e}")
         await callback.message.answer("Ошибка при получении статистики A/B теста. Проверь логи.")

@@ -557,7 +557,8 @@ async def mark_activation_failed(
     new_attempts: int,
     error_msg: str,
     max_attempts: Optional[int] = None,
-    conn: Optional[Any] = None
+    conn: Optional[Any] = None,
+    mark_as_failed: bool = True
 ) -> None:
     """
     Mark activation as failed and update attempt counter.
@@ -580,10 +581,10 @@ async def mark_activation_failed(
             raise ActivationFailedError("Database pool is not available")
         async with pool.acquire() as conn:
             async with conn.transaction():
-                await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts)
+                await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts, mark_as_failed=mark_as_failed)
     else:
         async with conn.transaction():
-            await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts)
+            await _update_subscription_failed(conn, subscription_id, new_attempts, error_msg, max_attempts, mark_as_failed=mark_as_failed)
 
 
 async def _update_subscription_failed(
