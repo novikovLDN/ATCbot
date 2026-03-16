@@ -194,6 +194,10 @@ async def callback_settings(callback: CallbackQuery):
     title = i18n_get_text(language, "main.settings_title", "main.settings_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "lang.change"), callback_data="change_language")],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.ecosystem", "main.ecosystem"),
+            callback_data="menu_ecosystem"
+        )],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     await safe_edit_text(callback.message, title, reply_markup=keyboard, bot=callback.bot)

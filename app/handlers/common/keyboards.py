@@ -168,10 +168,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     )])
     buttons.append([
         InlineKeyboardButton(
-            text=i18n_get_text(language, "main.ecosystem", "main.ecosystem"),
-            callback_data="menu_ecosystem"
-        ),
-        InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
             url="https://t.me/Atlas_SupportSecurity"
         ),
@@ -283,14 +279,9 @@ def get_profile_keyboard(
 
     buttons.append([
         InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"),
-        InlineKeyboardButton(text="💸 Вывести", callback_data="withdraw_start"),
     ])
 
     if has_active_subscription:
-        buttons.append([InlineKeyboardButton(
-            text="🚀 Подключиться",
-            web_app=WebAppInfo(url=MINI_APP_URL),
-        )])
         buttons.append([InlineKeyboardButton(
             text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
