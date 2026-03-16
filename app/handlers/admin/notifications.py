@@ -87,12 +87,13 @@ SEGMENT_OPTIONS = {
 # ==================== MAIN NOTIFICATION CENTER ====================
 
 @admin_notifications_router.callback_query(F.data == "admin:notifications")
-async def callback_admin_notifications(callback: CallbackQuery):
+async def callback_admin_notifications(callback: CallbackQuery, state: FSMContext):
     """Main notification center"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
+    await state.clear()
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "admin.notif_section_title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -116,6 +117,7 @@ async def callback_admin_notif_promo(callback: CallbackQuery, state: FSMContext)
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
+    await state.clear()
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "admin.notif_promo_title")
 
@@ -353,6 +355,7 @@ async def callback_admin_notif_retention(callback: CallbackQuery, state: FSMCont
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
+    await state.clear()
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "admin.notif_retention_title")
 
@@ -518,6 +521,7 @@ async def callback_admin_notif_referral(callback: CallbackQuery, state: FSMConte
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
+    await state.clear()
     language = await resolve_user_language(callback.from_user.id)
 
     # Check if there's an active cashback promo
@@ -581,7 +585,7 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
-    days = int(callback.data.split(":")[3])
+    days = int(callback.data.split(":")[2])
     now = datetime.now(timezone.utc)
     starts_at = now
     ends_at = now + timedelta(days=days)
@@ -682,11 +686,13 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
 # ==================== SUBSCRIPTION NOTIFICATIONS INFO ====================
 
 @admin_notifications_router.callback_query(F.data == "admin:notif_subscription")
-async def callback_admin_notif_subscription(callback: CallbackQuery):
+async def callback_admin_notif_subscription(callback: CallbackQuery, state: FSMContext):
     """Show subscription notification configuration info"""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
+
+    await state.clear()
 
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "admin.notif_sub_title")

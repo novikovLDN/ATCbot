@@ -303,11 +303,11 @@ async def callback_admin_broadcast(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._create"), callback_data="broadcast:create")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_stats"), callback_data="broadcast:ab_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:notifications")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
-    
+
     # Логируем действие
     await database._log_audit_event_atomic_standalone("admin_broadcast_view", callback.from_user.id, None, "Admin viewed broadcast section")
 
