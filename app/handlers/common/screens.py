@@ -18,7 +18,7 @@ from app.services.subscriptions.service import (
     get_subscription_status,
     check_and_disable_expired_subscription as check_subscription_expiry_service,
 )
-from app.handlers.common.utils import safe_edit_text, detect_platform, sanitize_display_name
+from app.handlers.common.utils import safe_edit_text, sanitize_display_name
 from app.handlers.common.keyboards import (
     get_about_keyboard,
     get_instruction_keyboard,
@@ -49,7 +49,7 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
 
 
 async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bot):
-    """Инструкция. Reusable for callback and /instruction command. Uses platform buttons and tariff-based copy keys."""
+    """Инструкция. Reusable for callback and /instruction command. Directs user to mini app guide."""
     if isinstance(event, CallbackQuery):
         try:
             await event.answer()
@@ -59,19 +59,10 @@ async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bo
     msg = event.message if isinstance(event, CallbackQuery) else event
     telegram_id = event.from_user.id
     language = await resolve_user_language(telegram_id)
-    platform = detect_platform(event)
-    subscription = await database.get_subscription(telegram_id)
-    subscription_type = "basic"
-    vpn_key = None
-    if subscription:
-        subscription_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        vpn_key = subscription.get("vpn_key")
-    if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
-        subscription_type = "basic"
     text = i18n_get_text(language, "instruction._text", "instruction_text")
     await safe_edit_text(
         msg, text,
-        reply_markup=get_instruction_keyboard(language, platform, subscription_type=subscription_type, vpn_key=vpn_key),
+        reply_markup=get_instruction_keyboard(language),
         bot=bot
     )
 

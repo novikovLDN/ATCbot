@@ -28,9 +28,6 @@ from app.handlers.common.keyboards import (
     get_profile_keyboard_old,
     get_vpn_key_keyboard,
     get_tariff_keyboard,
-    get_payment_method_keyboard,
-    get_sbp_payment_keyboard,
-    get_pending_payment_keyboard,
     get_about_keyboard,
     get_service_status_keyboard,
     get_instruction_keyboard,
@@ -45,7 +42,6 @@ from app.handlers.common.keyboards import (
     get_admin_export_keyboard,
     get_admin_user_keyboard,
     get_admin_user_keyboard_processing,
-    get_admin_payment_keyboard,
     _get_promo_error_keyboard,
 )
 __all__ = [
@@ -73,9 +69,6 @@ __all__ = [
     "get_profile_keyboard_old",
     "get_vpn_key_keyboard",
     "get_tariff_keyboard",
-    "get_payment_method_keyboard",
-    "get_sbp_payment_keyboard",
-    "get_pending_payment_keyboard",
     "get_about_keyboard",
     "get_service_status_keyboard",
     "get_instruction_keyboard",
@@ -90,6 +83,5 @@ __all__ = [
     "get_admin_export_keyboard",
     "get_admin_user_keyboard",
     "get_admin_user_keyboard_processing",
-    "get_admin_payment_keyboard",
     "_get_promo_error_keyboard",
 ]
