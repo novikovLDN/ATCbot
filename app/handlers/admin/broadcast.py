@@ -27,7 +27,6 @@ from app.handlers.admin.keyboards import (
 )
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready_message
-from app.utils.referral_link import build_referral_link
 
 admin_broadcast_router = Router()
 logger = logging.getLogger(__name__)
@@ -103,8 +102,6 @@ def _build_broadcast_reply_markup(
     buttons: list[str],
     broadcast_id: int,
     discount: int | None = None,
-    user_id: int | None = None,
-    bot_username: str | None = None,
 ) -> InlineKeyboardMarkup | None:
     """Build inline keyboard for broadcast message based on selected buttons."""
     if not buttons:
@@ -122,13 +119,7 @@ def _build_broadcast_reply_markup(
         elif btn == "support":
             rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")])
         elif btn == "referral":
-            if user_id and bot_username:
-                from urllib.parse import quote
-                referral_link = await build_referral_link(user_id, bot_username)
-                share_url = f"https://t.me/share/url?url={quote(referral_link)}"
-                rows.append([InlineKeyboardButton(text="👥 Пригласить друга", url=share_url)])
-            else:
-                rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="menu_referral")])
+            rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="menu_referral")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -680,12 +671,6 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                 final_message = f"{emoji} {title}\n\n{message_text}"
 
         # Build inline keyboard for broadcast message
-        # If referral button is present, we need per-user keyboards with personal share URLs
-        has_referral_btn = "referral" in broadcast_buttons
-        bot_username = None
-        if has_referral_btn:
-            bot_info = await bot.get_me()
-            bot_username = bot_info.username
         reply_markup = _build_broadcast_reply_markup(broadcast_buttons, broadcast_id, broadcast_discount)
 
         # Получаем список пользователей по сегменту
@@ -713,17 +698,9 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             photo_file_id: str | None = None,
             caption: str | None = None,
         ):
-            # Build per-user keyboard if referral button needs personal share URL
-            if has_referral_btn and bot_username:
-                user_markup = _build_broadcast_reply_markup(
-                    broadcast_buttons, broadcast_id, broadcast_discount,
-                    user_id=user_id, bot_username=bot_username,
-                )
-            else:
-                user_markup = reply_markup
             ok = await _safe_send_with_buttons(
                 bot, user_id, msg, semaphore,
-                reply_markup=user_markup,
+                reply_markup=reply_markup,
                 photo_file_id=photo_file_id, caption=caption,
             )
             return (user_id, variant, ok)
