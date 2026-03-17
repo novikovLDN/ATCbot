@@ -423,7 +423,7 @@ async def callback_retention_segment(callback: CallbackQuery, state: FSMContext)
     preview_text = i18n_get_text(language, tpl["text_key"])
     segment_label = SEGMENT_OPTIONS.get(segment, segment)
 
-    text = f"📋 <b>Предпросмотр</b>\n\n{preview_text}\n\n👥 Аудитория: {segment_label}\n\nОтправить?"
+    text = f"📋 Предпросмотр\n\n{preview_text}\n\n👥 Аудитория: {segment_label}\n\nОтправить?"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Отправить", callback_data="admin:ret_send")],

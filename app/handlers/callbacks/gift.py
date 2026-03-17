@@ -628,7 +628,7 @@ async def callback_my_gifts(callback: CallbackQuery):
     start = page * GIFTS_PER_PAGE
     page_gifts = gifts[start:start + GIFTS_PER_PAGE]
 
-    text = i18n_get_text(language, "gift.my_gifts_title", "🎁 <b>Мои подарки</b>")
+    text = i18n_get_text(language, "gift.my_gifts_title", "🎁 Мои подарки")
     if total_pages > 1:
         text += f"\n\n📄 {page + 1}/{total_pages}"
 
@@ -717,7 +717,7 @@ async def callback_gift_detail(callback: CallbackQuery):
         status_text = i18n_get_text(language, "gift.status_activated", "✅ Активирован")
         text = i18n_get_text(
             language, "gift.detail_activated",
-            f"🎁 <b>{tariff_name} — {period_text}</b>\n\n{status_text}",
+            f"🎁 {tariff_name} — {period_text}\n\n{status_text}",
             tariff_name=tariff_name,
             period=period_text,
         )
@@ -731,7 +731,7 @@ async def callback_gift_detail(callback: CallbackQuery):
         status_text = i18n_get_text(language, "gift.status_pending", "❌ Не активирован")
         text = i18n_get_text(
             language, "gift.detail_pending",
-            f"🎁 <b>Отправьте подарок близкому!</b>\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {period_text}\n\n{status_text}\n\n🔗 Ссылка для активации:\n<code>{gift_link}</code>",
+            f"🎁 Отправьте подарок близкому!\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {period_text}\n\n{status_text}\n\n🔗 Ссылка для активации:\n<code>{gift_link}</code>",
             tariff_name=tariff_name,
             period=period_text,
             gift_link=gift_link,
