@@ -56,9 +56,10 @@ async def _safe_send(
                         user_id,
                         photo=photo_file_id,
                         caption=caption or text,
+                        parse_mode="HTML",
                     )
                 else:
-                    await bot.send_message(user_id, text)
+                    await bot.send_message(user_id, text, parse_mode="HTML")
                 return True
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)
@@ -87,9 +88,10 @@ async def _safe_send_with_buttons(
                         photo=photo_file_id,
                         caption=caption or text,
                         reply_markup=reply_markup,
+                        parse_mode="HTML",
                     )
                 else:
-                    await bot.send_message(user_id, text, reply_markup=reply_markup)
+                    await bot.send_message(user_id, text, reply_markup=reply_markup, parse_mode="HTML")
                 return True
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)

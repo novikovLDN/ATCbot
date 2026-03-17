@@ -177,6 +177,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
                 chat_id=chat_id,
                 text=text,
                 reply_markup=keyboard,
+                parse_mode="HTML",
             )
         logger.debug(
             f"Referral screen opened: user={telegram_id}, "
