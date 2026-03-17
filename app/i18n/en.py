@@ -728,6 +728,14 @@ LANG = {
     'referral.cashback_referred': '👤 Referral: {referred}',
     'referral.registered_user': '👤 User: {user}',
     'referral.trial_activated_user': '👤 User: {user}',
+    'referral.cashback_x2_notification': "🔥 <b>x2 cashback — this week only!</b>\n\nFrom <b>{start_date}</b> to <b>{end_date}</b>, every friend's purchase earns you <b>double cashback</b> to your balance.\n\nInvite friends now — the more connections, the more you earn!\n\n💰 x2 cashback is credited automatically for every paid subscription.",
+    'referral.cashback_x2_btn_invite': "👥 Invite a friend",
+    'referral.cashback_x2_admin_title': "🔥 Referral promo x2 cashback",
+    'referral.cashback_x2_admin_period': "Choose promo period:",
+    'referral.cashback_x2_admin_3d': "3 days",
+    'referral.cashback_x2_admin_7d': "7 days",
+    'referral.cashback_x2_admin_started': "✅ x2 cashback promo launched\n\nPeriod: {start_date} — {end_date}\nNotifications sent to subscribers.",
+    'referral.cashback_x2_active': "🔥 x2 cashback is active now!\nEvery friend's purchase = double reward.",
 
     # subscription
     'subscription.tariff_basic': '⚡️ Plan: Basic',

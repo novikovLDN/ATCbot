@@ -710,6 +710,14 @@ LANG = {
     'profile.key_whitelist': '⚪️ نسخ White List',
 
     'referral.cashback_invite_button': '👥 دعوة المزيد من الأصدقاء',
+    'referral.cashback_x2_notification': "🔥 <b>x2 استرداد نقدي — هذا الأسبوع فقط!</b>\n\nمن <b>{start_date}</b> إلى <b>{end_date}</b>، كل عملية شراء من صديقك تمنحك <b>استرداد نقدي مضاعف</b> في رصيدك.\n\nادعُ أصدقاءك الآن — كلما زادت الاتصالات، زادت أرباحك!\n\n💰 يُضاف x2 استرداد نقدي تلقائيًا لكل اشتراك مدفوع.",
+    'referral.cashback_x2_btn_invite': "👥 دعوة صديق",
+    'referral.cashback_x2_admin_title': "🔥 حملة الإحالة x2 استرداد نقدي",
+    'referral.cashback_x2_admin_period': "اختر فترة الحملة:",
+    'referral.cashback_x2_admin_3d': "3 أيام",
+    'referral.cashback_x2_admin_7d': "7 أيام",
+    'referral.cashback_x2_admin_started': "✅ تم إطلاق حملة x2 استرداد نقدي\n\nالفترة: {start_date} — {end_date}\nتم إرسال الإشعارات للمشتركين.",
+    'referral.cashback_x2_active': "🔥 x2 استرداد نقدي نشط الآن!\nكل عملية شراء من صديق = مكافأة مضاعفة.",
 
     'subscription.tariff_basic': '⚡️ الخطة: Basic',
     'subscription.tariff_business': '🏢 الخطة: Business',

@@ -1568,6 +1568,9 @@ async def process_referral_reward(
             referrals_needed = 0
         
         # 5b. Проверяем активный множитель кешбэка (x2 промо-акция)
+        # Проверяем сначала персональный множитель, затем глобальную акцию —
+        # акция распространяется на ВСЕХ пользователей, не только на тех,
+        # кто был подписан на момент запуска.
         cashback_multiplier = 1
         try:
             multiplier_row = await conn.fetchrow(
@@ -1579,6 +1582,17 @@ async def process_referral_reward(
             )
             if multiplier_row:
                 cashback_multiplier = multiplier_row["multiplier"]
+            else:
+                # Fallback: проверяем глобальную акцию в cashback_promotions
+                global_promo = await conn.fetchrow(
+                    """SELECT multiplier FROM cashback_promotions
+                       WHERE is_active = TRUE
+                       AND starts_at <= NOW() AND ends_at > NOW()
+                       ORDER BY multiplier DESC LIMIT 1"""
+                )
+                if global_promo:
+                    cashback_multiplier = global_promo["multiplier"]
+            if cashback_multiplier > 1:
                 logger.info(
                     f"CASHBACK_MULTIPLIER_ACTIVE [referrer={referrer_id}, "
                     f"multiplier=x{cashback_multiplier}, base_percent={percent}%]"
