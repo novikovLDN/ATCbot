@@ -2099,7 +2099,7 @@ async def callback_admin_delete_user(callback: CallbackQuery):
             )],
         ])
         await callback.message.edit_text(
-            f"⚠️ Вы точно хотите удалить пользователя {user_id} из базы данных?\n\n"
+            f"⚠️ Вы точно хотите удалить пользователя <b>{user_id}</b> из базы данных?\n\n"
             "Будут удалены ВСЕ данные:\n"
             "• Профиль пользователя\n"
             "• Подписка и VPN-ключ\n"
@@ -2142,13 +2142,13 @@ async def callback_admin_delete_user_confirm(callback: CallbackQuery):
         if success:
             logger.info(f"Admin {admin_id} deleted user {user_id} from DB completely")
             await callback.message.edit_text(
-                f"✅ Пользователь {user_id} полностью удалён из базы данных.",
+                f"✅ Пользователь <b>{user_id}</b> полностью удалён из базы данных.",
                 reply_markup=get_admin_back_keyboard(language),
                 parse_mode="HTML"
             )
         else:
             await callback.message.edit_text(
-                f"❌ Пользователь {user_id} не найден в базе данных.",
+                f"❌ Пользователь <b>{user_id}</b> не найден в базе данных.",
                 reply_markup=get_admin_back_keyboard(language),
                 parse_mode="HTML"
             )

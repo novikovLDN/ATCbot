@@ -94,13 +94,13 @@ async def callback_games_menu(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = (
-        "🎮 Добро пожаловать в Игровой зал!\n\n"
+        "🎮 <b>Добро пожаловать в Игровой зал!</b>\n\n"
         "Здесь вы можете отвлечься и попытать удачу — "
         "а заодно выиграть призы и бонусы.\n\n"
-        "🎳 Боулинг — сбей кегли и получи бонусные дни подписки\n"
-        "🎲 Кубики — брось кубик и получи столько дней, сколько выпало\n"
-        "💣 Бомбер — стратегическая игра на выживание\n"
-        "🌾 Ферма — выращивай растения и получай рубли на баланс\n\n"
+        "🎳 <b>Боулинг</b> — сбей кегли и получи бонусные дни подписки\n"
+        "🎲 <b>Кубики</b> — брось кубик и получи столько дней, сколько выпало\n"
+        "💣 <b>Бомбер</b> — стратегическая игра на выживание\n"
+        "🌾 <b>Ферма</b> — выращивай растения и получай рубли на баланс\n\n"
         "Выбирай игру и испытай удачу! 🍀"
     )
 
@@ -207,14 +207,14 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     end_str = end_dt.strftime("%d.%m.%Y")
                 else:
                     end_str = "—"
-                text = i18n_get_text(language, "games.bowling_strike_success", "🎳 Страйк! Все кегли сбиты!\n\n🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\nДоступ до: {date}").format(date=end_str)
+                text = i18n_get_text(language, "games.bowling_strike_success", "🎳 <b>Страйк!</b> Все кегли сбиты!\n\n🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\nДоступ до: {date}").format(date=end_str)
                 logger.info(
                     "GAME_BOWL [user=%s] strike=True dice_value=6 grant_ok expires=%s",
                     telegram_id, end_str,
                 )
             except Exception as e:
                 logger.error("GAME_BOWL [user=%s] strike=True grant_error=%s", telegram_id, e)
-                text = i18n_get_text(language, "games.bowling_strike_error", "🎳 Страйк! Все кегли сбиты!\n\n🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\n⚠️ Ошибка при начислении. Обратитесь в поддержку.")
+                text = i18n_get_text(language, "games.bowling_strike_error", "🎳 <b>Страйк!</b> Все кегли сбиты!\n\n🎉 Поздравляем! Вы выиграли +7 дней подписки.\n\n⚠️ Ошибка при начислении. Обратитесь в поддержку.")
             await bot.send_message(
                 chat_id=chat_id,
                 text=text,
@@ -544,7 +544,7 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         await database.save_farm_plots(telegram_id, farm_plots)
     
     # Build text (plot 0 always visible; plots 1-8 only if purchased, i.e. plot_id < plot_count)
-    lines = ["🌾 Ваша ферма\n"]
+    lines = ["🌾 <b>Ваша ферма</b>\n"]
     for plot in farm_plots:
         if plot["plot_id"] >= plot_count:
             continue
@@ -686,7 +686,7 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     await callback.message.edit_text(
-        f"🌱 Выберите растение для грядки {plot_id+1}:",
+        f"🌱 <b>Выберите растение для грядки {plot_id+1}:</b>",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -1100,8 +1100,8 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
     ])
     
     await callback.message.edit_text(
-        f"⛏ Выкопать растение?\n\n"
-        f"Вы хотите выкопать {plant_name} на грядке {plot_id+1}?\n\n"
+        f"⛏ <b>Выкопать растение?</b>\n\n"
+        f"Вы хотите выкопать <b>{plant_name}</b> на грядке {plot_id+1}?\n\n"
         f"⚠️ Растение будет уничтожено без награды.\n"
         f"Грядка станет пустой и можно будет посадить новое растение.",
         reply_markup=confirm_keyboard,

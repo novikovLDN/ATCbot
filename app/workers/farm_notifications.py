@@ -68,7 +68,7 @@ async def farm_notifications_iteration(bot: Bot):
                 try:
                     await bot.send_message(
                         telegram_id,
-                        f"🌾 Ваши {plant_name} созрели!\n"
+                        f"🌾 Ваши <b>{plant_name}</b> созрели!\n"
                         f"Заходите скорее собирать урожай, пока он не испортился 🌻",
                         parse_mode="HTML"
                     )
@@ -82,7 +82,7 @@ async def farm_notifications_iteration(bot: Bot):
                 try:
                     await bot.send_message(
                         telegram_id,
-                        f"⚠️ Не забудьте собрать {plant_name}!\n"
+                        f"⚠️ Не забудьте собрать <b>{plant_name}</b>!\n"
                         f"У вас осталось ~12 часов до того, как урожай сгниёт 🕐",
                         parse_mode="HTML"
                     )
@@ -97,7 +97,7 @@ async def farm_notifications_iteration(bot: Bot):
                 try:
                     await bot.send_message(
                         telegram_id,
-                        f"💀 Ваши {plant_name} сгнили — вы не успели собрать урожай 😢\n"
+                        f"💀 Ваши <b>{plant_name}</b> сгнили — вы не успели собрать урожай 😢\n"
                         f"Зайдите на ферму, чтобы убрать погибшее растение.",
                         parse_mode="HTML"
                     )
