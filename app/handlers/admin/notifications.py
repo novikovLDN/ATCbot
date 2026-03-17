@@ -539,18 +539,23 @@ async def callback_admin_notif_referral(callback: CallbackQuery, state: FSMConte
 
     text = i18n_get_text(language, "admin.notif_referral_title")
 
+    buttons = []
     if active_promo:
         start = active_promo["starts_at"].strftime("%d.%m.%Y")
         end = active_promo["ends_at"].strftime("%d.%m.%Y")
         text += "\n\n" + i18n_get_text(language, "admin.notif_referral_active", start=start, end=end)
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "admin.notif_referral_cancel_x2"),
+            callback_data=f"admin:referral_x2_cancel:{active_promo['id']}"
+        )])
+    else:
+        buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "admin.notif_referral_start_x2"),
             callback_data="admin:referral_x2_start"
-        )],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notifications")],
-    ])
+        )])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notifications")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
@@ -705,6 +710,118 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
         await safe_edit_text(
             callback.message, f"❌ Ошибка: {str(e)[:100]}",
             reply_markup=get_admin_back_keyboard(language)
+        )
+
+
+# ==================== CANCEL x2 CASHBACK ====================
+
+@admin_notifications_router.callback_query(F.data.startswith("admin:referral_x2_cancel:"))
+async def callback_referral_x2_cancel(callback: CallbackQuery):
+    """Confirmation dialog to cancel x2 cashback promo"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    try:
+        promo_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка параметра", show_alert=True)
+        return
+
+    language = await resolve_user_language(callback.from_user.id)
+
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            promo = await conn.fetchrow(
+                "SELECT * FROM cashback_promotions WHERE id = $1 AND is_active = TRUE AND ends_at > NOW()",
+                promo_id
+            )
+        if not promo:
+            await callback.answer("Акция уже завершена или не найдена", show_alert=True)
+            return
+
+        start = promo["starts_at"].strftime("%d.%m.%Y")
+        end = promo["ends_at"].strftime("%d.%m.%Y")
+        text = i18n_get_text(language, "admin.notif_referral_cancel_confirm",
+                             promo_id=promo_id, start=start, end=end)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, отменить",
+                    callback_data=f"admin:referral_x2_cancel_confirm:{promo_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Нет",
+                    callback_data="admin:notif_referral"
+                ),
+            ]
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error showing x2 cancel confirmation: {e}")
+        await callback.answer(f"❌ Ошибка: {str(e)[:80]}", show_alert=True)
+
+
+@admin_notifications_router.callback_query(F.data.startswith("admin:referral_x2_cancel_confirm:"))
+async def callback_referral_x2_cancel_confirm(callback: CallbackQuery):
+    """Actually cancel the x2 cashback promo"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    try:
+        promo_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка параметра", show_alert=True)
+        return
+
+    language = await resolve_user_language(callback.from_user.id)
+
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            # Deactivate the promotion
+            result = await conn.fetchrow(
+                "UPDATE cashback_promotions SET is_active = FALSE, ends_at = NOW() "
+                "WHERE id = $1 AND is_active = TRUE RETURNING id",
+                promo_id
+            )
+            if not result:
+                await callback.answer("Акция уже отменена или не найдена", show_alert=True)
+                return
+
+            # Remove user multipliers for this promo
+            affected = await conn.fetchval(
+                "WITH deleted AS ("
+                "  DELETE FROM user_cashback_multipliers WHERE promo_id = $1 RETURNING 1"
+                ") SELECT count(*) FROM deleted",
+                promo_id
+            )
+
+        text = i18n_get_text(language, "admin.notif_referral_cancelled",
+                             promo_id=promo_id, affected=affected)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notif_referral")]
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer("✅ Акция отменена", show_alert=True)
+
+        await database._log_audit_event_atomic_standalone(
+            "admin_referral_x2_cancelled",
+            callback.from_user.id,
+            None,
+            f"promo_id={promo_id}, users_affected={affected}"
+        )
+
+    except Exception as e:
+        logger.exception(f"Error cancelling x2 promo: {e}")
+        await safe_edit_text(
+            callback.message, f"❌ Ошибка: {str(e)[:100]}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notif_referral")]
+            ])
         )
 
 
