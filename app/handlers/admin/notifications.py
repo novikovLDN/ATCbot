@@ -703,10 +703,17 @@ async def _send_x2_cashback_notifications(
     ends_at: datetime,
     language: str,
 ):
-    """Background task: send x2 cashback notifications to all users."""
+    """Background task: send x2 cashback notifications to all users.
+
+    Telegram rate limit: ~30 messages/sec globally, ~20/sec to different chats.
+    We use concurrency=10 + 0.04s delay ≈ 25 msg/sec to stay safely within limits.
+    """
+    _NOTIFY_CONCURRENCY = 10
+    _NOTIFY_DELAY = 0.04  # 40ms between sends ≈ 25 msg/sec max
+
     start_date_str = starts_at.strftime("%d.%m")
     end_date_str = ends_at.strftime("%d.%m")
-    semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
+    semaphore = asyncio.Semaphore(_NOTIFY_CONCURRENCY)
     sent_count = 0
 
     try:
@@ -736,6 +743,7 @@ async def _send_x2_cashback_notifications(
                         await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
                         sent_count += 1
                     except TelegramRetryAfter as e:
+                        logger.warning("RATE_LIMITED retry_after=%s during x2 cashback notifications", e.retry_after)
                         await asyncio.sleep(e.retry_after)
                         try:
                             await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
@@ -744,7 +752,7 @@ async def _send_x2_cashback_notifications(
                             pass
                     except Exception:
                         pass
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(_NOTIFY_DELAY)
             except Exception:
                 pass
 
