@@ -587,7 +587,15 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
-    days = int(callback.data.split(":")[2])
+    try:
+        days = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    if days not in (3, 7):
+        await callback.answer("Допустимый период: 3 или 7 дней", show_alert=True)
+        return
+
     now = datetime.now(timezone.utc)
     starts_at = now
     ends_at = now + timedelta(days=days)
@@ -599,6 +607,21 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
 
     try:
         pool = await database.get_pool()
+
+        # Guard: prevent starting duplicate campaign while one is active
+        async with pool.acquire() as conn:
+            existing = await conn.fetchrow(
+                "SELECT id FROM cashback_promotions WHERE is_active = TRUE AND ends_at > NOW() LIMIT 1"
+            )
+            if existing:
+                await safe_edit_text(
+                    callback.message,
+                    "⚠️ Акция x2 кешбэк уже активна. Дождитесь окончания текущей.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notifications")]
+                    ])
+                )
+                return
 
         # Create the promotion
         async with pool.acquire() as conn:

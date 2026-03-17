@@ -3126,7 +3126,10 @@ async def get_admin_referral_stats(
                 "cashback_paid": "total_cashback_paid_kopecks"
             }
             sort_column = sort_column_map.get(sort_by, "total_invited_revenue_kopecks")
-            order_by = f"ORDER BY {sort_column} {sort_order}, u.telegram_id ASC"
+            # Validate sort_order to prevent SQL injection
+            if sort_order.upper() not in ("ASC", "DESC"):
+                sort_order = "DESC"
+            order_by = f"ORDER BY {sort_column} {sort_order.upper()}, u.telegram_id ASC"
             
             # Пагинация
             limit_clause = f"LIMIT ${param_index} OFFSET ${param_index + 1}"
