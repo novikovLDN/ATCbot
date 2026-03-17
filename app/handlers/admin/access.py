@@ -732,6 +732,7 @@ async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMCo
                 await bot.send_message(
                     user_id,
                     f"🎁 Вам выдан доступ {tariff_label}\n📅 Действует до: {expires_date}",
+                    parse_mode="HTML",
                 )
             except Exception as e:
                 logger.exception(f"Error sending grant notification to user {user_id}: {e}")
@@ -874,7 +875,7 @@ async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
             sub = await database.get_subscription(user_id)
             msg = f"🔄 Ваш тариф изменён на {tariff_label}\n📅 Срок подписки не изменился."
             try:
-                await bot.send_message(user_id, msg)
+                await bot.send_message(user_id, msg, parse_mode="HTML")
                 if tariff == "plus" and sub and sub.get("vpn_key_plus"):
                     await bot.send_message(user_id, f"<code>{sub['vpn_key_plus']}</code>", parse_mode="HTML")
             except Exception as e:

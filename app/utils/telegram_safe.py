@@ -17,9 +17,14 @@ async def safe_send_message(bot, telegram_id: int, text: str, **kwargs):
     On blocked/forbidden: logs, returns None.
     On success: returns Message.
 
+    Defaults to parse_mode="HTML" so <b>, <code> etc. render correctly.
+    Callers can override with parse_mode=None or parse_mode="Markdown".
+
     Returns:
         Message on success, None on any handled failure.
     """
+    if "parse_mode" not in kwargs:
+        kwargs["parse_mode"] = "HTML"
     try:
         return await bot.send_message(telegram_id, text, **kwargs)
 

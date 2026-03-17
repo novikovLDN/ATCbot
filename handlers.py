@@ -245,18 +245,20 @@ async def _send_fallback(
         logger.error("Failed to send fallback (%s): %s", context, e)
 
 
-async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = None, bot: Bot = None):
+async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = "HTML", bot: Bot = None):
     """
     Безопасное редактирование текста сообщения с обработкой ошибок
-    
+
     Сравнивает текущий контент с новым перед редактированием, чтобы избежать ненужных вызовов API.
     Если сообщение недоступно (inaccessible), использует send_message вместо edit_message.
-    
+
+    Defaults to parse_mode="HTML" so <b>, <code> etc. render correctly.
+
     Args:
         message: Message объект для редактирования
         text: Новый текст сообщения
         reply_markup: Новая клавиатура (опционально) - MUST be InlineKeyboardMarkup, NOT coroutine
-        parse_mode: Режим парсинга (HTML, Markdown и т.д.)
+        parse_mode: Режим парсинга (HTML, Markdown и т.д.). По умолчанию "HTML".
         bot: Bot instance (требуется для fallback на send_message)
     """
     # Защита от передачи coroutine вместо InlineKeyboardMarkup
