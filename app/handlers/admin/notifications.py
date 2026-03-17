@@ -605,7 +605,6 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
     starts_at = now
     ends_at = now + timedelta(days=days)
 
-    await callback.answer("Запуск акции...")
     await state.clear()
 
     language = await resolve_user_language(callback.from_user.id)
@@ -619,6 +618,7 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
                 "SELECT id FROM cashback_promotions WHERE is_active = TRUE AND ends_at > NOW() LIMIT 1"
             )
             if existing:
+                await callback.answer("Акция уже активна", show_alert=True)
                 await safe_edit_text(
                     callback.message,
                     "⚠️ Акция x2 кешбэк уже активна. Дождитесь окончания текущей.",
@@ -639,21 +639,84 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
         # Get all users with active subscriptions
         user_ids = await database.get_users_by_segment("active_subscriptions")
 
-        # Activate x2 cashback for each user
+        # Batch insert multipliers (single query instead of N queries)
+        starts_at_db = _to_db_utc(starts_at)
+        ends_at_db = _to_db_utc(ends_at)
         async with pool.acquire() as conn:
-            for user_id in user_ids:
-                await conn.execute(
-                    "INSERT INTO user_cashback_multipliers (telegram_id, multiplier, promo_id, starts_at, ends_at) "
-                    "VALUES ($1, 2, $2, $3, $4)",
-                    user_id, promo_id, _to_db_utc(starts_at), _to_db_utc(ends_at)
-                )
+            await conn.executemany(
+                "INSERT INTO user_cashback_multipliers (telegram_id, multiplier, promo_id, starts_at, ends_at) "
+                "VALUES ($1, 2, $2, $3, $4)",
+                [(uid, promo_id, starts_at_db, ends_at_db) for uid in user_ids]
+            )
 
-        # Send notifications
-        start_date_str = starts_at.strftime("%d.%m")
-        end_date_str = ends_at.strftime("%d.%m")
-        semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
-        sent_count = 0
+        logger.info("REFERRAL_X2_PROMO promo_id=%s days=%s users=%s — multipliers inserted, starting background notifications",
+                     promo_id, days, len(user_ids))
 
+    except Exception as e:
+        logger.exception("Error starting referral x2 promo: %s", e)
+        await callback.answer("Ошибка запуска", show_alert=True)
+        await safe_edit_text(
+            callback.message, f"❌ Ошибка: {str(e)[:100]}",
+            reply_markup=get_admin_back_keyboard(language)
+        )
+        return
+
+    # Respond immediately — promo is active, notifications will be sent in background
+    await callback.answer("Акция запущена!")
+    await safe_edit_text(
+        callback.message,
+        i18n_get_text(
+            language, "referral.cashback_x2_admin_started",
+            start_date=starts_at.strftime("%d.%m.%Y"), end_date=ends_at.strftime("%d.%m.%Y")
+        ) + f"\n\n📤 Рассылка уведомлений ({len(user_ids)} пользователей) запущена в фоне...",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notifications")]
+        ])
+    )
+
+    # Launch notification sending as a background task (does not block webhook)
+    asyncio.create_task(
+        _send_x2_cashback_notifications(
+            bot=bot,
+            admin_id=callback.from_user.id,
+            admin_chat_id=callback.message.chat.id,
+            promo_id=promo_id,
+            days=days,
+            user_ids=user_ids,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            language=language,
+        ),
+        name=f"x2_cashback_notify_{promo_id}",
+    )
+
+
+async def _send_x2_cashback_notifications(
+    *,
+    bot: Bot,
+    admin_id: int,
+    admin_chat_id: int,
+    promo_id: int,
+    days: int,
+    user_ids: list,
+    starts_at: datetime,
+    ends_at: datetime,
+    language: str,
+):
+    """Background task: send x2 cashback notifications to all users.
+
+    Telegram rate limit: ~30 messages/sec globally, ~20/sec to different chats.
+    We use concurrency=10 + 0.04s delay ≈ 25 msg/sec to stay safely within limits.
+    """
+    _NOTIFY_CONCURRENCY = 10
+    _NOTIFY_DELAY = 0.04  # 40ms between sends ≈ 25 msg/sec max
+
+    start_date_str = starts_at.strftime("%d.%m")
+    end_date_str = ends_at.strftime("%d.%m")
+    semaphore = asyncio.Semaphore(_NOTIFY_CONCURRENCY)
+    sent_count = 0
+
+    try:
         bot_info = await bot.get_me()
         bot_username = bot_info.username
 
@@ -679,38 +742,38 @@ async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext
                     try:
                         await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
                         sent_count += 1
+                    except TelegramRetryAfter as e:
+                        logger.warning("RATE_LIMITED retry_after=%s during x2 cashback notifications", e.retry_after)
+                        await asyncio.sleep(e.retry_after)
+                        try:
+                            await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
+                            sent_count += 1
+                        except Exception:
+                            pass
                     except Exception:
                         pass
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(_NOTIFY_DELAY)
             except Exception:
                 pass
 
-        result_text = i18n_get_text(
-            language, "referral.cashback_x2_admin_started",
-            start_date=starts_at.strftime("%d.%m.%Y"), end_date=ends_at.strftime("%d.%m.%Y")
-        )
-        result_text += f"\n\n📤 Уведомлений отправлено: {sent_count}"
-
-        await safe_edit_text(
-            callback.message, result_text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notifications")]
-            ])
-        )
+        # Notify admin about completion
+        try:
+            await bot.send_message(
+                admin_chat_id,
+                f"✅ Рассылка x2 кешбэк завершена\n\n📤 Отправлено: {sent_count}/{len(user_ids)}",
+            )
+        except Exception:
+            pass
 
         await database._log_audit_event_atomic_standalone(
             "admin_referral_x2_started",
-            callback.from_user.id,
+            admin_id,
             None,
             f"promo_id={promo_id}, days={days}, users_notified={sent_count}"
         )
 
-    except Exception as e:
-        logger.exception(f"Error starting referral x2 promo: {e}")
-        await safe_edit_text(
-            callback.message, f"❌ Ошибка: {str(e)[:100]}",
-            reply_markup=get_admin_back_keyboard(language)
-        )
+    except Exception:
+        logger.exception("Background x2 cashback notification task failed for promo_id=%s", promo_id)
 
 
 # ==================== CANCEL x2 CASHBACK ====================
