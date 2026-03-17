@@ -83,7 +83,8 @@ async def send_referral_cashback_notification(
         await bot.send_message(
             chat_id=referrer_id,
             text=notification_text,
-            reply_markup=keyboard
+            reply_markup=keyboard,
+            parse_mode="HTML"
         )
 
         logger.info(

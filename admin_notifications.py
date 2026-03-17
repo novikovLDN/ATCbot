@@ -259,7 +259,7 @@ async def send_user_notification(
     user_id: int,
     message: str,
     notification_type: str = "custom",
-    parse_mode: Optional[str] = None,
+    parse_mode: Optional[str] = "HTML",
     reply_markup: Optional[InlineKeyboardMarkup] = None,
     **kwargs
 ) -> bool:
