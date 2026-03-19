@@ -234,12 +234,27 @@ DATABASE_URL = config.env("DATABASE_URL")
 def _get_pool_config() -> dict:
     """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation."""
     return {
-        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "2")),
-        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "25")),  # Increased from 15 to handle peak load (6 workers + 20 webhook handlers)
+        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "5")),
+        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "50")),  # Scaled for 500K users (workers + concurrent handlers)
         "max_inactive_connection_lifetime": 300,
         "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "10")),
         "command_timeout": int(os.getenv("DB_POOL_COMMAND_TIMEOUT", "30")),
     }
+
+
+# ====================================================================================
+# SLOW QUERY LOGGING: Log queries exceeding threshold (ENV-configurable)
+# ====================================================================================
+SLOW_QUERY_THRESHOLD_MS = int(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
+
+
+async def _setup_connection(conn: asyncpg.Connection):
+    """Per-connection init: slow query logging + application_name for log correlation."""
+    try:
+        await conn.execute(f"SET log_min_duration_statement = {SLOW_QUERY_THRESHOLD_MS}")
+        await conn.execute("SET application_name = 'atcbot'")
+    except Exception:
+        pass  # Non-critical — don't break pool init
 
 
 if not DATABASE_URL:
@@ -275,7 +290,7 @@ async def get_pool() -> asyncpg.Pool:
     if _pool is None:
         pool_config = _get_pool_config()
         _pool = await retry_async(
-            lambda: asyncpg.create_pool(DATABASE_URL, **pool_config),
+            lambda: asyncpg.create_pool(DATABASE_URL, init=_setup_connection, **pool_config),
             retries=1,
             base_delay=0.5,
             max_delay=5.0,
@@ -402,7 +417,7 @@ async def init_db() -> bool:
     # 2️⃣ CREATE POOL — AND NOTHING ELSE (single source of truth via _get_pool_config)
     pool_config = _get_pool_config()
     try:
-        _pool = await asyncpg.create_pool(DATABASE_URL, **pool_config)
+        _pool = await asyncpg.create_pool(DATABASE_URL, init=_setup_connection, **pool_config)
         logger.info(
             "DB_POOL_CONFIG min=%s max=%s acquire_timeout=%s command_timeout=%s",
             pool_config["min_size"], pool_config["max_size"],
@@ -431,7 +446,7 @@ async def init_db() -> bool:
     # Schema changes can invalidate cached prepared statements; fresh pool clears cache.
     try:
         await _pool.close()
-        _pool = await asyncpg.create_pool(DATABASE_URL, **pool_config)
+        _pool = await asyncpg.create_pool(DATABASE_URL, init=_setup_connection, **pool_config)
         logger.info(
             "DB_POOL_RECREATED_AFTER_MIGRATIONS min=%s max=%s acquire_timeout=%s command_timeout=%s",
             pool_config["min_size"], pool_config["max_size"],

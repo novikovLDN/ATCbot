@@ -272,6 +272,17 @@ def log_worker_iteration_end(
         log_data["level"] = "INFO"
         logger.info(json.dumps(log_data))
 
+    # Auto-report to worker monitor metrics
+    try:
+        from app.core.worker_monitor import worker_heartbeat, worker_error as _worker_error
+        from app.core.metrics import get_metrics
+        if outcome in ("success", "degraded", "skipped"):
+            worker_heartbeat(worker_name)
+        if duration_ms is not None:
+            get_metrics().worker_iteration_latency[worker_name].observe(duration_ms / 1000.0)
+    except Exception:
+        pass  # Metrics not critical
+
 
 def classify_error(exception: Exception) -> str:
     """

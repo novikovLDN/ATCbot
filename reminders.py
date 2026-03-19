@@ -108,19 +108,24 @@ async def send_smart_reminders(bot: Bot):
     """Отправить умные напоминания пользователям (старая логика для совместимости)"""
     try:
         subscriptions = await database.get_subscriptions_for_reminders()
-        
+
         if not subscriptions:
             return
-        
+
         logger.info("Found %d subscriptions for reminders check", len(subscriptions))
-        
+
+        # Batch-resolve languages to eliminate N+1 queries
+        from app.services.language_service import resolve_user_languages_batch
+        all_telegram_ids = [s["telegram_id"] for s in subscriptions]
+        languages_map = await resolve_user_languages_batch(all_telegram_ids)
+
         for subscription in subscriptions:
             telegram_id = subscription["telegram_id"]
-            
+
             try:
                 # Use notification service to determine if reminder should be sent
                 decision = notification_service.should_send_reminder(subscription)
-                
+
                 if not decision.should_send:
                     # Skip this subscription (already sent, not in time window, etc.)
                     if decision.reason:
@@ -140,7 +145,7 @@ async def send_smart_reminders(bot: Bot):
                     except (TypeError, AttributeError):
                         pass
 
-                language = await resolve_user_language(telegram_id)
+                language = languages_map.get(telegram_id, "ru")
                 
                 # Determine reminder text and keyboard based on reminder type
                 reminder_type = decision.reminder_type

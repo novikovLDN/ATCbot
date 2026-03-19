@@ -1739,6 +1739,12 @@ async def update_user_language(telegram_id: int, language: str):
             "UPDATE users SET language = $1 WHERE telegram_id = $2",
             language, telegram_id
         )
+    # Invalidate language cache
+    try:
+        from app.utils.query_cache import invalidate_user_language
+        await invalidate_user_language(telegram_id)
+    except Exception:
+        pass
 
 
 async def update_username(telegram_id: int, username: Optional[str]):
