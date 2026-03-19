@@ -215,7 +215,7 @@ def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_renew_config"),
-            callback_data="menu_buy_vpn"
+            callback_data="corporate_access_request"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_topup"),
