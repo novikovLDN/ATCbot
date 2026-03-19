@@ -212,10 +212,6 @@ def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
             callback_data="biz_control_panel"
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_ecosystem"),
-            callback_data="biz_ecosystem"
-        )],
-        [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
             url="https://t.me/Atlas_SupportSecurity"
         )],
@@ -254,10 +250,6 @@ def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_copy_login"),
             callback_data="biz_copy_login"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "biz.btn_copy_password"),
-            callback_data="biz_copy_password"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
