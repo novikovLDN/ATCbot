@@ -36,6 +36,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats"),
         ],
         # — Система —
+        [InlineKeyboardButton(text="📡 Мониторинг", callback_data="admin:monitoring")],
         [
             InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit"),

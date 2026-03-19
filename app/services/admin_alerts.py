@@ -74,6 +74,11 @@ async def send_alert(
         )
         _last_alert_at[category] = now
         logger.info(f"ADMIN_ALERT_SENT category={category}")
+        try:
+            from app.core.metrics import get_metrics
+            get_metrics().alerts_sent.inc()
+        except Exception:
+            pass
         return True
     except Exception as e:
         logger.error(f"ADMIN_ALERT_FAILED category={category} error={e}")
@@ -89,6 +94,11 @@ async def send_alert(
             return True
         except Exception as retry_err:
             logger.error(f"ADMIN_ALERT_RETRY_FAILED category={category} error={retry_err}")
+            try:
+                from app.core.metrics import get_metrics
+                get_metrics().alerts_failed.inc()
+            except Exception:
+                pass
             return False
 
 

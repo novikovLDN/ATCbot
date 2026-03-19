@@ -79,6 +79,17 @@ class TelegramErrorBoundaryMiddleware(BaseMiddleware):
             )
             logger.exception("UNHANDLED_HANDLER_EXCEPTION", extra={"update_type": type(event).__name__, "user_id": user_id})
 
+            # Record in metrics
+            try:
+                from app.core.metrics import get_metrics
+                get_metrics().errors.record(
+                    type(e).__name__,
+                    str(e)[:200],
+                    component="handler",
+                )
+            except Exception:
+                pass
+
             # Graceful fallback response for callback
             answer_target = None
             if hasattr(event, "answer"):

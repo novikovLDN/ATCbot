@@ -159,7 +159,10 @@ async def main():
     from app.core.telegram_error_middleware import TelegramErrorBoundaryMiddleware
     from app.core.chat_filter_middleware import PrivateChatOnlyMiddleware
     from app.core.rate_limit_middleware import GlobalRateLimitMiddleware
+    from app.core.metrics_middleware import MetricsMiddleware
 
+    # Metrics middleware FIRST (outermost) — captures all outcomes including errors
+    dp.update.middleware(MetricsMiddleware())
     dp.update.middleware(ConcurrencyLimiterMiddleware(update_semaphore))
     dp.update.middleware(TelegramErrorBoundaryMiddleware())
     # 1. Фильтр приватных чатов (отсекает группы до любой обработки)
@@ -253,7 +256,11 @@ async def main():
     
     # Centralized list for graceful shutdown
     background_tasks = []
-    
+
+    # Worker supervisor: auto-restarts crashed workers, alerts admin
+    from app.core.worker_monitor import WorkerSupervisor
+    supervisor = WorkerSupervisor(bot, check_interval_s=30.0)
+
     # Background workers: only start if this instance holds the advisory lock
     # (or if lock acquisition was skipped). This enables horizontal scaling:
     # multiple instances handle webhooks, but only one runs workers.
@@ -262,22 +269,13 @@ async def main():
     farm_notifications_task = None
 
     if database.DB_READY and workers_lock_acquired:
-        reminder_task = asyncio.create_task(reminders.reminders_task(bot))
-        background_tasks.append(reminder_task)
-        logger.info("Reminders task started")
-
-        trial_notifications_task = asyncio.create_task(trial_notifications.run_trial_scheduler(bot))
-        background_tasks.append(trial_notifications_task)
-        logger.info("Trial notifications scheduler started")
-
-        farm_notifications_task = asyncio.create_task(farm_notifications.farm_notifications_task(bot))
-        background_tasks.append(farm_notifications_task)
-        logger.info("Farm notifications task started")
-
         import biz_key_notifications
-        biz_key_notif_task = asyncio.create_task(biz_key_notifications.start_biz_key_notifier(bot))
-        background_tasks.append(biz_key_notif_task)
-        logger.info("Biz key notifications task started")
+
+        # Register ALL workers with supervisor for auto-restart
+        supervisor.register("reminders", reminders.reminders_task, bot, max_restarts=10, stale_threshold_s=1800)
+        supervisor.register("trial_notifications", trial_notifications.run_trial_scheduler, bot, max_restarts=10, stale_threshold_s=3600)
+        supervisor.register("farm_notifications", farm_notifications.farm_notifications_task, bot, max_restarts=10, stale_threshold_s=1800)
+        supervisor.register("biz_key_notifications", biz_key_notifications.start_biz_key_notifier, bot, max_restarts=10, stale_threshold_s=3600)
     elif not database.DB_READY:
         logger.warning("Background workers skipped (DB not ready)")
     else:
@@ -441,24 +439,24 @@ async def main():
     activation_worker_task = None
 
     if database.DB_READY and workers_lock_acquired:
-        fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
-        background_tasks.append(fast_cleanup_task)
-        logger.info("Fast expiry cleanup task started")
+        # Register additional workers with supervisor
+        supervisor.register("fast_cleanup", fast_expiry_cleanup.fast_expiry_cleanup_task, bot, max_restarts=10, stale_threshold_s=1800)
 
         _flags = get_feature_flags()
         if _flags.background_workers_enabled and _flags.auto_renewal_enabled:
-            auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
-            background_tasks.append(auto_renewal_task)
-            logger.info("Auto-renewal task started")
+            supervisor.register("auto_renewal", auto_renewal.auto_renewal_task, bot, max_restarts=10, stale_threshold_s=3600)
         else:
             logger.warning(
                 "Auto-renewal task skipped (feature flag: background_workers=%s, auto_renewal=%s)",
                 _flags.background_workers_enabled, _flags.auto_renewal_enabled
             )
 
-        activation_worker_task = asyncio.create_task(activation_worker.activation_worker_task(bot))
-        background_tasks.append(activation_worker_task)
-        logger.info("Activation worker task started")
+        supervisor.register("activation_worker", activation_worker.activation_worker_task, bot, max_restarts=10, stale_threshold_s=1800)
+
+        # Start ALL registered workers at once
+        supervisor_tasks = await supervisor.start_all()
+        background_tasks.extend(supervisor_tasks)
+        logger.info("Worker supervisor started with %d workers", len(supervisor._workers))
     elif not database.DB_READY:
         logger.warning("Cleanup/renewal/activation workers skipped (DB not ready)")
     else:
@@ -632,13 +630,19 @@ async def main():
             outcome="success",
             reason=f"count={len(background_tasks)}",
         )
-        
-        # Step 1: Cancel all tasks
+
+        # Step 1: Stop supervisor (cancels all supervised workers)
+        try:
+            await supervisor.stop_all()
+        except Exception as e:
+            logger.warning("supervisor stop error: %s", e)
+
+        # Step 2: Cancel remaining tasks
         for task in background_tasks:
             if task and not task.done():
                 task.cancel()
-        
-        # Step 2: Await all tasks (handle CancelledError gracefully)
+
+        # Step 3: Await all tasks (handle CancelledError gracefully)
         for task in background_tasks:
             if task:
                 try:

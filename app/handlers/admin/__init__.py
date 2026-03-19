@@ -12,6 +12,7 @@ from .reissue import admin_reissue_router
 from .broadcast import admin_broadcast_router
 from .notifications import admin_notifications_router
 from .business import admin_business_router
+from .monitoring import monitoring_router
 
 router = Router()
 
@@ -27,3 +28,4 @@ router.include_router(admin_reissue_router)
 router.include_router(admin_broadcast_router)
 router.include_router(admin_notifications_router)
 router.include_router(admin_business_router)
+router.include_router(monitoring_router)

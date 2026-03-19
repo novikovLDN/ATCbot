@@ -74,6 +74,7 @@ async def telegram_webhook(
         return Response(status_code=400)
 
     # Parse and feed update to aiogram with timeout
+    webhook_start = time.monotonic()
     try:
         body = await request.json()
         update = Update.model_validate(body)
@@ -90,11 +91,31 @@ async def telegram_webhook(
                 "WEBHOOK_HANDLER_TIMEOUT update_id=%s — returning 200 to prevent retry",
                 update.update_id
             )
+            try:
+                from app.core.metrics import get_metrics
+                get_metrics().requests_timeout.inc()
+            except Exception:
+                pass
             # Return 200 anyway — prevents Telegram from retrying
             return Response(status_code=200)
     except Exception as e:
         logger.error("WEBHOOK_PROCESSING_ERROR error=%s", e)
+        try:
+            from app.core.metrics import get_metrics
+            get_metrics().webhook_errors.inc()
+            get_metrics().errors.record(type(e).__name__, str(e)[:200], "webhook")
+        except Exception:
+            pass
         # Return 200 anyway — prevents Telegram from retrying a bad update
         return Response(status_code=200)
+    finally:
+        # Record webhook metrics
+        try:
+            from app.core.metrics import get_metrics
+            m = get_metrics()
+            m.webhook_requests.inc()
+            m.webhook_latency.observe(time.monotonic() - webhook_start)
+        except Exception:
+            pass
 
     return Response(status_code=200)

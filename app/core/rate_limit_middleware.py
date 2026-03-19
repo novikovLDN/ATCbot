@@ -114,6 +114,11 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
                 "FLOOD_BAN user=%s requests=%d ban_duration=%ds",
                 user_id, request_count, FLOOD_BAN_DURATION,
             )
+            try:
+                from app.core.metrics import get_metrics
+                get_metrics().flood_bans.inc()
+            except Exception:
+                pass
             return True
 
         max_requests = START_RATE_LIMIT_MAX if is_start else RATE_LIMIT_MAX
@@ -185,6 +190,11 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
                 "FLOOD_BAN user=%s requests=%d ban_duration=%ds",
                 user_id, request_count, FLOOD_BAN_DURATION,
             )
+            try:
+                from app.core.metrics import get_metrics
+                get_metrics().flood_bans.inc()
+            except Exception:
+                pass
             return True
 
         max_requests = START_RATE_LIMIT_MAX if is_start else RATE_LIMIT_MAX
@@ -220,6 +230,13 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
                 logger.warning(
                     "RATE_LIMITED user=%s is_start=%s", user_id, is_start
                 )
+                # Record metrics
+                try:
+                    from app.core.metrics import get_metrics
+                    get_metrics().rate_limit_hits.inc()
+                    get_metrics().requests_rate_limited.inc()
+                except Exception:
+                    pass
                 return
 
         return await handler(event, data)

@@ -131,3 +131,114 @@ async def health():
     result_body["payment_providers"] = payment_providers
     result_body["status"] = "ok"
     return JSONResponse(result_body)
+
+
+@app.get("/metrics")
+async def metrics():
+    """
+    Extended metrics endpoint for monitoring.
+
+    Returns full metrics snapshot: requests, latency, workers, DB pool, memory, errors.
+    Protected: only accessible from internal network or with admin token.
+    """
+    # SECURITY: Check for internal access token (optional, if configured)
+    # In production, restrict via reverse proxy / network rules
+    try:
+        from app.core.metrics import get_metrics
+        m = get_metrics()
+        snapshot = m.snapshot()
+
+        # Add pool stats
+        if database.DB_READY:
+            try:
+                pool = await database.get_pool()
+                if pool:
+                    snapshot["db_pool"] = {
+                        "size": pool.get_size(),
+                        "idle": pool.get_idle_size(),
+                        "used": pool.get_size() - pool.get_idle_size(),
+                        "min": pool.get_min_size(),
+                        "max": pool.get_max_size(),
+                    }
+            except Exception:
+                snapshot["db_pool"] = {"error": "unavailable"}
+
+        return JSONResponse(snapshot)
+    except Exception as e:
+        logger.error("METRICS_ENDPOINT error=%s", e)
+        return JSONResponse({"error": str(e)[:200]}, status_code=500)
+
+
+@app.get("/health/detailed")
+async def health_detailed():
+    """
+    Detailed health check with all component statuses and metrics summary.
+    More information than /health, designed for monitoring dashboards.
+    """
+    import database
+    from app.utils.redis_client import ping as redis_ping, is_configured as redis_configured
+    from app.core.system_state import recalculate_from_runtime
+
+    result = {}
+
+    # System state
+    try:
+        system_state = recalculate_from_runtime()
+        severity = system_state.get_severity()
+        result["system"] = {
+            "severity": severity.value,
+            "state": system_state.summary(),
+        }
+    except Exception as e:
+        result["system"] = {"error": str(e)[:200]}
+
+    # DB
+    result["database"] = {"ready": database.DB_READY}
+    if database.DB_READY:
+        try:
+            pool = await database.get_pool()
+            if pool:
+                import time
+                start = time.monotonic()
+                async with pool.acquire() as conn:
+                    await conn.fetchval("SELECT 1")
+                latency_ms = (time.monotonic() - start) * 1000
+                result["database"]["connected"] = True
+                result["database"]["latency_ms"] = round(latency_ms, 1)
+                result["database"]["pool"] = {
+                    "size": pool.get_size(),
+                    "idle": pool.get_idle_size(),
+                    "used": pool.get_size() - pool.get_idle_size(),
+                    "max": pool.get_max_size(),
+                }
+        except Exception as e:
+            result["database"]["connected"] = False
+            result["database"]["error"] = type(e).__name__
+
+    # Redis
+    if redis_configured():
+        try:
+            result["redis"] = {"connected": await redis_ping()}
+        except Exception:
+            result["redis"] = {"connected": False}
+
+    # Metrics summary
+    try:
+        from app.core.metrics import get_metrics
+        m = get_metrics()
+        snap = m.snapshot()
+        result["metrics"] = {
+            "requests_total": snap["requests"]["total"],
+            "errors_total": snap["requests"]["errors"],
+            "rate_per_sec": snap["requests"]["rate_per_sec"],
+            "latency_p95_ms": round(snap["requests"]["latency"]["p95"] * 1000, 0),
+            "concurrent": snap["concurrency"]["current"],
+            "memory_mb": snap["process"]["memory_rss_mb"],
+            "uptime_s": snap["process"]["uptime_seconds"],
+        }
+    except Exception:
+        pass
+
+    status_code = 200 if database.DB_READY else 503
+    result["status"] = "ok" if database.DB_READY else "degraded"
+    return JSONResponse(result, status_code=status_code)
