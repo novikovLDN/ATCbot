@@ -399,6 +399,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             callback_data="corporate_access_request"
         )],
         [InlineKeyboardButton(
+            text="💼 Для бизнеса · Клиенты",
+            callback_data="biz_client_tariffs"
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main"
         )],
