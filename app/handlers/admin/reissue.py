@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 @admin_reissue_router.message(Command("reissue_key"))
 async def cmd_reissue_key(message: Message):
     """Перевыпустить VPN-ключ для пользователя (только для админа)"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         logging.warning(f"Unauthorized reissue_key attempt by user {message.from_user.id}")
         await message.answer("Нет доступа")
         return

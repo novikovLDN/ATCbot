@@ -70,7 +70,7 @@ async def get_user_balance(telegram_id: int) -> float:
         return float(balance) if balance else 0.0
 
 
-async def increase_balance(telegram_id: int, amount: float, source: str = "telegram_payment", description: Optional[str] = None, conn=None) -> bool:
+async def increase_balance(telegram_id: int, amount: float, source: str = "telegram_payment", description: Optional[str] = None, conn=None, source_id: Optional[str] = None) -> bool:
     """
     Увеличить баланс пользователя (атомарно)
     
@@ -109,13 +109,13 @@ async def increase_balance(telegram_id: int, amount: float, source: str = "teleg
         elif source == "admin" or source == "admin_adjustment":
             transaction_type = "admin_adjustment"
         await c.execute(
-            """INSERT INTO balance_transactions (user_id, amount, type, source, description)
-               VALUES ($1, $2, $3, $4, $5)""",
-            telegram_id, amount_kopecks, transaction_type, source, description
+            """INSERT INTO balance_transactions (user_id, amount, type, source, description, source_id)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            telegram_id, amount_kopecks, transaction_type, source, description, source_id
         )
         logger.info(
-            f"BALANCE_INCREASED user={telegram_id} amount={amount:.2f} RUB "
-            f"({amount_kopecks} kopecks) source={source}"
+            "BALANCE_INCREASED user=%s amount=%.2f RUB (%s kopecks) source=%s source_id=%s",
+            telegram_id, amount, amount_kopecks, source, source_id,
         )
         return True
 
@@ -301,7 +301,7 @@ async def get_users_with_active_farm() -> List[Dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
-async def decrease_balance(telegram_id: int, amount: float, source: str = "subscription_payment", description: Optional[str] = None, conn=None) -> bool:
+async def decrease_balance(telegram_id: int, amount: float, source: str = "subscription_payment", description: Optional[str] = None, conn=None, source_id: Optional[str] = None) -> bool:
     """
     Уменьшить баланс пользователя (атомарно)
     
@@ -353,13 +353,13 @@ async def decrease_balance(telegram_id: int, amount: float, source: str = "subsc
         elif source == "refund":
             transaction_type = "refund"
         await c.execute(
-            """INSERT INTO balance_transactions (user_id, amount, type, source, description)
-               VALUES ($1, $2, $3, $4, $5)""",
-            telegram_id, -amount_kopecks, transaction_type, source, description
+            """INSERT INTO balance_transactions (user_id, amount, type, source, description, source_id)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            telegram_id, -amount_kopecks, transaction_type, source, description, source_id
         )
         logger.info(
-            f"BALANCE_DECREASED user={telegram_id} amount={amount:.2f} RUB "
-            f"({amount_kopecks} kopecks) source={source}"
+            "BALANCE_DECREASED user=%s amount=%.2f RUB (%s kopecks) source=%s source_id=%s",
+            telegram_id, amount, amount_kopecks, source, source_id,
         )
         return True
 

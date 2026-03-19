@@ -637,6 +637,29 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP")
         except Exception:
             pass
+
+        # Composite indexes for common query patterns
+        try:
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_subscriptions_expiry_status
+                ON subscriptions (expires_at, status)
+                WHERE status = 'active'
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_subscriptions_auto_renew
+                ON subscriptions (expires_at, auto_renew, status)
+                WHERE auto_renew = TRUE AND status = 'active'
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_balance_tx_user_created
+                ON balance_transactions (user_id, created_at DESC)
+            """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_payments_user_status
+                ON payments (telegram_id, status)
+            """)
+        except Exception:
+            pass
         
         # Миграция: добавляем поля для delayed activation (premium flow)
         try:
@@ -693,7 +716,7 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE balance_transactions ADD COLUMN IF NOT EXISTS related_user_id BIGINT")
         except Exception:
             pass
-        
+
         # Миграция: добавляем поле source в balance_transactions, если его нет
         try:
             await conn.execute("ALTER TABLE balance_transactions ADD COLUMN IF NOT EXISTS source TEXT")
@@ -701,6 +724,22 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE balance_transactions ALTER COLUMN amount TYPE NUMERIC USING amount::NUMERIC")
         except Exception:
             # Колонка уже существует или ошибка миграции
+            pass
+
+        # Миграция: добавляем source_id для идемпотентности операций с балансом
+        try:
+            await conn.execute("ALTER TABLE balance_transactions ADD COLUMN IF NOT EXISTS source_id TEXT")
+        except Exception:
+            pass
+
+        # Уникальный индекс для предотвращения дублирования операций
+        try:
+            await conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_tx_idempotency
+                ON balance_transactions (user_id, source, source_id)
+                WHERE source_id IS NOT NULL
+            """)
+        except Exception:
             pass
         
         # Миграция: добавляем поля для реферальной программы

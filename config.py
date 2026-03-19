@@ -73,16 +73,43 @@ if not BOT_TOKEN:
     sys.exit(1)
 _log.info("Using BOT_TOKEN from %s_BOT_TOKEN", APP_ENV.upper())
 
-# Telegram ID администратора (можно узнать у @userinfobot)
+# Telegram ID администраторов (можно узнать у @userinfobot)
+# Поддерживает одного или нескольких: "123456" или "123456,789012"
 ADMIN_TELEGRAM_ID_STR = env("ADMIN_TELEGRAM_ID")
 if not ADMIN_TELEGRAM_ID_STR:
     print(f"ERROR: {APP_ENV.upper()}_ADMIN_TELEGRAM_ID environment variable is not set!", file=sys.stderr)
     sys.exit(1)
 
+# Parse comma-separated list of admin IDs
+ADMIN_TELEGRAM_IDS: set[int] = set()
+for _id_str in ADMIN_TELEGRAM_ID_STR.split(","):
+    _id_str = _id_str.strip()
+    if not _id_str:
+        continue
+    try:
+        ADMIN_TELEGRAM_IDS.add(int(_id_str))
+    except ValueError:
+        print(f"ERROR: ADMIN_TELEGRAM_ID must be number(s), got: {_id_str}", file=sys.stderr)
+        sys.exit(1)
+if not ADMIN_TELEGRAM_IDS:
+    print(f"ERROR: ADMIN_TELEGRAM_ID must contain at least one valid ID", file=sys.stderr)
+    sys.exit(1)
+
+# Primary admin (first listed) — used for alerts and single-admin operations
+ADMIN_TELEGRAM_ID = next(iter(ADMIN_TELEGRAM_IDS))
 try:
-    ADMIN_TELEGRAM_ID = int(ADMIN_TELEGRAM_ID_STR)
+    # Keep backwards-compatible: if single ID was given, use it as primary
+    ADMIN_TELEGRAM_ID = int(ADMIN_TELEGRAM_ID_STR.split(",")[0].strip())
 except ValueError:
-    print(f"ERROR: ADMIN_TELEGRAM_ID must be a number, got: {ADMIN_TELEGRAM_ID_STR}", file=sys.stderr)
+    pass
+
+# Database URL validation
+DATABASE_URL = env("DATABASE_URL")
+if not DATABASE_URL:
+    print(f"ERROR: {APP_ENV.upper()}_DATABASE_URL environment variable is not set!", file=sys.stderr)
+    sys.exit(1)
+if not DATABASE_URL.startswith(("postgres://", "postgresql://")):
+    print(f"ERROR: DATABASE_URL must start with postgres:// or postgresql://", file=sys.stderr)
     sys.exit(1)
 
 # Тарифы Basic и Plus с периодами

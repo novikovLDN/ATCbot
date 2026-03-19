@@ -74,7 +74,7 @@ async def callback_admin_export(callback: CallbackQuery):
     """Раздел Экспорт данных"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -86,7 +86,7 @@ async def callback_admin_export(callback: CallbackQuery):
 @admin_export_router.callback_query(F.data.startswith("admin:export:"))
 async def callback_admin_export_data(callback: CallbackQuery):
     """Обработка экспорта данных"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return

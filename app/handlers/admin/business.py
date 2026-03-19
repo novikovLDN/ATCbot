@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def _is_admin(user_id: int) -> bool:
-    return user_id == config.ADMIN_TELEGRAM_ID
+    return user_id in config.ADMIN_TELEGRAM_IDS
 
 
 # ── Список бизнес-подписчиков ──────────────────────────────────────

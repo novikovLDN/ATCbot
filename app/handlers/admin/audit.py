@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @admin_audit_router.message(Command("admin_audit"))
 async def cmd_admin_audit(message: Message):
     """Показать последние записи audit_log (только для админа)"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         logging.warning(f"Unauthorized admin_audit attempt by user {message.from_user.id}")
         await message.answer("Недостаточно прав")
         return
@@ -132,7 +132,7 @@ async def callback_admin_audit(callback: CallbackQuery):
     """Раздел Аудит (переиспользование логики /admin_audit)"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     

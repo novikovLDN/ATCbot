@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @admin_activations_router.message(Command("pending_activations"))
 async def cmd_pending_activations(message: Message):
     """Показать подписки с отложенной активацией (только для админа)"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         logging.warning(f"Unauthorized pending_activations attempt by user {message.from_user.id}")
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))

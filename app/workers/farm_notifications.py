@@ -42,8 +42,15 @@ async def farm_notifications_iteration(bot: Bot):
         
         # Parse JSONB if needed
         if isinstance(farm_plots, str):
-            farm_plots = json.loads(farm_plots)
+            try:
+                farm_plots = json.loads(farm_plots)
+            except (json.JSONDecodeError, ValueError):
+                logger.warning("FARM_INVALID_JSON user=%s", telegram_id)
+                continue
         elif farm_plots is None:
+            continue
+        if not isinstance(farm_plots, list):
+            logger.warning("FARM_INVALID_FORMAT user=%s type=%s", telegram_id, type(farm_plots).__name__)
             continue
         
         changed = False

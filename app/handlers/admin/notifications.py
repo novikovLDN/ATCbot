@@ -91,7 +91,7 @@ SEGMENT_OPTIONS = {
 @admin_notifications_router.callback_query(F.data == "admin:notifications")
 async def callback_admin_notifications(callback: CallbackQuery, state: FSMContext):
     """Main notification center"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -115,7 +115,7 @@ async def callback_admin_notifications(callback: CallbackQuery, state: FSMContex
 @admin_notifications_router.callback_query(F.data == "admin:notif_promo")
 async def callback_admin_notif_promo(callback: CallbackQuery, state: FSMContext):
     """Show promo templates list"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -139,7 +139,7 @@ async def callback_admin_notif_promo(callback: CallbackQuery, state: FSMContext)
 @admin_notifications_router.callback_query(F.data.startswith("admin:promo_tpl:"))
 async def callback_admin_promo_template(callback: CallbackQuery, state: FSMContext):
     """Select a promo template"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -166,7 +166,7 @@ async def callback_admin_promo_template(callback: CallbackQuery, state: FSMConte
 @admin_notifications_router.message(AdminPromoNotif.enter_discount)
 async def process_promo_discount(message: Message, state: FSMContext):
     """Process discount input"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
 
     data = await state.get_data()
@@ -199,7 +199,7 @@ async def process_promo_discount(message: Message, state: FSMContext):
 @admin_notifications_router.callback_query(F.data.startswith("admin:promo_period:"), AdminPromoNotif.choose_period)
 async def callback_promo_period(callback: CallbackQuery, state: FSMContext):
     """Select promo period"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -226,7 +226,7 @@ async def callback_promo_period(callback: CallbackQuery, state: FSMContext):
 @admin_notifications_router.callback_query(F.data.startswith("admin:promo_seg:"), AdminPromoNotif.choose_segment)
 async def callback_promo_segment(callback: CallbackQuery, state: FSMContext):
     """Select segment and show preview"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -261,7 +261,7 @@ async def callback_promo_segment(callback: CallbackQuery, state: FSMContext):
 @admin_notifications_router.callback_query(F.data == "admin:promo_send", AdminPromoNotif.confirm)
 async def callback_promo_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Send promo notification to users"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -353,7 +353,7 @@ async def callback_promo_send(callback: CallbackQuery, state: FSMContext, bot: B
 @admin_notifications_router.callback_query(F.data == "admin:notif_retention")
 async def callback_admin_notif_retention(callback: CallbackQuery, state: FSMContext):
     """Show retention templates"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -377,7 +377,7 @@ async def callback_admin_notif_retention(callback: CallbackQuery, state: FSMCont
 @admin_notifications_router.callback_query(F.data.startswith("admin:ret_tpl:"))
 async def callback_retention_template(callback: CallbackQuery, state: FSMContext):
     """Select retention template, go to segment"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -407,7 +407,7 @@ async def callback_retention_template(callback: CallbackQuery, state: FSMContext
 @admin_notifications_router.callback_query(F.data.startswith("admin:ret_seg:"), AdminRetentionNotif.choose_segment)
 async def callback_retention_segment(callback: CallbackQuery, state: FSMContext):
     """Confirm and show preview"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -436,7 +436,7 @@ async def callback_retention_segment(callback: CallbackQuery, state: FSMContext)
 @admin_notifications_router.callback_query(F.data == "admin:ret_send", AdminRetentionNotif.confirm)
 async def callback_retention_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Send retention notification"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -519,7 +519,7 @@ async def callback_retention_send(callback: CallbackQuery, state: FSMContext, bo
 @admin_notifications_router.callback_query(F.data == "admin:notif_referral")
 async def callback_admin_notif_referral(callback: CallbackQuery, state: FSMContext):
     """Referral promo section"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -563,7 +563,7 @@ async def callback_admin_notif_referral(callback: CallbackQuery, state: FSMConte
 @admin_notifications_router.callback_query(F.data == "admin:referral_x2_start")
 async def callback_referral_x2_start(callback: CallbackQuery, state: FSMContext):
     """Choose period for x2 cashback"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -588,7 +588,7 @@ async def callback_referral_x2_start(callback: CallbackQuery, state: FSMContext)
 @admin_notifications_router.callback_query(F.data.startswith("admin:referral_x2_period:"), AdminReferralPromo.choose_period)
 async def callback_referral_x2_period(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Start x2 cashback promo and notify subscribers"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -781,7 +781,7 @@ async def _send_x2_cashback_notifications(
 @admin_notifications_router.callback_query(F.data.startswith("admin:referral_x2_cancel:"))
 async def callback_referral_x2_cancel(callback: CallbackQuery):
     """Confirmation dialog to cancel x2 cashback promo"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -830,7 +830,7 @@ async def callback_referral_x2_cancel(callback: CallbackQuery):
 @admin_notifications_router.callback_query(F.data.startswith("admin:referral_x2_cancel_confirm:"))
 async def callback_referral_x2_cancel_confirm(callback: CallbackQuery):
     """Actually cancel the x2 cashback promo"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -893,7 +893,7 @@ async def callback_referral_x2_cancel_confirm(callback: CallbackQuery):
 @admin_notifications_router.callback_query(F.data == "admin:notif_subscription")
 async def callback_admin_notif_subscription(callback: CallbackQuery, state: FSMContext):
     """Show subscription notification configuration info"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 

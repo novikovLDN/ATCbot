@@ -151,13 +151,18 @@ async def process_auto_renewals(bot: Bot):
                     subscription = sub_row
                     language = sub_row.get("language", "en")
                     try:
+                        # Use savepoint so we can rollback per-subscription on failure
+                        # without aborting the entire batch transaction.
+                        sp = conn.transaction()
+                        await sp.start()
+
                         # КРИТИЧНО: Обновляем last_auto_renewal_at в НАЧАЛЕ транзакции
                         # Это предотвращает обработку одной подписки несколькими воркерами
                         # даже при рестарте или параллельных вызовах
                         update_result = await conn.execute(
-                        """UPDATE subscriptions 
-                           SET last_auto_renewal_at = $1 
-                           WHERE telegram_id = $2 
+                        """UPDATE subscriptions
+                           SET last_auto_renewal_at = $1
+                           WHERE telegram_id = $2
                            AND status = 'active'
                            AND auto_renew = TRUE
                            AND (last_auto_renewal_at IS NULL OR last_auto_renewal_at < expires_at - INTERVAL '12 hours')""",
@@ -167,20 +172,21 @@ async def process_auto_renewals(bot: Bot):
                         # Если UPDATE не затронул ни одной строки - подписка уже обрабатывается или не подходит
                         if update_result == "UPDATE 0":
                             logger.debug(f"Subscription {telegram_id} already being processed or conditions changed, skipping")
+                            await sp.rollback()
                             continue
-                        
+
                         # Дополнительная проверка: убеждаемся, что подписка еще не была обработана
                         # (дополнительная защита от race condition)
                         current_sub = await conn.fetchrow(
-                            """SELECT auto_renew, expires_at, last_auto_renewal_at 
-                               FROM subscriptions 
+                            """SELECT auto_renew, expires_at, last_auto_renewal_at
+                               FROM subscriptions
                                WHERE telegram_id = $1""",
                             telegram_id
                         )
-                        
+
                         if not current_sub or not current_sub["auto_renew"]:
                             logger.debug(f"Subscription {telegram_id} no longer has auto_renew enabled, skipping")
-                            # Откатываем транзакцию (last_auto_renewal_at будет откачен)
+                            await sp.rollback()
                             continue
                         
                         # PHASE A: Только DB по conn — без вложенного pool.acquire и без сетевых вызовов
@@ -242,6 +248,7 @@ async def process_auto_renewals(bot: Bot):
                             
                             if not success:
                                 logger.error(f"Failed to decrease balance for auto-renewal: user={telegram_id}")
+                                await sp.rollback()
                                 continue
                             
                             result = await database.grant_access(
@@ -283,8 +290,9 @@ async def process_auto_renewals(bot: Bot):
                                         tariff=tariff_type,
                                         period_days=period_days,
                                     )
+                                await sp.rollback()
                                 continue
-                            
+
                             subscription_row = await conn.fetchrow(
                                 "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
                                 telegram_id
@@ -319,8 +327,9 @@ async def process_auto_renewals(bot: Bot):
                                         tariff=tariff_type,
                                         period_days=period_days,
                                     )
+                                await sp.rollback()
                                 continue
-                            
+
                             tariff_str = f"{tariff_type}_{period_days}"
                             payment_id = await conn.fetchval(
                                 "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved') RETURNING id",
@@ -356,11 +365,17 @@ async def process_auto_renewals(bot: Bot):
                                 "xray_sync": xray_sync_info,
                             })
                             logger.info(f"Auto-renewal successful: user={telegram_id}, tariff={tariff_type}, period_days={period_days}, amount={amount_rubles} RUB, expires_at={expires_str}")
+                            await sp.commit()
 
                         else:
                             logger.debug(f"Insufficient balance for auto-renewal: user={telegram_id}, balance={balance_rubles:.2f} RUB, required={amount_rubles:.2f} RUB")
-                    
+                            await sp.rollback()
+
                     except Exception as e:
+                        try:
+                            await sp.rollback()
+                        except Exception:
+                            pass
                         logger.exception(f"Error processing auto-renewal for user {telegram_id}: {e}")
                         try:
                             from app.services.admin_alerts import send_alert

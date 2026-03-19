@@ -177,7 +177,7 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
 @admin_broadcast_router.message(Command("notify_no_subscription"))
 async def cmd_notify_no_subscription(message: Message, state: FSMContext):
     """Broadcast to users without active subscription or trial (admin only). Silently ignore non-admin."""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     language = await resolve_user_language(message.from_user.id)
     await state.set_state(AdminBroadcastNoSubscription.waiting_for_text)
@@ -187,7 +187,7 @@ async def cmd_notify_no_subscription(message: Message, state: FSMContext):
 @admin_broadcast_router.message(AdminBroadcastNoSubscription.waiting_for_text)
 async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
     """Process broadcast text, show preview, ask confirmation."""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     if message.text and message.text.strip().lower() in ("/cancel", "cancel", "отмена"):
         await state.clear()
@@ -229,7 +229,7 @@ async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
 @admin_broadcast_router.callback_query(F.data.startswith("no_sub_broadcast:"))
 async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Handle confirm/cancel for no-subscription broadcast."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer()
         return
     action = callback.data.split(":")[1]
@@ -289,7 +289,7 @@ async def callback_admin_broadcast(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -312,7 +312,7 @@ async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -326,7 +326,7 @@ async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_title)
 async def process_broadcast_title(message: Message, state: FSMContext):
     """Обработка заголовка уведомления"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     language = await resolve_user_language(message.from_user.id)
     
@@ -341,7 +341,7 @@ async def process_broadcast_title(message: Message, state: FSMContext):
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_test_type:"))
 async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора типа тестирования"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -367,7 +367,7 @@ async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContex
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_message_a)
 async def process_broadcast_message_a(message: Message, state: FSMContext):
     """Обработка текста варианта A"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     language = await resolve_user_language(message.from_user.id)
     
@@ -381,7 +381,7 @@ async def process_broadcast_message_a(message: Message, state: FSMContext):
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_message_b)
 async def process_broadcast_message_b(message: Message, state: FSMContext):
     """Обработка текста варианта B"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     language = await resolve_user_language(message.from_user.id)
     
@@ -396,7 +396,7 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_message, F.text | F.photo)
 async def process_broadcast_message(message: Message, state: FSMContext):
     """Обработка текста/фото уведомления"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     language = await resolve_user_language(message.from_user.id)
 
@@ -437,7 +437,7 @@ async def process_broadcast_message(message: Message, state: FSMContext):
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_emoji)
 async def process_broadcast_emoji(message: Message, state: FSMContext):
     """Обработка выбора эмодзи"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     language = await resolve_user_language(message.from_user.id)
 
@@ -462,7 +462,7 @@ async def process_broadcast_emoji(message: Message, state: FSMContext):
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_btn:"))
 async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора кнопок для уведомления"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -520,7 +520,7 @@ def _btn_label(btn_type: str) -> str:
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_discount)
 async def process_broadcast_discount(message: Message, state: FSMContext):
     """Обработка ввода скидки для кнопки 'Купить со скидкой'"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     language = await resolve_user_language(message.from_user.id)
 
@@ -547,7 +547,7 @@ async def process_broadcast_discount(message: Message, state: FSMContext):
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_segment:"))
 async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора сегмента получателей"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -611,7 +611,7 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
 @admin_broadcast_router.callback_query(F.data == "broadcast:confirm_send")
 async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение и отправка уведомления"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -793,7 +793,7 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -824,7 +824,7 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast:ab_stat:"))
 async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
     """Статистика конкретного A/B теста"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return

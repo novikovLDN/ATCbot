@@ -120,7 +120,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
     """Обработчик кнопки статистики промокодов в админ-дашборде"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     try:
@@ -139,7 +139,7 @@ async def callback_admin_promo_stats(callback: CallbackQuery):
 @admin_stats_router.callback_query(F.data.startswith("admin:deactivate_promo:"))
 async def callback_admin_deactivate_promo(callback: CallbackQuery):
     """Подтверждение деактивации промокода"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -163,7 +163,7 @@ async def callback_admin_deactivate_promo(callback: CallbackQuery):
 @admin_stats_router.callback_query(F.data.startswith("admin:deactivate_promo_confirm:"))
 async def callback_admin_deactivate_promo_confirm(callback: CallbackQuery):
     """Фактическая деактивация промокода после подтверждения"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -192,7 +192,7 @@ async def callback_admin_metrics(callback: CallbackQuery):
     """Раздел Метрики"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -253,7 +253,7 @@ async def callback_admin_stats(callback: CallbackQuery):
     """Раздел Статистика"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -308,7 +308,7 @@ async def callback_admin_stats(callback: CallbackQuery):
 async def callback_admin_referral_stats(callback: CallbackQuery):
     """Реферальная статистика - главный экран с общей статистикой"""
     logger.info("REFERRAL_STATS_REQUESTED telegram_id=%s", callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -608,7 +608,7 @@ async def callback_admin_referral_sort(callback: CallbackQuery):
 
     """Сортировка реферальной статистики"""
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -774,7 +774,7 @@ async def callback_admin_referral_search(callback: CallbackQuery, state: FSMCont
 
     """Поиск реферальной статистики"""
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -812,7 +812,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
 
     """Обработка поискового запроса"""
 
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(message.from_user.id)
 
@@ -964,7 +964,7 @@ async def callback_admin_referral_detail(callback: CallbackQuery):
 
     
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
 
@@ -1106,7 +1106,7 @@ async def callback_admin_referral_history(callback: CallbackQuery):
 
     """История начислений реферального кешбэка"""
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -1258,7 +1258,7 @@ async def callback_admin_referral_history_page(callback: CallbackQuery):
 
     """Пагинация истории начислений"""
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -1406,7 +1406,7 @@ async def callback_admin_referral_top(callback: CallbackQuery):
 
     """Топ рефереров - расширенный список"""
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -1554,7 +1554,7 @@ async def callback_admin_analytics(callback: CallbackQuery):
 
     """📊 Финансовая аналитика - базовые метрики"""
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -1674,7 +1674,7 @@ async def callback_admin_analytics_monthly(callback: CallbackQuery):
 
     """Ежемесячная сводка"""
 
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
 
         language = await resolve_user_language(callback.from_user.id)
 
@@ -1816,7 +1816,7 @@ def _get_growth_period_keyboard(language: str = "ru") -> InlineKeyboardMarkup:
 @admin_stats_router.callback_query(F.data == "admin:analytics:growth")
 async def callback_admin_analytics_growth(callback: CallbackQuery):
     """Экран выбора периода для аналитики роста пользователей"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -1830,7 +1830,7 @@ async def callback_admin_analytics_growth(callback: CallbackQuery):
 @admin_stats_router.callback_query(F.data.startswith("admin:growth:"))
 async def callback_admin_growth_period(callback: CallbackQuery):
     """Показать аналитику за выбранный период"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -1887,7 +1887,7 @@ async def callback_admin_growth_period(callback: CallbackQuery):
 @admin_stats_router.callback_query(F.data == "admin:analytics:extended")
 async def callback_admin_extended_stats(callback: CallbackQuery):
     """Расширенная статистика и мониторинг бота"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
