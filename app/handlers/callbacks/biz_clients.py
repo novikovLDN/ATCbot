@@ -650,8 +650,13 @@ async def callback_biz_client_tariffs(callback: CallbackQuery):
                 "biz_client_150", "biz_client_250", "biz_client_500"):
         t = tariffs[key]
         price_30 = t[30]["price"]
+        discount = t.get("discount")
+        if discount:
+            btn_text = f"{t['label']} — {price_30} ₽/мес · -{discount}%"
+        else:
+            btn_text = f"{t['label']} — {price_30} ₽/мес"
         buttons.append([InlineKeyboardButton(
-            text=f"{t['label']} — {price_30} ₽/мес",
+            text=btn_text,
             callback_data=f"biz_cl_info:{key}",
         )])
 
