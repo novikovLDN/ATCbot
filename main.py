@@ -242,14 +242,27 @@ async def main():
                 await pool.release(instance_lock_conn)
                 instance_lock_conn = None
         except Exception as e:
-            logger.warning("Advisory lock check failed, continuing without lock: %s", e)
+            logger.error("Advisory lock check failed: %s", e)
             if instance_lock_conn:
                 try:
                     await pool.release(instance_lock_conn)
                 except Exception:
                     pass
                 instance_lock_conn = None
-            workers_lock_acquired = True  # Fallback: run workers to avoid stalled system
+            # SECURITY: Do NOT fallback to True — risk of duplicate workers across instances.
+            # Alert admin and disable workers for this instance.
+            workers_lock_acquired = False
+            try:
+                from app.services.admin_alerts import send_admin_alert
+                await send_admin_alert(
+                    bot,
+                    "ADVISORY_LOCK_FAILURE",
+                    f"⚠️ Advisory lock acquisition failed: {e}\n"
+                    "This instance will NOT run background workers.\n"
+                    "Check DB connectivity and restart if needed.",
+                )
+            except Exception:
+                pass
     else:
         logger.warning("DB not ready; skipping advisory lock (single-instance guard disabled)")
         workers_lock_acquired = True  # Run workers when DB recovers

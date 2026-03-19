@@ -14,8 +14,9 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Spam protection: per-category cooldowns
+# Spam protection: per-category cooldowns (guarded by _alert_lock)
 _last_alert_at: dict = {}
+_alert_lock = asyncio.Lock()
 _ALERT_COOLDOWNS = {
     "db_degraded": 3600.0,    # 1 hour
     "db_pool": 1800.0,        # 30 min
@@ -35,21 +36,23 @@ POOL_UTILIZATION_ALERT_THRESHOLD = float(os.getenv("POOL_UTILIZATION_ALERT_THRES
 
 async def _send_admin_alert(bot: Bot, category: str, message: str) -> None:
     """Send alert to admin with timeout and per-category cooldown. Never raises."""
-    now = time.monotonic()
-    cooldown = _ALERT_COOLDOWNS.get(category, 3600.0)
-    last = _last_alert_at.get(category, 0.0)
+    async with _alert_lock:
+        now = time.monotonic()
+        cooldown = _ALERT_COOLDOWNS.get(category, 3600.0)
+        last = _last_alert_at.get(category, 0.0)
 
-    if now - last < cooldown:
-        return
+        if now - last < cooldown:
+            return
 
-    try:
-        await asyncio.wait_for(
-            bot.send_message(config.ADMIN_TELEGRAM_ID, message),
-            timeout=10.0,
-        )
-        _last_alert_at[category] = now
-    except Exception as e:
-        logger.warning("health_alert_failed category=%s error=%s", category, e)
+        try:
+            for admin_id in config.ADMIN_TELEGRAM_IDS:
+                await asyncio.wait_for(
+                    bot.send_message(admin_id, message),
+                    timeout=10.0,
+                )
+            _last_alert_at[category] = now
+        except Exception as e:
+            logger.warning("health_alert_failed category=%s error=%s", category, e)
 
 
 def _get_memory_rss_mb() -> float:

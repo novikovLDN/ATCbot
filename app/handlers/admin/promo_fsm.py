@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @admin_promo_fsm_router.message(AdminCreatePromocode.waiting_for_code_name)
 async def process_admin_promocode_code_name(message: Message, state: FSMContext):
     """Обработка имени промокода"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
@@ -58,7 +58,7 @@ async def process_admin_promocode_code_name(message: Message, state: FSMContext)
 @admin_promo_fsm_router.message(AdminCreatePromocode.waiting_for_discount_percent)
 async def process_admin_promocode_discount(message: Message, state: FSMContext):
     """Обработка процента скидки"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
@@ -91,7 +91,7 @@ async def process_admin_promocode_discount(message: Message, state: FSMContext):
 @admin_promo_fsm_router.message(AdminCreatePromocode.waiting_for_duration_value)
 async def process_admin_promocode_duration_value(message: Message, state: FSMContext):
     """Обработка значения длительности"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
@@ -134,7 +134,7 @@ async def process_admin_promocode_duration_value(message: Message, state: FSMCon
 @admin_promo_fsm_router.message(AdminCreatePromocode.waiting_for_max_uses)
 async def process_admin_promocode_max_uses(message: Message, state: FSMContext):
     """Обработка максимального количества использований"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()

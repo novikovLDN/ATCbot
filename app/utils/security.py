@@ -212,7 +212,7 @@ def is_admin(telegram_id: int) -> bool:
         logger.warning(f"[SECURITY_WARNING] Invalid telegram_id in is_admin check: {error}")
         return False
     
-    return telegram_id == config.ADMIN_TELEGRAM_ID
+    return telegram_id in config.ADMIN_TELEGRAM_IDS
 
 
 def require_admin(telegram_id: int) -> Tuple[bool, Optional[str]]:

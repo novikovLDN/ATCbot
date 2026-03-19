@@ -77,6 +77,13 @@ async def telegram_webhook(
     webhook_start = time.monotonic()
     try:
         body = await request.json()
+        if not isinstance(body, dict):
+            logger.warning("WEBHOOK_INVALID_BODY type=%s", type(body).__name__)
+            return Response(status_code=400)
+        # Reject payloads missing required Telegram update fields
+        if "update_id" not in body:
+            logger.warning("WEBHOOK_MISSING_UPDATE_ID")
+            return Response(status_code=400)
         update = Update.model_validate(body)
         logger.debug("WEBHOOK_UPDATE update_id=%s", update.update_id)
 

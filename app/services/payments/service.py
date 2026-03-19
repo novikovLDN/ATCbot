@@ -284,30 +284,34 @@ async def verify_payment_payload(
 async def validate_payment_amount(
     actual_amount_rubles: float,
     expected_amount_rubles: float,
-    tolerance: float = 1.0
+    tolerance: float = 0.01,
 ) -> bool:
     """
     Validate that payment amount matches expected amount.
-    
+
+    Strict matching: tolerance defaults to 0.01 RUB (1 kopeck) to account
+    for floating-point rounding only. Payment providers must deliver exact amounts.
+
     Args:
         actual_amount_rubles: Actual payment amount in rubles
         expected_amount_rubles: Expected payment amount in rubles
-        tolerance: Allowed difference in rubles (default: 1.0)
-        
+        tolerance: Allowed difference in rubles (default: 0.01)
+
     Returns:
         True if amounts match within tolerance
-        
+
     Raises:
         PaymentAmountMismatchError: If amounts don't match
     """
     amount_diff = abs(actual_amount_rubles - expected_amount_rubles)
-    
+
     if amount_diff > tolerance:
         raise PaymentAmountMismatchError(
             f"Payment amount mismatch: expected={expected_amount_rubles:.2f} RUB, "
-            f"actual={actual_amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB"
+            f"actual={actual_amount_rubles:.2f} RUB, diff={amount_diff:.2f} RUB "
+            f"(tolerance={tolerance:.2f} RUB)"
         )
-    
+
     return True
 
 

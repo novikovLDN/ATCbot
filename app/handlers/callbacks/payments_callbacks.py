@@ -317,7 +317,7 @@ async def callback_withdraw_cancel(callback: CallbackQuery, state: FSMContext):
 @payments_router.callback_query(F.data.startswith("withdraw_approve:"))
 async def callback_withdraw_approve(callback: CallbackQuery, bot: Bot):
     """Админ: подтвердить вывод средств"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
     try:
@@ -346,7 +346,7 @@ async def callback_withdraw_approve(callback: CallbackQuery, bot: Bot):
 @payments_router.callback_query(F.data.startswith("withdraw_reject:"))
 async def callback_withdraw_reject(callback: CallbackQuery, bot: Bot):
     """Админ: отклонить вывод (возврат средств)"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
     try:

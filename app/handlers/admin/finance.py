@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 async def callback_admin_discount_create(callback: CallbackQuery):
     """Обработчик кнопки 'Назначить скидку'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -68,7 +68,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
 @admin_finance_router.callback_query(F.data.startswith("admin:discount_percent:"))
 async def callback_admin_discount_percent(callback: CallbackQuery):
     """Обработчик выбора процента скидки"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -90,7 +90,7 @@ async def callback_admin_discount_percent(callback: CallbackQuery):
 @admin_finance_router.callback_query(F.data.startswith("admin:discount_percent_manual:"))
 async def callback_admin_discount_percent_manual(callback: CallbackQuery, state: FSMContext):
     """Обработчик для ввода процента скидки вручную"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -115,7 +115,7 @@ async def callback_admin_discount_percent_manual(callback: CallbackQuery, state:
 @admin_finance_router.message(AdminDiscountCreate.waiting_for_percent)
 async def process_admin_discount_percent(message: Message, state: FSMContext):
     """Обработка введённого процента скидки"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
@@ -149,7 +149,7 @@ async def process_admin_discount_percent(message: Message, state: FSMContext):
 @admin_finance_router.callback_query(F.data.startswith("admin:discount_expires:"))
 async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
     """Обработчик выбора срока действия скидки"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -193,7 +193,7 @@ async def callback_admin_discount_expires(callback: CallbackQuery, bot: Bot):
 @admin_finance_router.callback_query(F.data.startswith("admin:discount_expires_manual:"))
 async def callback_admin_discount_expires_manual(callback: CallbackQuery, state: FSMContext):
     """Обработчик для ввода срока действия скидки вручную"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -220,7 +220,7 @@ async def callback_admin_discount_expires_manual(callback: CallbackQuery, state:
 @admin_finance_router.message(AdminDiscountCreate.waiting_for_expires)
 async def process_admin_discount_expires(message: Message, state: FSMContext, bot: Bot):
     """Обработка введённого срока действия скидки"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
@@ -275,7 +275,7 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
 async def callback_admin_discount_delete(callback: CallbackQuery):
     """Обработчик кнопки 'Удалить скидку'"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -311,7 +311,7 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
 @admin_finance_router.callback_query(F.data == "admin:incident")
 async def callback_admin_incident(callback: CallbackQuery):
     """Раздел управления инцидентом"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -347,7 +347,7 @@ async def callback_admin_incident(callback: CallbackQuery):
 @admin_finance_router.callback_query(F.data == "admin:incident:toggle")
 async def callback_admin_incident_toggle(callback: CallbackQuery):
     """Переключение режима инцидента"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -398,7 +398,7 @@ async def callback_admin_incident_toggle(callback: CallbackQuery):
 @admin_finance_router.callback_query(F.data == "admin:incident:edit")
 async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContext):
     """Начало редактирования текста инцидента"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -417,7 +417,7 @@ async def callback_admin_incident_edit(callback: CallbackQuery, state: FSMContex
 @admin_finance_router.message(IncidentEdit.waiting_for_text)
 async def process_incident_text(message: Message, state: FSMContext):
     """Обработка текста инцидента"""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         return
     
     if message.text and message.text.startswith("/cancel"):
@@ -446,7 +446,7 @@ async def process_incident_text(message: Message, state: FSMContext):
 @admin_finance_router.callback_query(F.data == "admin:balance_management")
 async def callback_admin_balance_management_start(callback: CallbackQuery, state: FSMContext):
     """💰 Управление балансом - запрос поиска пользователя"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -461,7 +461,7 @@ async def callback_admin_balance_management_start(callback: CallbackQuery, state
 async def process_admin_balance_user_search(message: Message, state: FSMContext):
     """Обработка поиска пользователя для управления балансом → показ профиля с ➕➖"""
     language = await resolve_user_language(message.from_user.id)
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -504,7 +504,7 @@ async def process_admin_balance_user_search(message: Message, state: FSMContext)
 @admin_finance_router.callback_query(F.data == "admin:credit_balance")
 async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FSMContext):
     """Начало процесса выдачи средств - запрос поиска пользователя (legacy entry)"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -518,7 +518,7 @@ async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FS
 @admin_finance_router.callback_query(F.data.startswith("admin:credit_balance:"))
 async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSMContext):
     """Начало процесса выдачи средств для конкретного пользователя"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -545,7 +545,7 @@ async def callback_admin_credit_balance_user(callback: CallbackQuery, state: FSM
 async def process_admin_credit_balance_user_search(message: Message, state: FSMContext):
     """Обработка поиска пользователя для выдачи средств"""
     language = await resolve_user_language(message.from_user.id)
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -586,7 +586,7 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
 async def process_admin_credit_balance_amount(message: Message, state: FSMContext):
     """Обработка ввода суммы для выдачи средств"""
     language = await resolve_user_language(message.from_user.id)
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -658,7 +658,7 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
 async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение выдачи средств"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -727,7 +727,7 @@ async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: F
     """Отмена выдачи средств"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -745,7 +745,7 @@ async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: F
 @admin_finance_router.callback_query(F.data.startswith("admin:debit_balance:"))
 async def callback_admin_debit_balance_start(callback: CallbackQuery, state: FSMContext):
     """Начало процесса снятия средств с баланса пользователя"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -770,7 +770,7 @@ async def callback_admin_debit_balance_start(callback: CallbackQuery, state: FSM
 async def process_admin_debit_amount(message: Message, state: FSMContext):
     """Обработка ввода суммы для снятия средств"""
     language = await resolve_user_language(message.from_user.id)
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -832,7 +832,7 @@ async def process_admin_debit_amount(message: Message, state: FSMContext):
 async def callback_admin_debit_confirm(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Подтверждение снятия средств"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     try:
@@ -879,7 +879,7 @@ async def callback_admin_debit_confirm(callback: CallbackQuery, state: FSMContex
 async def callback_admin_debit_cancel(callback: CallbackQuery, state: FSMContext):
     """Отмена снятия средств"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"), reply_markup=get_admin_back_keyboard(language))

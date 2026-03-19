@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 async def callback_admin_keys(callback: CallbackQuery):
     """Раздел VPN-ключи в админ-дашборде"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -73,7 +73,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
     """Массовый перевыпуск ключей для всех активных пользователей"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -264,7 +264,7 @@ async def callback_admin_keys_legacy(callback: CallbackQuery):
     """Раздел VPN-ключи"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -297,7 +297,7 @@ async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
     """Раздел Пользователь - запрос Telegram ID или username"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -311,7 +311,7 @@ async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
 async def process_admin_user_id(message: Message, state: FSMContext):
     """Обработка введённого Telegram ID или username пользователя"""
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(message.from_user.id)
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
@@ -454,7 +454,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
 @admin_access_router.callback_query(F.data.startswith("admin:show_user:"))
 async def callback_admin_show_user(callback: CallbackQuery):
     """Вернуться к карточке пользователя (например после отмены смены тарифа)."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer()
         return
     await callback.answer()
@@ -470,7 +470,7 @@ async def callback_admin_show_user(callback: CallbackQuery):
 async def callback_admin_user_history(callback: CallbackQuery):
     """История подписок пользователя (админ)"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -554,7 +554,7 @@ def _grant_flex_calculated_days(amount: float, unit: str) -> float:
 @admin_access_router.callback_query(F.data.startswith("admin_grant_basic:"))
 async def callback_admin_grant_basic(callback: CallbackQuery, state: FSMContext):
     """Entry: Admin selects «Выдать Basic». Ask for duration number, then unit."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -572,7 +572,7 @@ async def callback_admin_grant_basic(callback: CallbackQuery, state: FSMContext)
 @admin_access_router.callback_query(F.data.startswith("admin_grant_plus:"))
 async def callback_admin_grant_plus(callback: CallbackQuery, state: FSMContext):
     """Entry: Admin selects «Выдать Plus». Ask for duration number, then unit."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -590,7 +590,7 @@ async def callback_admin_grant_plus(callback: CallbackQuery, state: FSMContext):
 @admin_access_router.message(StateFilter(AdminGrantState.waiting_amount), F.text)
 async def process_admin_grant_flex_amount(message: Message, state: FSMContext):
     """After admin entered number, show unit selection keyboard."""
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await state.clear()
         return
     try:
@@ -613,7 +613,7 @@ async def process_admin_grant_flex_amount(message: Message, state: FSMContext):
 @admin_access_router.callback_query(F.data.startswith("admin:grant_flex_unit:"), StateFilter(AdminGrantState.waiting_unit))
 async def callback_admin_grant_flex_unit(callback: CallbackQuery, state: FSMContext):
     """Admin selected unit → show confirmation (N unit_label, total minutes/days)."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -660,7 +660,7 @@ async def callback_admin_grant_flex_unit(callback: CallbackQuery, state: FSMCont
 @admin_access_router.callback_query(F.data == "admin:grant_flex_confirm", StateFilter(AdminGrantState.waiting_confirm))
 async def callback_admin_grant_flex_confirm(callback: CallbackQuery, state: FSMContext):
     """After confirm: show notify user choice, then execute grant in next step."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -686,7 +686,7 @@ async def callback_admin_grant_flex_confirm(callback: CallbackQuery, state: FSMC
 @admin_access_router.callback_query(F.data.startswith("admin:grant_flex_notify:"), StateFilter(AdminGrantState.waiting_notify))
 async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Execute grant; if notify=yes send user message, then show admin confirmation."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -753,7 +753,7 @@ async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMCo
 @admin_access_router.callback_query(F.data == "admin:grant_flex_cancel")
 async def callback_admin_grant_flex_cancel(callback: CallbackQuery, state: FSMContext):
     """Cancel flexible grant flow (from unit, confirm or notify step)."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer()
         return
     await callback.answer()
@@ -783,7 +783,7 @@ def _admin_switch_notify_keyboard(user_id: int, tariff: str, language: str = "ru
 @admin_access_router.callback_query(F.data.startswith("admin_switch_plus:"))
 async def callback_admin_switch_plus(callback: CallbackQuery):
     """Перевести пользователя с Basic на Plus — показать подтверждение."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text("ru", "admin.access_denied"), show_alert=True)
         return
     await callback.answer()
@@ -804,7 +804,7 @@ async def callback_admin_switch_plus(callback: CallbackQuery):
 @admin_access_router.callback_query(F.data.startswith("admin_switch_basic:"))
 async def callback_admin_switch_basic(callback: CallbackQuery):
     """Перевести пользователя с Plus на Basic — показать подтверждение."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text("ru", "admin.access_denied"), show_alert=True)
         return
     await callback.answer()
@@ -826,7 +826,7 @@ async def callback_admin_switch_basic(callback: CallbackQuery):
 @admin_access_router.callback_query(F.data.startswith("admin_switch_confirm:"))
 async def callback_admin_switch_confirm(callback: CallbackQuery, bot: Bot):
     """Выполнить смену тарифа: VPN API + БД, затем спросить про уведомление."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text("ru", "admin.access_denied"), show_alert=True)
         return
     await callback.answer()
@@ -860,7 +860,7 @@ async def callback_admin_switch_confirm(callback: CallbackQuery, bot: Bot):
 @admin_access_router.callback_query(F.data.startswith("admin_switch_notify:"))
 async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
     """После смены тарифа: уведомить пользователя или нет, затем вернуть к карточке."""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer()
         return
     await callback.answer()
@@ -906,7 +906,7 @@ async def callback_admin_grant(callback: CallbackQuery, state: FSMContext):
     Shows quick action buttons (1/7/14 days, 1 year, 10 minutes, custom).
     """
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -955,7 +955,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
     Ask for notify_user choice before executing.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -997,7 +997,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
     Quick action: Grant access for N minutes, then ask for notify choice.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1056,7 +1056,7 @@ async def callback_admin_grant_1_year(callback: CallbackQuery, state: FSMContext
     Ask for notify_user choice before executing.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1082,7 +1082,7 @@ async def callback_admin_grant_1_year_fallback(callback: CallbackQuery, state: F
     Re-establishes notify choice flow statelessly from callback_data.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1111,7 +1111,7 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
     This is the handler that was missing - works when FSM is in waiting_for_days.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1150,7 +1150,7 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
     Fallback handler (no state filter) - works from any state.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1189,7 +1189,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
     Handler works ONLY in state waiting_for_unit.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1223,7 +1223,7 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
     PART 1: Process duration value input, move to notify choice.
     """
     language = await resolve_user_language(message.from_user.id)
-    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if message.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await message.answer(i18n_get_text(language, "admin.access_denied"))
         await state.clear()
         return
@@ -1265,7 +1265,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
     PART 1: Execute grant access with notify_user choice.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1363,7 +1363,7 @@ async def callback_admin_grant_minutes_notify(callback: CallbackQuery, bot: Bot)
     Format: admin:notify:yes|no:minutes:<user_id>:<minutes>
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1435,7 +1435,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
     FIX: Missing handler for admin:notify:yes and admin:notify:no used by grant_days and grant_1_year.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1570,7 +1570,7 @@ async def callback_admin_grant_notify_fallback(callback: CallbackQuery, state: F
     Without FSM data we cannot execute grant; inform user to retry.
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1595,7 +1595,7 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
     Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:user:<id>
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1648,7 +1648,7 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
     Handler обрабатывает ТОЛЬКО callback вида: admin:revoke:notify:yes|no
     """
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1867,7 +1867,7 @@ async def callback_admin_vip_grant(callback: CallbackQuery):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1910,7 +1910,7 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -1941,7 +1941,7 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
 async def callback_admin_user_reissue(callback: CallbackQuery):
     """Перевыпуск ключа из админ-дашборда. 5 слоёв защиты: immediate ACK, disabled UI, in-memory lock, Postgres advisory lock, correlation logging."""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
 
@@ -2075,7 +2075,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
 async def callback_admin_delete_user(callback: CallbackQuery):
     """Показываем подтверждение удаления пользователя из БД"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
 
@@ -2123,7 +2123,7 @@ async def callback_admin_delete_user(callback: CallbackQuery):
 async def callback_admin_delete_user_confirm(callback: CallbackQuery):
     """Подтверждение удаления — выполняем полное удаление пользователя из БД"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
 
@@ -2167,7 +2167,7 @@ async def callback_admin_delete_user_confirm(callback: CallbackQuery):
 async def callback_admin_user_back(callback: CallbackQuery):
     """Возврат к карточке пользователя после отмены удаления"""
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
 

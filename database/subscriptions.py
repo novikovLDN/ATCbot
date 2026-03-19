@@ -4022,9 +4022,10 @@ async def finalize_purchase(
         is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
         is_gift_purchase = (purchase_type == "gift")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
-        # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
-        # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
-        max_tolerance = max(0.50, expected_amount_rubles * 0.005)
+        # SECURITY: Strict tolerance — only allow 1 kopeck rounding difference.
+        # Payment providers must deliver exact amounts; any larger discrepancy
+        # indicates a tampered or replayed payment and must be rejected.
+        max_tolerance = 0.01
         if amount_diff > max_tolerance:
             error_msg = (
                 f"Payment amount mismatch: purchase_id={purchase_id}, user={telegram_id}, "

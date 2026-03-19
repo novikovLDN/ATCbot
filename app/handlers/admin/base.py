@@ -112,7 +112,7 @@ async def callback_admin_dashboard(callback: CallbackQuery):
 @admin_base_router.callback_query(F.data == "admin:main")
 async def callback_admin_main(callback: CallbackQuery):
     """Главный экран админ-дашборда"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -129,7 +129,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
     """Перевыпуск ключа для одной подписки (по subscription_id)"""
     user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
@@ -208,7 +208,7 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
 @admin_base_router.callback_query(F.data == "admin:reissue_all_active")
 async def callback_admin_reissue_all_active_confirm(callback: CallbackQuery):
     """Подтверждение массового перевыпуска"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -228,7 +228,7 @@ async def callback_admin_reissue_all_active_confirm(callback: CallbackQuery):
 @admin_base_router.callback_query(F.data == "admin:reissue_all_active_go")
 async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
     """Массовый перевыпуск ключей для всех активных подписок"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -348,7 +348,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
 @admin_base_router.callback_query(F.data == "admin:create_promocode")
 async def callback_admin_create_promocode(callback: CallbackQuery, state: FSMContext):
     """Начало создания промокода"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -367,7 +367,7 @@ async def callback_admin_create_promocode(callback: CallbackQuery, state: FSMCon
 @admin_base_router.callback_query(F.data.startswith("admin:promocode_unit:"))
 async def callback_admin_promocode_unit(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора единицы времени"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -395,7 +395,7 @@ async def callback_admin_promocode_unit(callback: CallbackQuery, state: FSMConte
 @admin_base_router.callback_query(F.data == "admin:promocode_confirm")
 async def callback_admin_promocode_confirm(callback: CallbackQuery, state: FSMContext):
     """Подтверждение создания промокода"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -453,7 +453,7 @@ async def callback_admin_promocode_confirm(callback: CallbackQuery, state: FSMCo
 @admin_base_router.callback_query(F.data == "admin:promocode_cancel")
 async def callback_admin_promocode_cancel(callback: CallbackQuery, state: FSMContext):
     """Отмена создания промокода"""
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -474,7 +474,7 @@ async def callback_admin_system(callback: CallbackQuery):
     PART A.3: Admin system status dashboard with severity and error summary.
     Uses SystemState for accurate runtime health display.
     """
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -586,7 +586,7 @@ async def callback_admin_test_menu(callback: CallbackQuery):
     """
     PART C.5: Admin test menu for testing notifications.
     """
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
@@ -623,7 +623,7 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
     """
     PART C.5: Execute admin test actions.
     """
-    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return

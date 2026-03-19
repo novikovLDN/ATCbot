@@ -29,12 +29,18 @@ async def start_biz_key_notifier(bot: Bot):
         _BIZ_KEY_NOTIFIER_STARTED = True
 
     logger.info("BIZ_KEY_NOTIFIER: started")
-    while True:
-        try:
-            await _check_expiring_keys(bot)
-        except Exception as e:
-            logger.exception(f"BIZ_KEY_NOTIFIER error: {e}")
-        await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+    try:
+        while True:
+            try:
+                await _check_expiring_keys(bot)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.exception(f"BIZ_KEY_NOTIFIER error: {e}")
+            await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+    except asyncio.CancelledError:
+        logger.info("BIZ_KEY_NOTIFIER: cancelled, shutting down")
+        return
 
 
 async def _check_expiring_keys(bot: Bot):

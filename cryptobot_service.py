@@ -207,12 +207,15 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
             f"purchase_id={purchase_id}, raw_amount={raw_amount}, expected={expected_amount}"
         )
         amount_rubles = expected_amount
-    elif abs(raw_amount - expected_amount) > 1.0:
-        logger.warning(
-            f"CryptoBot webhook: amount mismatch. purchase_id={purchase_id}, "
-            f"webhook_amount={raw_amount}, expected={expected_amount}"
+    elif abs(raw_amount - expected_amount) > 0.01:
+        logger.error(
+            f"CryptoBot webhook: PAYMENT_AMOUNT_MISMATCH purchase_id={purchase_id}, "
+            f"webhook_amount={raw_amount}, expected={expected_amount}, "
+            f"diff={abs(raw_amount - expected_amount):.2f}"
         )
-        amount_rubles = raw_amount
+        raise ValueError(
+            f"CryptoBot amount mismatch: expected={expected_amount}, got={raw_amount}"
+        )
     else:
         amount_rubles = raw_amount
 
