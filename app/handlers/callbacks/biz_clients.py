@@ -635,7 +635,7 @@ async def callback_biz_client_tariffs(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
 
     text = (
-        "💼 <b>Для бизнеса · Клиенты</b>\n\n"
+        "🏢 <b>Для бизнеса</b>\n\n"
         "Готовое решение для вашего бизнеса — выдавайте "
         "клиентам VPN-доступ без лишней работы и волокиты.\n\n"
         "Просто создайте временный ключ, отправьте QR-код "

@@ -18,6 +18,7 @@ from app.handlers.common.utils import (
     get_reissue_notification_text,
 )
 from app.handlers.common.keyboards import (
+    generate_subscription_url,
     get_language_keyboard,
     get_main_menu_keyboard,
     get_back_keyboard,
@@ -59,6 +60,7 @@ __all__ = [
     "format_promo_stats_text",
     "get_reissue_lock",
     "get_reissue_notification_text",
+    "generate_subscription_url",
     "get_language_keyboard",
     "get_main_menu_keyboard",
     "get_back_keyboard",

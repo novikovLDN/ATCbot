@@ -17,25 +17,41 @@ logger = logging.getLogger(__name__)
 MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
 
 
-def get_connect_button():
+def generate_subscription_url(uuid: str, telegram_id: int) -> Optional[str]:
+    """Генерация ссылки подписки: {MINI_APP_URL}/api/sub/{uuid}?id={telegram_id}."""
+    if not uuid or not telegram_id:
+        return None
+    base = MINI_APP_URL.rstrip("/")
+    return f"{base}/api/sub/{uuid}?id={telegram_id}"
+
+
+def get_connect_button(uuid: Optional[str] = None, telegram_id: Optional[int] = None):
     """Одна кнопка WebApp «Подключиться» (Mini App)."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
+    buttons = [[
         InlineKeyboardButton(
             text="🚀 Подключиться",
             web_app=WebAppInfo(url=MINI_APP_URL),
         )
-    ]])
+    ]]
+    sub_url = generate_subscription_url(uuid, telegram_id) if uuid and telegram_id else None
+    if sub_url:
+        buttons.append([InlineKeyboardButton(text="📲 Ссылка на подписку", url=sub_url)])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_connect_keyboard():
-    """Клавиатура: Подключиться (WebApp) + Профиль. Для замены отправки ключа кодом."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+def get_connect_keyboard(uuid: Optional[str] = None, telegram_id: Optional[int] = None):
+    """Клавиатура: Подключиться (WebApp) + Ссылка на подписку + Профиль."""
+    buttons = [
         [InlineKeyboardButton(
             text="🚀 Подключиться",
             web_app=WebAppInfo(url=MINI_APP_URL),
         )],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile")],
-    ])
+    ]
+    sub_url = generate_subscription_url(uuid, telegram_id) if uuid and telegram_id else None
+    if sub_url:
+        buttons.append([InlineKeyboardButton(text="📲 Ссылка на подписку", url=sub_url)])
+    buttons.append([InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_language_keyboard(language: str = "ru"):
@@ -215,7 +231,7 @@ def get_biz_profile_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_renew_config"),
-            callback_data="menu_buy_vpn"
+            callback_data="corporate_access_request"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_topup"),
@@ -271,6 +287,8 @@ def get_profile_keyboard(
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
     vpn_key_plus: Optional[str] = None,
+    uuid: Optional[str] = None,
+    telegram_id: Optional[int] = None,
 ):
     """Карточка профиля: безопасная раскладка для малых экранов (без двух длинных кнопок в одном ряду)."""
     buttons = []
@@ -286,6 +304,9 @@ def get_profile_keyboard(
     ])
 
     if has_active_subscription:
+        sub_url = generate_subscription_url(uuid, telegram_id) if uuid and telegram_id else None
+        if sub_url:
+            buttons.append([InlineKeyboardButton(text="📲 Ссылка на подписку", url=sub_url)])
         buttons.append([InlineKeyboardButton(
             text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
@@ -333,18 +354,22 @@ def get_vpn_key_keyboard(
     language: str,
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
+    uuid: Optional[str] = None,
+    telegram_id: Optional[int] = None,
 ):
-    """Клавиатура после активации/оплаты: Подключиться (WebApp) + Профиль."""
-    return get_connect_keyboard()
+    """Клавиатура после активации/оплаты: Подключиться (WebApp) + Ссылка на подписку + Профиль."""
+    return get_connect_keyboard(uuid=uuid, telegram_id=telegram_id)
 
 
 def get_payment_success_keyboard(
     language: str,
     subscription_type: str = "basic",
     is_renewal: bool = False,
+    uuid: Optional[str] = None,
+    telegram_id: Optional[int] = None,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура после успешной оплаты: Подключиться (WebApp) + Профиль."""
-    return get_connect_keyboard()
+    """Клавиатура после успешной оплаты: Подключиться (WebApp) + Ссылка на подписку + Профиль."""
+    return get_connect_keyboard(uuid=uuid, telegram_id=telegram_id)
 
 
 async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):

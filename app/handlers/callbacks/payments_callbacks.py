@@ -617,7 +617,9 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         
         # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
         expires_str = expires_at.strftime("%d.%m.%Y")
-        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
+        sub_for_url = await database.get_subscription(telegram_id)
+        sub_uuid = sub_for_url.get("uuid") if sub_for_url else None
+        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal, uuid=sub_uuid, telegram_id=telegram_id)
 
         if is_upgrade:
             text = (

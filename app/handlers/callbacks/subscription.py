@@ -217,17 +217,21 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         except NameError:
             pass
 
-        from app.handlers.common.keyboards import get_connect_keyboard, MINI_APP_URL
-        trial_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        from app.handlers.common.keyboards import get_connect_keyboard, MINI_APP_URL, generate_subscription_url
+        trial_buttons = [
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "trial.activated_btn_connect"),
                 web_app=__import__('aiogram.types', fromlist=['WebAppInfo']).WebAppInfo(url=MINI_APP_URL),
             )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "trial.activated_btn_profile"),
-                callback_data="menu_profile"
-            )],
-        ])
+        ]
+        sub_url = generate_subscription_url(uuid, telegram_id) if uuid else None
+        if sub_url:
+            trial_buttons.append([InlineKeyboardButton(text="📲 Ссылка на подписку", url=sub_url)])
+        trial_buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "trial.activated_btn_profile"),
+            callback_data="menu_profile"
+        )])
+        trial_keyboard = InlineKeyboardMarkup(inline_keyboard=trial_buttons)
         await callback.message.answer(success_text, parse_mode="HTML", reply_markup=trial_keyboard)
 
         # Обновляем главное меню (кнопка trial должна исчезнуть)

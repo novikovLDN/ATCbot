@@ -391,7 +391,10 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
 
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
+    telegram_id = callback.from_user.id
+    sub = await database.get_subscription(telegram_id)
+    sub_uuid = sub.get("uuid") if sub else None
     await callback.message.answer(
         "🚀 Нажмите кнопку ниже чтобы подключиться:",
-        reply_markup=get_connect_keyboard(),
+        reply_markup=get_connect_keyboard(uuid=sub_uuid, telegram_id=telegram_id),
     )

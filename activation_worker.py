@@ -221,7 +221,8 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 f"{tariff_emoji} Тариф: {tariff_label}\n"
                                 f"📅 До: {expires_str}"
                             )
-                            keyboard = get_connect_keyboard()
+                            sub_uuid = subscription_check.get("uuid")
+                            keyboard = get_connect_keyboard(uuid=sub_uuid, telegram_id=telegram_id)
                             await safe_send_message(
                                 bot, telegram_id, text,
                                 reply_markup=keyboard, parse_mode="HTML"
