@@ -267,6 +267,7 @@ def get_profile_keyboard(
     vpn_key_plus: Optional[str] = None,
     uuid: Optional[str] = None,
     telegram_id: Optional[int] = None,
+    saved_card_info: Optional[dict] = None,
 ):
     """Карточка профиля: безопасная раскладка для малых экранов (без двух длинных кнопок в одном ряду)."""
     buttons = []
@@ -286,6 +287,20 @@ def get_profile_keyboard(
             text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
             callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
         )])
+
+        # Card auto-renewal controls
+        if saved_card_info and saved_card_info.get("payment_method_id"):
+            auto_renew_card = saved_card_info.get("auto_renew_card", False)
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "card.auto_renew_on") if auto_renew_card
+                else i18n_get_text(language, "card.auto_renew_off"),
+                callback_data="toggle_card_auto_renew:off" if auto_renew_card
+                else "toggle_card_auto_renew:on",
+            )])
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "card.remove_button"),
+                callback_data="card_remove",
+            )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),

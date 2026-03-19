@@ -1036,6 +1036,17 @@ async def show_payment_method_selection(
         callback_data="pay:stars"
     )])
 
+    # Кнопка оплаты через YooKassa (с сохранением карты)
+    try:
+        import yookassa_service
+        if yookassa_service.is_enabled():
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.yookassa_card"),
+                callback_data="pay:yookassa_card"
+            )])
+    except ImportError:
+        pass
+
     # Кнопка оплаты криптовалютой (CryptoBot)
     import cryptobot_service
     if cryptobot_service.is_enabled():

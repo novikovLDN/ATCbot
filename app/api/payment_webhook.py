@@ -135,3 +135,48 @@ async def _handle_cryptobot_webhook(request: Request):
 @router.post("/webhooks/cryptobot")
 async def cryptobot_webhook(request: Request):
     return await _handle_cryptobot_webhook(request)
+
+
+async def _handle_yookassa_webhook(request: Request):
+    """Handle YooKassa webhook notification."""
+    if _bot is None:
+        logger.critical("YooKassa webhook received but bot is not initialized — setup() not called")
+        return JSONResponse({"status": "error"}, status_code=500)
+    try:
+        import yookassa_service
+        if not yookassa_service.is_enabled():
+            logger.warning("YooKassa webhook received but service is disabled")
+            return JSONResponse({"status": "disabled"})
+
+        try:
+            body = await request.json()
+        except Exception as e:
+            logger.error(f"YooKassa webhook: invalid JSON: {e}")
+            return JSONResponse({"status": "invalid"})
+
+        result = await asyncio.wait_for(
+            yookassa_service.process_webhook(body, _bot),
+            timeout=_WEBHOOK_TIMEOUT,
+        )
+        return JSONResponse(result)
+
+    except ImportError:
+        logger.error("yookassa_service not available")
+        return JSONResponse({"status": "error"}, status_code=500)
+    except ValueError as e:
+        logger.info(f"YooKassa webhook: already processed: {e}")
+        return JSONResponse({"status": "already_processed"})
+    except TransientPaymentError as e:
+        logger.error(f"YooKassa webhook transient error (returning 500 for retry): {e}")
+        return JSONResponse({"status": "transient_error"}, status_code=500)
+    except asyncio.TimeoutError:
+        logger.error("YooKassa webhook timeout (returning 500 for retry)")
+        return JSONResponse({"status": "timeout"}, status_code=500)
+    except Exception as e:
+        logger.exception(f"YooKassa webhook error: {e}")
+        return JSONResponse({"status": "error"}, status_code=500)
+
+
+@router.post("/webhooks/yookassa")
+async def yookassa_webhook(request: Request):
+    return await _handle_yookassa_webhook(request)

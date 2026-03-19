@@ -171,6 +171,18 @@ from database.subscriptions import (  # noqa: F401
     finalize_purchase,
 )
 
+# YooKassa saved payment methods (direct DB access in yookassa_service.py,
+# re-exported here for convenience and consistency)
+try:
+    from yookassa_service import (  # noqa: F401
+        save_user_payment_method,
+        get_user_payment_method,
+        remove_user_payment_method,
+        toggle_card_auto_renew,
+    )
+except ImportError:
+    pass  # YooKassa not installed — functions unavailable
+
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
 from database.admin import (  # noqa: F401
     expire_old_pending_purchases,
