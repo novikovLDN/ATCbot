@@ -457,7 +457,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     
     # КРИТИЧНО: Формируем данные для активации подписки
     months = period_days // 30
-    if config.is_biz_tariff(tariff_type) or config.is_biz_client_tariff(tariff_type):
+    if config.is_biz_client_tariff(tariff_type):
         tariff_name = "Business"
     elif tariff_type == "basic":
         tariff_name = "Basic"
@@ -633,7 +633,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             except Exception as e:
                 logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
         else:
-            if config.is_biz_tariff(subscription_type) or config.is_biz_client_tariff(subscription_type):
+            if config.is_biz_client_tariff(subscription_type):
                 tariff_label, tariff_icon = "Business", "🏢"
             elif subscription_type == "plus":
                 tariff_label, tariff_icon = "Plus", "⭐️"
@@ -650,7 +650,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             else:
                 if subscription_type == "plus":
                     text = i18n_get_text(language, "payment.success_welcome_plus", date=expires_str)
-                elif config.is_biz_tariff(subscription_type) or config.is_biz_client_tariff(subscription_type):
+                elif config.is_biz_client_tariff(subscription_type):
                     text = f"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"
                 else:
                     text = i18n_get_text(language, "payment.success_welcome_basic", date=expires_str)
@@ -780,7 +780,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
         
         # Формируем описание тарифа
         months = period_days // 30
-        if config.is_biz_tariff(tariff_type) or config.is_biz_client_tariff(tariff_type):
+        if config.is_biz_client_tariff(tariff_type):
             tariff_name = "Business"
         elif tariff_type == "basic":
             tariff_name = "Basic"
@@ -872,10 +872,6 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
         return
 
     stars_price = config.TARIFFS_STARS[tariff_type][period_days]["price"]
-    # Для бизнес-тарифов применяем множитель страны к Stars
-    if country and config.is_biz_tariff(tariff_type):
-        multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-        stars_price = int(round(stars_price * multiplier))
 
     # Получаем промо-сессию (промокоды НЕ применяются к Stars — цена фиксирована)
     promo_session = await get_promo_session(state)
@@ -908,7 +904,7 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
 
         # Формируем описание
         months = period_days // 30
-        if config.is_biz_tariff(tariff_type) or config.is_biz_client_tariff(tariff_type):
+        if config.is_biz_client_tariff(tariff_type):
             tariff_name = "Business"
         elif tariff_type == "basic":
             tariff_name = "Basic"
@@ -1154,7 +1150,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
 
         # Формируем описание
         months = period_days // 30
-        if config.is_biz_tariff(tariff_type) or config.is_biz_client_tariff(tariff_type):
+        if config.is_biz_client_tariff(tariff_type):
             tariff_name = "Business"
         elif tariff_type == "basic":
             tariff_name = "Basic"
@@ -1435,7 +1431,7 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
     
     # Формируем описание тарифа
     months = period_days // 30
-    if config.is_biz_tariff(tariff_type) or config.is_biz_client_tariff(tariff_type):
+    if config.is_biz_client_tariff(tariff_type):
         tariff_name = "Business"
     elif tariff_type == "basic":
         tariff_name = "Basic"

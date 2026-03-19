@@ -468,7 +468,7 @@ async def init_db() -> bool:
                 id SERIAL PRIMARY KEY,
                 purchase_id TEXT UNIQUE NOT NULL,
                 telegram_id BIGINT NOT NULL,
-                tariff TEXT NOT NULL CHECK (tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate')),
+                tariff TEXT NOT NULL CHECK (tariff IN ('basic', 'plus', 'biz_client_25', 'biz_client_50', 'biz_client_100', 'biz_client_150', 'biz_client_250', 'biz_client_500')),
                 period_days INTEGER NOT NULL,
                 price_kopecks INTEGER NOT NULL,
                 promo_code TEXT,
@@ -960,7 +960,7 @@ async def init_db() -> bool:
             """)
             await conn.execute("""
                 ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check
-                CHECK (tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate'))
+                CHECK (tariff IN ('basic', 'plus', 'biz_client_25', 'biz_client_50', 'biz_client_100', 'biz_client_150', 'biz_client_250', 'biz_client_500'))
             """)
         except Exception:
             pass

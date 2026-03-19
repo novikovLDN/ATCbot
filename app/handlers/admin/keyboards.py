@@ -27,6 +27,8 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management"),
         ],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
+        # — Бизнес —
+        [InlineKeyboardButton(text="🏢 Бизнес", callback_data="admin:business")],
         # — Маркетинг и уведомления —
         [InlineKeyboardButton(text="📣 Центр уведомлений", callback_data="admin:notifications")],
         [

@@ -618,21 +618,9 @@ LANG = {
     'biz.profile_title': '🔷 أعمالي · Atlas Secure',
     'biz.profile_welcome': '👤 {name}، مرحباً\n   في Atlas Secure.\n\n✦ يسعدنا أن نرحب بك\n   بين مستخدمينا\n   المختارين.',
 
-    'buy.biz_business_btn': '🏢 Business · حتى 50 شخص · من 10,900 ₽/شهر',
-    'buy.biz_enterprise_btn': '🏗 Enterprise · حتى 250 شخص · من 42,900 ₽/شهر',
-    'buy.biz_pro_btn': '🚀 Pro · حتى 100 شخص · من 21,500 ₽/شهر',
     'buy.biz_screen_title': '🏢 خادم مخصص للأعمال\n\nاختر التكوين:',
-    'buy.biz_starter_btn': '⚡ Starter · حتى 5 أشخاص · من 2,900 ₽/شهر',
-    'buy.biz_team_btn': '👥 Team · حتى 15 شخص · من 5,500 ₽/شهر',
-    'buy.biz_ultimate_btn': '👑 Ultimate · حتى 500 شخص · من 64,900 ₽/شهر',
     'buy.choose_country': '🌍 اختر منطقة الخادم:',
     'buy.period_24_months': '24 شهر',
-    'buy.tariff_biz_business_desc': '🏢 Business — خادم مخصص\n\n⚙️ 8 vCPU · 32 GB RAM · 30 TB حركة بيانات\n👥 حتى 50 مستخدم\n🔒 تحكم كامل في الوصول',
-    'buy.tariff_biz_enterprise_desc': '🏢 Enterprise — خادم مخصص\n\n⚙️ 32 vCPU · 128 GB RAM · 50 TB حركة بيانات\n👥 حتى 250 مستخدم\n🔒 تحكم كامل في الوصول',
-    'buy.tariff_biz_pro_desc': '🏢 Pro — خادم مخصص\n\n⚙️ 16 vCPU · 64 GB RAM · 40 TB حركة بيانات\n👥 حتى 100 مستخدم\n🔒 تحكم كامل في الوصول',
-    'buy.tariff_biz_starter_desc': '🏢 Starter — خادم مخصص\n\n⚙️ 2 vCPU · 8 GB RAM · 20 TB حركة بيانات\n👥 حتى 5 مستخدمين\n🔒 تحكم كامل في الوصول',
-    'buy.tariff_biz_team_desc': '🏢 Team — خادم مخصص\n\n⚙️ 4 vCPU · 16 GB RAM · 20 TB حركة بيانات\n👥 حتى 15 مستخدم\n🔒 تحكم كامل في الوصول',
-    'buy.tariff_biz_ultimate_desc': '🏢 Ultimate — خادم مخصص\n\n⚙️ 48 vCPU · 192 GB RAM · 60 TB حركة بيانات\n👥 حتى 500 مستخدم\n🔒 تحكم كامل في الوصول',
 
     'connect.press_button': '🚀 اضغط الزر أدناه للاتصال:',
 

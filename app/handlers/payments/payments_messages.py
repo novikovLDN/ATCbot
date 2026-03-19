@@ -855,7 +855,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         except Exception as e:
             logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
     else:
-        if config.is_biz_tariff(subscription_type) or config.is_biz_client_tariff(subscription_type):
+        if config.is_biz_client_tariff(subscription_type):
             tariff_label, tariff_emoji = "Business", "🏢"
         elif subscription_type == "plus":
             tariff_label, tariff_emoji = "Plus", "⭐️"

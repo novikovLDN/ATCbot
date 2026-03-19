@@ -130,5 +130,10 @@ class BizKeyExtend(StatesGroup):
     waiting_extend_choice = State()  # выбор времени продления
 
 
+class AdminBizLimit(StatesGroup):
+    """Ввод нового лимита клиентов/день для бизнес-пользователя."""
+    waiting_new_limit = State()
+
+
 class BomberState(StatesGroup):
     playing = State()
