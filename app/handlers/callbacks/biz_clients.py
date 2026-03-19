@@ -270,9 +270,11 @@ async def _create_key_final(event, state: FSMContext, duration_minutes: int):
         from datetime import timedelta
         now = datetime.now(timezone.utc)
         sub_end = now + timedelta(minutes=duration_minutes)
+        new_uuid = database._generate_subscription_uuid()
         vpn_result = await vpn_utils.add_vless_user(
             telegram_id=telegram_id,
             subscription_end=sub_end,
+            uuid=new_uuid,
             tariff="basic",
         )
         vless_url = vpn_result["vless_url"]
