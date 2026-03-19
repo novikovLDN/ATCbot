@@ -11,7 +11,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_POOL_MONITOR_ENABLED = os.getenv("POOL_MONITOR_ENABLED", "").strip().lower() in ("true", "1", "yes")
+_POOL_MONITOR_ENABLED = os.getenv("POOL_MONITOR_ENABLED", "true").strip().lower() in ("true", "1", "yes")
 # Set when we log high wait (for watchdog diagnostic). Monotonic time or 0 if never.
 _last_pool_wait_spike_monotonic: float = 0.0
 
@@ -28,7 +28,7 @@ def _is_enabled() -> bool:
 class _MonitoredAcquireContextManager:
     """Async context manager that times pool.acquire() and logs if wait > 1s or > 5s."""
 
-    __slots__ = ("pool", "label")
+    __slots__ = ("pool", "label", "_conn")
 
     def __init__(self, pool: Any, label: str) -> None:
         self.pool = pool

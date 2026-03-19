@@ -2922,13 +2922,13 @@ async def is_user_first_purchase(telegram_id: int) -> bool:
 
 
 async def get_subscriptions_for_reminders() -> list:
-    """Получить все активные подписки, которым нужно отправить напоминания
+    """Получить активные подписки, которым нужно отправить напоминания.
 
     Filters out users with is_reachable = FALSE (blocked/chat not found).
     Falls back to legacy query if is_reachable column not yet present (migration 014).
+    Uses cursor-based pagination (batch_size=500) to avoid loading 500K rows at once.
     Returns список подписок с информацией о типе (админ-доступ или оплаченный тариф)
     """
-    # Защита от работы с неинициализированной БД
     if not _core.DB_READY:
         logger.warning("DB not ready, get_subscriptions_for_reminders skipped")
         return []
@@ -2936,32 +2936,59 @@ async def get_subscriptions_for_reminders() -> list:
     if pool is None:
         logger.warning("Pool is None, get_subscriptions_for_reminders skipped")
         return []
-    async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc)
-        query_with_reachable = """
-            SELECT s.*,
-                   (SELECT action_type FROM subscription_history
-                    WHERE telegram_id = s.telegram_id
-                    ORDER BY created_at DESC LIMIT 1) as last_action_type
-            FROM subscriptions s
-            JOIN users u ON s.telegram_id = u.telegram_id
-            WHERE s.expires_at > $1
-            AND COALESCE(u.is_reachable, TRUE) = TRUE
-            ORDER BY s.expires_at ASC"""
-        fallback_query = """
-            SELECT s.*,
-                   (SELECT action_type FROM subscription_history
-                    WHERE telegram_id = s.telegram_id
-                    ORDER BY created_at DESC LIMIT 1) as last_action_type
-            FROM subscriptions s
-            WHERE s.expires_at > $1
-            ORDER BY s.expires_at ASC"""
-        try:
-            rows = await conn.fetch(query_with_reachable, _to_db_utc(now))
-        except asyncpg.UndefinedColumnError:
-            logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, fallback to legacy query")
-            rows = await conn.fetch(fallback_query, _to_db_utc(now))
-        return [_normalize_subscription_row(row) for row in rows]
+
+    BATCH_SIZE = 500
+    all_rows = []
+    last_id = 0
+    now = datetime.now(timezone.utc)
+
+    query_with_reachable = """
+        SELECT s.*, u.language AS user_language,
+               (SELECT action_type FROM subscription_history
+                WHERE telegram_id = s.telegram_id
+                ORDER BY created_at DESC LIMIT 1) as last_action_type
+        FROM subscriptions s
+        JOIN users u ON s.telegram_id = u.telegram_id
+        WHERE s.expires_at > $1
+        AND COALESCE(u.is_reachable, TRUE) = TRUE
+        AND s.id > $2
+        ORDER BY s.id ASC
+        LIMIT $3"""
+    fallback_query = """
+        SELECT s.*, u.language AS user_language,
+               (SELECT action_type FROM subscription_history
+                WHERE telegram_id = s.telegram_id
+                ORDER BY created_at DESC LIMIT 1) as last_action_type
+        FROM subscriptions s
+        JOIN users u ON s.telegram_id = u.telegram_id
+        WHERE s.expires_at > $1
+        AND s.id > $2
+        ORDER BY s.id ASC
+        LIMIT $3"""
+
+    use_fallback = False
+    while True:
+        async with pool.acquire() as conn:
+            if use_fallback:
+                rows = await conn.fetch(fallback_query, _to_db_utc(now), last_id, BATCH_SIZE)
+            else:
+                try:
+                    rows = await conn.fetch(query_with_reachable, _to_db_utc(now), last_id, BATCH_SIZE)
+                except asyncpg.UndefinedColumnError:
+                    logger.warning("DB_SCHEMA_OUTDATED: is_reachable missing, fallback to legacy query")
+                    use_fallback = True
+                    rows = await conn.fetch(fallback_query, _to_db_utc(now), last_id, BATCH_SIZE)
+
+        if not rows:
+            break
+
+        all_rows.extend(_normalize_subscription_row(row) for row in rows)
+        last_id = rows[-1]["id"]
+
+        if len(rows) < BATCH_SIZE:
+            break
+
+    return all_rows
 
 
 async def get_admin_stats() -> Dict[str, int]:

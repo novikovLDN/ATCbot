@@ -151,7 +151,7 @@ async def main():
     pay_webhook_module.setup(bot)
 
     # Global concurrency limiter for update processing
-    MAX_CONCURRENT_UPDATES = int(os.getenv("MAX_CONCURRENT_UPDATES", "20"))
+    MAX_CONCURRENT_UPDATES = int(os.getenv("MAX_CONCURRENT_UPDATES", "100"))
     update_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPDATES)
     logger.info("CONCURRENCY_LIMIT=%s", MAX_CONCURRENT_UPDATES)
     
@@ -210,10 +210,14 @@ async def main():
             logger.error(f"Failed to send degraded mode notification: {e}")
         # Продолжаем запуск бота в деградированном режиме
 
-    # ADVISORY_LOCK_FIX: single-instance guard via PostgreSQL (1s max wait to avoid startup delay).
-    # H4 fix: Use try/finally to ensure connection is released on exception
+    # DISTRIBUTED LOCK: try_advisory_lock (non-blocking) for multi-instance safety.
+    # If lock is already held by another instance, this instance still starts but
+    # background workers are skipped (only webhook handlers run).
+    # This enables horizontal scaling: multiple instances handle webhooks,
+    # but only one runs background workers (reminders, auto_renewal, etc.).
     global instance_lock_conn
     instance_lock_conn = None
+    workers_lock_acquired = False
     if database.DB_READY:
         pool = await database.get_pool()
         if not pool:
@@ -221,56 +225,63 @@ async def main():
             sys.exit(1)
         try:
             instance_lock_conn = await pool.acquire()
-            await instance_lock_conn.execute("SET lock_timeout = '1000'")
-            await instance_lock_conn.execute("SELECT pg_advisory_lock($1)", ADVISORY_LOCK_KEY)
-            logger.info("Advisory lock acquired")
-        except Exception as e:
-            if config.IS_PROD:
-                logger.critical("Advisory lock not acquired in PROD — another instance may be running: %s", e)
-                sys.exit(1)
-            logger.warning("Advisory lock not acquired (timeout or error), continuing without single-instance guard: %s", e)
-            if instance_lock_conn:
+            # pg_try_advisory_lock returns TRUE if lock acquired, FALSE if already held
+            workers_lock_acquired = await instance_lock_conn.fetchval(
+                "SELECT pg_try_advisory_lock($1)", ADVISORY_LOCK_KEY
+            )
+            if workers_lock_acquired:
+                logger.info("Advisory lock acquired — this instance will run background workers")
+            else:
+                logger.info(
+                    "Advisory lock NOT acquired — another instance holds it. "
+                    "This instance will only handle webhooks (no background workers)."
+                )
                 await pool.release(instance_lock_conn)
                 instance_lock_conn = None
+        except Exception as e:
+            logger.warning("Advisory lock check failed, continuing without lock: %s", e)
+            if instance_lock_conn:
+                try:
+                    await pool.release(instance_lock_conn)
+                except Exception:
+                    pass
+                instance_lock_conn = None
+            workers_lock_acquired = True  # Fallback: run workers to avoid stalled system
     else:
         logger.warning("DB not ready; skipping advisory lock (single-instance guard disabled)")
+        workers_lock_acquired = True  # Run workers when DB recovers
     
     # Centralized list for graceful shutdown
     background_tasks = []
     
-    # Запуск фоновой задачи для напоминаний (только если БД готова)
+    # Background workers: only start if this instance holds the advisory lock
+    # (or if lock acquisition was skipped). This enables horizontal scaling:
+    # multiple instances handle webhooks, but only one runs workers.
     reminder_task = None
-    if database.DB_READY:
+    trial_notifications_task = None
+    farm_notifications_task = None
+
+    if database.DB_READY and workers_lock_acquired:
         reminder_task = asyncio.create_task(reminders.reminders_task(bot))
         background_tasks.append(reminder_task)
         logger.info("Reminders task started")
-    else:
-        logger.warning("Reminders task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для trial-уведомлений (только если БД готова)
-    trial_notifications_task = None
-    if database.DB_READY:
+
         trial_notifications_task = asyncio.create_task(trial_notifications.run_trial_scheduler(bot))
         background_tasks.append(trial_notifications_task)
         logger.info("Trial notifications scheduler started")
-    else:
-        logger.warning("Trial notifications scheduler skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для уведомлений о ферме (только если БД готова)
-    farm_notifications_task = None
-    if database.DB_READY:
+
         farm_notifications_task = asyncio.create_task(farm_notifications.farm_notifications_task(bot))
         background_tasks.append(farm_notifications_task)
         logger.info("Farm notifications task started")
-    else:
-        logger.warning("Farm notifications task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для уведомлений о бизнес-ключах (только если БД готова)
-    if database.DB_READY:
+
         import biz_key_notifications
         biz_key_notif_task = asyncio.create_task(biz_key_notifications.start_biz_key_notifier(bot))
         background_tasks.append(biz_key_notif_task)
         logger.info("Biz key notifications task started")
+    elif not database.DB_READY:
+        logger.warning("Background workers skipped (DB not ready)")
+    else:
+        logger.info("Background workers skipped (advisory lock held by another instance)")
 
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
@@ -424,39 +435,34 @@ async def main():
     else:
         logger.info("Database already ready, skipping retry task")
     
-    # Запуск фоновой задачи для быстрой очистки истёкших подписок (только если БД готова)
+    # Additional workers: gated by advisory lock like above
     fast_cleanup_task = None
-    if database.DB_READY:
+    auto_renewal_task = None
+    activation_worker_task = None
+
+    if database.DB_READY and workers_lock_acquired:
         fast_cleanup_task = asyncio.create_task(fast_expiry_cleanup.fast_expiry_cleanup_task(bot))
         background_tasks.append(fast_cleanup_task)
         logger.info("Fast expiry cleanup task started")
-    else:
-        logger.warning("Fast expiry cleanup task skipped (DB not ready)")
-    
-    # Запуск фоновой задачи для автопродления подписок (только если БД готова И kill switch включён)
-    auto_renewal_task = None
-    _flags = get_feature_flags()
-    if database.DB_READY and _flags.background_workers_enabled and _flags.auto_renewal_enabled:
-        auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
-        background_tasks.append(auto_renewal_task)
-        logger.info("Auto-renewal task started")
-    else:
-        if not database.DB_READY:
-            logger.warning("Auto-renewal task skipped (DB not ready)")
+
+        _flags = get_feature_flags()
+        if _flags.background_workers_enabled and _flags.auto_renewal_enabled:
+            auto_renewal_task = asyncio.create_task(auto_renewal.auto_renewal_task(bot))
+            background_tasks.append(auto_renewal_task)
+            logger.info("Auto-renewal task started")
         else:
             logger.warning(
                 "Auto-renewal task skipped (feature flag: background_workers=%s, auto_renewal=%s)",
                 _flags.background_workers_enabled, _flags.auto_renewal_enabled
             )
-    
-    # Запуск фоновой задачи для активации отложенных подписок (только если БД готова)
-    activation_worker_task = None
-    if database.DB_READY:
+
         activation_worker_task = asyncio.create_task(activation_worker.activation_worker_task(bot))
         background_tasks.append(activation_worker_task)
         logger.info("Activation worker task started")
+    elif not database.DB_READY:
+        logger.warning("Cleanup/renewal/activation workers skipped (DB not ready)")
     else:
-        logger.warning("Activation worker task skipped (DB not ready)")
+        logger.info("Cleanup/renewal/activation workers skipped (advisory lock held by another instance)")
 
     # Xray sync: safe optional background worker (fail-safe, never crashes bot)
     async def start_xray_sync_safe(bot_obj):
@@ -478,9 +484,12 @@ async def main():
             return None
 
     xray_sync_task = None
-    xray_sync_task = await start_xray_sync_safe(bot)
-    if xray_sync_task:
-        background_tasks.append(xray_sync_task)
+    if workers_lock_acquired:
+        xray_sync_task = await start_xray_sync_safe(bot)
+        if xray_sync_task:
+            background_tasks.append(xray_sync_task)
+    else:
+        logger.info("Xray sync skipped (advisory lock held by another instance)")
     
     # Bot initialization complete
     if database.DB_READY:
