@@ -1075,6 +1075,128 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
 
 
+@payments_router.callback_query(F.data == "pay:yookassa_card")
+async def callback_pay_yookassa_card(callback: CallbackQuery, state: FSMContext):
+    """Оплата через YooKassa Direct API (с сохранением карты для автопродления)
+
+    КРИТИЧНО:
+    - Работает ТОЛЬКО в состоянии choose_payment_method
+    - Создает pending_purchase
+    - Создает платёж через YooKassa API
+    - Отправляет пользователю ссылку для оплаты
+    """
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    current_state = await state.get_state()
+    if current_state != PurchaseState.choose_payment_method.state:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid FSM state for pay:yookassa_card: user={telegram_id}, state={current_state}")
+        await state.set_state(None)
+        return
+
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type")
+    period_days = fsm_data.get("period_days")
+    final_price_kopecks = fsm_data.get("final_price_kopecks")
+
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+
+    if not tariff_type or not period_days or not final_price_kopecks:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        await state.set_state(None)
+        return
+
+    try:
+        import yookassa_service
+        if not yookassa_service.is_enabled():
+            await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
+            return
+    except ImportError:
+        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
+        return
+
+    try:
+        # Create pending_purchase
+        purchase_id = await subscription_service.create_subscription_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=final_price_kopecks,
+            promo_code=promo_code,
+        )
+        await state.update_data(purchase_id=purchase_id)
+
+        amount_rubles = final_price_kopecks / 100.0
+        months = period_days // 30
+        tariff_name = "Plus" if tariff_type == "plus" else "Basic"
+        description = f"Atlas Secure VPN {tariff_name} — {months} мес."
+
+        # Check if user already has a saved payment method
+        existing_pm = await yookassa_service.get_user_payment_method(telegram_id)
+        save_pm = existing_pm is None  # Save only if no card saved yet
+
+        result = await yookassa_service.create_payment_with_save(
+            amount_rubles=amount_rubles,
+            description=description,
+            purchase_id=purchase_id,
+            telegram_id=telegram_id,
+            save_payment_method=save_pm,
+        )
+
+        payment_id = result.get("payment_id")
+        confirmation_url = result.get("confirmation_url")
+
+        if not confirmation_url:
+            logger.error(f"YooKassa: no confirmation_url, payment_id={payment_id}")
+            await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+            await state.set_state(None)
+            return
+
+        # Save YooKassa payment_id as invoice_id
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, payment_id)
+        except Exception as e:
+            logger.error(f"Failed to save YooKassa payment_id: purchase_id={purchase_id}, error={e}")
+
+        logger.info(
+            f"yookassa_invoice_created: user={telegram_id}, purchase_id={purchase_id}, "
+            f"payment_id={payment_id}, amount={amount_rubles}, save_pm={save_pm}"
+        )
+
+        text = i18n_get_text(language, "payment.yookassa_waiting", amount=amount_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.yookassa_pay_button"),
+                url=confirmation_url,
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="menu_buy_vpn",
+            )],
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+        await state.set_state(None)
+        await state.clear()
+
+    except Exception as e:
+        logger.exception(f"Error creating YooKassa payment: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.set_state(None)
+
+
 @payments_router.callback_query(F.data == "pay:crypto")
 async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     """Оплата через CryptoBot (криптовалюта)

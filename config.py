@@ -275,6 +275,17 @@ PLATEGA_API_URL = env("PLATEGA_API_URL") or "https://app.platega.io"
 # Процент наценки для СБП (11%)
 SBP_MARKUP_PERCENT = 11
 
+# YooKassa (ЮKassa) Direct API Configuration
+# Прямая интеграция с YooKassa для рекуррентных платежей (сохранение карт)
+YOOKASSA_SHOP_ID = env("YOOKASSA_SHOP_ID", default="")
+YOOKASSA_SECRET_KEY = env("YOOKASSA_SECRET_KEY", default="")
+YOOKASSA_RETURN_URL = env("YOOKASSA_RETURN_URL", default="")
+YOOKASSA_ENABLED = bool(YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY)
+if YOOKASSA_ENABLED:
+    _log.info("YooKassa direct API configured (recurring payments enabled)")
+else:
+    _log.info("YooKassa direct API not configured (recurring payments disabled)")
+
 # CryptoBot (Crypto Pay) Configuration
 # Криптовалютная оплата через @CryptoBot
 CRYPTOBOT_API_TOKEN = env("CRYPTOBOT_API_TOKEN", default="")

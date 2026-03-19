@@ -242,6 +242,16 @@ async def show_profile(message_or_query, language: str):
         expires_at = subscription_status.expires_at
 
         auto_renew = bool(subscription and subscription.get("auto_renew"))
+
+        # Fetch saved card info for card auto-renewal display
+        saved_card_info = None
+        try:
+            import yookassa_service
+            if yookassa_service.is_enabled():
+                saved_card_info = await yookassa_service.get_user_payment_method(telegram_id)
+        except ImportError:
+            pass
+
         sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
         if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
@@ -290,6 +300,10 @@ async def show_profile(message_or_query, language: str):
                 text += i18n_get_text(language, "profile.auto_renew_on", date=format_date_ru(next_renewal))
             else:
                 text += i18n_get_text(language, "profile.auto_renew_off")
+            # Show saved card info
+            if saved_card_info and saved_card_info.get("payment_method_id"):
+                card_title = saved_card_info.get("title") or "💳 ****"
+                text += "\n" + i18n_get_text(language, "card.saved_info", title=card_title)
         else:
             text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
@@ -302,6 +316,7 @@ async def show_profile(message_or_query, language: str):
             language, has_active_subscription, auto_renew,
             subscription_type=sub_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus,
             uuid=sub_uuid, telegram_id=telegram_id,
+            saved_card_info=saved_card_info,
         )
 
         await send_func(text, reply_markup=keyboard, parse_mode="HTML")

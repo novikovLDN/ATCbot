@@ -459,6 +459,250 @@ async def process_auto_renewals(bot: Bot):
         await asyncio.sleep(0)
 
 
+async def process_card_auto_renewals(bot: Bot):
+    """
+    Автопродление подписок по сохранённой карте (YooKassa recurring).
+
+    Обрабатывает подписки с auto_renew_card=TRUE и saved_payment_method_id IS NOT NULL.
+    Для каждой — вызывает yookassa_service.create_autopayment(), при успехе продлевает через grant_access().
+
+    Отличия от balance auto-renewal:
+    - Не работает внутри единой DB-транзакции (внешний API вызов между проверкой и продлением)
+    - Использует last_card_renewal_at для idempotency (аналог last_auto_renewal_at)
+    - При ошибке оплаты — уведомляет пользователя, но не ретраит в этой итерации
+    """
+    try:
+        import yookassa_service
+        if not yookassa_service.is_enabled():
+            return
+    except ImportError:
+        return
+
+    pool = await database.get_pool()
+    if not pool:
+        return
+
+    now = datetime.now(timezone.utc)
+    renewal_threshold = now + RENEWAL_WINDOW
+
+    # Fetch subscriptions eligible for card auto-renewal
+    async with pool.acquire() as conn:
+        try:
+            subscriptions = await conn.fetch(
+                """SELECT s.telegram_id, s.expires_at, s.subscription_type,
+                          s.saved_payment_method_id, s.saved_payment_method_title,
+                          s.last_auto_renewal_at, u.language
+                   FROM subscriptions s
+                   JOIN users u ON s.telegram_id = u.telegram_id
+                   WHERE s.status = 'active'
+                     AND s.auto_renew_card = TRUE
+                     AND s.saved_payment_method_id IS NOT NULL
+                     AND s.expires_at <= $1
+                     AND s.expires_at > $2
+                     AND s.uuid IS NOT NULL
+                     AND (s.last_auto_renewal_at IS NULL
+                          OR s.last_auto_renewal_at < s.expires_at - INTERVAL '12 hours')
+                   ORDER BY s.id ASC
+                   LIMIT $3""",
+                database._to_db_utc(renewal_threshold),
+                database._to_db_utc(now),
+                BATCH_SIZE,
+            )
+        except Exception as e:
+            logger.error(f"card_auto_renewal: query failed: {e}")
+            return
+
+    if not subscriptions:
+        return
+
+    logger.info(f"Card auto-renewal: found {len(subscriptions)} subscriptions")
+
+    iteration_start = time.monotonic()
+    for sub_row in subscriptions:
+        if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
+            logger.warning("Card auto-renewal iteration time limit reached, breaking early")
+            break
+
+        telegram_id = sub_row["telegram_id"]
+        payment_method_id = sub_row["saved_payment_method_id"]
+        language = sub_row.get("language", "ru")
+
+        try:
+            # Determine tariff and price (same logic as balance auto-renewal)
+            last_payment = await database.get_last_approved_payment(telegram_id)
+            if not last_payment:
+                tariff_type = "basic"
+                period_days = 30
+            else:
+                tariff_str = last_payment.get("tariff", "basic_30")
+                if "_" in tariff_str:
+                    parts = tariff_str.split("_")
+                    tariff_type = parts[0] if len(parts) > 0 else "basic"
+                    try:
+                        period_days = int(parts[1]) if len(parts) > 1 else 30
+                    except (ValueError, IndexError):
+                        period_days = 30
+                else:
+                    tariff_type = "basic"
+                    try:
+                        period_days = int(tariff_str) * 30
+                    except ValueError:
+                        period_days = 30
+
+            if tariff_type not in config.TARIFFS or period_days not in config.TARIFFS[tariff_type]:
+                tariff_type = "basic"
+                period_days = 30
+
+            base_price = config.TARIFFS[tariff_type][period_days]["price"]
+
+            is_vip = await database.is_vip_user(telegram_id)
+            if is_vip:
+                amount_rubles = round(base_price * 0.70, 2)
+            else:
+                personal_discount = await database.get_user_discount(telegram_id)
+                if personal_discount:
+                    discount_percent = personal_discount["discount_percent"]
+                    amount_rubles = round(base_price * (1 - discount_percent / 100), 2)
+                else:
+                    amount_rubles = float(base_price)
+
+            tariff_label = "Plus" if tariff_type == "plus" else "Basic"
+            months = period_days // 30
+
+            # Mark renewal attempt (idempotency)
+            async with pool.acquire() as conn:
+                update_result = await conn.execute(
+                    """UPDATE subscriptions
+                       SET last_auto_renewal_at = $1
+                       WHERE telegram_id = $2
+                         AND status = 'active'
+                         AND auto_renew_card = TRUE
+                         AND saved_payment_method_id IS NOT NULL
+                         AND (last_auto_renewal_at IS NULL
+                              OR last_auto_renewal_at < expires_at - INTERVAL '12 hours')""",
+                    database._to_db_utc(now), telegram_id,
+                )
+                if update_result == "UPDATE 0":
+                    logger.debug(f"Card renewal: {telegram_id} already being processed, skipping")
+                    continue
+
+            # Call YooKassa autopayment API (external call, outside DB transaction)
+            try:
+                pay_result = await asyncio.wait_for(
+                    yookassa_service.create_autopayment(
+                        amount_rubles=amount_rubles,
+                        payment_method_id=payment_method_id,
+                        description=f"Atlas Secure VPN автопродление {tariff_label} на {months} мес.",
+                        telegram_id=telegram_id,
+                        metadata={"telegram_id": str(telegram_id), "source": "card_auto_renewal"},
+                    ),
+                    timeout=20.0,
+                )
+            except Exception as pay_err:
+                logger.error(f"Card auto-renewal payment failed: user={telegram_id}, error={pay_err}")
+                # Notify user about failed charge
+                try:
+                    user_lang = await resolve_user_language(telegram_id)
+                    text = i18n.get_text(user_lang, "purchase.auto_renewal_card_failed")
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
+                    ])
+                    await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+                except Exception:
+                    pass
+                continue
+
+            if not pay_result.get("paid") and pay_result.get("status") != "succeeded":
+                logger.warning(
+                    f"Card auto-renewal: payment not confirmed immediately: user={telegram_id}, "
+                    f"status={pay_result.get('status')}, paid={pay_result.get('paid')}"
+                )
+                # Payment may settle later via webhook — skip grant for now
+                continue
+
+            # Payment succeeded — grant access
+            duration = timedelta(days=period_days)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    result = await database.grant_access(
+                        telegram_id=telegram_id,
+                        duration=duration,
+                        source="card_auto_renew",
+                        admin_telegram_id=None,
+                        admin_grant_days=None,
+                        conn=conn,
+                    )
+
+                    expires_at = result.get("subscription_end")
+                    action_type = result.get("action", "unknown")
+
+                    if action_type != "renewal" or result.get("vless_url") is not None:
+                        logger.error(
+                            f"Card auto-renewal ERROR: UUID regenerated! user={telegram_id}, "
+                            f"action={action_type}"
+                        )
+                        continue
+
+                    tariff_str = f"{tariff_type}_{period_days}"
+                    await conn.execute(
+                        "INSERT INTO payments (telegram_id, tariff, amount, status) VALUES ($1, $2, $3, 'approved')",
+                        telegram_id, tariff_str, round(amount_rubles * 100),
+                    )
+
+            # Post-commit: xray sync
+            xray_sync = result.get("renewal_xray_sync_after_commit")
+            if xray_sync:
+                try:
+                    import vpn_utils
+                    await vpn_utils.ensure_user_in_xray(
+                        telegram_id=xray_sync["telegram_id"],
+                        uuid=xray_sync["uuid"],
+                        subscription_end=xray_sync["subscription_end"],
+                    )
+                except Exception as e:
+                    logger.error(f"CARD_RENEWAL_XRAY_SYNC_FAILED user={telegram_id} error={e}")
+
+            # Notify user
+            try:
+                user_lang = await resolve_user_language(telegram_id)
+                tariff_emoji = "⭐️" if tariff_type == "plus" else "📦"
+                expires_str = expires_at.strftime("%d.%m.%Y") if expires_at else "—"
+                text = i18n.get_text(
+                    user_lang, "purchase.auto_renewal_card_success",
+                    tariff_name=f"{tariff_emoji} {tariff_label}",
+                    days=period_days,
+                    expires_date=expires_str,
+                    amount=amount_rubles,
+                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="👤 Мой профиль", callback_data="menu_profile")],
+                ])
+                await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+            except Exception as e:
+                logger.error(f"Card auto-renewal notification failed: user={telegram_id}, error={e}")
+
+            logger.info(
+                f"Card auto-renewal successful: user={telegram_id}, tariff={tariff_type}, "
+                f"period_days={period_days}, amount={amount_rubles} RUB, "
+                f"payment_id={pay_result.get('payment_id')}"
+            )
+
+        except Exception as e:
+            logger.exception(f"Error in card auto-renewal for user {telegram_id}: {e}")
+            try:
+                from app.services.admin_alerts import send_alert
+                await send_alert(
+                    bot, "payment",
+                    f"Card auto-renewal error\n"
+                    f"User: {telegram_id}\n"
+                    f"Error: {type(e).__name__}: {str(e)[:200]}"
+                )
+            except Exception:
+                pass
+
+        await cooperative_yield()
+
+
 async def auto_renewal_task(bot: Bot):
     """
     Фоновая задача для автопродления подписок
@@ -482,6 +726,7 @@ async def auto_renewal_task(bot: Bot):
     try:
         async with _worker_lock:
             await process_auto_renewals(bot)
+            await process_card_auto_renewals(bot)
     except (asyncpg.PostgresError, asyncio.TimeoutError) as e:
         # RESILIENCE FIX: Temporary DB failures don't crash the task
         logger.warning(f"auto_renewal: Initial check failed (DB temporarily unavailable): {type(e).__name__}: {str(e)[:100]}")
@@ -535,8 +780,13 @@ async def auto_renewal_task(bot: Bot):
                 async with _worker_lock:
                     await process_auto_renewals(bot)
 
+            async def _run_card_iteration_body():
+                async with _worker_lock:
+                    await process_card_auto_renewals(bot)
+
             try:
                 await asyncio.wait_for(_run_iteration_body(), timeout=ITERATION_HARD_TIMEOUT_SECONDS)
+                await asyncio.wait_for(_run_card_iteration_body(), timeout=ITERATION_HARD_TIMEOUT_SECONDS)
             except asyncio.TimeoutError:
                 logger.error(
                     "auto_renewal: iteration timed out after %.0fs (worker=auto_renewal correlation_id=%s)",
