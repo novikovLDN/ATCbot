@@ -247,19 +247,12 @@ async def show_profile(message_or_query, language: str):
             sub_type = "basic"
 
         # Бизнес-профиль: специальный экран для biz_* подписок
-        if (config.is_biz_tariff(sub_type) or config.is_biz_client_tariff(sub_type)) and has_active_subscription:
+        if config.is_biz_client_tariff(sub_type) and has_active_subscription:
             from app.handlers.common.keyboards import get_biz_profile_keyboard
             # Формируем лейбл тарифа
-            if config.is_biz_client_tariff(sub_type):
-                client_info = config.BIZ_CLIENT_TARIFFS.get(sub_type, {})
-                max_clients = client_info.get("max_clients_per_day", "?")
-                tariff_label = f"{max_clients} кл/день"
-            else:
-                tariff_names = {
-                    "biz_starter": "Starter", "biz_team": "Team", "biz_business": "Business",
-                    "biz_pro": "Pro", "biz_enterprise": "Enterprise", "biz_ultimate": "Ultimate",
-                }
-                tariff_label = tariff_names.get(sub_type, "Business")
+            client_info = config.BIZ_CLIENT_TARIFFS.get(sub_type, {})
+            max_clients = client_info.get("max_clients_per_day", "?")
+            tariff_label = f"{max_clients} кл/день"
             date_str = format_date_ru(expires_at)
             text = i18n_get_text(language, "biz.profile_title") + "\n\n"
             text += i18n_get_text(language, "biz.profile_welcome", name=display_name) + "\n\n"
@@ -284,7 +277,7 @@ async def show_profile(message_or_query, language: str):
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
             text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
-            if config.is_biz_tariff(sub_type):
+            if config.is_biz_client_tariff(sub_type):
                 tariff_label = "Business"
             elif sub_type == "plus":
                 tariff_label = "Plus"

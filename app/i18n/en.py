@@ -668,21 +668,9 @@ LANG = {
     'biz.profile_welcome': '👤 {name}, welcome\n   to Atlas Secure.\n\n✦ We are glad to welcome you\n   among our selected\n   users.',
 
     # buy
-    'buy.biz_business_btn': '🏢 Business · up to 50 users · from 10,900 ₽/mo',
-    'buy.biz_enterprise_btn': '🏗 Enterprise · up to 250 users · from 42,900 ₽/mo',
-    'buy.biz_pro_btn': '🚀 Pro · up to 100 users · from 21,500 ₽/mo',
     'buy.biz_screen_title': '🏢 Dedicated Business Server\n\nChoose a configuration:',
-    'buy.biz_starter_btn': '⚡ Starter · up to 5 users · from 2,900 ₽/mo',
-    'buy.biz_team_btn': '👥 Team · up to 15 users · from 5,500 ₽/mo',
-    'buy.biz_ultimate_btn': '👑 Ultimate · up to 500 users · from 64,900 ₽/mo',
     'buy.choose_country': '🌍 Choose server region:',
     'buy.period_24_months': '24 months',
-    'buy.tariff_biz_business_desc': '🏢 Business — dedicated server\n\n⚙️ 8 vCPU · 32 GB RAM · 30 TB traffic\n👥 Up to 50 users\n🔒 Full access control',
-    'buy.tariff_biz_enterprise_desc': '🏢 Enterprise — dedicated server\n\n⚙️ 32 vCPU · 128 GB RAM · 50 TB traffic\n👥 Up to 250 users\n🔒 Full access control',
-    'buy.tariff_biz_pro_desc': '🏢 Pro — dedicated server\n\n⚙️ 16 vCPU · 64 GB RAM · 40 TB traffic\n👥 Up to 100 users\n🔒 Full access control',
-    'buy.tariff_biz_starter_desc': '🏢 Starter — dedicated server\n\n⚙️ 2 vCPU · 8 GB RAM · 20 TB traffic\n👥 Up to 5 users\n🔒 Full access control',
-    'buy.tariff_biz_team_desc': '🏢 Team — dedicated server\n\n⚙️ 4 vCPU · 16 GB RAM · 20 TB traffic\n👥 Up to 15 users\n🔒 Full access control',
-    'buy.tariff_biz_ultimate_desc': '🏢 Ultimate — dedicated server\n\n⚙️ 48 vCPU · 192 GB RAM · 60 TB traffic\n👥 Up to 500 users\n🔒 Full access control',
 
     # farm
     'farm.back': '🔙 Back',

@@ -3,4 +3,4 @@
 
 ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check;
 ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check
-    CHECK (tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate'));
+    CHECK (tariff IN ('basic', 'plus', 'biz_client_25', 'biz_client_50', 'biz_client_100', 'biz_client_150', 'biz_client_250', 'biz_client_500'));

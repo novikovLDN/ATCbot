@@ -3617,10 +3617,7 @@ async def calculate_final_price(
     
     # Получаем базовую цену в рублях из конфига
     base_price_rubles = config.TARIFFS[tariff][period_days]["price"]
-    # Для бизнес-тарифов применяем множитель страны
-    if country and config.is_biz_tariff(tariff):
-        multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-        base_price_rubles = int(round(base_price_rubles * multiplier / 100) * 100)
+    # Множитель страны (не используется для текущих тарифов)
     base_price_kopecks = round(base_price_rubles * 100)
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)
