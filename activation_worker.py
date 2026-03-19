@@ -209,13 +209,13 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             sub_type = (subscription_check.get("subscription_type") or "basic").strip().lower()
                             if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
                                 sub_type = "basic"
-                            if config.is_biz_tariff(sub_type):
+                            if config.is_biz_tariff(sub_type) or config.is_biz_client_tariff(sub_type):
                                 tariff_label = "Business"
                             elif sub_type == "plus":
                                 tariff_label = "Plus"
                             else:
                                 tariff_label = "Basic"
-                            tariff_emoji = "🏢" if config.is_biz_tariff(sub_type) else ("⭐️" if sub_type == "plus" else "📦")
+                            tariff_emoji = "🏢" if (config.is_biz_tariff(sub_type) or config.is_biz_client_tariff(sub_type)) else ("⭐️" if sub_type == "plus" else "📦")
                             text = (
                                 "🎉 Добро пожаловать в Atlas Secure!\n"
                                 f"{tariff_emoji} Тариф: {tariff_label}\n"

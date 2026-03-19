@@ -222,7 +222,7 @@ async def _send_confirmation(
         if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
 
-        if config.is_biz_tariff(subscription_type):
+        if config.is_biz_tariff(subscription_type) or config.is_biz_client_tariff(subscription_type):
             _label, _emoji = "Business", "🏢"
         elif subscription_type == "plus":
             _label, _emoji = "Plus", "⭐️"

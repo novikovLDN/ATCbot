@@ -233,8 +233,13 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
             callback_data=f"period:{tariff_type}:{period_days}"
         )])
     
-    # Кнопка назад: для бизнес-тарифов → каталог бизнес, для обычных → главный экран тарифов
-    back_callback = "corporate_access_request" if config.is_biz_tariff(tariff_type) else "menu_buy_vpn"
+    # Кнопка назад: для бизнес-тарифов → каталог бизнес, для клиентских → каталог клиентских, для обычных → главный экран тарифов
+    if config.is_biz_tariff(tariff_type):
+        back_callback = "corporate_access_request"
+    elif config.is_biz_client_tariff(tariff_type):
+        back_callback = f"biz_cl_info:{tariff_type}"
+    else:
+        back_callback = "menu_buy_vpn"
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=back_callback

@@ -667,8 +667,8 @@ async def callback_biz_client_tariffs(callback: CallbackQuery):
 
 
 @biz_clients_router.callback_query(F.data.startswith("biz_cl_info:"))
-async def callback_biz_client_tariff_info(callback: CallbackQuery):
-    """Подробности о выбранном клиентском бизнес-тарифе."""
+async def callback_biz_client_tariff_info(callback: CallbackQuery, state: FSMContext):
+    """Подробности о выбранном клиентском бизнес-тарифе + выбор периода для покупки."""
     try:
         await callback.answer()
     except Exception:
@@ -685,29 +685,45 @@ async def callback_biz_client_tariff_info(callback: CallbackQuery):
     text = (
         f"💼 <b>{t['label']}</b>\n\n"
         f"Лимит генераций ключей: <b>{t['max_clients_per_day']}</b> в день\n\n"
-        f"<b>Цены:</b>\n"
-        f"  • 1 месяц — <b>{t[30]['price']} ₽</b>\n"
-        f"  • 3 месяца — <b>{t[90]['price']} ₽</b>\n"
-        f"  • 12 месяцев — <b>{t[365]['price']} ₽</b>\n\n"
         f"<b>Что входит:</b>\n"
         f"  • Создание временных ключей (от 10 мин до 24 ч)\n"
         f"  • QR-код и ссылка для каждого клиента\n"
         f"  • Аналитика и управление ключами\n"
         f"  • Уведомления об истечении\n"
         f"  • Продление и досрочный отзыв\n\n"
-        f"Для подключения свяжитесь с менеджером:"
+        f"Выберите период:"
     )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="👤 Связаться с менеджером",
-            url="https://t.me/Atlas_SupportSecurity",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="biz_client_tariffs",
-        )],
-    ])
+    # Кнопки выбора периода — стандартный purchase flow
+    from app.handlers.common.states import PurchaseState
+
+    await state.update_data(tariff_type=tariff_key)
+    await state.set_state(PurchaseState.choose_period)
+
+    periods = config.TARIFFS[tariff_key]
+    buttons = []
+    for period_days, period_data in periods.items():
+        price = period_data["price"]
+        months = period_days // 30
+        if months == 1:
+            period_text = i18n_get_text(language, "buy.period_1")
+        elif months in [2, 3, 4]:
+            period_text = i18n_get_text(language, "buy.period_2_4", months=months)
+        else:
+            period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
+
+        button_text = f"{price:,} ₽ — {period_text}".replace(",", " ")
+        buttons.append([InlineKeyboardButton(
+            text=button_text,
+            callback_data=f"period:{tariff_key}:{period_days}",
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="biz_client_tariffs",
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await safe_edit_text(
         callback.message, text,

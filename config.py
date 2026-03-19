@@ -143,17 +143,53 @@ TARIFFS = {
         365: {"price": 569900},
         730: {"price": 989900},
     },
+    # --- Бизнес-клиентские тарифы (генерация ключей для клиентов) ---
+    "biz_client_25": {
+        30: {"price": 1490},
+        90: {"price": 3990},
+        365: {"price": 14900},
+    },
+    "biz_client_50": {
+        30: {"price": 2490},
+        90: {"price": 6490},
+        365: {"price": 24900},
+    },
+    "biz_client_100": {
+        30: {"price": 3990},
+        90: {"price": 9990},
+        365: {"price": 39900},
+    },
+    "biz_client_150": {
+        30: {"price": 5490},
+        90: {"price": 13900},
+        365: {"price": 54900},
+    },
+    "biz_client_250": {
+        30: {"price": 7990},
+        90: {"price": 19900},
+        365: {"price": 79900},
+    },
+    "biz_client_500": {
+        30: {"price": 12900},
+        90: {"price": 32900},
+        365: {"price": 129900},
+    },
 }
 
 # Список всех бизнес-тарифов (для проверок)
 BIZ_TARIFFS = ("biz_starter", "biz_team", "biz_business", "biz_pro", "biz_enterprise", "biz_ultimate")
 
 # Все допустимые типы подписок (для валидации в БД и хендлерах)
-VALID_SUBSCRIPTION_TYPES = ("basic", "plus") + BIZ_TARIFFS
+BIZ_CLIENT_TARIFF_NAMES = ("biz_client_25", "biz_client_50", "biz_client_100", "biz_client_150", "biz_client_250", "biz_client_500")
+VALID_SUBSCRIPTION_TYPES = ("basic", "plus") + BIZ_TARIFFS + BIZ_CLIENT_TARIFF_NAMES
 
 def is_biz_tariff(tariff: str) -> bool:
     """Проверяет, является ли тариф бизнес-тарифом."""
     return tariff in BIZ_TARIFFS
+
+def is_biz_client_tariff(tariff: str) -> bool:
+    """Проверяет, является ли тариф клиентским бизнес-тарифом."""
+    return tariff in BIZ_CLIENT_TARIFF_NAMES
 
 def tariff_for_vpn_api(tariff: str) -> str:
     """Маппинг тарифа на VPN API тип (basic/plus). Бизнес → plus."""
@@ -271,6 +307,37 @@ TARIFFS_STARS = {
         180: {"price": 303081},
         365: {"price": 523581},
         730: {"price": 909297},
+    },
+    # Бизнес-клиентские тарифы Stars (price × 1.7 / 1.85, округление вверх до 5)
+    "biz_client_25": {
+        30: {"price": 1370},
+        90: {"price": 3670},
+        365: {"price": 13695},
+    },
+    "biz_client_50": {
+        30: {"price": 2290},
+        90: {"price": 5965},
+        365: {"price": 22865},
+    },
+    "biz_client_100": {
+        30: {"price": 3670},
+        90: {"price": 9180},
+        365: {"price": 36650},
+    },
+    "biz_client_150": {
+        30: {"price": 5045},
+        90: {"price": 12775},
+        365: {"price": 50435},
+    },
+    "biz_client_250": {
+        30: {"price": 7340},
+        90: {"price": 18285},
+        365: {"price": 73390},
+    },
+    "biz_client_500": {
+        30: {"price": 11855},
+        90: {"price": 30220},
+        365: {"price": 119355},
     },
 }
 
