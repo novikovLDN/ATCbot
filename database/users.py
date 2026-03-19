@@ -658,25 +658,28 @@ def generate_referral_code(telegram_id: int) -> str:
 
 async def create_user(telegram_id: int, username: Optional[str] = None, language: str = "ru"):
     """Создать нового пользователя с автоматической генерацией referral_code"""
+    if not _core.DB_READY:
+        logger.warning("create_user called before DB is ready")
+        return
     pool = await get_pool()
+    if pool is None:
+        logger.warning("create_user: pool is None")
+        return
     async with pool.acquire() as conn:
-        # Генерируем referral_code если его нет
         referral_code = generate_referral_code(telegram_id)
-        
+
         await conn.execute(
-            """INSERT INTO users (telegram_id, username, language, referral_code) 
-               VALUES ($1, $2, $3, $4) 
+            """INSERT INTO users (telegram_id, username, language, referral_code)
+               VALUES ($1, $2, $3, $4)
                ON CONFLICT (telegram_id) DO NOTHING""",
             telegram_id, username, language, referral_code
         )
-        
-        # Если пользователь уже существовал, обновляем referral_code если его нет
-        user = await get_user(telegram_id)
-        if user and not user.get("referral_code"):
-            await conn.execute(
-                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
-                referral_code, telegram_id
-            )
+
+        # Atomically set referral_code if missing (same connection, no TOCTOU)
+        await conn.execute(
+            "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
+            referral_code, telegram_id
+        )
 
 
 async def get_user_referral_code(telegram_id: int) -> Optional[str]:

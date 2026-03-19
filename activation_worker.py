@@ -323,6 +323,28 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             period_days=pending_sub.period_days,
                             subscription_id=subscription_id,
                         )
+                except ActivationNotAllowedError as e:
+                    error_msg = str(e)
+                    new_attempts = current_attempts + 1
+                    logger.warning(
+                        f"ACTIVATION_NOT_ALLOWED [subscription_id={subscription_id}, "
+                        f"user={telegram_id}, attempt={new_attempts}/{MAX_ACTIVATION_ATTEMPTS}, "
+                        f"error={error_msg}]"
+                    )
+                    try:
+                        async with acquire_connection(pool, "activation_mark_not_allowed") as conn:
+                            await activation_service.mark_activation_failed(
+                                subscription_id=subscription_id,
+                                new_attempts=new_attempts,
+                                error_msg=f"not_allowed: {error_msg}",
+                                max_attempts=MAX_ACTIVATION_ATTEMPTS,
+                                conn=conn
+                            )
+                    except Exception as db_error:
+                        logger.critical(
+                            f"ACTIVATION_DB_FAILURE: Failed to mark not-allowed subscription: "
+                            f"subscription_id={subscription_id}, user={telegram_id}, error={db_error}"
+                        )
                 except ActivationFailedError as e:
                     error_msg = str(e)
                     new_attempts = current_attempts + 1

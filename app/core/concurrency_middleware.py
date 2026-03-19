@@ -23,6 +23,8 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
         super().__init__()
         self._semaphore = semaphore
 
+    _ACQUIRE_TIMEOUT = 10.0  # seconds to wait for semaphore slot
+
     async def __call__(
         self,
         handler: Callable[[Any, Dict[str, Any]], Awaitable[Any]],
@@ -31,8 +33,16 @@ class ConcurrencyLimiterMiddleware(BaseMiddleware):
     ) -> Any:
         """
         Process update with concurrency limit.
-        
+
         Acquires semaphore before processing, releases after completion.
+        Times out if semaphore cannot be acquired within _ACQUIRE_TIMEOUT seconds.
         """
-        async with self._semaphore:
+        try:
+            await asyncio.wait_for(self._semaphore.acquire(), timeout=self._ACQUIRE_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("Concurrency limiter: semaphore acquire timed out, dropping update")
+            return None
+        try:
             return await handler(event, data)
+        finally:
+            self._semaphore.release()

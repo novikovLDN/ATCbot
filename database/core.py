@@ -251,7 +251,7 @@ SLOW_QUERY_THRESHOLD_MS = int(os.getenv("SLOW_QUERY_THRESHOLD_MS", "500"))
 async def _setup_connection(conn: asyncpg.Connection):
     """Per-connection init: slow query logging + application_name for log correlation."""
     try:
-        await conn.execute(f"SET log_min_duration_statement = {SLOW_QUERY_THRESHOLD_MS}")
+        await conn.execute("SET log_min_duration_statement = $1", str(SLOW_QUERY_THRESHOLD_MS))
         await conn.execute("SET application_name = 'atcbot'")
     except Exception:
         pass  # Non-critical — don't break pool init

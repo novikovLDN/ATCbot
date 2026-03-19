@@ -67,7 +67,14 @@ async def process_auto_renewals(bot: Bot):
     - Идемпотентность: при рестарте не будет двойного списания
     - Атомарные транзакции для баланса и подписки
     """
-    pool = await database.get_pool()
+    try:
+        pool = await database.get_pool()
+    except Exception as e:
+        logger.warning(f"auto_renewal: Failed to acquire DB pool: {type(e).__name__}: {e}")
+        return
+    if not pool:
+        logger.warning("auto_renewal: DB pool not available, skipping iteration")
+        return
     now = datetime.now(timezone.utc)
     renewal_threshold = now + RENEWAL_WINDOW
 
@@ -408,7 +415,7 @@ async def process_auto_renewals(bot: Bot):
                     tariff_label = "Plus" if item.get("tariff_type") == "plus" else "Basic"
                     tariff_emoji = "⭐️" if item.get("tariff_type") == "plus" else "📦"
                     user_lang = await resolve_user_language(item["telegram_id"])
-                    amount_val = item.get("amount", 0)
+                    amount_val = item.get("amount_rubles", 0)
                     # amount may be in kopecks (>1000) or rubles
                     if amount_val > 1000:
                         amount_val = amount_val / 100
@@ -501,7 +508,7 @@ async def process_card_auto_renewals(bot: Bot):
     renewal_threshold = now + RENEWAL_WINDOW
 
     # Fetch subscriptions eligible for card auto-renewal
-    async with pool.acquire() as conn:
+    async with acquire_connection(pool, "card_auto_renewal_fetch") as conn:
         try:
             subscriptions = await conn.fetch(
                 """SELECT s.telegram_id, s.expires_at, s.subscription_type,
@@ -585,7 +592,7 @@ async def process_card_auto_renewals(bot: Bot):
             months = period_days // 30
 
             # Mark renewal attempt (idempotency)
-            async with pool.acquire() as conn:
+            async with acquire_connection(pool, "card_auto_renewal_mark") as conn:
                 update_result = await conn.execute(
                     """UPDATE subscriptions
                        SET last_auto_renewal_at = $1
@@ -637,7 +644,7 @@ async def process_card_auto_renewals(bot: Bot):
 
             # Payment succeeded — grant access
             duration = timedelta(days=period_days)
-            async with pool.acquire() as conn:
+            async with acquire_connection(pool, "card_auto_renewal_grant") as conn:
                 async with conn.transaction():
                     result = await database.grant_access(
                         telegram_id=telegram_id,

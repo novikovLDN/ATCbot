@@ -150,7 +150,9 @@ async def create_autopayment(
     if not is_enabled():
         raise RuntimeError("YooKassa direct API is not configured")
 
-    idempotence_key = str(uuid4())
+    # Derive idempotence key from payment parameters to prevent double-charge on retry
+    idem_source = f"autopay:{telegram_id}:{payment_method_id}:{amount_rubles:.2f}:{description or ''}"
+    idempotence_key = hashlib.sha256(idem_source.encode()).hexdigest()[:48]
 
     body = {
         "amount": {
