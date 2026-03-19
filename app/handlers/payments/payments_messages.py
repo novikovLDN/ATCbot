@@ -847,7 +847,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
             f"📲 Чтобы конфигурации обновились в приложении:\n"
             f"V2rayTUN — нажмите 🔄 (обновить подписку)"
         )
-        keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True)
+        sub_for_url = await database.get_subscription(telegram_id)
+        sub_uuid = sub_for_url.get("uuid") if sub_for_url else None
+        keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True, uuid=sub_uuid, telegram_id=telegram_id)
         try:
             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         except Exception as e:
@@ -875,41 +877,50 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 period_str = f"{period_days} дней"
 
         from app.i18n import get_text as _i18n_get
-        from app.handlers.common.keyboards import MINI_APP_URL
+        from app.handlers.common.keyboards import MINI_APP_URL, generate_subscription_url
+        if not sub_for_url:
+            sub_for_url = await database.get_subscription(telegram_id)
+        sub_uuid = sub_for_url.get("uuid") if sub_for_url else None
+        sub_url = generate_subscription_url(sub_uuid, telegram_id) if sub_uuid else None
         if is_renewal:
             text = _i18n_get(language, "purchase.success_renewal",
                              tariff_name=f"{tariff_emoji} {tariff_label}",
                              period=period_str,
                              expires_date=expires_str)
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_renewal_btn_profile"),
-                    callback_data="menu_profile"
-                )],
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_renewal_btn_main"),
-                    callback_data="menu_main"
-                )],
-            ])
+            renewal_buttons = []
+            if sub_url:
+                renewal_buttons.append([InlineKeyboardButton(text="📲 Ссылка на подписку", url=sub_url)])
+            renewal_buttons.append([InlineKeyboardButton(
+                text=_i18n_get(language, "purchase.success_renewal_btn_profile"),
+                callback_data="menu_profile"
+            )])
+            renewal_buttons.append([InlineKeyboardButton(
+                text=_i18n_get(language, "purchase.success_renewal_btn_main"),
+                callback_data="menu_main"
+            )])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=renewal_buttons)
         else:
             text = _i18n_get(language, "purchase.success_first",
                              tariff_name=f"{tariff_emoji} {tariff_label}",
                              period=period_str,
                              expires_date=expires_str)
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            first_buttons = [
                 [InlineKeyboardButton(
                     text=_i18n_get(language, "purchase.success_first_btn_connect"),
                     web_app=WebAppInfo(url=MINI_APP_URL),
                 )],
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_first_btn_instruction"),
-                    callback_data="menu_instruction"
-                )],
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_first_btn_profile"),
-                    callback_data="menu_profile"
-                )],
-            ])
+            ]
+            if sub_url:
+                first_buttons.append([InlineKeyboardButton(text="📲 Ссылка на подписку", url=sub_url)])
+            first_buttons.append([InlineKeyboardButton(
+                text=_i18n_get(language, "purchase.success_first_btn_instruction"),
+                callback_data="menu_instruction"
+            )])
+            first_buttons.append([InlineKeyboardButton(
+                text=_i18n_get(language, "purchase.success_first_btn_profile"),
+                callback_data="menu_profile"
+            )])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=first_buttons)
         # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой (mark-before-send pattern)
         # При краше между mark и send — уведомление потеряно, но не дублировано
         try:

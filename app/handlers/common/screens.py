@@ -305,9 +305,11 @@ async def show_profile(message_or_query, language: str):
         text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
         vpn_key = subscription.get("vpn_key") if subscription else None
         vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
+        sub_uuid = subscription.get("uuid") if subscription else None
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
-            subscription_type=sub_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
+            subscription_type=sub_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus,
+            uuid=sub_uuid, telegram_id=telegram_id,
         )
 
         await send_func(text, reply_markup=keyboard, parse_mode="HTML")

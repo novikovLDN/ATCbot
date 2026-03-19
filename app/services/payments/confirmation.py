@@ -240,9 +240,10 @@ async def _send_confirmation(
 
         from app.handlers.common.keyboards import get_connect_keyboard
 
+        sub_uuid = result.get("uuid") if result else None
         try:
             await bot.send_message(
-                telegram_id, text, reply_markup=get_connect_keyboard(), parse_mode="HTML"
+                telegram_id, text, reply_markup=get_connect_keyboard(uuid=sub_uuid, telegram_id=telegram_id), parse_mode="HTML"
             )
         except Exception as send_err:
             logger.warning(
