@@ -265,6 +265,13 @@ async def main():
     else:
         logger.warning("Farm notifications task skipped (DB not ready)")
     
+    # Запуск фоновой задачи для уведомлений о бизнес-ключах (только если БД готова)
+    if database.DB_READY:
+        import biz_key_notifications
+        biz_key_notif_task = asyncio.create_task(biz_key_notifications.start_biz_key_notifier(bot))
+        background_tasks.append(biz_key_notif_task)
+        logger.info("Biz key notifications task started")
+
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
     background_tasks.append(healthcheck_task)

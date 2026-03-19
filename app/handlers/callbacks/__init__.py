@@ -5,6 +5,7 @@ from .language import language_router
 from .subscription import subscription_router
 from .payments_callbacks import payments_router
 from .gift import gift_router
+from .biz_clients import biz_clients_router
 
 router = Router()
 router.include_router(navigation_router)
@@ -12,3 +13,4 @@ router.include_router(language_router)
 router.include_router(subscription_router)
 router.include_router(payments_router)
 router.include_router(gift_router)
+router.include_router(biz_clients_router)

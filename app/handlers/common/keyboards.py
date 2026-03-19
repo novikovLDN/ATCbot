@@ -188,6 +188,10 @@ def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
             callback_data="biz_profile"
         )],
         [InlineKeyboardButton(
+            text="🔑 Управление клиентами",
+            callback_data="biz_clients"
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_control_panel"),
             callback_data="biz_control_panel"
         )],

@@ -119,5 +119,16 @@ class GiftState(StatesGroup):
     processing_payment = State()
 
 
+class BizKeyCreate(StatesGroup):
+    """Создание гостевого ключа для клиента бизнес-подписчика."""
+    waiting_client_name = State()   # ввод имени клиента
+    waiting_duration = State()      # ввод времени жизни ключа
+
+
+class BizKeyExtend(StatesGroup):
+    """Продление гостевого ключа."""
+    waiting_extend_choice = State()  # выбор времени продления
+
+
 class BomberState(StatesGroup):
     playing = State()

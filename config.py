@@ -374,6 +374,58 @@ _log.info("Using WEBHOOK_URL from %s_WEBHOOK_URL", APP_ENV.upper())
 BOT_USERNAME = env("BOT_USERNAME", default="atlassecure_bot")
 MINI_APP_NAME = env("MINI_APP_NAME", default="app")
 
+# --- Бизнес-клиентские тарифы (генерация ключей для клиентов) ---
+# Тарифы с лимитами на максимальное количество генераций клиентских ключей в день
+BIZ_CLIENT_TARIFFS = {
+    "biz_client_25": {
+        "max_clients_per_day": 25,
+        "label": "До 25 клиентов/день",
+        30: {"price": 1490},
+        90: {"price": 3990},
+        365: {"price": 14900},
+    },
+    "biz_client_50": {
+        "max_clients_per_day": 50,
+        "label": "До 50 клиентов/день",
+        30: {"price": 2490},
+        90: {"price": 6490},
+        365: {"price": 24900},
+    },
+    "biz_client_100": {
+        "max_clients_per_day": 100,
+        "label": "До 100 клиентов/день",
+        30: {"price": 3990},
+        90: {"price": 9990},
+        365: {"price": 39900},
+    },
+    "biz_client_150": {
+        "max_clients_per_day": 150,
+        "label": "До 150 клиентов/день",
+        30: {"price": 5490},
+        90: {"price": 13900},
+        365: {"price": 54900},
+    },
+    "biz_client_250": {
+        "max_clients_per_day": 250,
+        "label": "До 250 клиентов/день",
+        30: {"price": 7990},
+        90: {"price": 19900},
+        365: {"price": 79900},
+    },
+    "biz_client_500": {
+        "max_clients_per_day": 500,
+        "label": "До 500 клиентов/день",
+        30: {"price": 12900},
+        90: {"price": 32900},
+        365: {"price": 129900},
+    },
+}
+
+BIZ_CLIENT_TARIFF_KEYS = tuple(BIZ_CLIENT_TARIFFS.keys())
+
+# Лимит по умолчанию для бизнес-клиентских ключей в день
+BIZ_DEFAULT_MAX_CLIENTS_PER_DAY = 25
+
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
