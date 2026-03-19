@@ -1234,8 +1234,13 @@ async def grant_access(
         should_release_conn = True
     else:
         should_release_conn = False
-    
+
+    # When caller doesn't provide conn, wrap in transaction for atomicity
+    _txn_cm = conn.transaction() if should_release_conn else None
+
     try:
+        if _txn_cm is not None:
+            await _txn_cm.start()
         now = datetime.now(timezone.utc)
         
         # Логируем начало операции с полными данными
@@ -2021,8 +2026,19 @@ async def grant_access(
             f"error_type={type(e).__name__}]"
         )
         logger.exception(f"grant_access: EXCEPTION_TRACEBACK [user={telegram_id}]")
+        if _txn_cm is not None:
+            try:
+                await _txn_cm.rollback()
+            except Exception:
+                pass
         raise  # Пробрасываем исключение, не возвращаем None
     finally:
+        # Commit on success (if we own the transaction and it wasn't rolled back)
+        if _txn_cm is not None:
+            try:
+                await _txn_cm.commit()
+            except Exception:
+                pass  # Already committed via return or rolled back via except
         if should_release_conn and _acquired_pool is not None:
             try:
                 await _acquired_pool.release(conn)

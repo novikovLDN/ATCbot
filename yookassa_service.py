@@ -246,25 +246,41 @@ async def get_payment_info(payment_id: str) -> Dict[str, Any]:
         return response.json()
 
 
+import ipaddress
+
+# YooKassa webhook IP allowlist (as of 2025)
+_YOOKASSA_IP_NETWORKS = [
+    ipaddress.ip_network("185.71.76.0/27"),
+    ipaddress.ip_network("185.71.77.0/27"),
+    ipaddress.ip_network("77.75.153.0/25"),
+    ipaddress.ip_network("77.75.156.11/32"),
+    ipaddress.ip_network("77.75.156.35/32"),
+    ipaddress.ip_network("77.75.154.128/25"),
+    ipaddress.ip_network("2a02:5180::/32"),
+]
+
+
 def verify_webhook_ip(client_ip: str) -> bool:
     """
     Verify that webhook request comes from YooKassa IP ranges.
 
-    YooKassa webhook IPs (as of 2025):
-    - 185.71.76.0/27
-    - 185.71.77.0/27
-    - 77.75.153.0/25
-    - 77.75.156.11
-    - 77.75.156.35
-    - 77.75.154.128/25
-    - 2a02:5180::/32
-
-    In production, this should be checked. For now we rely on the
-    notification object structure validation.
+    Returns True if the IP is in the YooKassa allowlist.
+    Falls back to True if IP cannot be parsed (e.g. behind proxy without X-Forwarded-For),
+    since we also verify payments by re-fetching from YooKassa API.
     """
-    # In production behind a reverse proxy, IP verification is handled at infrastructure level.
-    # We validate the payment object by fetching it from YooKassa API.
-    return True
+    if not client_ip:
+        logger.warning("YooKassa webhook: no client IP provided, allowing (API re-fetch protects)")
+        return True
+    try:
+        addr = ipaddress.ip_address(client_ip)
+        for net in _YOOKASSA_IP_NETWORKS:
+            if addr in net:
+                return True
+        logger.warning("YooKassa webhook: IP %s not in allowlist", client_ip)
+        return False
+    except ValueError:
+        logger.warning("YooKassa webhook: invalid IP format: %s", client_ip)
+        return True  # Allow — API re-fetch is the primary verification
 
 
 async def process_webhook(body: dict, bot) -> dict:

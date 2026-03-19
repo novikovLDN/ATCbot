@@ -148,6 +148,12 @@ async def _handle_yookassa_webhook(request: Request):
             logger.warning("YooKassa webhook received but service is disabled")
             return JSONResponse({"status": "disabled"})
 
+        # IP verification (defense in depth — API re-fetch is primary)
+        client_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or request.client.host
+        if not yookassa_service.verify_webhook_ip(client_ip):
+            logger.warning(f"YooKassa webhook: rejected IP {client_ip}")
+            return JSONResponse({"status": "forbidden"}, status_code=403)
+
         try:
             body = await request.json()
         except Exception as e:
