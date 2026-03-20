@@ -81,6 +81,7 @@ from database.users import (  # noqa: F401
     find_user_by_id_or_username,
     generate_referral_code,
     create_user,
+    get_or_create_user,
     find_user_by_referral_code,
     get_user_referral_code,
     register_referral,

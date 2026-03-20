@@ -136,7 +136,9 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
 
     def _cleanup_old(self):
         now = time.monotonic()
-        if now - self._last_cleanup < 60:
+        # Under heavy load (10-20k users), clean up more aggressively
+        cleanup_interval = 10 if len(self._user_requests) > 5000 else 60
+        if now - self._last_cleanup < cleanup_interval:
             return
         self._last_cleanup = now
 

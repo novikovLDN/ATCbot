@@ -222,6 +222,7 @@ class MetricsCollector:
         self.requests_error = _Counter()
         self.requests_rate_limited = _Counter()
         self.requests_timeout = _Counter()
+        self.requests_shed = _Counter()  # overload shed by concurrency limiter
 
         # Request rate (sliding window)
         self.request_rate = _RateWindow(60)
@@ -351,6 +352,7 @@ class MetricsCollector:
                 "errors": self.requests_error.value,
                 "rate_limited": self.requests_rate_limited.value,
                 "timeouts": self.requests_timeout.value,
+                "shed": self.requests_shed.value,
                 "rate_per_sec": round(self.request_rate.rate, 2),
                 "error_rate_per_sec": round(self.error_rate.rate, 2),
                 "latency": self.request_latency.snapshot(),

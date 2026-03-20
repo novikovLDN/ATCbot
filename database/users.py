@@ -39,6 +39,53 @@ async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def get_or_create_user(
+    telegram_id: int,
+    username: Optional[str] = None,
+    language: str = "ru",
+) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """
+    Atomic get-or-create user in a single DB round-trip.
+
+    Returns (user_dict, is_new).  Uses INSERT ... ON CONFLICT + RETURNING
+    to guarantee exactly one pool.acquire() per /start call, which is
+    critical for surviving 10-20k concurrent /start spikes.
+    """
+    if not _core.DB_READY:
+        logger.warning("DB not ready, get_or_create_user skipped")
+        return None, False
+    pool = await get_pool()
+    if pool is None:
+        logger.warning("Pool is None, get_or_create_user skipped")
+        return None, False
+
+    referral_code = generate_referral_code(telegram_id)
+
+    try:
+        async with pool.acquire() as conn:
+            # Try INSERT first; ON CONFLICT do a lightweight update
+            # (username refresh + referral_code backfill) and RETURN the row.
+            row = await conn.fetchrow(
+                """
+                INSERT INTO users (telegram_id, username, language, referral_code)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (telegram_id) DO UPDATE
+                    SET username      = COALESCE(EXCLUDED.username, users.username),
+                        referral_code = COALESCE(users.referral_code, EXCLUDED.referral_code)
+                RETURNING *, (xmax = 0) AS _is_new
+                """,
+                telegram_id, username, language, referral_code,
+            )
+            if row is None:
+                return None, False
+            is_new = row["_is_new"]
+            user = {k: v for k, v in dict(row).items() if k != "_is_new"}
+            return user, is_new
+    except Exception as e:
+        logger.error("get_or_create_user error: %s: %s", type(e).__name__, e)
+        return None, False
+
+
 async def get_user_balance(telegram_id: int) -> float:
     """
     Получить баланс пользователя в рублях
