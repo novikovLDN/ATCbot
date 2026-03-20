@@ -231,6 +231,10 @@ TARIFFS_STARS = {
 # Время жизни инвойса (в секундах). После истечения инвойс удаляется.
 INVOICE_TIMEOUT_SECONDS = 900  # 15 минут
 
+# Лимиты вывода средств (в рублях)
+MIN_WITHDRAW_RUBLES = 500
+MAX_WITHDRAW_RUBLES = 1_000_000
+
 # Суммы пополнения баланса (в рублях)
 BALANCE_TOPUP_AMOUNTS = [250, 750, 999]
 

@@ -52,7 +52,6 @@ async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Me
 
 
 # --- User withdrawal flow ---
-MIN_WITHDRAW_RUBLES = 500
 
 
 @payments_router.callback_query(F.data == "topup_balance")
