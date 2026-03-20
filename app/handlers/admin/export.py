@@ -72,15 +72,18 @@ def _generate_csv_file(data: list[dict], headers: list[str], key_mapping: dict[s
 @admin_export_router.callback_query(F.data == "admin:export")
 async def callback_admin_export(callback: CallbackQuery):
     """Раздел Экспорт данных"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
-    text = i18n_get_text(language, "admin.export_prompt")
-    await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard(language))
-    await callback.answer()
+
+    try:
+        text = i18n_get_text(language, "admin.export_prompt")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_export_keyboard(language))
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_export: {e}")
+        await callback.answer("Ошибка загрузки экспорта", show_alert=True)
 
 
 @admin_export_router.callback_query(F.data.startswith("admin:export:"))

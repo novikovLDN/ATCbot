@@ -117,24 +117,28 @@ async def callback_admin_dashboard(callback: CallbackQuery):
 
 
 @admin_base_router.callback_query(F.data == "admin:main")
-async def callback_admin_main(callback: CallbackQuery):
+async def callback_admin_main(callback: CallbackQuery, state: FSMContext):
     """Главный экран админ-дашборда"""
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
-    user = await database.get_user(callback.from_user.id)
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "admin.dashboard_title")
-    await safe_edit_text(callback.message, text, reply_markup=get_admin_dashboard_keyboard(language))
-    await callback.answer()
+
+    try:
+        # Очищаем FSM state чтобы не застревать в незавершённых операциях
+        await state.clear()
+        language = await resolve_user_language(callback.from_user.id)
+        text = i18n_get_text(language, "admin.dashboard_title")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_dashboard_keyboard(language))
+        await callback.answer()
+    except Exception as e:
+        logger.exception("Error in callback_admin_main: %s", e)
+        await callback.answer("Ошибка загрузки дашборда", show_alert=True)
 
 
 @admin_base_router.callback_query(F.data.startswith("admin:reissue_key:"))
 async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
     """Перевыпуск ключа для одной подписки (по subscription_id)"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)

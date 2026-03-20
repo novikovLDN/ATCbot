@@ -237,7 +237,7 @@ async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMC
     if action == "cancel":
         await state.clear()
         language = await resolve_user_language(callback.from_user.id)
-        await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"))
+        await safe_edit_text(callback.message, i18n_get_text(language, "admin.operation_cancelled"))
         return
     if action != "confirm":
         return
@@ -245,18 +245,17 @@ async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMC
     text = data.get("broadcast_text")
     if not text:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.message.edit_text(i18n_get_text(language, "broadcast._validation_message_empty"))
+        await safe_edit_text(callback.message, i18n_get_text(language, "broadcast._validation_message_empty"))
         await state.clear()
         return
     try:
         users = await database.get_eligible_no_subscription_broadcast_users()
         total = len(users)
-    except Exception:
+    except Exception as e:
+        logger.exception("Error fetching no_sub broadcast users: %s", e)
         total = 0
     language = await resolve_user_language(callback.from_user.id)
-    await callback.message.edit_text(
-        i18n_get_text(language, "broadcast._no_sub_sending", total=total)
-    )
+    await safe_edit_text(callback.message, i18n_get_text(language, "broadcast._no_sub_sending", total=total))
     await state.clear()
 
     async def _run_broadcast():
@@ -286,30 +285,32 @@ async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMC
 @admin_broadcast_router.callback_query(F.data == "admin:broadcast")
 async def callback_admin_broadcast(callback: CallbackQuery):
     """Раздел уведомлений"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
     
-    text = i18n_get_text(language, "broadcast._section_title")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._create"), callback_data="broadcast:create")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_stats"), callback_data="broadcast:ab_stats")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:notifications")],
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
-    await callback.answer()
+    try:
+        text = i18n_get_text(language, "broadcast._section_title")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._create"), callback_data="broadcast:create")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_stats"), callback_data="broadcast:ab_stats")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:notifications")],
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await callback.answer()
 
-    # Логируем действие
-    await database._log_audit_event_atomic_standalone("admin_broadcast_view", callback.from_user.id, None, "Admin viewed broadcast section")
+        # Логируем действие
+        await database._log_audit_event_atomic_standalone("admin_broadcast_view", callback.from_user.id, None, "Admin viewed broadcast section")
+    except Exception as e:
+        logger.exception("Error in callback_admin_broadcast: %s", e)
+        await callback.answer("Ошибка загрузки рассылки", show_alert=True)
 
 
 @admin_broadcast_router.callback_query(F.data == "broadcast:create")
 async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
     """Начать создание уведомления"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
@@ -354,14 +355,10 @@ async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContex
     
     if test_type == "ab":
         await state.set_state(BroadcastCreate.waiting_for_message_a)
-        await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._enter_variant_a")
-        )
+        await safe_edit_text(callback.message, i18n_get_text(language, "broadcast._enter_variant_a"))
     else:
         await state.set_state(BroadcastCreate.waiting_for_message)
-        await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._enter_message")
-        )
+        await safe_edit_text(callback.message, i18n_get_text(language, "broadcast._enter_message"))
 
 
 @admin_broadcast_router.message(BroadcastCreate.waiting_for_message_a)
@@ -473,23 +470,17 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
     if btn_type == "none":
         await state.update_data(broadcast_buttons=[])
         await state.set_state(BroadcastCreate.waiting_for_segment)
-        await callback.message.edit_text(
-            "Выберите сегмент получателей:",
-            reply_markup=get_broadcast_segment_keyboard(language)
-        )
+        await safe_edit_text(callback.message, "Выберите сегмент получателей:",
+            reply_markup=get_broadcast_segment_keyboard(language))
     elif btn_type == "promo_buy":
         # Need to ask for discount percentage
         await state.set_state(BroadcastCreate.waiting_for_discount)
-        await callback.message.edit_text(
-            "Введите процент скидки для акции (число от 1 до 99):"
-        )
+        await safe_edit_text(callback.message, "Введите процент скидки для акции (число от 1 до 99):")
     elif btn_type == "done":
         # Finished selecting buttons, move to segment
         await state.set_state(BroadcastCreate.waiting_for_segment)
-        await callback.message.edit_text(
-            "Выберите сегмент получателей:",
-            reply_markup=get_broadcast_segment_keyboard(language)
-        )
+        await safe_edit_text(callback.message, "Выберите сегмент получателей:",
+            reply_markup=get_broadcast_segment_keyboard(language))
     else:
         # Add button to list: buy, channel, support, referral
         data = await state.get_data()
@@ -498,11 +489,10 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
             buttons.append(btn_type)
         await state.update_data(broadcast_buttons=buttons)
         # Show updated keyboard with selected buttons
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             f"Выбранные кнопки: {', '.join(_btn_label(b) for b in buttons)}\n\n"
             "Выберите ещё кнопки или нажмите «Готово»:",
-            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons)
-        )
+            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons))
 
 
 def _btn_label(btn_type: str) -> str:
@@ -602,10 +592,8 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
     language = await resolve_user_language(callback.from_user.id)
 
     preview_confirm_text = i18n_get_text(language, "broadcast._preview_confirm", preview=preview_text)
-    await callback.message.edit_text(
-        preview_confirm_text,
-        reply_markup=get_broadcast_confirm_keyboard(language)
-    )
+    await safe_edit_text(callback.message, preview_confirm_text,
+        reply_markup=get_broadcast_confirm_keyboard(language))
 
 
 @admin_broadcast_router.callback_query(F.data == "broadcast:confirm_send")
@@ -683,10 +671,8 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             f"BROADCAST_START broadcast_id={broadcast_id} segment={segment} total_users={total}"
         )
 
-        await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._sending", total=total),
-            reply_markup=None
-        )
+        await safe_edit_text(callback.message, i18n_get_text(language, "broadcast._sending", total=total),
+            reply_markup=None)
 
         semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
         sent_count = 0
@@ -772,7 +758,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back_to_broadcast"), callback_data="admin:broadcast")],
         ])
         
-        await callback.message.edit_text(result_text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, result_text, reply_markup=keyboard)
         
     except Exception as e:
         logger.exception(f"Error in broadcast send: {e}")
@@ -790,7 +776,6 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 @admin_broadcast_router.callback_query(F.data == "broadcast:ab_stats")
 async def callback_broadcast_ab_stats(callback: CallbackQuery):
     """Список A/B тестов"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:

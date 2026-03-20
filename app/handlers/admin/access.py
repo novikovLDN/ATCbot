@@ -241,9 +241,7 @@ async def callback_admin_keys(callback: CallbackQuery):
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_keys: {e}")
-        user = await database.get_user(callback.from_user.id)
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "errors.generic"), show_alert=True)
+        await callback.answer("Ошибка загрузки раздела ключей", show_alert=True)
 
 
 @admin_access_router.callback_query(F.data == "admin:keys:reissue_all")
@@ -565,16 +563,19 @@ async def callback_admin_keys_legacy(callback: CallbackQuery):
 @admin_access_router.callback_query(F.data == "admin:user")
 async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
     """Раздел Пользователь - запрос Telegram ID или username"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
-    text = i18n_get_text(language, "admin.user_prompt_enter_id")
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
-    await state.set_state(AdminUserSearch.waiting_for_user_id)
-    await callback.answer()
+
+    try:
+        text = i18n_get_text(language, "admin.user_prompt_enter_id")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        await state.set_state(AdminUserSearch.waiting_for_user_id)
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_user: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
 @admin_access_router.message(AdminUserSearch.waiting_for_user_id)

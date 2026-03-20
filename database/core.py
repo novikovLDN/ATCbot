@@ -253,8 +253,8 @@ async def _setup_connection(conn: asyncpg.Connection):
     try:
         await conn.execute("SET log_min_duration_statement = $1", str(SLOW_QUERY_THRESHOLD_MS))
         await conn.execute("SET application_name = 'atcbot'")
-    except Exception:
-        pass  # Non-critical — don't break pool init
+    except Exception as e:
+        logger.warning("Non-critical: failed to configure connection settings: %s", e)
 
 
 if not DATABASE_URL:
