@@ -123,11 +123,16 @@ class RateLimiter:
     Provides per-user, per-action rate limiting.
     """
     
+    # Evict buckets unused for longer than this (seconds)
+    _EVICTION_INTERVAL = 300  # 5 minutes between cleanups
+    _BUCKET_MAX_AGE = 600  # evict buckets idle for 10 minutes
+
     def __init__(self):
         """Initialize rate limiter"""
         self._buckets: Dict[Tuple[int, str], TokenBucket] = {}
         self._lock = threading.Lock()
         self._configs = DEFAULT_RATE_LIMITS.copy()
+        self._last_eviction = time.time()
     
     def check_rate_limit(
         self,
@@ -153,12 +158,25 @@ class RateLimiter:
             - error_message: Human-readable message if limit exceeded
         """
         with self._lock:
+            # Periodic eviction of stale buckets
+            now = time.time()
+            if now - self._last_eviction > self._EVICTION_INTERVAL:
+                self._last_eviction = now
+                stale_keys = [
+                    k for k, b in self._buckets.items()
+                    if now - b.last_refill > self._BUCKET_MAX_AGE
+                ]
+                for k in stale_keys:
+                    del self._buckets[k]
+                if stale_keys:
+                    logger.debug("RATE_LIMIT_EVICTION evicted=%d remaining=%d", len(stale_keys), len(self._buckets))
+
             # Get config
             config = custom_config or self._configs.get(action_key)
             if not config:
                 # No rate limit for this action
                 return True, None
-            
+
             # Get or create bucket
             key = (telegram_id, action_key)
             if key not in self._buckets:

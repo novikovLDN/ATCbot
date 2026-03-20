@@ -108,6 +108,9 @@ class TelegramErrorBoundaryMiddleware(BaseMiddleware):
                         except Exception:
                             pass
                     error_text = i18n_get_text(lang, "errors.try_later")
+                    # Telegram callback answer limit is 200 chars
+                    if len(error_text) > 200:
+                        error_text = error_text[:200]
                     await answer_target.answer(error_text, show_alert=False)
                 except Exception:
                     pass

@@ -138,7 +138,6 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
             if time.monotonic() - iteration_start > MAX_ITERATION_SECONDS:
                 logger.warning("Activation worker iteration time limit reached, breaking early")
                 break
-            items_processed += 1
             telegram_id = pending_sub.telegram_id
             subscription_id = pending_sub.subscription_id
             current_attempts = pending_sub.activation_attempts
@@ -376,6 +375,7 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                             subscription_id=subscription_id,
                         )
 
+            items_processed += 1
             # Connection released before sleep — no conn held during asyncio.sleep
             await asyncio.sleep(0.5)
 

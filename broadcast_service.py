@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 25
 ADMIN_BROADCAST_TYPE = "no_subscription"
-CONCURRENCY_LIMIT = 7
+CONCURRENCY_LIMIT = 5
 
 
 def _format_completion_message(result: dict) -> str:
@@ -107,7 +107,7 @@ async def run_no_subscription_broadcast(
                 return
             try:
                 sent = await safe_send_message(bot, telegram_id, text)
-                await asyncio.sleep(0.07)
+                await asyncio.sleep(0.15)  # ~6-7 msg/s with concurrency 5, well within Telegram limits
                 async with counters_lock:
                     if sent is not None:
                         counters["success"] += 1

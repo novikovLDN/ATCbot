@@ -76,7 +76,16 @@ async def telegram_webhook(
     # Parse and feed update to aiogram with timeout
     webhook_start = time.monotonic()
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        if len(raw_body) > MAX_BODY_SIZE:
+            logger.warning(
+                "WEBHOOK_BODY_TOO_LARGE ip=%s actual_size=%d",
+                request.client.host if request.client else "unknown",
+                len(raw_body),
+            )
+            return Response(status_code=413)
+        import json as _json
+        body = _json.loads(raw_body)
         if not isinstance(body, dict):
             logger.warning("WEBHOOK_INVALID_BODY type=%s", type(body).__name__)
             return Response(status_code=400)

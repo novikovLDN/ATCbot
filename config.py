@@ -17,7 +17,7 @@ _log = logging.getLogger(__name__)
 # использовать PROD_BOT_TOKEN даже если он случайно задан).
 # ====================================================================================
 
-APP_ENV = os.getenv("APP_ENV", "prod").lower()
+APP_ENV = os.getenv("APP_ENV", "local").lower()
 if APP_ENV not in ("prod", "stage", "local"):
     print(f"ERROR: Invalid APP_ENV={APP_ENV}. Must be one of: prod, stage, local", file=sys.stderr)
     sys.exit(1)

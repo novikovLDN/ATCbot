@@ -47,9 +47,8 @@ jobs:
           DEPLOY_HOOK_URL: ${{ secrets.STAGING_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$DEPLOY_HOOK_URL" ]; then
-            echo "⚠ STAGING_DEPLOY_HOOK_URL not configured, skipping deploy"
-            echo "Configure this secret to enable automatic staging deployments"
-            exit 0
+            echo "::error::STAGING_DEPLOY_HOOK_URL not configured — deploy cannot proceed"
+            exit 1
           fi
           echo "Deploying ${{ github.sha }} to staging..."
           curl -sf -X POST "$DEPLOY_HOOK_URL" \
@@ -74,9 +73,8 @@ jobs:
           DEPLOY_HOOK_URL: ${{ secrets.PRODUCTION_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$DEPLOY_HOOK_URL" ]; then
-            echo "⚠ PRODUCTION_DEPLOY_HOOK_URL not configured, skipping deploy"
-            echo "Configure this secret to enable automatic production deployments"
-            exit 0
+            echo "::error::PRODUCTION_DEPLOY_HOOK_URL not configured — deploy cannot proceed"
+            exit 1
           fi
           echo "Deploying ${{ github.sha }} to production..."
           curl -sf -X POST "$DEPLOY_HOOK_URL" \

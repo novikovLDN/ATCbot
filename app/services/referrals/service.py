@@ -8,6 +8,7 @@ All functions are pure business logic - no aiogram imports, no Telegram calls.
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
+import asyncio
 import database
 import logging
 
@@ -277,7 +278,7 @@ async def activate_referral(
                 "referrer_id": referrer_id,
                 "was_activated": False
             }
-        async with pool.acquire() as conn:
+        async with asyncio.wait_for(pool.acquire(), timeout=5.0) as conn:
             return await _activate_referral_internal(telegram_id, referrer_id, activation_type, conn)
     else:
         return await _activate_referral_internal(telegram_id, referrer_id, activation_type, conn)
