@@ -38,6 +38,9 @@ class AdminUserOverview:
     user_discount: Optional[Dict[str, Any]]
     is_vip: bool
     trial_available: bool
+    referral_stats: Optional[Dict[str, Any]] = None
+    game_stats: Optional[Dict[str, Any]] = None
+    payment_stats: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -56,6 +59,101 @@ class AdminActions:
 # ====================================================================================
 # Admin User Overview
 # ====================================================================================
+
+async def _get_game_and_payment_stats(user_id: int):
+    """Fetch game and payment statistics for admin user card."""
+    pool = await database.get_pool()
+    if pool is None:
+        return None, None
+
+    async with pool.acquire() as conn:
+        # --- Game stats ---
+        # Bowling wins (subscription_history where source contains game info, or audit_log)
+        bowling_plays = await conn.fetchval(
+            "SELECT COUNT(*) FROM audit_log WHERE telegram_id = $1 AND action ILIKE '%bowling%'",
+            user_id,
+        ) or 0
+        bowling_wins = await conn.fetchval(
+            "SELECT COUNT(*) FROM audit_log WHERE telegram_id = $1 AND action ILIKE '%bowling%' AND result = 'success'",
+            user_id,
+        ) or 0
+
+        dice_plays = await conn.fetchval(
+            "SELECT COUNT(*) FROM audit_log WHERE telegram_id = $1 AND action ILIKE '%dice%'",
+            user_id,
+        ) or 0
+
+        bomber_plays = await conn.fetchval(
+            "SELECT COUNT(*) FROM audit_log WHERE telegram_id = $1 AND action ILIKE '%bomber%'",
+            user_id,
+        ) or 0
+
+        # Farm earnings from balance_transactions
+        farm_earnings_kopecks = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount), 0) FROM balance_transactions WHERE user_id = $1 AND source = 'farm_harvest'",
+            user_id,
+        ) or 0
+        farm_harvests = await conn.fetchval(
+            "SELECT COUNT(*) FROM balance_transactions WHERE user_id = $1 AND source = 'farm_harvest'",
+            user_id,
+        ) or 0
+
+        # Days earned from games (via subscription grants from games)
+        game_days_earned = await conn.fetchval(
+            """SELECT COALESCE(SUM(
+                CASE
+                    WHEN details ILIKE '%bowling%' OR details ILIKE '%dice%'
+                    THEN COALESCE(
+                        CAST(NULLIF(SUBSTRING(details FROM '\\+(\\d+)\\s*д'), '') AS INTEGER),
+                        0
+                    )
+                    ELSE 0
+                END
+            ), 0)
+            FROM audit_log
+            WHERE telegram_id = $1
+            AND action ILIKE '%game%'
+            AND result = 'success'""",
+            user_id,
+        ) or 0
+
+        game_stats = {
+            "bowling_plays": bowling_plays,
+            "bowling_wins": bowling_wins,
+            "dice_plays": dice_plays,
+            "bomber_plays": bomber_plays,
+            "farm_harvests": farm_harvests,
+            "farm_earnings_rub": farm_earnings_kopecks / 100.0,
+            "game_days_earned": game_days_earned,
+        }
+
+        # --- Payment stats ---
+        total_payments = await conn.fetchval(
+            "SELECT COUNT(*) FROM payments WHERE telegram_id = $1 AND status = 'approved'",
+            user_id,
+        ) or 0
+        total_spent_kopecks = await conn.fetchval(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE telegram_id = $1 AND status = 'approved'",
+            user_id,
+        ) or 0
+        first_payment = await conn.fetchval(
+            "SELECT MIN(paid_at) FROM payments WHERE telegram_id = $1 AND status = 'approved'",
+            user_id,
+        )
+        last_payment = await conn.fetchval(
+            "SELECT MAX(paid_at) FROM payments WHERE telegram_id = $1 AND status = 'approved'",
+            user_id,
+        )
+
+        payment_stats = {
+            "total_payments": total_payments,
+            "total_spent_rub": total_spent_kopecks / 100.0,
+            "first_payment_at": first_payment,
+            "last_payment_at": last_payment,
+        }
+
+    return game_stats, payment_stats
+
 
 async def get_admin_user_overview(user_id: int) -> AdminUserOverview:
     """
@@ -97,10 +195,25 @@ async def get_admin_user_overview(user_id: int) -> AdminUserOverview:
     
     # Get VIP status
     is_vip = await database.is_vip_user(user_id)
-    
+
     # Check trial availability using trial service
     trial_available = await trial_service.is_trial_available(user_id)
-    
+
+    # Referral statistics
+    referral_stats = None
+    try:
+        referral_stats = await database.get_referral_statistics(user_id)
+    except Exception:
+        pass
+
+    # Game & payment statistics (via single DB query)
+    game_stats = None
+    payment_stats = None
+    try:
+        game_stats, payment_stats = await _get_game_and_payment_stats(user_id)
+    except Exception:
+        pass
+
     return AdminUserOverview(
         user=user,
         subscription=subscription,
@@ -108,7 +221,10 @@ async def get_admin_user_overview(user_id: int) -> AdminUserOverview:
         stats=stats,
         user_discount=user_discount,
         is_vip=is_vip,
-        trial_available=trial_available
+        trial_available=trial_available,
+        referral_stats=referral_stats,
+        game_stats=game_stats,
+        payment_stats=payment_stats,
     )
 
 
