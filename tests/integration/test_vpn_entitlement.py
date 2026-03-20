@@ -19,55 +19,50 @@ class TestOrphanPreventionOnDBFailure:
         """Phase 1 succeeds, Phase 2 (DB tx) fails → remove_vless_user called."""
         removed_uuids = []
 
-        async def fake_add_vless_user(*, telegram_id, subscription_end, uuid):
+        async def fake_add_vless_user(*, telegram_id, subscription_end, uuid, tariff="basic"):
             return {"uuid": uuid, "vless_url": f"vless://{uuid}@example.com"}
 
         async def fake_remove_vless_user(uuid):
             removed_uuids.append(uuid)
 
-        with patch("database.vpn_utils.add_vless_user", side_effect=fake_add_vless_user):
-            with patch("database.vpn_utils.remove_vless_user", side_effect=fake_remove_vless_user):
-                with patch("database.get_pool") as mock_pool:
-                    conn = MagicMock()
-                    conn.fetchrow = AsyncMock(side_effect=[
-                        {"purchase_id": "p1", "telegram_id": 123, "status": "pending", "tariff": "basic",
-                         "period_days": 30, "price_kopecks": 10000, "purchase_type": "subscription"},
-                        {"telegram_id": 123},
-                    ])
-                    conn.fetchval = AsyncMock(return_value=1)
-                    conn.execute = AsyncMock(return_value="UPDATE 1")
-                    conn.transaction = MagicMock()
+        with patch("database.subscriptions.vpn_utils.add_vless_user", side_effect=fake_add_vless_user), \
+             patch("database.subscriptions.vpn_utils.remove_vless_user", side_effect=fake_remove_vless_user), \
+             patch("database.subscriptions.get_pool") as mock_pool, \
+             patch("database.subscriptions.config") as mock_config:
 
-                    async def tx_enter():
-                        return conn
-                    async def tx_exit(*args):
-                        return None
-                    tx_ctx = MagicMock()
-                    tx_ctx.__aenter__ = tx_enter
-                    tx_ctx.__aexit__ = tx_exit
-                    conn.transaction.return_value = tx_ctx
+            mock_config.VPN_ENABLED = True
 
-                    with patch("database.grant_access", AsyncMock(side_effect=Exception("Simulated DB failure"))):
-                        pool = MagicMock()
-                        acq = MagicMock()
-                        acq.__aenter__ = AsyncMock(return_value=conn)
-                        acq.__aexit__ = AsyncMock(return_value=None)
-                        pool.acquire.return_value = acq
-                        mock_pool.return_value = pool
+            conn = MagicMock()
+            # First fetchrow: pending purchase; Second fetchrow: user check (subscription)
+            conn.fetchrow = AsyncMock(side_effect=[
+                {"purchase_id": "p1", "telegram_id": 123, "status": "pending", "tariff": "basic",
+                 "period_days": 30, "price_kopecks": 10000, "purchase_type": "subscription"},
+                None,  # no existing subscription
+            ])
+            conn.fetchval = AsyncMock(return_value=1)
+            conn.execute = AsyncMock(return_value="UPDATE 1")
 
-                        with patch("database.config") as mock_config:
-                            mock_config.VPN_ENABLED = True
-                            from app.core.system_state import ComponentStatus
-                            with patch("database.recalculate_from_runtime") as mock_recalc:
-                                mock_recalc.return_value = MagicMock(vpn_api=MagicMock(status=ComponentStatus.HEALTHY))
-                                import database
-                                with pytest.raises(Exception, match="Simulated DB failure"):
-                                    await database.finalize_purchase(
-                                        purchase_id="p1",
-                                        payment_provider="cryptobot",
-                                        amount_rubles=100.0,
-                                        invoice_id="inv1"
-                                    )
+            # Transaction context manager
+            tx_ctx = MagicMock()
+            tx_ctx.__aenter__ = AsyncMock(side_effect=Exception("Simulated DB failure"))
+            tx_ctx.__aexit__ = AsyncMock(return_value=None)
+            conn.transaction = MagicMock(return_value=tx_ctx)
+
+            pool = MagicMock()
+            acq = MagicMock()
+            acq.__aenter__ = AsyncMock(return_value=conn)
+            acq.__aexit__ = AsyncMock(return_value=None)
+            pool.acquire.return_value = acq
+            mock_pool.return_value = pool
+
+            import database
+            with pytest.raises(Exception, match="Simulated DB failure"):
+                await database.finalize_purchase(
+                    purchase_id="p1",
+                    payment_provider="cryptobot",
+                    amount_rubles=100.0,
+                    invoice_id="inv1"
+                )
 
         assert len(removed_uuids) >= 1, "remove_vless_user must be called to prevent orphan"
 
@@ -78,7 +73,7 @@ class TestDuplicateWebhookIdempotency:
     @pytest.mark.asyncio
     async def test_duplicate_webhook_raises_already_processed(self):
         """Same purchase_id, status already 'paid' → ValueError."""
-        with patch("database.get_pool") as mock_pool:
+        with patch("database.subscriptions.get_pool") as mock_sub_pool:
             conn = MagicMock()
             conn.fetchrow = AsyncMock(return_value={
                 "purchase_id": "p1", "telegram_id": 123, "status": "paid",  # already paid
@@ -90,7 +85,7 @@ class TestDuplicateWebhookIdempotency:
             acq.__aenter__ = AsyncMock(return_value=conn)
             acq.__aexit__ = AsyncMock(return_value=None)
             pool.acquire.return_value = acq
-            mock_pool.return_value = pool
+            mock_sub_pool.return_value = pool
 
             import database
             with pytest.raises(ValueError, match="already processed"):

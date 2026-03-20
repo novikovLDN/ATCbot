@@ -153,6 +153,7 @@ async def metrics(request: Request):
         if not hmac.compare_digest(auth.encode(), expected.encode()):
             return Response(status_code=403)
     try:
+        import database
         from app.core.metrics import get_metrics
         m = get_metrics()
         snapshot = m.snapshot()

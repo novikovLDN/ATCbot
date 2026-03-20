@@ -35,13 +35,13 @@ class TestVerifyWebhookIp:
     def test_private_ip_rejected(self):
         assert self._verify("192.168.1.1") is False
 
-    def test_empty_ip_allowed_with_fallback(self):
-        """Empty IP allowed because API re-fetch is the primary verification."""
-        assert self._verify("") is True
+    def test_empty_ip_rejected(self):
+        """Empty IP rejected for defense in depth."""
+        assert self._verify("") is False
 
-    def test_invalid_format_allowed_with_fallback(self):
-        """Invalid IP format allowed because API re-fetch protects."""
-        assert self._verify("not-an-ip") is True
+    def test_invalid_format_rejected(self):
+        """Invalid IP format rejected for defense in depth."""
+        assert self._verify("not-an-ip") is False
 
     def test_localhost_rejected(self):
         assert self._verify("127.0.0.1") is False

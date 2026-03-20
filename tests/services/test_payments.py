@@ -24,7 +24,7 @@ from app.services.payments.exceptions import (
 
 class TestVerifyPaymentPayload:
     """Tests for verify_payment_payload function"""
-    
+
     @pytest.mark.asyncio
     async def test_valid_purchase_payload(self):
         """Valid purchase payload should be parsed correctly"""
@@ -34,135 +34,152 @@ class TestVerifyPaymentPayload:
                 "price_kopecks": 100000,
                 "promo_code": None,
             })
-            
+
             result = await verify_payment_payload("purchase:123", 12345)
-            
+
             assert result.payload_type == "purchase"
             assert result.purchase_id == "123"
             assert result.telegram_id == 12345
             assert result.tariff == "basic"
             assert result.amount == 1000.0
-    
+
     @pytest.mark.asyncio
     async def test_balance_topup_payload(self):
         """Balance topup payload should be parsed correctly"""
         result = await verify_payment_payload("balance_topup_12345_500", 12345)
-        
+
         assert result.payload_type == "balance_topup"
         assert result.telegram_id == 12345
         assert result.amount == 500.0
-    
+
     @pytest.mark.asyncio
     async def test_invalid_payload_format(self):
         """Invalid payload format should raise exception"""
         with pytest.raises(InvalidPaymentPayloadError):
             await verify_payment_payload("invalid_format", 12345)
-    
+
     @pytest.mark.asyncio
     async def test_empty_payload(self):
         """Empty payload should raise exception"""
         with pytest.raises(InvalidPaymentPayloadError):
             await verify_payment_payload("", 12345)
-    
+
     @pytest.mark.asyncio
     async def test_telegram_id_mismatch(self):
         """Telegram ID mismatch should raise exception"""
         with pytest.raises(InvalidPaymentPayloadError):
             await verify_payment_payload("balance_topup_12345_500", 99999)
-    
+
     @pytest.mark.asyncio
     async def test_pending_purchase_not_found(self):
         """Missing pending purchase should raise exception"""
         with patch('app.services.payments.service.database') as mock_db:
             mock_db.get_pending_purchase = AsyncMock(return_value=None)
-            
+
             with pytest.raises(InvalidPaymentPayloadError):
                 await verify_payment_payload("purchase:123", 12345)
 
 
 class TestValidatePaymentAmount:
     """Tests for validate_payment_amount function"""
-    
+
     @pytest.mark.asyncio
     async def test_amount_matches(self):
         """Matching amounts should pass validation"""
-        payload_info = type('obj', (object,), {
-            'amount_rubles': 1000.0,
-            'payment_type': 'subscription',
-        })()
-        
-        with patch('app.services.payments.service.subscription_service') as mock_sub:
-            mock_sub.calculate_price = AsyncMock(return_value=1000.0)
-            await validate_payment_amount(payload_info, 1000)
-            # Should not raise
-    
+        result = await validate_payment_amount(1000.0, 1000.0)
+        assert result is True
+
     @pytest.mark.asyncio
     async def test_amount_mismatch(self):
         """Mismatched amounts should raise exception"""
-        payload_info = type('obj', (object,), {
-            'amount_rubles': 1000.0,
-            'payment_type': 'subscription',
-            'tariff': 'basic',
-            'period_days': 30,
-        })()
-        
-        with patch('app.services.payments.service.subscription_service') as mock_sub:
-            mock_sub.calculate_price = AsyncMock(return_value=1500.0)
-            with pytest.raises(PaymentAmountMismatchError):
-                await validate_payment_amount(payload_info, 1000)
-    
+        with pytest.raises(PaymentAmountMismatchError):
+            await validate_payment_amount(1000.0, 1500.0)
+
     @pytest.mark.asyncio
     async def test_balance_topup_amount(self):
-        """Balance topup should validate against payload amount"""
-        payload_info = type('obj', (object,), {
-            'amount_rubles': 500.0,
-            'payment_type': 'balance_topup',
-        })()
-        
-        await validate_payment_amount(payload_info, 500)
-        # Should not raise
+        """Amounts within tolerance should pass"""
+        result = await validate_payment_amount(500.0, 500.0)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_amount_within_tolerance(self):
+        """Amounts within tolerance (0.01 RUB) should pass"""
+        result = await validate_payment_amount(500.005, 500.0)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_amount_outside_tolerance(self):
+        """Amounts outside tolerance should raise exception"""
+        with pytest.raises(PaymentAmountMismatchError):
+            await validate_payment_amount(500.02, 500.0)
 
 
 class TestCheckPaymentIdempotency:
     """Tests for check_payment_idempotency function"""
-    
+
     @pytest.mark.asyncio
     async def test_payment_not_processed(self):
-        """Payment not yet processed should pass"""
+        """Payment not yet processed should return (False, None)"""
         with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value=None)
-            result = await check_payment_idempotency("provider_123", "invoice_456")
-            assert result is False
-    
+            mock_db.get_pending_purchase = AsyncMock(return_value=None)
+            is_processed, data = await check_payment_idempotency("purchase_123", 12345)
+            assert is_processed is False
+            assert data is None
+
     @pytest.mark.asyncio
     async def test_payment_already_processed(self):
-        """Already processed payment should raise exception"""
+        """Already processed payment should return (True, subscription)"""
+        from contextlib import asynccontextmanager
+
+        mock_subscription = {
+            "status": "active",
+            "expires_at": datetime(2024, 2, 15),
+            "vpn_key": "vless://test",
+        }
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(return_value={"id": 123, "status": "approved"})
+
+        @asynccontextmanager
+        async def mock_acquire():
+            yield mock_conn
+
         with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value={
-                "status": "approved",
-                "payment_id": 123,
+            mock_db.get_pending_purchase = AsyncMock(return_value={
+                "status": "paid",
+                "tariff": "basic",
+                "price_kopecks": 14900,
             })
-            with pytest.raises(PaymentAlreadyProcessedError):
-                await check_payment_idempotency("provider_123", "invoice_456")
-    
+            mock_pool = AsyncMock()
+            mock_pool.acquire = mock_acquire
+            mock_db.get_pool = AsyncMock(return_value=mock_pool)
+            mock_db.get_subscription = AsyncMock(return_value=mock_subscription)
+
+            is_processed, data = await check_payment_idempotency("purchase_123", 12345)
+            assert is_processed is True
+            assert data == mock_subscription
+
     @pytest.mark.asyncio
     async def test_payment_pending(self):
-        """Pending payment should raise exception"""
+        """Pending purchase should return (False, None)"""
         with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value={
+            mock_db.get_pending_purchase = AsyncMock(return_value={
                 "status": "pending",
-                "payment_id": 123,
+                "tariff": "basic",
+                "price_kopecks": 14900,
             })
-            with pytest.raises(PaymentAlreadyProcessedError):
-                await check_payment_idempotency("provider_123", "invoice_456")
-    
+            is_processed, data = await check_payment_idempotency("purchase_123", 12345)
+            assert is_processed is False
+            assert data is None
+
     @pytest.mark.asyncio
-    async def test_payment_rejected(self):
-        """Rejected payment should pass (can retry)"""
+    async def test_payment_expired(self):
+        """Expired purchase should return (False, None)"""
         with patch('app.services.payments.service.database') as mock_db:
-            mock_db.get_payment_by_provider_id = AsyncMock(return_value={
-                "status": "rejected",
-                "payment_id": 123,
+            mock_db.get_pending_purchase = AsyncMock(return_value={
+                "status": "expired",
+                "tariff": "basic",
+                "price_kopecks": 14900,
             })
-            result = await check_payment_idempotency("provider_123", "invoice_456")
-            assert result is False
+            is_processed, data = await check_payment_idempotency("purchase_123", 12345)
+            assert is_processed is False
+            assert data is None
