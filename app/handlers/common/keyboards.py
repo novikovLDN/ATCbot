@@ -567,7 +567,7 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
 def get_admin_user_keyboard_processing(user_id: int, has_discount: bool = False, is_vip: bool = False, language: str = "ru"):
     """Клавиатура во время перевыпуска ключа: кнопка «Перевыпуск» заменена на disabled состояние"""
     buttons = []
-    buttons.append([InlineKeyboardButton(text="⏳ Перевыпуск...", callback_data="noop")])
+    buttons.append([InlineKeyboardButton(text="⏳ Перевыпуск...", callback_data="noop_processing")])
     if user_id:
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
         buttons.append([

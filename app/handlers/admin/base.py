@@ -723,5 +723,11 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
 
 @admin_base_router.callback_query(F.data == "noop")
 async def noop_handler(callback: CallbackQuery):
-    """Обработчик disabled кнопки во время перевыпуска ключа"""
+    """Обработчик для декоративных разделителей (секции дашборда) — тихий ответ"""
+    await callback.answer()
+
+
+@admin_base_router.callback_query(F.data == "noop_processing")
+async def noop_processing_handler(callback: CallbackQuery):
+    """Обработчик disabled кнопки во время выполнения операции (перевыпуск и т.д.)"""
     await callback.answer("Операция уже выполняется...", show_alert=False)
