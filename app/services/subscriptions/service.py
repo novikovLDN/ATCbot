@@ -329,11 +329,20 @@ def parse_expires_at(expires_at: Any) -> Optional[datetime]:
     
     if isinstance(expires_at, str):
         try:
-            return datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            # Ensure timezone-aware UTC (naive strings assumed UTC)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            elif dt.tzinfo != timezone.utc:
+                dt = dt.astimezone(timezone.utc)
+            return dt
         except Exception as e:
             logger.debug("Date parse (Z format) failed: %s", e)
             try:
-                return datetime.fromisoformat(expires_at)
+                dt = datetime.fromisoformat(expires_at)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
             except Exception as e2:
                 logger.debug("Date parse (plain) failed: %s", e2)
                 return None

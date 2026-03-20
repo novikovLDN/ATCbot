@@ -164,12 +164,11 @@ def verify_webhook_ip(client_ip: str) -> bool:
     Verify that webhook request comes from YooKassa IP ranges.
 
     Returns True if the IP is in the YooKassa allowlist.
-    Falls back to True if IP cannot be parsed (e.g. behind proxy without X-Forwarded-For),
-    since we also verify payments by re-fetching from YooKassa API.
+    Returns False on missing or invalid IPs (defense in depth).
     """
     if not client_ip:
-        logger.warning("YooKassa webhook: no client IP provided, allowing (API re-fetch protects)")
-        return True
+        logger.warning("YooKassa webhook: no client IP provided, rejecting")
+        return False
     try:
         addr = ipaddress.ip_address(client_ip)
         for net in _YOOKASSA_IP_NETWORKS:
@@ -178,8 +177,8 @@ def verify_webhook_ip(client_ip: str) -> bool:
         logger.warning("YooKassa webhook: IP %s not in allowlist", client_ip)
         return False
     except ValueError:
-        logger.warning("YooKassa webhook: invalid IP format: %s", client_ip)
-        return True  # Allow — API re-fetch is the primary verification
+        logger.warning("YooKassa webhook: invalid IP format: %s, rejecting", client_ip)
+        return False
 
 
 async def process_webhook(body: dict, bot) -> dict:
