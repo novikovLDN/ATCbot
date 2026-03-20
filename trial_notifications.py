@@ -464,6 +464,9 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
     trial_used_at = database._from_db_utc(row["trial_used_at"]) if row["trial_used_at"] else None
     trial_expires_at = database._from_db_utc(row["trial_expires_at"]) if row["trial_expires_at"] else None
 
+    # Phase 1: Check eligibility with DB connection
+    should_expire_flag = False
+    should_send_notification = False
     async with pool.acquire() as conn:
         try:
             # PRODUCTION HOTFIX: Trial must NEVER revoke VPN or modify subscription if user has active paid.
@@ -503,16 +506,29 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                 )
                 return
 
-            if uuid_val:
-                import vpn_utils
-                try:
-                    await vpn_utils.remove_vless_user(uuid_val)
-                    logger.info(f"trial_expired: VPN access revoked: user={telegram_id}, uuid={uuid_val[:8]}...")
-                except Exception as e:
-                    logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
+            should_expire_flag = True
+        except Exception as e:
+            logger.error(f"trial_expiry: eligibility check failed: user={telegram_id}, error={e}")
+            return
+    # conn released here
 
+    if not should_expire_flag:
+        return
+
+    # Phase 2: VPN HTTP call OUTSIDE DB connection
+    if uuid_val:
+        import vpn_utils
+        try:
+            await vpn_utils.remove_vless_user(uuid_val)
+            logger.info(f"trial_expired: VPN access revoked: user={telegram_id}, uuid={uuid_val[:8]}...")
+        except Exception as e:
+            logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
+
+    # Phase 3: DB update and notification with new connection
+    async with pool.acquire() as conn:
+        try:
             await conn.execute("""
-                UPDATE subscriptions 
+                UPDATE subscriptions
                 SET status = 'expired', uuid = NULL, vpn_key = NULL
                 WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
             """, telegram_id)

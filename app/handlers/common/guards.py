@@ -2,6 +2,7 @@
 DB readiness and permission guards. Shared across all handler domains.
 """
 import logging
+import time
 
 import config
 import database
@@ -11,6 +12,21 @@ from app.i18n import get_text as i18n_get_text
 from app.services.language_service import DEFAULT_LANGUAGE
 
 logger = logging.getLogger(__name__)
+
+# Cache critical tables check result for 30 seconds to avoid DB query on every handler
+_critical_tables_cache: dict = {"result": None, "expires": 0.0}
+_CRITICAL_TABLES_CACHE_TTL = 30.0
+
+
+async def _check_critical_tables_cached() -> bool:
+    """Check critical tables with TTL cache to avoid per-request DB query."""
+    now = time.monotonic()
+    if _critical_tables_cache["result"] is not None and now < _critical_tables_cache["expires"]:
+        return _critical_tables_cache["result"]
+    result = await database.check_critical_tables()
+    _critical_tables_cache["result"] = result
+    _critical_tables_cache["expires"] = now + _CRITICAL_TABLES_CACHE_TTL
+    return result
 
 
 async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: bool = False) -> bool:
@@ -29,7 +45,7 @@ async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: boo
     Returns:
         True если БД готова или операция разрешена, False если БД недоступна (сообщение отправлено)
     """
-    critical_ok = await database.check_critical_tables()
+    critical_ok = await _check_critical_tables_cached()
 
     if not critical_ok:
         if allow_readonly_in_stage and config.IS_STAGE:

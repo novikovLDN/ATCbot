@@ -1,7 +1,9 @@
 """
 API module — HTTP endpoints for webhooks and health.
 """
+import hmac
 import logging
+import os
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -10,6 +12,10 @@ from app.api import telegram_webhook
 from app.api import payment_webhook
 
 logger = logging.getLogger(__name__)
+
+# SECURITY: Optional bearer token for /metrics and /health/detailed.
+# Set METRICS_AUTH_TOKEN env var in production to protect these endpoints.
+_METRICS_AUTH_TOKEN = os.getenv("METRICS_AUTH_TOKEN", "")
 
 # SECURITY: Disable OpenAPI/Swagger docs in production (information leak prevention)
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -134,15 +140,18 @@ async def health():
 
 
 @app.get("/metrics")
-async def metrics():
+async def metrics(request: Request):
     """
     Extended metrics endpoint for monitoring.
 
     Returns full metrics snapshot: requests, latency, workers, DB pool, memory, errors.
-    Protected: only accessible from internal network or with admin token.
+    Protected by METRICS_AUTH_TOKEN when configured.
     """
-    # SECURITY: Check for internal access token (optional, if configured)
-    # In production, restrict via reverse proxy / network rules
+    if _METRICS_AUTH_TOKEN:
+        auth = request.headers.get("authorization", "")
+        expected = f"Bearer {_METRICS_AUTH_TOKEN}"
+        if not hmac.compare_digest(auth.encode(), expected.encode()):
+            return Response(status_code=403)
     try:
         from app.core.metrics import get_metrics
         m = get_metrics()
@@ -170,11 +179,17 @@ async def metrics():
 
 
 @app.get("/health/detailed")
-async def health_detailed():
+async def health_detailed(request: Request):
     """
     Detailed health check with all component statuses and metrics summary.
     More information than /health, designed for monitoring dashboards.
+    Protected by METRICS_AUTH_TOKEN when configured.
     """
+    if _METRICS_AUTH_TOKEN:
+        auth = request.headers.get("authorization", "")
+        expected = f"Bearer {_METRICS_AUTH_TOKEN}"
+        if not hmac.compare_digest(auth.encode(), expected.encode()):
+            return Response(status_code=403)
     import database
     from app.utils.redis_client import ping as redis_ping, is_configured as redis_configured
     from app.core.system_state import recalculate_from_runtime
@@ -218,7 +233,20 @@ async def health_detailed():
     # Redis
     if redis_configured():
         try:
-            result["redis"] = {"connected": await redis_ping()}
+            from app.utils.redis_client import info_stats as redis_info_stats
+            redis_connected = await redis_ping()
+            redis_data = {"connected": redis_connected}
+            if redis_connected:
+                stats = await redis_info_stats()
+                if stats:
+                    redis_data.update(stats)
+                # Include blocked IPs count
+                try:
+                    from app.core.ip_abuse import get_blocked_count
+                    redis_data["blocked_ips"] = await get_blocked_count()
+                except Exception:
+                    pass
+            result["redis"] = redis_data
         except Exception:
             result["redis"] = {"connected": False}
 

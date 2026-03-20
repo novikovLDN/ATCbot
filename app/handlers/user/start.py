@@ -62,31 +62,24 @@ async def cmd_start(message: Message, state: FSMContext):
     # Обработчик команды /start
     telegram_id = message.from_user.id
     # Safe username resolution: username or first_name or localized fallback
-    user = await database.get_user(telegram_id)
-    is_new_user = user is None
     start_language = await resolve_user_language(telegram_id)
     username = safe_resolve_username(message.from_user, start_language, telegram_id)
     # Ограничиваем длину для БД
     if username and len(username) > 64:
         username = username[:64]
 
-    # Создаем пользователя если его нет (user already fetched above)
-    if not user:
-        await database.create_user(telegram_id, username, start_language)
-    else:
-        # Обновляем username если изменился (safe: username can be None)
-        if username is not None:
-            await database.update_username(telegram_id, username)
-        # Убеждаемся, что у пользователя есть referral_code
-        if not user.get("referral_code"):
-            # Генерируем код для существующего пользователя
-            referral_code = database.generate_referral_code(telegram_id)
-            pool = await database.get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
-                    referral_code, telegram_id
-                )
+    # PERFORMANCE: Single DB round-trip instead of 3-5 separate calls.
+    # Critical for surviving 10-20k concurrent /start spikes.
+    user, is_new_user = await database.get_or_create_user(
+        telegram_id, username, start_language
+    )
+    if user is None:
+        # DB call failed — fallback to degraded welcome
+        text = i18n_get_text(start_language, "main.welcome")
+        text += "\n\n" + i18n_get_text(start_language, "main.service_unavailable")
+        keyboard = await get_main_menu_keyboard(start_language, telegram_id)
+        await message.answer(text, reply_markup=keyboard)
+        return
     
     # GIFT ACTIVATION: Обработка подарочной ссылки /start gift_XXXXX
     if message.text:

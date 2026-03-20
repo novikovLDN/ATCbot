@@ -81,6 +81,7 @@ from database.users import (  # noqa: F401
     find_user_by_id_or_username,
     generate_referral_code,
     create_user,
+    get_or_create_user,
     find_user_by_referral_code,
     get_user_referral_code,
     register_referral,
@@ -170,18 +171,6 @@ from database.subscriptions import (  # noqa: F401
     mark_pending_purchase_paid,
     finalize_purchase,
 )
-
-# YooKassa saved payment methods (direct DB access in yookassa_service.py,
-# re-exported here for convenience and consistency)
-try:
-    from yookassa_service import (  # noqa: F401
-        save_user_payment_method,
-        get_user_payment_method,
-        remove_user_payment_method,
-        toggle_card_auto_renew,
-    )
-except ImportError:
-    pass  # YooKassa not installed — functions unavailable
 
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
 from database.admin import (  # noqa: F401

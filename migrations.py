@@ -180,14 +180,21 @@ async def run_migrations(conn: asyncpg.Connection) -> bool:
 
 async def run_migrations_safe(pool: asyncpg.Pool) -> bool:
     """
-    Безопасное применение миграций с использованием пула соединений
-    
+    Безопасное применение миграций с использованием пула соединений.
+    Uses advisory lock to prevent concurrent migration runs across instances.
+
     Args:
         pool: Пул соединений с БД
-        
+
     Returns:
         True если все миграции применены успешно, False если ошибка
     """
+    MIGRATION_LOCK_ID = 123456789
     async with pool.acquire() as conn:
-        return await run_migrations(conn)
+        # Advisory lock prevents concurrent migration runs from multiple instances
+        await conn.execute("SELECT pg_advisory_lock($1)", MIGRATION_LOCK_ID)
+        try:
+            return await run_migrations(conn)
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock($1)", MIGRATION_LOCK_ID)
 

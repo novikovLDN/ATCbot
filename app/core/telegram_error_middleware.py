@@ -13,6 +13,8 @@ from aiogram import BaseMiddleware
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from app.core.structured_logger import log_event
+from app.services.language_service import resolve_user_language, DEFAULT_LANGUAGE
+from app.i18n import get_text as i18n_get_text
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,17 @@ class TelegramErrorBoundaryMiddleware(BaseMiddleware):
 
             if answer_target:
                 try:
-                    await answer_target.answer("⚠️ Произошла ошибка. Попробуйте позже.", show_alert=False)
+                    lang = DEFAULT_LANGUAGE
+                    if user_id:
+                        try:
+                            lang = await resolve_user_language(user_id)
+                        except Exception:
+                            pass
+                    error_text = i18n_get_text(lang, "errors.try_later")
+                    # Telegram callback answer limit is 200 chars
+                    if len(error_text) > 200:
+                        error_text = error_text[:200]
+                    await answer_target.answer(error_text, show_alert=False)
                 except Exception:
                     pass
 

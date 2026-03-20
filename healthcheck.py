@@ -177,11 +177,31 @@ async def _run_health_check(bot: Bot) -> None:
 
     # ── 2. Redis health ────────────────────────────────────────────
     try:
-        from app.utils.redis_client import ping as redis_ping, is_configured as redis_configured
+        from app.utils.redis_client import ping as redis_ping, is_configured as redis_configured, info_stats as redis_info_stats
         if redis_configured():
             redis_ok = await redis_ping()
             if redis_ok:
-                logger.info("HEALTH_CHECK redis=ok")
+                # Get detailed Redis stats for monitoring
+                redis_stats = await redis_info_stats()
+                if redis_stats:
+                    logger.info(
+                        "HEALTH_CHECK redis=ok memory=%.1fMB peak=%.1fMB clients=%d blocked=%d",
+                        redis_stats["used_memory_mb"],
+                        redis_stats["used_memory_peak_mb"],
+                        redis_stats["connected_clients"],
+                        redis_stats["blocked_clients"],
+                    )
+                else:
+                    logger.info("HEALTH_CHECK redis=ok")
+
+                # Check blocked IPs count (IP abuse protection)
+                try:
+                    from app.core.ip_abuse import get_blocked_count
+                    blocked_ips = await get_blocked_count()
+                    if blocked_ips > 0:
+                        logger.info("HEALTH_CHECK blocked_ips=%d", blocked_ips)
+                except Exception:
+                    pass
             else:
                 logger.warning("HEALTH_CHECK redis=unavailable")
                 await _send_admin_alert(

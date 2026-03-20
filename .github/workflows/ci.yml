@@ -8,7 +8,6 @@ on:
   push:
     branches: [main, stage]
   pull_request:
-    branches: [main, stage]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,6 +15,8 @@ concurrency:
 
 permissions:
   contents: read
+  checks: write
+  pull-requests: write
 
 jobs:
   # ── 1. Lint & static analysis ──────────────────────────────
@@ -84,15 +85,110 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Run tests
-        run: pytest tests/ --tb=short --junitxml=test-results.xml
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --tb=long \
+            --junitxml=test-results.xml \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            -v
+
+      - name: Test Report (annotations in PR)
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Test Results
+          path: test-results.xml
+          reporter: java-junit
+          fail-on-error: true
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f test-results.xml ]; then
+            TESTS=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('test-results.xml')
+          root = tree.getroot()
+          ts = root.find('.//testsuite') if root.tag != 'testsuite' else root
+          if ts is None:
+              ts = root
+          total = ts.get('tests', '0')
+          fail = ts.get('failures', '0')
+          err = ts.get('errors', '0')
+          skip = ts.get('skipped', '0')
+          time = ts.get('time', '0')
+          passed = int(total) - int(fail) - int(err) - int(skip)
+          print(f'| Total | Passed | Failed | Errors | Skipped | Time |')
+          print(f'|-------|--------|--------|--------|---------|------|')
+          print(f'| {total} | {passed} | {fail} | {err} | {skip} | {float(time):.1f}s |')
+          ")
+            echo "$TESTS" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Show failed tests details
+          if [ -f test-results.xml ]; then
+            FAILURES=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('test-results.xml')
+          root = tree.getroot()
+          cases = root.iter('testcase')
+          found = False
+          for tc in cases:
+              fail = tc.find('failure')
+              err = tc.find('error')
+              elem = fail if fail is not None else err
+              if elem is not None:
+                  if not found:
+                      print('### Failed Tests')
+                      print('')
+                      found = True
+                  name = tc.get('classname', '') + '::' + tc.get('name', '')
+                  msg = elem.get('message', '')[:200]
+                  text = (elem.text or '')[:500]
+                  print(f'<details><summary>{name}</summary>')
+                  print('')
+                  print(f'**Message:** {msg}')
+                  print('')
+                  print('\`\`\`')
+                  print(text)
+                  print('\`\`\`')
+                  print('</details>')
+                  print('')
+          if not found:
+              print('All tests passed!')
+          " 2>/dev/null || echo "Could not parse test details")
+            echo "$FAILURES" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Coverage summary
+          if [ -f coverage.xml ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            COV=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('coverage.xml')
+          root = tree.getroot()
+          rate = float(root.get('line-rate', 0)) * 100
+          print(f'### Coverage: {rate:.1f}%')
+          " 2>/dev/null || echo "### Coverage: N/A")
+            echo "$COV" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: test-results.xml
+          path: |
+            test-results.xml
+            coverage.xml
           retention-days: 7
 
   # ── 3. Security scan ───────────────────────────────────────
@@ -111,11 +207,10 @@ jobs:
         run: pip install pip-audit safety
 
       - name: Check dependencies for known vulnerabilities
-        run: pip-audit -r requirements.txt --desc on --fix --dry-run || true
+        run: pip-audit -r requirements.txt --desc on --fix --dry-run
 
       - name: Safety check
-        run: safety check -r requirements.txt --output text || true
-        continue-on-error: true
+        run: safety check -r requirements.txt --output text
 
   # ── 4. Docker build verification ───────────────────────────
   docker:

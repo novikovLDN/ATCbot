@@ -111,7 +111,7 @@ async def revoke_key(key_id: int, owner_telegram_id: int) -> bool:
                WHERE id = $1 AND owner_telegram_id = $2 AND revoked_at IS NULL""",
             key_id, owner_telegram_id,
         )
-        return result.endswith("1")
+        return result == "UPDATE 1"
 
 
 async def extend_key(key_id: int, owner_telegram_id: int, extra_minutes: int) -> Optional[Dict[str, Any]]:

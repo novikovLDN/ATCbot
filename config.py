@@ -17,7 +17,7 @@ _log = logging.getLogger(__name__)
 # использовать PROD_BOT_TOKEN даже если он случайно задан).
 # ====================================================================================
 
-APP_ENV = os.getenv("APP_ENV", "prod").lower()
+APP_ENV = os.getenv("APP_ENV", "local").lower()
 if APP_ENV not in ("prod", "stage", "local"):
     print(f"ERROR: Invalid APP_ENV={APP_ENV}. Must be one of: prod, stage, local", file=sys.stderr)
     sys.exit(1)
@@ -237,13 +237,6 @@ BALANCE_TOPUP_AMOUNTS = [250, 750, 999]
 # Суммы пополнения баланса (в Stars, +70% от рублёвых)
 BALANCE_TOPUP_AMOUNTS_STARS = [230, 690, 920]
 
-# Реквизиты СБП (для оплаты)
-SBP_DETAILS = {
-    "bank": "Банк",
-    "account": "12345678901234567890",
-    "name": "ИП Иванов Иван Иванович",
-}
-
 # Поддержка
 SUPPORT_EMAIL = "support@example.com"
 SUPPORT_TELEGRAM = "@support"
@@ -335,9 +328,10 @@ if not WEBHOOK_SECRET:
 WEBHOOK_PORT = int(os.getenv("PORT") or env("WEBHOOK_PORT") or "8080")
 _log.info("Using WEBHOOK_URL from %s_WEBHOOK_URL", APP_ENV.upper())
 
-# Telegram Mini App deep-link settings (for t.me/<bot>/<app>?startapp=...)
+# Telegram Mini App settings
 BOT_USERNAME = env("BOT_USERNAME", default="atlassecure_bot")
 MINI_APP_NAME = env("MINI_APP_NAME", default="app")
+MINI_APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
 
 # --- Бизнес-клиентские тарифы (генерация ключей для клиентов) ---
 # Тарифы с лимитами на максимальное количество генераций клиентских ключей в день

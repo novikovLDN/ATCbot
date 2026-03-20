@@ -48,21 +48,29 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
         self._user_requests: Dict[int, list] = defaultdict(list)
         self._banned_users: Dict[int, float] = {}  # user_id -> ban_expires_at
         self._last_cleanup = time.monotonic()
-        # Redis handle (set once at startup)
+        # Redis handle (retries periodically if unavailable)
         self._redis = None
         self._redis_checked = False
+        self._last_redis_attempt = 0.0
+
+    # Re-check Redis availability every 60 seconds after failure
+    _REDIS_RETRY_INTERVAL = 60
 
     async def _get_redis(self):
-        """Lazy-load Redis client. Returns None if unavailable."""
-        if not self._redis_checked:
+        """Lazy-load Redis client. Retries periodically if initially unavailable."""
+        now = time.monotonic()
+        if not self._redis_checked or (self._redis is None and now - self._last_redis_attempt > self._REDIS_RETRY_INTERVAL):
             self._redis_checked = True
+            self._last_redis_attempt = now
             try:
                 from app.utils.redis_client import get_redis
                 self._redis = await get_redis()
                 if self._redis:
                     logger.info("RATE_LIMIT using Redis backend")
                 else:
-                    logger.info("RATE_LIMIT using in-memory backend (Redis not configured)")
+                    if not hasattr(self, '_redis_warned'):
+                        logger.info("RATE_LIMIT using in-memory backend (Redis not configured)")
+                        self._redis_warned = True
             except Exception as e:
                 logger.warning("RATE_LIMIT Redis init failed, using in-memory: %s", e)
                 self._redis = None
@@ -128,7 +136,9 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
 
     def _cleanup_old(self):
         now = time.monotonic()
-        if now - self._last_cleanup < 60:
+        # Under heavy load (10-20k users), clean up more aggressively
+        cleanup_interval = 10 if len(self._user_requests) > 5000 else 60
+        if now - self._last_cleanup < cleanup_interval:
             return
         self._last_cleanup = now
 

@@ -24,7 +24,7 @@ from app.core.system_state import (
     degraded_component,
     unavailable_component,
 )
-from app.core.rate_limit import check_rate_limit
+from app.core.rate_limit import check_rate_limit_async
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import (
     safe_edit_text,
@@ -124,7 +124,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     language = await resolve_user_language(telegram_id)
 
     # STEP 6 — F3: RATE LIMITING (HUMAN & BOT SAFETY)
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "trial_activate")
+    is_allowed, rate_limit_message = await check_rate_limit_async(telegram_id, "trial_activate")
     if not is_allowed:
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
         return
@@ -395,86 +395,6 @@ async def callback_renewal_pay(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
-@subscription_router.callback_query(F.data.startswith("toggle_card_auto_renew:"))
-async def callback_toggle_card_auto_renew(callback: CallbackQuery):
-    """Включить/выключить автопродление по карте"""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    action = callback.data.split(":")[1]
-    enabled = (action == "on")
-
-    try:
-        import yookassa_service
-        success = await yookassa_service.toggle_card_auto_renew(telegram_id, enabled)
-    except ImportError:
-        success = False
-
-    language = await resolve_user_language(telegram_id)
-
-    if not success:
-        await callback.answer(
-            i18n_get_text(language, "card.no_saved_card"),
-            show_alert=True,
-        )
-        return
-
-    if enabled:
-        text = i18n_get_text(language, "card.toggle_on_toast")
-    else:
-        text = i18n_get_text(language, "card.toggle_off_toast")
-
-    await callback.answer(text, show_alert=True)
-    await show_profile(callback, language)
-
-
-@subscription_router.callback_query(F.data == "card_remove")
-async def callback_card_remove(callback: CallbackQuery):
-    """Показать подтверждение отвязки карты"""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    text = i18n_get_text(language, "card.remove_confirm")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "card.remove_confirm_yes"),
-            callback_data="card_remove_confirm",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "card.remove_confirm_no"),
-            callback_data="menu_profile",
-        )],
-    ])
-
-    from app.handlers.common.utils import safe_edit_text
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-    await callback.answer()
-
-
-@subscription_router.callback_query(F.data == "card_remove_confirm")
-async def callback_card_remove_confirm(callback: CallbackQuery):
-    """Подтверждение отвязки карты"""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        import yookassa_service
-        await yookassa_service.remove_user_payment_method(telegram_id)
-    except ImportError:
-        pass
-
-    await callback.answer(
-        i18n_get_text(language, "card.removed_success"),
-        show_alert=True,
-    )
-    await show_profile(callback, language)
 
 
 @subscription_router.callback_query(F.data == "subscription_history")
