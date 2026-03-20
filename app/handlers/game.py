@@ -80,29 +80,18 @@ async def callback_games_menu(callback: CallbackQuery):
         return
 
     telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
     subscription = await database.get_subscription(telegram_id)
     if not subscription:
         await callback.answer(
-            "🎮 Игровой клуб доступен только для подписчиков!\n"
-            "Оформите подписку и получите доступ ко всем играм 🎯",
+            i18n_get_text(language, "games.games_club_paywall"),
             show_alert=True,
         )
         return
 
     await callback.answer()
 
-    language = await resolve_user_language(telegram_id)
-
-    text = (
-        "🎮 <b>Добро пожаловать в Игровой зал!</b>\n\n"
-        "Здесь вы можете отвлечься и попытать удачу — "
-        "а заодно выиграть призы и бонусы.\n\n"
-        "🎳 <b>Боулинг</b> — сбей кегли и получи бонусные дни подписки\n"
-        "🎲 <b>Кубики</b> — брось кубик и получи столько дней, сколько выпало\n"
-        "💣 <b>Бомбер</b> — стратегическая игра на выживание\n"
-        "🌾 <b>Ферма</b> — выращивай растения и получай рубли на баланс\n\n"
-        "Выбирай игру и испытай удачу! 🍀"
-    )
+    text = i18n_get_text(language, "games.menu_title")
 
     await callback.message.edit_text(
         text,
@@ -398,12 +387,30 @@ async def callback_game_bomber(callback: CallbackQuery, state: FSMContext):
     """Start Bomber game - initialize grid with 3 random mines"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
-    await callback.answer()
-    
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
+    # Subscription check (same pattern as bowling/dice)
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription:
+        paywall_text = i18n_get_text(language, "games.bomber_paywall")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "main.buy"),
+                callback_data="menu_buy_vpn",
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="menu_main",
+            )],
+        ])
+        await callback.message.edit_text(paywall_text, reply_markup=keyboard)
+        logger.info("GAME_BOMBER [user=%s] no_subscription paywall", telegram_id)
+        return
+
+    await callback.answer()
+
     # Initialize game: 3 random mines on 5x5 grid (25 cells, indices 0-24)
     mines = set(random.sample(range(25), 3))
     player_bombs: Set[int] = set()
@@ -544,7 +551,7 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         await database.save_farm_plots(telegram_id, farm_plots)
     
     # Build text (plot 0 always visible; plots 1-8 only if purchased, i.e. plot_id < plot_count)
-    lines = ["🌾 <b>Ваша ферма</b>\n"]
+    lines = [i18n_get_text(language, "farm.title") + "\n"]
     for plot in farm_plots:
         if plot["plot_id"] >= plot_count:
             continue
@@ -552,21 +559,21 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         status = plot["status"]
         pt = plot.get("plant_type")
         plant = PLANT_TYPES.get(pt, {}) if pt else {}
-        
+
         if status == "empty":
-            lines.append(f"Грядка {i+1}: ⬜ Пусто")
+            lines.append(i18n_get_text(language, "farm.plot_empty", num=i+1))
         elif status == "growing":
             ready_at = datetime.fromisoformat(plot["ready_at"])
             remaining = ready_at - now
             days = remaining.days
             hours = remaining.seconds // 3600
-            lines.append(f"Грядка {i+1}: 🌱 {plant.get('name','')} — осталось {days}д {hours}ч")
+            lines.append(i18n_get_text(language, "farm.plot_growing", num=i+1, name=plant.get('name',''), days=days, hours=hours))
         elif status == "ready":
-            lines.append(f"Грядка {i+1}: {plant.get('emoji','🌿')} {plant.get('name','')} — ✅ Готово к сбору!")
+            lines.append(i18n_get_text(language, "farm.plot_ready", num=i+1, emoji=plant.get('emoji','🌿'), name=plant.get('name','')))
         elif status == "dead":
-            lines.append(f"Грядка {i+1}: ☠️ {plant.get('name','')} — сгнило")
-    
-    lines.append(f"\n💰 Баланс: {balance/100:.2f} ₽")
+            lines.append(i18n_get_text(language, "farm.plot_dead", num=i+1, name=plant.get('name','')))
+
+    lines.append(i18n_get_text(language, "farm.balance", balance=balance/100))
     text = "\n".join(lines)
     
     # Build keyboard (same visibility: plot_id < plot_count)
@@ -581,7 +588,7 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         
         if status == "empty":
             buttons.append([InlineKeyboardButton(
-                text=f"🌱 Посадить на грядку {i+1}",
+                text=i18n_get_text(language, "farm.button_plant", num=i+1),
                 callback_data=f"farm_choose_{i}"
             )])
         elif status == "growing":
@@ -591,26 +598,26 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             can_water = not water_used or (now - datetime.fromisoformat(water_used)).total_seconds() >= 86400
             fert_used = plot.get("fertilizer_used_at")
             can_fert = not fert_used or (now - datetime.fromisoformat(fert_used)).total_seconds() >= 86400
-            
+
             if can_water:
-                row.append(InlineKeyboardButton(text=f"💧 Полить #{i+1}", callback_data=f"farm_water_{i}"))
+                row.append(InlineKeyboardButton(text=i18n_get_text(language, "farm.button_water", num=i+1), callback_data=f"farm_water_{i}"))
             if can_fert:
-                row.append(InlineKeyboardButton(text=f"🌿 Удобрить #{i+1}", callback_data=f"farm_fert_{i}"))
+                row.append(InlineKeyboardButton(text=i18n_get_text(language, "farm.button_fertilize", num=i+1), callback_data=f"farm_fert_{i}"))
             if row:
                 buttons.append(row)
             # Always show dig button for growing plots
             buttons.append([InlineKeyboardButton(
-                text=f"⛏ Выкопать #{i+1}",
+                text=i18n_get_text(language, "farm.button_dig", num=i+1),
                 callback_data=f"farm_dig_{i}"
             )])
         elif status == "ready":
             buttons.append([InlineKeyboardButton(
-                text=f"🌾 Собрать {plant.get('emoji','')} #{i+1} (+{plant.get('reward',0)//100} ₽)",
+                text=i18n_get_text(language, "farm.button_harvest", emoji=plant.get('emoji',''), num=i+1, reward=plant.get('reward',0)//100),
                 callback_data=f"farm_harvest_{i}"
             )])
         elif status == "dead":
             buttons.append([InlineKeyboardButton(
-                text=f"☠️ Убрать #{i+1}",
+                text=i18n_get_text(language, "farm.button_remove", num=i+1),
                 callback_data=f"farm_remove_{i}"
             )])
     
@@ -620,20 +627,20 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         remaining = 9 - plot_count
         if balance >= price:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Купить грядку — 50 ₽ (осталось мест: {remaining})",
+                text=i18n_get_text(language, "farm.button_buy_plot_remaining", remaining=remaining),
                 callback_data="farm_buy_plot"
             )])
         else:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Грядка (нужно 50 ₽, осталось мест: {remaining})",
+                text=i18n_get_text(language, "farm.button_buy_plot_disabled_remaining", remaining=remaining),
                 callback_data="farm_noop"
             )])
-    
+
     buttons.append([InlineKeyboardButton(
-        text="📖 Инструкция",
+        text=i18n_get_text(language, "farm.instructions"),
         url="https://telegra.ph/Instrukciya-Ferma-02-20"
     )])
-    buttons.append([InlineKeyboardButton(text="🔙 К играм", callback_data="games_menu")])
+    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "farm.back_to_games"), callback_data="games_menu")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     try:
@@ -679,14 +686,14 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     buttons = []
     for key, plant in PLANT_TYPES.items():
         buttons.append([InlineKeyboardButton(
-            text=f"{plant['emoji']} {plant['name']} — {plant['days']} дн. → +{plant['reward']//100} ₽",
+            text=i18n_get_text(language, "farm.plant_info", emoji=plant['emoji'], name=plant['name'], days=plant['days'], reward=plant['reward']//100),
             callback_data=f"farm_plant_{plot_id}_{key}"
         )])
-    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="game_farm")])
+    buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "farm.back"), callback_data="game_farm")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    
+
     await callback.message.edit_text(
-        f"🌱 <b>Выберите растение для грядки {plot_id+1}:</b>",
+        i18n_get_text(language, "farm.choose_plant_title", num=plot_id+1),
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -708,7 +715,7 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     plant_type = parts[3]
     
     if plant_type not in PLANT_TYPES:
-        await callback.answer("Неизвестный тип растения", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_unknown_plant"), show_alert=True)
         return
     
     pool = await database.get_pool()
@@ -729,7 +736,7 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "empty":
-        await callback.answer("Грядка недоступна", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True)
         return
     
     now = datetime.now(timezone.utc)
@@ -781,7 +788,7 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "growing":
-        await callback.answer("Грядка недоступна", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True)
         return
     
     now = datetime.now(timezone.utc)
@@ -789,7 +796,7 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
     if water_used:
         water_time = datetime.fromisoformat(water_used)
         if (now - water_time).total_seconds() < 86400:
-            await callback.answer("Вы уже поливали сегодня!", show_alert=True)
+            await callback.answer(i18n_get_text(language, "farm.error_already_watered"), show_alert=True)
             return
     
     # Reduce ready_at by 6 hours
@@ -830,7 +837,7 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "growing":
-        await callback.answer("Грядка недоступна", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True)
         return
     
     now = datetime.now(timezone.utc)
@@ -838,7 +845,7 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
     if fert_used:
         fert_time = datetime.fromisoformat(fert_used)
         if (now - fert_time).total_seconds() < 86400:
-            await callback.answer("Вы уже удобряли сегодня!", show_alert=True)
+            await callback.answer(i18n_get_text(language, "farm.error_already_fertilized"), show_alert=True)
             return
     
     # Reduce ready_at by 2 hours
@@ -879,7 +886,7 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
             break
     
     if not plot or plot["status"] != "ready":
-        await callback.answer("Растение не готово к сбору", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_not_ready"), show_alert=True)
         return
     
     plant_type = plot.get("plant_type")
@@ -896,7 +903,7 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     )
     
     if not success:
-        await callback.answer("Ошибка при начислении награды", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_harvest_failed"), show_alert=True)
         return
     
     # Reset plot
@@ -917,74 +924,90 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
     
-    await callback.answer(f"🌾 Урожай собран! +{reward_rubles:.0f} ₽", show_alert=True)
+    await callback.answer(i18n_get_text(language, "farm.harvest_success", reward=f"{reward_rubles:.0f}"), show_alert=True)
 
 
-@router.callback_query(F.data.startswith("farm_remove_"))
+@router.callback_query(F.data.startswith("farm_remove_") & ~F.data.startswith("farm_remove_confirm_"))
 async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
-    """Remove dead plant - show confirmation"""
+    """Remove dead plant - show confirmation dialog"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
+
     await callback.answer()
-    
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     plot_id = int(callback.data.split("_")[-1])
-    
-    # Check if this is a confirmation
-    if callback.data.startswith("farm_remove_confirm_"):
-        plot_id = int(callback.data.split("_")[-1])
-        
-        pool = await database.get_pool()
-        if not pool:
-            await callback.message.edit_text(
-                i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
-                reply_markup=get_games_back_keyboard(language),
-            )
-            return
-        
-        farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-        
-        plot = None
-        for p in farm_plots:
-            if p["plot_id"] == plot_id:
-                plot = p
-                break
-        
-        if plot and plot["status"] == "dead":
-            # Reset plot
-            plot["status"] = "empty"
-            plot["plant_type"] = None
-            plot["planted_at"] = None
-            plot["ready_at"] = None
-            plot["dead_at"] = None
-            plot["notified_ready"] = False
-            plot["notified_12h"] = False
-            plot["notified_dead"] = False
-            plot["water_used_at"] = None
-            plot["fertilizer_used_at"] = None
-            
-            await database.save_farm_plots(telegram_id, farm_plots)
-            await _render_farm(callback, pool, farm_plots, plot_count, balance)
+
+    # Validate plot is actually dead before showing confirmation
+    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+    plot = next((p for p in farm_plots if p["plot_id"] == plot_id), None)
+    if not plot or plot["status"] != "dead":
+        await callback.answer(i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True)
         return
-    
+
     # Show confirmation dialog
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="✅ Да, убрать",
+            text=i18n_get_text(language, "farm.remove_yes"),
             callback_data=f"farm_remove_confirm_{plot_id}"
         )],
         [InlineKeyboardButton(
-            text="❌ Нет",
-            callback_data="farm_noop"
+            text=i18n_get_text(language, "farm.remove_no"),
+            callback_data="game_farm"
         )]
     ])
-    
+
     await callback.message.edit_text(
-        "Хотите убрать погибшее растение?",
+        i18n_get_text(language, "farm.remove_confirm"),
         reply_markup=keyboard
     )
+
+
+@router.callback_query(F.data.startswith("farm_remove_confirm_"))
+async def callback_farm_remove_confirm(callback: CallbackQuery, state: FSMContext):
+    """Confirm and execute removal of a dead plant"""
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    plot_id = int(callback.data.split("_")[-1])
+
+    pool = await database.get_pool()
+    if not pool:
+        await callback.message.edit_text(
+            i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
+            reply_markup=get_games_back_keyboard(language),
+        )
+        return
+
+    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+
+    plot = next((p for p in farm_plots if p["plot_id"] == plot_id), None)
+
+    if not plot or plot["status"] != "dead":
+        await callback.answer(i18n_get_text(language, "farm.error_plot_unavailable"), show_alert=True)
+        # Refresh farm screen
+        await _render_farm(callback, pool, farm_plots, plot_count, balance)
+        return
+
+    # Reset plot
+    plot["status"] = "empty"
+    plot["plant_type"] = None
+    plot["planted_at"] = None
+    plot["ready_at"] = None
+    plot["dead_at"] = None
+    plot["notified_ready"] = False
+    plot["notified_12h"] = False
+    plot["notified_dead"] = False
+    plot["water_used_at"] = None
+    plot["fertilizer_used_at"] = None
+
+    await database.save_farm_plots(telegram_id, farm_plots)
+    await _render_farm(callback, pool, farm_plots, plot_count, balance)
 
 
 @router.callback_query(F.data == "farm_buy_plot")
@@ -1009,12 +1032,12 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
     
     if plot_count >= 9:
-        await callback.answer("Максимальное количество грядок достигнуто", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.max_plots_reached"), show_alert=True)
         return
     
     price = 5000  # 50 RUB in kopecks
     if balance < price:
-        await callback.answer("Недостаточно средств", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.insufficient_funds"), show_alert=True)
         return
     
     # Deduct balance
@@ -1026,7 +1049,7 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     )
     
     if not success:
-        await callback.answer("Ошибка при списании средств", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.buy_plot_error"), show_alert=True)
         return
     
     # Add new empty plot
@@ -1078,32 +1101,29 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
     plot = next((p for p in farm_plots if p["plot_id"] == plot_id), None)
     
     if not plot or plot["status"] != "growing":
-        await callback.answer("❌ Растение недоступно для выкапывания", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_dig_unavailable"), show_alert=True)
         return
     
     plant_type = plot.get("plant_type", "")
     plant = PLANT_TYPES.get(plant_type, {})
-    plant_name = plant.get("name", "растение")
-    
+    plant_name = plant.get("name", "")
+
     # Show confirmation with inline keyboard
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="⛏ Да, выкопать",
+                text=i18n_get_text(language, "farm.dig_confirm_yes"),
                 callback_data=f"farm_dig_confirm_{plot_id}"
             ),
             InlineKeyboardButton(
-                text="❌ Нет",
+                text=i18n_get_text(language, "farm.dig_confirm_no"),
                 callback_data="game_farm"
             )
         ]
     ])
-    
+
     await callback.message.edit_text(
-        f"⛏ <b>Выкопать растение?</b>\n\n"
-        f"Вы хотите выкопать <b>{plant_name}</b> на грядке {plot_id+1}?\n\n"
-        f"⚠️ Растение будет уничтожено без награды.\n"
-        f"Грядка станет пустой и можно будет посадить новое растение.",
+        i18n_get_text(language, "farm.dig_confirm_title", name=plant_name, num=plot_id+1),
         reply_markup=confirm_keyboard,
         parse_mode="HTML"
     )
@@ -1133,7 +1153,7 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     plot = next((p for p in farm_plots if p["plot_id"] == plot_id), None)
     
     if not plot:
-        await callback.answer("❌ Грядка не найдена", show_alert=True)
+        await callback.answer(i18n_get_text(language, "farm.error_plot_not_found"), show_alert=True)
         return
     
     # Reset plot to empty
@@ -1149,7 +1169,7 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     plot["fertilizer_used_at"] = None
     
     await database.save_farm_plots(telegram_id, farm_plots)
-    await callback.answer("⛏ Растение выкопано! Грядка свободна.", show_alert=True)
+    await callback.answer(i18n_get_text(language, "farm.dig_success"), show_alert=True)
     await _render_farm(callback, pool, farm_plots=farm_plots, 
                        plot_count=plot_count, balance=balance)
 

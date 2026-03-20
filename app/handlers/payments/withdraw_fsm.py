@@ -23,8 +23,7 @@ payments_router = Router()
 logger = logging.getLogger(__name__)
 
 # --- User withdrawal flow ---
-MIN_WITHDRAW_RUBLES = 500
-MAX_WITHDRAW_RUBLES = 1_000_000
+from config import MIN_WITHDRAW_RUBLES, MAX_WITHDRAW_RUBLES
 
 # Строгий паттерн: только ASCII-цифры (макс 6), опционально одна точка/запятая + копейки
 _AMOUNT_PATTERN = re.compile(r"^\d{1,6}([.,]\d{1,2})?$")

@@ -24,6 +24,7 @@ from app.services.payments.exceptions import (
     PaymentAmountMismatchError,
     PaymentFinalizationError,
 )
+from app.utils.retry import retry_async
 from app.core.system_state import (
     SystemState,
     healthy_component,
@@ -311,13 +312,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 else "Пополнение баланса через Telegram Payments"
             )
             try:
-                result = await payment_service.finalize_balance_topup_payment(
-                    telegram_id=telegram_id,
-                    amount_rubles=payment_amount_rubles,
-                    provider=topup_provider,
-                    provider_charge_id=provider_charge_id,
-                    description=topup_description,
-                    correlation_id=str(message.message_id)
+                result = await retry_async(
+                    lambda: payment_service.finalize_balance_topup_payment(
+                        telegram_id=telegram_id,
+                        amount_rubles=payment_amount_rubles,
+                        provider=topup_provider,
+                        provider_charge_id=provider_charge_id,
+                        description=topup_description,
+                        correlation_id=str(message.message_id)
+                    ),
+                    retries=2,
                 )
             except PaymentFinalizationError as e:
                 logger.error(f"Balance topup finalization failed: user={telegram_id}, error={e}")
@@ -601,11 +605,14 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Finalize subscription payment through payment service
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:
-        result = await payment_service.finalize_subscription_payment(
-            purchase_id=purchase_id,
-            telegram_id=telegram_id,
-            payment_provider=payment_provider_name,
-            amount_rubles=payment_amount_rubles
+        result = await retry_async(
+            lambda: payment_service.finalize_subscription_payment(
+                purchase_id=purchase_id,
+                telegram_id=telegram_id,
+                payment_provider=payment_provider_name,
+                amount_rubles=payment_amount_rubles
+            ),
+            retries=2,
         )
         
         payment_id = result.payment_id

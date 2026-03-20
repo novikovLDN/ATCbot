@@ -373,6 +373,8 @@ LANG = {
     'games.bomber_self_destruct': "🧨 BOOM! Siz o'z bombingizda portladingiz!\n\nO'yin tugadi. Qayta urinib ko'ring!",
     'games.bomber_mine_exploded': "💥 BOOM! Siz bot minasida portladingiz!\n\nO'yin tugadi. Qayta urinib ko'ring!",
     'games.bomber_safe_exit': "😮‍💨 Siz o'yindan xavfsiz chiqdingiz!\n\nOmon qolgan bombalar: {count}",
+    'games.bomber_paywall': "💣 Bomber faqat obunachilar uchun!\n\nO'ynash uchun obuna xarid qiling.",
+    'games.games_club_paywall': "🎮 O'yin klubi faqat obunachilar uchun!\nBarcha o'yinlarga kirish uchun obuna bo'ling 🎯",
     'main.profile': '👤 Mening profilim',
     'main.profile_active': "👤 Kirish profili\n\nKirish holati: Faol\nKirish {date} gacha to'langan\n\nSiz ulangansiz. Kirish barqaror ishlaydi.\n\nShaxsiy kirish kaliti\nVPN ilovasida ulanish uchun ishlatiladi.\nUlanish kirish faol bo'lguncha saqlanadi.\n\n{vpn_key}\n\nUzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.\n\nMuddat tugaguncha siz\nsozlashlar va to'lovga qaytishingiz shart emas.",
     'main.profile_auto_renew_disabled': "🔁 Avtomatik uzaytirish: o'chirilgan",
