@@ -43,17 +43,17 @@ logger = logging.getLogger(__name__)
 
 
 def _format_user_card(overview) -> str:
-    """Форматирует расширенную карточку пользователя для админа."""
+    """Форматирует полную карточку пользователя для админа со всей информацией."""
     text = "👤 Пользователь\n\n"
 
-    # --- Профиль ---
+    # ━━━ Профиль ━━━
     text += "━━━ Профиль ━━━\n"
-    text += f"🆔 Telegram ID: <code>{overview.user['telegram_id']}</code>\n"
+    text += f"🆔 ID: <code>{overview.user['telegram_id']}</code>\n"
     username_display = overview.user.get('username') or 'не указан'
     text += f"👤 Username: @{username_display}\n"
 
     user_language = overview.user.get('language') or 'ru'
-    lang_map = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English", "es": "🇪🇸 Español"}
+    lang_map = {"ru": "🇷🇺 RU", "en": "🇬🇧 EN", "es": "🇪🇸 ES"}
     text += f"🌐 Язык: {lang_map.get(user_language, user_language)}\n"
 
     created_at = overview.user.get('created_at')
@@ -61,23 +61,27 @@ def _format_user_card(overview) -> str:
         if isinstance(created_at, str):
             created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
         created_str = created_at.strftime("%d.%m.%Y %H:%M")
-        # Дней с регистрации
         days_since = (datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc if created_at.tzinfo is None else created_at.tzinfo)).days
-        text += f"📅 Регистрация: {created_str} ({days_since} дн. назад)\n"
+        text += f"📅 Регистрация: {created_str} ({days_since} дн.)\n"
     else:
         text += "📅 Регистрация: —\n"
 
-    # Баланс
     balance = overview.user.get('balance', 0) or 0
-    text += f"💰 Баланс: {balance:.2f} ₽\n"
+    text += f"💰 Баланс: {balance / 100.0:.2f} ₽\n"
 
-    # VIP
     if overview.is_vip:
         text += "👑 VIP: активен (скидка 30%)\n"
 
+    if overview.trial_available:
+        text += "🎁 Триал: доступен\n"
+    else:
+        trial_used = overview.user.get('trial_used_at')
+        if trial_used:
+            text += "🎁 Триал: использован\n"
+
     text += "\n"
 
-    # --- Подписка ---
+    # ━━━ Подписка ━━━
     text += "━━━ Подписка ━━━\n"
     if overview.subscription:
         sub = overview.subscription
@@ -93,7 +97,6 @@ def _format_user_card(overview) -> str:
         expires_at = overview.subscription_status.expires_at
         if expires_at:
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
-            # Осталось дней
             now = datetime.now(timezone.utc)
             exp_aware = expires_at.replace(tzinfo=timezone.utc if expires_at.tzinfo is None else expires_at.tzinfo)
             remaining = (exp_aware - now).days
@@ -103,6 +106,10 @@ def _format_user_card(overview) -> str:
                 text += f"До: {expires_str} (истекла)\n"
         else:
             text += "До: —\n"
+
+        auto_renew = sub.get('auto_renew', False)
+        if auto_renew:
+            text += "🔄 Автопродление: вкл\n"
 
         vpn_key = sub.get('vpn_key', '—')
         if vpn_key and vpn_key != '—':
@@ -114,22 +121,83 @@ def _format_user_card(overview) -> str:
 
     text += "\n"
 
-    # --- Статистика ---
-    text += "━━━ Статистика ━━━\n"
+    # ━━━ Платежи ━━━
+    text += "━━━ 💳 Платежи ━━━\n"
     text += f"🔄 Продлений: {overview.stats['renewals_count']}\n"
     text += f"🔑 Перевыпусков: {overview.stats['reissues_count']}\n"
 
-    # Скидка
+    ps = overview.payment_stats
+    if ps:
+        text += f"💳 Платежей: {ps['total_payments']}\n"
+        text += f"💰 Потрачено: {ps['total_spent_rub']:.2f} ₽\n"
+        if ps.get('first_payment_at'):
+            text += f"📅 Первый: {ps['first_payment_at'].strftime('%d.%m.%Y')}\n"
+        if ps.get('last_payment_at'):
+            text += f"📅 Последний: {ps['last_payment_at'].strftime('%d.%m.%Y')}\n"
+
     if overview.user_discount:
         discount_percent = overview.user_discount["discount_percent"]
         expires_at_discount = overview.user_discount.get("expires_at")
         if expires_at_discount:
             if isinstance(expires_at_discount, str):
                 expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
-            expires_str = expires_at_discount.strftime("%d.%m.%Y %H:%M")
+            expires_str = expires_at_discount.strftime("%d.%m.%Y")
             text += f"🎯 Скидка: {discount_percent}% (до {expires_str})\n"
         else:
             text += f"🎯 Скидка: {discount_percent}% (бессрочно)\n"
+
+    text += "\n"
+
+    # ━━━ Рефералы ━━━
+    text += "━━━ 👥 Рефералы ━━━\n"
+    rs = overview.referral_stats
+    if rs:
+        text += f"👥 Приглашено: {rs.get('total_invited', 0)}\n"
+        text += f"✅ Оплативших: {rs.get('active_paid_referrals', 0)}\n"
+        text += f"💰 Кешбэк: {rs.get('total_cashback_earned', 0):.2f} ₽\n"
+        text += f"📊 Уровень: {rs.get('current_level_name', '—')} ({rs.get('cashback_percent', 10)}%)\n"
+        if rs.get('remaining_connections', 0) > 0 and rs.get('next_level_name'):
+            text += f"⬆️ До {rs['next_level_name']}: ещё {rs['remaining_connections']}\n"
+    else:
+        text += "Нет данных\n"
+
+    text += "\n"
+
+    # ━━━ Игры ━━━
+    text += "━━━ 🎮 Игры ━━━\n"
+    gs = overview.game_stats
+    if gs:
+        has_games = any([
+            gs.get('bowling_plays', 0),
+            gs.get('dice_plays', 0),
+            gs.get('bomber_plays', 0),
+            gs.get('farm_harvests', 0),
+        ])
+        if has_games:
+            if gs.get('bowling_plays', 0):
+                text += f"🎳 Боулинг: {gs['bowling_plays']} игр"
+                if gs.get('bowling_wins', 0):
+                    text += f" ({gs['bowling_wins']} побед)"
+                text += "\n"
+            if gs.get('dice_plays', 0):
+                text += f"🎲 Кубики: {gs['dice_plays']} игр\n"
+            if gs.get('bomber_plays', 0):
+                text += f"💣 Бомбер: {gs['bomber_plays']} игр\n"
+            if gs.get('farm_harvests', 0):
+                text += f"🌾 Ферма: {gs['farm_harvests']} сборов, {gs['farm_earnings_rub']:.2f} ₽\n"
+            if gs.get('game_days_earned', 0):
+                text += f"🎁 Выиграно дней: +{gs['game_days_earned']}\n"
+        else:
+            text += "Не играл\n"
+
+        # Текущее состояние фермы
+        farm_plots = overview.user.get('farm_plots')
+        if farm_plots and isinstance(farm_plots, list):
+            active_plots = [p for p in farm_plots if p.get('status') in ('growing', 'ready')]
+            if active_plots:
+                text += f"🌱 Активных грядок: {len(active_plots)}\n"
+    else:
+        text += "Нет данных\n"
 
     return text
 
