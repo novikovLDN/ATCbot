@@ -190,7 +190,6 @@ async def callback_admin_deactivate_promo_confirm(callback: CallbackQuery):
 @admin_stats_router.callback_query(F.data == "admin:metrics")
 async def callback_admin_metrics(callback: CallbackQuery):
     """Раздел Метрики"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
@@ -244,14 +243,11 @@ async def callback_admin_metrics(callback: CallbackQuery):
         
     except Exception as e:
         logging.exception(f"Error in callback_admin_metrics: {e}")
-        user = await database.get_user(callback.from_user.id)
-        language = await resolve_user_language(callback.from_user.id)
-        await callback.answer(i18n_get_text(language, "errors.metrics"), show_alert=True)
+        await callback.answer("Ошибка загрузки метрик", show_alert=True)
 
 @admin_stats_router.callback_query(F.data == "admin:stats")
 async def callback_admin_stats(callback: CallbackQuery):
     """Раздел Статистика"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)

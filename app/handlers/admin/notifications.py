@@ -95,19 +95,23 @@ async def callback_admin_notifications(callback: CallbackQuery, state: FSMContex
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
-    await state.clear()
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "admin.notif_section_title")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_custom"), callback_data="admin:broadcast")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_promo"), callback_data="admin:notif_promo")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_retention"), callback_data="admin:notif_retention")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_referral"), callback_data="admin:notif_referral")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_subscription"), callback_data="admin:notif_subscription")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
-    await callback.answer()
+    try:
+        await state.clear()
+        language = await resolve_user_language(callback.from_user.id)
+        text = i18n_get_text(language, "admin.notif_section_title")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_custom"), callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_promo"), callback_data="admin:notif_promo")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_retention"), callback_data="admin:notif_retention")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_referral"), callback_data="admin:notif_referral")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_subscription"), callback_data="admin:notif_subscription")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception("Error in callback_admin_notifications: %s", e)
+        await callback.answer("Ошибка загрузки уведомлений", show_alert=True)
 
 
 # ==================== PROMO NOTIFICATIONS ====================

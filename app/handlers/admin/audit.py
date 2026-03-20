@@ -130,7 +130,6 @@ async def cmd_admin_audit(message: Message):
 @admin_audit_router.callback_query(F.data == "admin:audit")
 async def callback_admin_audit(callback: CallbackQuery):
     """Раздел Аудит (переиспользование логики /admin_audit)"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)

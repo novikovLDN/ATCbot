@@ -57,7 +57,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
             return
         
         text = f"🎯 Назначить скидку\n\nВыберите процент скидки:"
-        await callback.message.edit_text(text, reply_markup=get_admin_discount_percent_keyboard(user_id))
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_discount_percent_keyboard(user_id))
         await callback.answer()
         
     except Exception as e:
@@ -79,7 +79,7 @@ async def callback_admin_discount_percent(callback: CallbackQuery):
         discount_percent = int(parts[3])
         
         text = f"🎯 Назначить скидку {discount_percent}%\n\nВыберите срок действия скидки:"
-        await callback.message.edit_text(text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent))
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent))
         await callback.answer()
         
     except Exception as e:
@@ -450,11 +450,15 @@ async def callback_admin_balance_management_start(callback: CallbackQuery, state
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "admin.balance_management_prompt", "admin_balance_management_prompt")
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
-    await state.set_state(AdminBalanceManagement.waiting_for_user_search)
-    await callback.answer()
+    try:
+        language = await resolve_user_language(callback.from_user.id)
+        text = i18n_get_text(language, "admin.balance_management_prompt", "admin_balance_management_prompt")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        await state.set_state(AdminBalanceManagement.waiting_for_user_search)
+        await callback.answer()
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_balance_management_start: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
 @admin_finance_router.message(AdminBalanceManagement.waiting_for_user_search)
@@ -508,11 +512,15 @@ async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FS
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "admin.credit_balance_prompt", "admin_credit_balance_prompt")
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
-    await state.set_state(AdminCreditBalance.waiting_for_user_search)
-    await callback.answer()
+    try:
+        language = await resolve_user_language(callback.from_user.id)
+        text = i18n_get_text(language, "admin.credit_balance_prompt", "admin_credit_balance_prompt")
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+        await state.set_state(AdminCreditBalance.waiting_for_user_search)
+        await callback.answer()
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_credit_balance_start: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 
 @admin_finance_router.callback_query(F.data.startswith("admin:credit_balance:"))
@@ -725,13 +733,13 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
 @admin_finance_router.callback_query(F.data == "admin:credit_balance_cancel")
 async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: FSMContext):
     """Отмена выдачи средств"""
-    user = await database.get_user(callback.from_user.id)
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
-    await callback.message.edit_text(
+
+    await safe_edit_text(
+        callback.message,
         i18n_get_text(language, "admin.operation_cancelled"),
         reply_markup=get_admin_back_keyboard(language)
     )
@@ -882,7 +890,7 @@ async def callback_admin_debit_cancel(callback: CallbackQuery, state: FSMContext
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"), reply_markup=get_admin_back_keyboard(language))
+    await safe_edit_text(callback.message, i18n_get_text(language, "admin.operation_cancelled"), reply_markup=get_admin_back_keyboard(language))
     await state.clear()
     await callback.answer()
 
