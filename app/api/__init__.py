@@ -233,7 +233,20 @@ async def health_detailed(request: Request):
     # Redis
     if redis_configured():
         try:
-            result["redis"] = {"connected": await redis_ping()}
+            from app.utils.redis_client import info_stats as redis_info_stats
+            redis_connected = await redis_ping()
+            redis_data = {"connected": redis_connected}
+            if redis_connected:
+                stats = await redis_info_stats()
+                if stats:
+                    redis_data.update(stats)
+                # Include blocked IPs count
+                try:
+                    from app.core.ip_abuse import get_blocked_count
+                    redis_data["blocked_ips"] = await get_blocked_count()
+                except Exception:
+                    pass
+            result["redis"] = redis_data
         except Exception:
             result["redis"] = {"connected": False}
 

@@ -27,10 +27,10 @@ class TestBucketEviction:
 
         # Age all buckets beyond BUCKET_MAX_AGE
         for bucket in limiter._buckets.values():
-            bucket.last_refill = time.time() - limiter._BUCKET_MAX_AGE - 10
+            bucket.last_refill = time.monotonic() - limiter._BUCKET_MAX_AGE - 10
 
         # Force eviction interval to trigger
-        limiter._last_eviction = time.time() - limiter._EVICTION_INTERVAL - 1
+        limiter._last_eviction = time.monotonic() - limiter._EVICTION_INTERVAL - 1
 
         # Next check_rate_limit triggers eviction
         limiter.check_rate_limit(999, "test", cfg)
@@ -47,7 +47,7 @@ class TestBucketEviction:
         limiter.check_rate_limit(111, "test", cfg)
 
         # Force eviction interval
-        limiter._last_eviction = time.time() - limiter._EVICTION_INTERVAL - 1
+        limiter._last_eviction = time.monotonic() - limiter._EVICTION_INTERVAL - 1
 
         # Trigger eviction with another user
         limiter.check_rate_limit(222, "test", cfg)
@@ -62,10 +62,10 @@ class TestBucketEviction:
         # Create and age buckets
         limiter.check_rate_limit(111, "test", cfg)
         for bucket in limiter._buckets.values():
-            bucket.last_refill = time.time() - limiter._BUCKET_MAX_AGE - 10
+            bucket.last_refill = time.monotonic() - limiter._BUCKET_MAX_AGE - 10
 
         # Don't force eviction interval — it was just set in __init__
-        limiter._last_eviction = time.time()
+        limiter._last_eviction = time.monotonic()
 
         limiter.check_rate_limit(222, "test", cfg)
         # Stale bucket should NOT be evicted yet

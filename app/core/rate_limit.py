@@ -1,26 +1,30 @@
 """
-Rate limiting for human & bot safety (in-memory token bucket).
+Rate limiting for human & bot safety.
 
 STEP 6 — PRODUCTION HARDENING & OPERATIONAL READINESS:
 F3. RATE LIMITING (HUMAN & BOT SAFETY)
 
-This module provides simple in-memory token bucket rate limiting
-for protecting against abuse and mistakes.
+This module provides rate limiting with Redis backend (persistent,
+distributed) and in-memory fallback (TokenBucket).
 
 IMPORTANT:
 - Soft fail (message shown, NO exceptions)
 - NO bans
 - Configurable limits
 - Handlers only (services untouched)
+- Redis: sliding window via sorted sets (survives restarts)
+- Memory: token bucket fallback when Redis unavailable
 """
 
 import logging
 import time
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, Any
-from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
+# Redis key prefix for action-specific rate limiting
+_REDIS_ACTION_PREFIX = "rl:action:"
 
 
 @dataclass
@@ -90,30 +94,80 @@ class RateLimiter:
     """
     Rate limiter for human & bot safety.
 
-    Lock-free: designed for single-threaded asyncio event loop.
+    Uses Redis sorted sets when available (persistent, distributed).
+    Falls back to in-memory TokenBucket when Redis is unavailable.
     """
 
     # Evict buckets unused for longer than this (seconds)
     _EVICTION_INTERVAL = 300  # 5 minutes between cleanups
     _BUCKET_MAX_AGE = 600  # evict buckets idle for 10 minutes
+    # Re-check Redis availability every 60 seconds after failure
+    _REDIS_RETRY_INTERVAL = 60
 
     def __init__(self):
         self._buckets: Dict[Tuple[int, str], TokenBucket] = {}
         self._configs = DEFAULT_RATE_LIMITS.copy()
         self._last_eviction = time.monotonic()
+        # Redis state
+        self._redis = None
+        self._redis_checked = False
+        self._last_redis_attempt = 0.0
 
-    def check_rate_limit(
-        self,
-        telegram_id: int,
-        action_key: str,
-        custom_config: Optional[RateLimitConfig] = None,
+    async def _get_redis(self):
+        """Lazy-load Redis client. Retries periodically if unavailable."""
+        now = time.monotonic()
+        if not self._redis_checked or (
+            self._redis is None
+            and now - self._last_redis_attempt > self._REDIS_RETRY_INTERVAL
+        ):
+            self._redis_checked = True
+            self._last_redis_attempt = now
+            try:
+                from app.utils.redis_client import get_redis
+                self._redis = await get_redis()
+                if self._redis:
+                    logger.info("ACTION_RATE_LIMIT using Redis backend")
+            except Exception as e:
+                logger.warning("ACTION_RATE_LIMIT Redis init failed: %s", e)
+                self._redis = None
+        return self._redis
+
+    async def _check_redis(
+        self, telegram_id: int, action_key: str, cfg: RateLimitConfig
     ) -> Tuple[bool, Optional[str]]:
-        """
-        Check if action is within rate limit.
+        """Check rate limit via Redis sorted set (sliding window)."""
+        redis = self._redis
+        now = time.time()
+        key = f"{_REDIS_ACTION_PREFIX}{action_key}:{telegram_id}"
+        cutoff = now - cfg.window_seconds
 
-        Returns (is_allowed, error_message).
-        Soft fail: returns False with message, NO exceptions.
-        """
+        try:
+            pipe = redis.pipeline(transaction=True)
+            pipe.zremrangebyscore(key, 0, cutoff)
+            pipe.zadd(key, {str(now): now})
+            pipe.zcard(key)
+            pipe.expire(key, cfg.window_seconds * 2)
+            results = await pipe.execute()
+            count = results[2]
+        except Exception as e:
+            logger.warning("ACTION_RATE_LIMIT Redis error: %s", e)
+            # Fallback to in-memory for this request
+            return self._check_memory(telegram_id, action_key, cfg)
+
+        if count <= cfg.max_requests:
+            return True, None
+
+        wait_seconds = cfg.window_seconds
+        logger.warning(
+            "[RATE_LIMIT] exceeded: user=%s action=%s count=%d limit=%s/%ss",
+            telegram_id, action_key, count, cfg.max_requests, cfg.window_seconds,
+        )
+        return False, f"Слишком много запросов. Попробуйте через {wait_seconds} секунд."
+
+    def _check_memory(
+        self, telegram_id: int, action_key: str, cfg: RateLimitConfig
+    ) -> Tuple[bool, Optional[str]]:
+        """In-memory TokenBucket fallback."""
         # Periodic eviction of stale buckets
         now = time.monotonic()
         if now - self._last_eviction > self._EVICTION_INTERVAL:
@@ -125,32 +179,71 @@ class RateLimiter:
             for k in stale_keys:
                 del self._buckets[k]
             if stale_keys:
-                logger.debug("RATE_LIMIT_EVICTION evicted=%d remaining=%d", len(stale_keys), len(self._buckets))
+                logger.debug(
+                    "RATE_LIMIT_EVICTION evicted=%d remaining=%d",
+                    len(stale_keys), len(self._buckets),
+                )
 
-        # Get config
-        config = custom_config or self._configs.get(action_key)
-        if not config:
-            return True, None
-
-        # Get or create bucket
         key = (telegram_id, action_key)
         bucket = self._buckets.get(key)
         if bucket is None:
             bucket = TokenBucket(
-                max_tokens=config.max_requests,
-                refill_rate=config.max_requests / config.window_seconds,
+                max_tokens=cfg.max_requests,
+                refill_rate=cfg.max_requests / cfg.window_seconds,
             )
             self._buckets[key] = bucket
 
         if bucket.consume(1):
             return True, None
 
-        wait_seconds = max(1, int(1.0 / bucket.refill_rate)) if bucket.refill_rate > 0 else config.window_seconds
+        wait_seconds = (
+            max(1, int(1.0 / bucket.refill_rate))
+            if bucket.refill_rate > 0
+            else cfg.window_seconds
+        )
         logger.warning(
             "[RATE_LIMIT] exceeded: user=%s action=%s limit=%s/%ss wait=%ss",
-            telegram_id, action_key, config.max_requests, config.window_seconds, wait_seconds,
+            telegram_id, action_key, cfg.max_requests, cfg.window_seconds, wait_seconds,
         )
         return False, f"Слишком много запросов. Попробуйте через {wait_seconds} секунд."
+
+    async def check_rate_limit_async(
+        self,
+        telegram_id: int,
+        action_key: str,
+        custom_config: Optional[RateLimitConfig] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Check rate limit (async, Redis-first with in-memory fallback).
+
+        Returns (is_allowed, error_message).
+        Soft fail: returns False with message, NO exceptions.
+        """
+        cfg = custom_config or self._configs.get(action_key)
+        if not cfg:
+            return True, None
+
+        redis = await self._get_redis()
+        if redis:
+            return await self._check_redis(telegram_id, action_key, cfg)
+        return self._check_memory(telegram_id, action_key, cfg)
+
+    def check_rate_limit(
+        self,
+        telegram_id: int,
+        action_key: str,
+        custom_config: Optional[RateLimitConfig] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Check rate limit (sync, in-memory only).
+
+        Kept for backwards compatibility with sync callers.
+        Prefer check_rate_limit_async() for Redis support.
+        """
+        cfg = custom_config or self._configs.get(action_key)
+        if not cfg:
+            return True, None
+        return self._check_memory(telegram_id, action_key, cfg)
 
     def get_status(self, telegram_id: int, action_key: str) -> Dict[str, Any]:
         key = (telegram_id, action_key)
@@ -182,3 +275,8 @@ def get_rate_limiter() -> RateLimiter:
 
 def check_rate_limit(telegram_id: int, action_key: str) -> Tuple[bool, Optional[str]]:
     return get_rate_limiter().check_rate_limit(telegram_id, action_key)
+
+
+async def check_rate_limit_async(telegram_id: int, action_key: str) -> Tuple[bool, Optional[str]]:
+    """Async version with Redis support. Prefer this in async handlers."""
+    return await get_rate_limiter().check_rate_limit_async(telegram_id, action_key)

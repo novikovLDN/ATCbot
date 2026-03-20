@@ -121,9 +121,16 @@ async def main():
 
     # Инициализация бота и диспетчера
     bot = Bot(token=config.BOT_TOKEN)
+    # FSM state TTL: auto-expire stale sessions (e.g., abandoned payment flows)
+    FSM_STATE_TTL = int(os.getenv("FSM_STATE_TTL", "3600"))  # 1 hour default
+
     if config.REDIS_URL:
-        storage = RedisStorage.from_url(config.REDIS_URL)
-        logger.info("FSM_STORAGE=redis (configured)")
+        storage = RedisStorage.from_url(
+            config.REDIS_URL,
+            state_ttl=FSM_STATE_TTL,
+            data_ttl=FSM_STATE_TTL,
+        )
+        logger.info("FSM_STORAGE=redis (configured, state_ttl=%ds)", FSM_STATE_TTL)
         # Validate Redis connectivity at startup
         try:
             from app.utils.redis_client import ping as redis_ping

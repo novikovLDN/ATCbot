@@ -34,6 +34,17 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ):
+    client_ip = request.client.host if request.client else "unknown"
+
+    # SECURITY: Check IP-level block BEFORE any processing (Redis-backed)
+    try:
+        from app.core.ip_abuse import is_ip_blocked
+        if client_ip != "unknown" and await is_ip_blocked(client_ip):
+            logger.warning("WEBHOOK_IP_BLOCKED ip=%s", client_ip)
+            return Response(status_code=403)
+    except Exception:
+        pass  # Fail-open: Redis unavailable → skip check
+
     # Validate secret token FIRST (before heartbeat — reject unauthorized requests early)
     if not config.WEBHOOK_SECRET:
         logger.error("WEBHOOK_SECRET not configured")
@@ -43,10 +54,14 @@ async def telegram_webhook(
         (x_telegram_bot_api_secret_token or "").encode(),
         config.WEBHOOK_SECRET.encode(),
     ):
-        logger.warning(
-            "WEBHOOK_SECRET_MISMATCH ip=%s",
-            request.client.host if request.client else "unknown"
-        )
+        logger.warning("WEBHOOK_SECRET_MISMATCH ip=%s", client_ip)
+        # Record auth failure for IP abuse tracking
+        try:
+            from app.core.ip_abuse import record_auth_failure
+            if client_ip != "unknown":
+                await record_auth_failure(client_ip)
+        except Exception:
+            pass
         return Response(status_code=403)
 
     # Update liveness heartbeat AFTER validation (only for authenticated requests)
@@ -61,7 +76,7 @@ async def telegram_webhook(
         if content_length and int(content_length) > MAX_BODY_SIZE:
             logger.warning(
                 "WEBHOOK_BODY_TOO_LARGE ip=%s content_length=%s",
-                request.client.host if request.client else "unknown",
+                client_ip,
                 content_length,
             )
             return Response(status_code=413)
@@ -80,7 +95,7 @@ async def telegram_webhook(
         if len(raw_body) > MAX_BODY_SIZE:
             logger.warning(
                 "WEBHOOK_BODY_TOO_LARGE ip=%s actual_size=%d",
-                request.client.host if request.client else "unknown",
+                client_ip,
                 len(raw_body),
             )
             return Response(status_code=413)
