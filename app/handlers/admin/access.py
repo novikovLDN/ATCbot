@@ -28,6 +28,12 @@ from app.handlers.admin.keyboards import (
     get_admin_grant_flex_unit_keyboard,
     get_admin_grant_flex_confirm_keyboard,
     get_admin_grant_flex_notify_keyboard,
+    get_reissue_confirm_keyboard,
+    get_reissue_final_confirm_keyboard,
+    get_bulk_reissue_confirm_keyboard,
+    get_bulk_reissue_final_confirm_keyboard,
+    get_delete_user_confirm_keyboard,
+    get_delete_user_final_confirm_keyboard,
 )
 from app.handlers.common.utils import safe_edit_text, get_reissue_lock, get_reissue_notification_text
 from app.handlers.common.keyboards import get_reissue_notification_keyboard
@@ -35,6 +41,97 @@ from app.handlers.common.keyboards import get_reissue_notification_keyboard
 admin_access_router = Router()
 logger = logging.getLogger(__name__)
 
+
+def _format_user_card(overview) -> str:
+    """Форматирует расширенную карточку пользователя для админа."""
+    text = "👤 Пользователь\n\n"
+
+    # --- Профиль ---
+    text += "━━━ Профиль ━━━\n"
+    text += f"🆔 Telegram ID: <code>{overview.user['telegram_id']}</code>\n"
+    username_display = overview.user.get('username') or 'не указан'
+    text += f"👤 Username: @{username_display}\n"
+
+    user_language = overview.user.get('language') or 'ru'
+    lang_map = {"ru": "🇷🇺 Русский", "en": "🇬🇧 English", "es": "🇪🇸 Español"}
+    text += f"🌐 Язык: {lang_map.get(user_language, user_language)}\n"
+
+    created_at = overview.user.get('created_at')
+    if created_at:
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+        created_str = created_at.strftime("%d.%m.%Y %H:%M")
+        # Дней с регистрации
+        days_since = (datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc if created_at.tzinfo is None else created_at.tzinfo)).days
+        text += f"📅 Регистрация: {created_str} ({days_since} дн. назад)\n"
+    else:
+        text += "📅 Регистрация: —\n"
+
+    # Баланс
+    balance = overview.user.get('balance', 0) or 0
+    text += f"💰 Баланс: {balance:.2f} ₽\n"
+
+    # VIP
+    if overview.is_vip:
+        text += "👑 VIP: активен (скидка 30%)\n"
+
+    text += "\n"
+
+    # --- Подписка ---
+    text += "━━━ Подписка ━━━\n"
+    if overview.subscription:
+        sub = overview.subscription
+        sub_type = (sub.get("subscription_type") or "basic").strip().lower()
+        type_label = {"basic": "📦 Basic", "plus": "⭐️ Plus"}.get(sub_type, sub_type)
+        text += f"Тариф: {type_label}\n"
+
+        if overview.subscription_status.is_active:
+            text += "Статус: ✅ Активна\n"
+        else:
+            text += "Статус: ⛔ Истекла\n"
+
+        expires_at = overview.subscription_status.expires_at
+        if expires_at:
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            # Осталось дней
+            now = datetime.now(timezone.utc)
+            exp_aware = expires_at.replace(tzinfo=timezone.utc if expires_at.tzinfo is None else expires_at.tzinfo)
+            remaining = (exp_aware - now).days
+            if remaining > 0:
+                text += f"До: {expires_str} ({remaining} дн.)\n"
+            else:
+                text += f"До: {expires_str} (истекла)\n"
+        else:
+            text += "До: —\n"
+
+        vpn_key = sub.get('vpn_key', '—')
+        if vpn_key and vpn_key != '—':
+            text += f"🔑 Ключ:\n<code>{vpn_key}</code>\n"
+        else:
+            text += "🔑 Ключ: —\n"
+    else:
+        text += "Статус: ❌ Нет подписки\n"
+
+    text += "\n"
+
+    # --- Статистика ---
+    text += "━━━ Статистика ━━━\n"
+    text += f"🔄 Продлений: {overview.stats['renewals_count']}\n"
+    text += f"🔑 Перевыпусков: {overview.stats['reissues_count']}\n"
+
+    # Скидка
+    if overview.user_discount:
+        discount_percent = overview.user_discount["discount_percent"]
+        expires_at_discount = overview.user_discount.get("expires_at")
+        if expires_at_discount:
+            if isinstance(expires_at_discount, str):
+                expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
+            expires_str = expires_at_discount.strftime("%d.%m.%Y %H:%M")
+            text += f"🎯 Скидка: {discount_percent}% (до {expires_str})\n"
+        else:
+            text += f"🎯 Скидка: {discount_percent}% (бессрочно)\n"
+
+    return text
 
 
 @admin_access_router.callback_query(F.data == "admin:keys")
@@ -46,15 +143,28 @@ async def callback_admin_keys(callback: CallbackQuery):
         return
     
     try:
-        # Показываем меню управления ключами
+        # Считаем активные ключи
+        active_count = 0
+        try:
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                active_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND expires_at > NOW() AND uuid IS NOT NULL"
+                ) or 0
+        except Exception:
+            pass
+
         text = "🔑 Управление VPN-ключами\n\n"
+        text += f"Активных ключей: {active_count}\n\n"
         text += "Доступные действия:\n"
         text += "• Перевыпустить ключ для одного пользователя\n"
-        text += "• Перевыпустить ключи для всех активных пользователей\n"
-        
+        text += "• Массовый перевыпуск всех активных ключей\n"
+        text += "• Просмотр текущих тарифов\n"
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_for_user"), callback_data="admin:user")],
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_all_keys"), callback_data="admin:keys:reissue_all")],
+            [InlineKeyboardButton(text="🔍 Перевыпуск для пользователя", callback_data="admin:user")],
+            [InlineKeyboardButton(text="⚠️ Массовый перевыпуск ВСЕХ", callback_data="admin:keys:reissue_all")],
+            [InlineKeyboardButton(text="💳 Текущие тарифы", callback_data="admin:tariffs_overview")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
         ])
         
@@ -69,14 +179,58 @@ async def callback_admin_keys(callback: CallbackQuery):
 
 
 @admin_access_router.callback_query(F.data == "admin:keys:reissue_all")
-async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
-    """Массовый перевыпуск ключей для всех активных пользователей"""
-    user = await database.get_user(callback.from_user.id)
+async def callback_admin_keys_reissue_all_ask(callback: CallbackQuery):
+    """Массовый перевыпуск: шаг 1 — первое подтверждение"""
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+    await callback.answer()
+
+    try:
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM subscriptions WHERE status = 'active' AND expires_at > NOW() AND uuid IS NOT NULL"
+            ) or 0
+    except Exception:
+        count = "?"
+
+    text = (
+        f"⚠️ Массовый перевыпуск VPN-ключей\n\n"
+        f"Активных подписок: {count}\n\n"
+        "Все текущие ключи будут аннулированы и заменены новыми.\n"
+        "Каждый пользователь получит уведомление.\n\n"
+        "Продолжить?"
+    )
+    await safe_edit_text(callback.message, text, reply_markup=get_bulk_reissue_confirm_keyboard(language))
+
+
+@admin_access_router.callback_query(F.data == "admin:keys:reissue_all_step2")
+async def callback_admin_keys_reissue_all_step2(callback: CallbackQuery):
+    """Массовый перевыпуск: шаг 2 — финальное подтверждение"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    text = (
+        "🔐 Финальное подтверждение\n\n"
+        "❗️ Это действие затронет ВСЕХ активных пользователей.\n"
+        "Все текущие VPN-ключи будут заменены.\n\n"
+        "Нажмите «ПОДТВЕРЖДАЮ» для выполнения."
+    )
+    await safe_edit_text(callback.message, text, reply_markup=get_bulk_reissue_final_confirm_keyboard(language))
+
+
+@admin_access_router.callback_query(F.data == "admin:keys:reissue_all_go")
+async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
+    """Массовый перевыпуск ключей (после 2-шагового подтверждения)"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
     await callback.answer("Начинаю массовый перевыпуск...")
     
     try:
@@ -259,6 +413,54 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         )
 
 
+@admin_access_router.callback_query(F.data == "admin:tariffs_overview")
+async def callback_admin_tariffs_overview(callback: CallbackQuery):
+    """Обзор текущих тарифов"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+
+    basic = config.TARIFFS["basic"]
+    plus = config.TARIFFS["plus"]
+
+    text = "💳 Текущие тарифы\n\n"
+    text += "━━━ 📦 Basic ━━━\n"
+    for days in sorted(basic.keys()):
+        price = basic[days]["price"]
+        per_month = round(price / (days / 30), 0)
+        text += f"  {days} дн — {price} ₽ (~{int(per_month)} ₽/мес)\n"
+
+    text += "\n━━━ ⭐️ Plus ━━━\n"
+    for days in sorted(plus.keys()):
+        price = plus[days]["price"]
+        per_month = round(price / (days / 30), 0)
+        text += f"  {days} дн — {price} ₽ (~{int(per_month)} ₽/мес)\n"
+
+    # Бизнес-тарифы
+    text += "\n━━━ 🏢 Бизнес ━━━\n"
+    for tariff_name in config.BIZ_CLIENT_TARIFF_NAMES:
+        biz = config.BIZ_CLIENT_TARIFFS.get(tariff_name, {})
+        label = biz.get("label", tariff_name)
+        price_30 = biz.get(30, {}).get("price", "—")
+        text += f"  {label}: от {price_30} ₽/мес\n"
+
+    # Stars
+    basic_stars = config.TARIFFS_STARS.get("basic", {})
+    plus_stars = config.TARIFFS_STARS.get("plus", {})
+    if basic_stars:
+        text += "\n━━━ ⭐ Telegram Stars ━━━\n"
+        text += f"  Basic 30д: {basic_stars.get(30, {}).get('price', '—')}⭐\n"
+        text += f"  Plus 30д: {plus_stars.get(30, {}).get('price', '—')}⭐\n"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ К ключам", callback_data="admin:keys")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+
 @admin_access_router.callback_query(F.data.startswith("admin:keys:"))
 async def callback_admin_keys_legacy(callback: CallbackQuery):
     """Раздел VPN-ключи"""
@@ -356,72 +558,8 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         # Получаем доступные действия через admin service
         actions = admin_service.get_admin_user_actions(overview)
         
-        # Формируем карточку пользователя (только форматирование)
-        text = "👤 Пользователь\n\n"
-        text += f"Telegram ID: {overview.user['telegram_id']}\n"
-        username_display = overview.user.get('username') or 'не указан'
-        text += f"Username: @{username_display}\n"
-        
-        # Язык
-        user_language = overview.user.get('language') or 'ru'
-        language_display = i18n_get_text("ru", f"lang.button_{user_language}")
-        text += f"Язык: {language_display}\n"
-        
-        # Дата регистрации
-        created_at = overview.user.get('created_at')
-        if created_at:
-            if isinstance(created_at, str):
-                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-            created_str = created_at.strftime("%d.%m.%Y %H:%M")
-            text += f"Дата регистрации: {created_str}\n"
-        else:
-            text += "Дата регистрации: —\n"
-        
-        text += "\n"
-        
-        # Информация о подписке
-        if overview.subscription:
-            expires_at = overview.subscription_status.expires_at
-            if expires_at:
-                expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
-            else:
-                expires_str = "—"
-            
-            if overview.subscription_status.is_active:
-                text += "Статус подписки: ✅ Активна\n"
-            else:
-                text += "Статус подписки: ⛔ Истекла\n"
-            
-            text += f"Срок действия: до {expires_str}\n"
-            vpn_key = overview.subscription.get('vpn_key', '—')
-            if vpn_key and vpn_key != '—':
-                text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
-            else:
-                text += "VPN-ключ: —\n"
-        else:
-            text += "Статус подписки: ❌ Нет подписки\n"
-            text += "VPN-ключ: —\n"
-            text += "Срок действия: —\n"
-
-        # Статистика
-        text += f"\nКоличество продлений: {overview.stats['renewals_count']}\n"
-        text += f"Количество перевыпусков: {overview.stats['reissues_count']}\n"
-
-        # Персональная скидка
-        if overview.user_discount:
-            discount_percent = overview.user_discount["discount_percent"]
-            expires_at_discount = overview.user_discount.get("expires_at")
-            if expires_at_discount:
-                if isinstance(expires_at_discount, str):
-                    expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
-                expires_str = expires_at_discount.strftime("%d.%m.%Y %H:%M")
-                text += f"\n🎯 Персональная скидка: {discount_percent}% (до {expires_str})\n"
-            else:
-                text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
-
-        # VIP-статус
-        if overview.is_vip:
-            text += f"\n👑 VIP-статус: активен\n"
+        # Формируем расширенную карточку пользователя
+        text = _format_user_card(overview)
 
         # Используем actions для определения доступных действий
         sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
@@ -1772,76 +1910,9 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
             await message_or_callback.answer("❌ Пользователь не найден")
         return
     
-    # Получаем доступные действия через admin service
-    actions = admin_service.get_admin_user_actions(overview)
-    
-    # Формируем карточку пользователя (только форматирование)
-    text = "👤 Пользователь\n\n"
-    text += f"Telegram ID: {overview.user['telegram_id']}\n"
-    username_display = overview.user.get('username') or 'не указан'
-    text += f"Username: @{username_display}\n"
-    
-    # Язык
-    user_language = overview.user.get('language') or 'ru'
-    language_display = i18n_get_text("ru", f"lang.button_{user_language}")
-    text += f"Язык: {language_display}\n"
-    
-    # Дата регистрации
-    created_at = overview.user.get('created_at')
-    if created_at:
-        if isinstance(created_at, str):
-            created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-        created_str = created_at.strftime("%d.%m.%Y %H:%M")
-        text += f"Дата регистрации: {created_str}\n"
-    else:
-        text += "Дата регистрации: —\n"
-    
-    text += "\n"
-    
-    # Информация о подписке
-    if overview.subscription:
-        expires_at = overview.subscription_status.expires_at
-        if expires_at:
-            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
-        else:
-            expires_str = "—"
-        
-        if overview.subscription_status.is_active:
-            text += "Статус подписки: ✅ Активна\n"
-        else:
-            text += "Статус подписки: ⛔ Истекла\n"
-        
-        text += f"Срок действия: до {expires_str}\n"
-        vpn_key = overview.subscription.get('vpn_key', '—')
-        if vpn_key and vpn_key != '—':
-            text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
-        else:
-            text += "VPN-ключ: —\n"
-    else:
-        text += "Статус подписки: ❌ Нет подписки\n"
-        text += "VPN-ключ: —\n"
-        text += "Срок действия: —\n"
+    # Используем единый формат карточки
+    text = _format_user_card(overview)
 
-    # Статистика
-    text += f"\nКоличество продлений: {overview.stats['renewals_count']}\n"
-    text += f"Количество перевыпусков: {overview.stats['reissues_count']}\n"
-    
-    # Персональная скидка
-    if overview.user_discount:
-        discount_percent = overview.user_discount["discount_percent"]
-        expires_at_discount = overview.user_discount.get("expires_at")
-        if expires_at_discount:
-            if isinstance(expires_at_discount, str):
-                expires_at_discount = datetime.fromisoformat(expires_at_discount.replace('Z', '+00:00'))
-            expires_str = expires_at_discount.strftime("%d.%m.%Y %H:%M")
-            text += f"\n🎯 Персональная скидка: {discount_percent}% (до {expires_str})\n"
-        else:
-            text += f"\n🎯 Персональная скидка: {discount_percent}% (бессрочно)\n"
-    
-    # VIP-статус
-    if overview.is_vip:
-        text += f"\n👑 VIP-статус: активен\n"
-    
     # Отображаем карточку
     sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
     if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
@@ -1935,6 +2006,60 @@ async def callback_admin_vip_revoke(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_vip_revoke: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+# ====================================================================================
+# ПЕРЕВЫПУСК КЛЮЧА: 2-шаговое подтверждение
+# ====================================================================================
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:user_reissue_ask:"))
+async def callback_admin_user_reissue_ask(callback: CallbackQuery):
+    """Шаг 1: Первый запрос подтверждения перевыпуска ключа"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        target_user_id = int(callback.data.split(":")[2])
+        text = (
+            f"⚠️ Перевыпуск VPN-ключа\n\n"
+            f"Пользователь: {target_user_id}\n\n"
+            "Текущий ключ будет аннулирован и заменён новым.\n"
+            "Пользователь получит уведомление с новым ключом.\n\n"
+            "Продолжить?"
+        )
+        await safe_edit_text(
+            callback.message, text,
+            reply_markup=get_reissue_confirm_keyboard(target_user_id, language),
+        )
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка: неверный формат", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:user_reissue_confirm:"))
+async def callback_admin_user_reissue_confirm(callback: CallbackQuery):
+    """Шаг 2: Финальное подтверждение перевыпуска (защита от случайного нажатия)"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    await callback.answer()
+    try:
+        target_user_id = int(callback.data.split(":")[2])
+        text = (
+            f"🔐 Финальное подтверждение\n\n"
+            f"Пользователь: {target_user_id}\n\n"
+            "❗️ Вы уверены? Старый ключ станет недействительным.\n"
+            "Нажмите «ПОДТВЕРЖДАЮ» для выполнения."
+        )
+        await safe_edit_text(
+            callback.message, text,
+            reply_markup=get_reissue_final_confirm_keyboard(target_user_id, language),
+        )
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка: неверный формат", show_alert=True)
 
 
 @admin_access_router.callback_query(F.data.startswith("admin:user_reissue:"))
@@ -2073,7 +2198,7 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
 
 @admin_access_router.callback_query(F.data.startswith("admin:delete_user:"))
 async def callback_admin_delete_user(callback: CallbackQuery):
-    """Показываем подтверждение удаления пользователя из БД"""
+    """Удаление пользователя: шаг 1 — первое предупреждение"""
     language = await resolve_user_language(callback.from_user.id)
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
@@ -2089,18 +2214,8 @@ async def callback_admin_delete_user(callback: CallbackQuery):
 
         user_id = int(parts[2])
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text="✅ Подтвердить удаление",
-                callback_data=f"admin:delete_user_confirm:{user_id}"
-            )],
-            [InlineKeyboardButton(
-                text="⬅️ Назад",
-                callback_data=f"admin:user_back:{user_id}"
-            )],
-        ])
         await callback.message.edit_text(
-            f"⚠️ Вы точно хотите удалить пользователя <b>{user_id}</b> из базы данных?\n\n"
+            f"⚠️ Вы хотите удалить пользователя <b>{user_id}</b> из базы данных?\n\n"
             "Будут удалены ВСЕ данные:\n"
             "• Профиль пользователя\n"
             "• Подписка и VPN-ключ\n"
@@ -2109,13 +2224,42 @@ async def callback_admin_delete_user(callback: CallbackQuery):
             "• Реферальные данные\n"
             "• Скидки и VIP-статус\n\n"
             "❗️ Это действие необратимо!",
-            reply_markup=keyboard,
-            parse_mode="HTML"
+            reply_markup=get_delete_user_confirm_keyboard(user_id, language),
+            parse_mode="HTML",
         )
     except ValueError:
         await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
     except Exception as e:
         logger.exception(f"Error in callback_admin_delete_user: {e}")
+        await callback.answer("Произошла ошибка", show_alert=True)
+
+
+@admin_access_router.callback_query(F.data.startswith("admin:delete_user_step2:"))
+async def callback_admin_delete_user_step2(callback: CallbackQuery):
+    """Удаление пользователя: шаг 2 — финальное подтверждение"""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    await callback.answer()
+
+    try:
+        user_id = int(callback.data.split(":")[2])
+
+        await callback.message.edit_text(
+            f"🔐 Финальное подтверждение удаления\n\n"
+            f"Пользователь: <b>{user_id}</b>\n\n"
+            "❗️ ЭТО ПОСЛЕДНИЙ ШАГ. После нажатия «ПОДТВЕРЖДАЮ» данные будут\n"
+            "безвозвратно удалены из базы данных.\n\n"
+            "Вы абсолютно уверены?",
+            reply_markup=get_delete_user_final_confirm_keyboard(user_id, language),
+            parse_mode="HTML",
+        )
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка: неверный ID пользователя", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_delete_user_step2: {e}")
         await callback.answer("Произошла ошибка", show_alert=True)
 
 

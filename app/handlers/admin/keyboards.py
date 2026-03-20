@@ -8,11 +8,24 @@ from app.i18n import get_text as i18n_get_text
 
 
 def get_admin_dashboard_keyboard(language: str = "ru"):
-    """Клавиатура главного экрана админ-дашборда (сгруппирована по категориям)"""
+    """Клавиатура главного экрана админ-дашборда (структурирована по секциям)"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        # — Обзор —
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.dashboard"), callback_data="admin:dashboard")],
-        # — Аналитика и статистика —
+        # ━━━ Обзор ━━━
+        [InlineKeyboardButton(text="📊 Дашборд", callback_data="admin:dashboard")],
+
+        # ━━━ Пользователи и подписки ━━━
+        [InlineKeyboardButton(text="── 👥 Пользователи ──", callback_data="noop")],
+        [
+            InlineKeyboardButton(text="🔍 Поиск", callback_data="admin:user"),
+            InlineKeyboardButton(text="💰 Балансы", callback_data="admin:balance_management"),
+        ],
+        [
+            InlineKeyboardButton(text="🔑 VPN-ключи", callback_data="admin:keys"),
+            InlineKeyboardButton(text="🏢 Бизнес", callback_data="admin:business"),
+        ],
+
+        # ━━━ Аналитика ━━━
+        [InlineKeyboardButton(text="── 📈 Аналитика ──", callback_data="noop")],
         [
             InlineKeyboardButton(text=i18n_get_text(language, "admin.stats"), callback_data="admin:stats"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.analytics"), callback_data="admin:analytics"),
@@ -21,27 +34,25 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text=i18n_get_text(language, "admin.metrics"), callback_data="admin:metrics"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.referral_stats"), callback_data="admin:referral_stats"),
         ],
-        # — Управление пользователями —
-        [
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.user"), callback_data="admin:user"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.balance_management"), callback_data="admin:balance_management"),
-        ],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.keys"), callback_data="admin:keys")],
-        # — Бизнес —
-        [InlineKeyboardButton(text="🏢 Бизнес", callback_data="admin:business")],
-        # — Маркетинг и уведомления —
+
+        # ━━━ Маркетинг ━━━
+        [InlineKeyboardButton(text="── 📣 Маркетинг ──", callback_data="noop")],
         [InlineKeyboardButton(text="📣 Центр уведомлений", callback_data="admin:notifications")],
         [
             InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats"),
         ],
-        # — Система —
-        [InlineKeyboardButton(text="📡 Мониторинг", callback_data="admin:monitoring")],
+
+        # ━━━ Система ━━━
+        [InlineKeyboardButton(text="── ⚙️ Система ──", callback_data="noop")],
         [
+            InlineKeyboardButton(text="📡 Мониторинг", callback_data="admin:monitoring"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system"),
-            InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit"),
         ],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit"),
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export"),
+        ],
     ])
     return keyboard
 
@@ -65,39 +76,42 @@ def get_admin_export_keyboard(language: str = "ru"):
 
 
 def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False, is_vip: bool = False, subscription_type: str = "basic", language: str = "ru"):
-    """Клавиатура для раздела пользователя. subscription_type нужен для кнопки «Заменить подписку»."""
+    """Клавиатура для раздела пользователя. Структурирована по секциям с подтверждением опасных действий."""
     buttons = []
-    if has_active_subscription:
-        callback_data = f"admin:user_reissue:{user_id}" if user_id else "admin:user_reissue"
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_key"), callback_data=callback_data)])
     if user_id:
+        # ━━━ Подписка и ключи ━━━
+        buttons.append([InlineKeyboardButton(text="── 🔑 Подписка ──", callback_data="noop")])
+        if has_active_subscription:
+            callback_data = f"admin:user_reissue_ask:{user_id}"
+            buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.reissue_key"), callback_data=callback_data)])
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.subscription_history"), callback_data=f"admin:user_history:{user_id}")])
-        # Кнопки выдачи доступа (Basic / Plus) и лишения доступа
         buttons.append([
             InlineKeyboardButton(text="📦 Выдать Basic", callback_data=f"admin_grant_basic:{user_id}"),
             InlineKeyboardButton(text="⭐️ Выдать Plus", callback_data=f"admin_grant_plus:{user_id}"),
         ])
-        # Заменить подписку (Basic↔Plus) только при активной подписке
         sub_type = (subscription_type or "basic").strip().lower()
         if has_active_subscription and sub_type in ("basic", "plus"):
             if sub_type == "basic":
                 buttons.append([InlineKeyboardButton(text="⭐️ Перевести на Plus", callback_data=f"admin_switch_plus:{user_id}")])
             else:
                 buttons.append([InlineKeyboardButton(text="📦 Перевести на Basic", callback_data=f"admin_switch_basic:{user_id}")])
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")])
-        # Кнопки управления скидками
+
+        # ━━━ Финансы и скидки ━━━
+        buttons.append([InlineKeyboardButton(text="── 💰 Финансы ──", callback_data="noop")])
+        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
         if has_discount:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
         else:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.create_discount"), callback_data=f"admin:discount_create:{user_id}")])
-        # Кнопки управления VIP-статусом
         if is_vip:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_vip"), callback_data=f"admin:vip_revoke:{user_id}")])
         else:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
-        # Кнопка выдачи средств
-        buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
-        # Кнопка удаления пользователя из БД
+
+        # ━━━ Опасные действия (с подтверждением) ━━━
+        buttons.append([InlineKeyboardButton(text="── ⚠️ Действия ──", callback_data="noop")])
+        if has_active_subscription:
+            buttons.append([InlineKeyboardButton(text="🚫 Отозвать доступ", callback_data=f"admin:revoke:user:{user_id}")])
         buttons.append([InlineKeyboardButton(text="🗑 Удалить из БД", callback_data=f"admin:delete_user:{user_id}")])
     buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -291,3 +305,120 @@ def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int, lan
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     return keyboard
+
+
+# ====================================================================================
+# КЛАВИАТУРЫ ПОДТВЕРЖДЕНИЯ ОПАСНЫХ ДЕЙСТВИЙ
+# ====================================================================================
+
+
+def get_reissue_confirm_keyboard(user_id: int, language: str = "ru"):
+    """Клавиатура подтверждения перевыпуска ключа (1-й шаг)"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⚠️ Да, перевыпустить ключ",
+            callback_data=f"admin:user_reissue_confirm:{user_id}",
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена",
+            callback_data=f"admin:show_user:{user_id}",
+        )],
+    ])
+
+
+def get_reissue_final_confirm_keyboard(user_id: int, language: str = "ru"):
+    """Клавиатура финального подтверждения перевыпуска (2-й шаг — защита от мисклика)"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔑 ПОДТВЕРЖДАЮ перевыпуск",
+            callback_data=f"admin:user_reissue:{user_id}",
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена — вернуться",
+            callback_data=f"admin:show_user:{user_id}",
+        )],
+    ])
+
+
+def get_bulk_reissue_confirm_keyboard(language: str = "ru"):
+    """Клавиатура подтверждения массового перевыпуска (1-й шаг)"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⚠️ Да, перевыпустить ВСЕ ключи",
+            callback_data="admin:keys:reissue_all_step2",
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена",
+            callback_data="admin:keys",
+        )],
+    ])
+
+
+def get_bulk_reissue_final_confirm_keyboard(language: str = "ru"):
+    """Клавиатура финального подтверждения массового перевыпуска (2-й шаг)"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🔑 ПОДТВЕРЖДАЮ массовый перевыпуск",
+            callback_data="admin:keys:reissue_all_go",
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена — вернуться",
+            callback_data="admin:keys",
+        )],
+    ])
+
+
+def get_delete_user_confirm_keyboard(user_id: int, language: str = "ru"):
+    """Клавиатура подтверждения удаления пользователя (1-й шаг)"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="⚠️ Да, удалить пользователя",
+            callback_data=f"admin:delete_user_step2:{user_id}",
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена",
+            callback_data=f"admin:show_user:{user_id}",
+        )],
+    ])
+
+
+def get_delete_user_final_confirm_keyboard(user_id: int, language: str = "ru"):
+    """Клавиатура финального подтверждения удаления (2-й шаг)"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🗑 ПОДТВЕРЖДАЮ УДАЛЕНИЕ",
+            callback_data=f"admin:delete_user_confirm:{user_id}",
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена — вернуться",
+            callback_data=f"admin:show_user:{user_id}",
+        )],
+    ])
+
+
+def get_admin_tariffs_keyboard(language: str = "ru"):
+    """Клавиатура управления тарифами с отображением текущих цен"""
+    import config
+    basic = config.TARIFFS["basic"]
+    plus = config.TARIFFS["plus"]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="── 📦 Basic ──", callback_data="noop")],
+        [
+            InlineKeyboardButton(text=f"30д — {basic[30]['price']}₽", callback_data="noop"),
+            InlineKeyboardButton(text=f"90д — {basic[90]['price']}₽", callback_data="noop"),
+        ],
+        [
+            InlineKeyboardButton(text=f"180д — {basic[180]['price']}₽", callback_data="noop"),
+            InlineKeyboardButton(text=f"365д — {basic[365]['price']}₽", callback_data="noop"),
+        ],
+        [InlineKeyboardButton(text="── ⭐️ Plus ──", callback_data="noop")],
+        [
+            InlineKeyboardButton(text=f"30д — {plus[30]['price']}₽", callback_data="noop"),
+            InlineKeyboardButton(text=f"90д — {plus[90]['price']}₽", callback_data="noop"),
+        ],
+        [
+            InlineKeyboardButton(text=f"180д — {plus[180]['price']}₽", callback_data="noop"),
+            InlineKeyboardButton(text=f"365д — {plus[365]['price']}₽", callback_data="noop"),
+        ],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+    ])

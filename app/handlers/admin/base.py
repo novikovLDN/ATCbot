@@ -64,11 +64,18 @@ async def callback_admin_dashboard(callback: CallbackQuery):
             try:
                 stats = await database.get_admin_stats()
                 daily = await database.get_daily_summary(None)
-                text += f"\n━━━ Ключевые показатели ━━━\n"
+
+                text += f"\n━━━ 📈 Ключевые показатели ━━━\n"
                 text += f"👥 Пользователей: {stats['total_users']}\n"
                 text += f"🔑 Активных подписок: {stats['active_subscriptions']}\n"
                 text += f"💳 Платежей: {stats['approved_payments']}/{stats['total_payments']}\n"
-                text += f"\n━━━ Сегодня ━━━\n"
+
+                # Конверсия
+                if stats['total_users'] > 0:
+                    conversion = (stats['active_subscriptions'] / stats['total_users']) * 100
+                    text += f"📊 Конверсия: {conversion:.1f}%\n"
+
+                text += f"\n━━━ 📅 Сегодня ━━━\n"
                 text += f"💰 Доход: {daily.get('revenue', 0):.2f} ₽\n"
                 text += f"🆕 Новых: {daily.get('new_users', 0)} польз. | {daily.get('new_subscriptions', 0)} подп.\n"
                 text += f"💳 Платежей: {daily.get('payments_count', 0)}\n"
@@ -207,19 +214,44 @@ async def callback_admin_reissue_key(callback: CallbackQuery, bot: Bot):
 
 @admin_base_router.callback_query(F.data == "admin:reissue_all_active")
 async def callback_admin_reissue_all_active_confirm(callback: CallbackQuery):
-    """Подтверждение массового перевыпуска"""
+    """Массовый перевыпуск: шаг 1 — предупреждение"""
     if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
 
     language = await resolve_user_language(callback.from_user.id)
-    text = "⚠️ Массовый перевыпуск ключей\n\nВсе активные VPN-ключи будут перевыпущены.\nПродолжить?"
+    text = (
+        "⚠️ Массовый перевыпуск ключей\n\n"
+        "Все активные VPN-ключи будут аннулированы и заменены новыми.\n"
+        "Каждый пользователь получит уведомление.\n\n"
+        "Продолжить?"
+    )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Да, перевыпустить", callback_data="admin:reissue_all_active_go"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="admin:keys"),
-        ]
+        [InlineKeyboardButton(text="⚠️ Да, продолжить", callback_data="admin:reissue_all_active_step2")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:keys")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@admin_base_router.callback_query(F.data == "admin:reissue_all_active_step2")
+async def callback_admin_reissue_all_active_step2(callback: CallbackQuery):
+    """Массовый перевыпуск: шаг 2 — финальное подтверждение"""
+    if callback.from_user.id not in config.ADMIN_TELEGRAM_IDS:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    language = await resolve_user_language(callback.from_user.id)
+    text = (
+        "🔐 Финальное подтверждение\n\n"
+        "❗️ Это затронет ВСЕХ активных пользователей.\n"
+        "Нажмите «ПОДТВЕРЖДАЮ» для выполнения."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 ПОДТВЕРЖДАЮ массовый перевыпуск", callback_data="admin:reissue_all_active_go")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:keys")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
     await callback.answer()
