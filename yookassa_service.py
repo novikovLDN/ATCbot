@@ -37,16 +37,15 @@ def _get_auth() -> tuple:
     return (config.YOOKASSA_SHOP_ID, config.YOOKASSA_SECRET_KEY)
 
 
-async def create_payment_with_save(
+async def create_payment(
     amount_rubles: float,
     description: str,
     purchase_id: str,
     telegram_id: int,
     return_url: Optional[str] = None,
-    save_payment_method: bool = True,
 ) -> Dict[str, Any]:
     """
-    Create a YooKassa payment with optional card saving for recurring charges.
+    Create a YooKassa payment.
 
     Args:
         amount_rubles: Payment amount in rubles
@@ -54,7 +53,6 @@ async def create_payment_with_save(
         purchase_id: Internal purchase ID (stored in metadata)
         telegram_id: User's Telegram ID
         return_url: URL to redirect user after payment
-        save_payment_method: Whether to save the payment method
 
     Returns:
         {"payment_id": str, "confirmation_url": str, "status": str}
@@ -77,7 +75,6 @@ async def create_payment_with_save(
             "return_url": return_url or config.YOOKASSA_RETURN_URL or "https://t.me/atlassecure_bot",
         },
         "capture": True,
-        "save_payment_method": save_payment_method,
         "description": description[:128] if description else "Atlas Secure VPN",
         "metadata": {
             "purchase_id": purchase_id,
@@ -113,111 +110,13 @@ async def create_payment_with_save(
 
     logger.info(
         f"YooKassa payment created: payment_id={payment_id}, status={status}, "
-        f"purchase_id={purchase_id}, telegram_id={telegram_id}, "
-        f"save_payment_method={save_payment_method}"
+        f"purchase_id={purchase_id}, telegram_id={telegram_id}"
     )
 
     return {
         "payment_id": payment_id,
         "confirmation_url": confirmation_url,
         "status": status,
-    }
-
-
-async def create_autopayment(
-    amount_rubles: float,
-    payment_method_id: str,
-    description: str,
-    telegram_id: int,
-    metadata: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
-    """
-    Create an autopayment using a saved payment method (no user confirmation needed).
-
-    Args:
-        amount_rubles: Payment amount in rubles
-        payment_method_id: Saved YooKassa payment method ID
-        description: Payment description
-        telegram_id: User's Telegram ID
-        metadata: Optional metadata dict
-
-    Returns:
-        {"payment_id": str, "status": str, "paid": bool}
-
-    Raises:
-        RuntimeError on API or payment errors
-    """
-    if not is_enabled():
-        raise RuntimeError("YooKassa direct API is not configured")
-
-    # Derive idempotence key from payment parameters to prevent double-charge on retry
-    idem_source = f"autopay:{telegram_id}:{payment_method_id}:{amount_rubles:.2f}:{description or ''}"
-    idempotence_key = hashlib.sha256(idem_source.encode()).hexdigest()[:48]
-
-    body = {
-        "amount": {
-            "value": f"{amount_rubles:.2f}",
-            "currency": "RUB",
-        },
-        "capture": True,
-        "payment_method_id": payment_method_id,
-        "description": description[:128] if description else "Atlas Secure VPN — автопродление",
-        "metadata": metadata or {"telegram_id": str(telegram_id)},
-        "merchant_customer_id": str(telegram_id),
-    }
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"{YOOKASSA_API_URL}/payments",
-            json=body,
-            auth=_get_auth(),
-            headers={
-                "Idempotence-Key": idempotence_key,
-                "Content-Type": "application/json",
-            },
-        )
-
-        if response.status_code not in (200, 201):
-            error_text = response.text[:500]
-            logger.error(
-                f"YooKassa autopayment failed: status={response.status_code}, "
-                f"response={error_text}, telegram_id={telegram_id}"
-            )
-            raise RuntimeError(f"YooKassa autopayment error: {response.status_code}: {error_text}")
-
-        data = response.json()
-
-    payment_id = data.get("id")
-    status = data.get("status")
-    paid = data.get("paid", False)
-
-    # Check for cancellation
-    cancellation = data.get("cancellation_details")
-    if cancellation:
-        reason = cancellation.get("reason", "unknown")
-        party = cancellation.get("party", "unknown")
-        logger.warning(
-            f"YooKassa autopayment cancelled: payment_id={payment_id}, "
-            f"reason={reason}, party={party}, telegram_id={telegram_id}"
-        )
-        raise RuntimeError(f"Autopayment cancelled: {reason} (party: {party})")
-
-    if status == "canceled":
-        logger.warning(
-            f"YooKassa autopayment status=canceled: payment_id={payment_id}, "
-            f"telegram_id={telegram_id}"
-        )
-        raise RuntimeError("Autopayment was canceled by YooKassa")
-
-    logger.info(
-        f"YooKassa autopayment result: payment_id={payment_id}, status={status}, "
-        f"paid={paid}, telegram_id={telegram_id}, amount={amount_rubles}"
-    )
-
-    return {
-        "payment_id": payment_id,
-        "status": status,
-        "paid": paid,
     }
 
 
@@ -349,24 +248,6 @@ async def process_webhook(body: dict, bot) -> dict:
         logger.error(f"YooKassa webhook: invalid telegram_id={telegram_id_str}")
         return {"status": "invalid"}
 
-    # Save payment method if available
-    payment_method = verified_payment.get("payment_method", {})
-    pm_saved = payment_method.get("saved", False)
-    pm_id = payment_method.get("id")
-    pm_title = payment_method.get("title")
-
-    if pm_saved and pm_id:
-        try:
-            await save_user_payment_method(telegram_id, pm_id, pm_title)
-            logger.info(
-                f"YooKassa: saved payment method for user={telegram_id}, "
-                f"pm_id={pm_id[:8]}..., title={pm_title}"
-            )
-        except Exception as e:
-            logger.error(
-                f"YooKassa: failed to save payment method for user={telegram_id}: {e}"
-            )
-
     # Process payment through shared confirmation logic
     amount_obj = verified_payment.get("amount", {})
     amount_rubles = float(amount_obj.get("value", 0))
@@ -390,120 +271,3 @@ async def process_webhook(body: dict, bot) -> dict:
     )
 
 
-async def save_user_payment_method(
-    telegram_id: int,
-    payment_method_id: str,
-    title: Optional[str] = None,
-) -> bool:
-    """
-    Save YooKassa payment method ID for a user (enables card auto-renewal).
-
-    Args:
-        telegram_id: User's Telegram ID
-        payment_method_id: YooKassa payment method ID
-        title: Card title/mask (e.g. "Visa •••• 4242")
-
-    Returns:
-        True if saved successfully
-    """
-    pool = await database.get_pool()
-    if not pool:
-        return False
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """UPDATE subscriptions
-               SET saved_payment_method_id = $1,
-                   saved_payment_method_title = $2,
-                   auto_renew_card = TRUE
-               WHERE telegram_id = $3""",
-            payment_method_id, title, telegram_id,
-        )
-    logger.info(
-        f"SAVED_PAYMENT_METHOD user={telegram_id} pm_id={payment_method_id[:8]}... "
-        f"title={title}"
-    )
-    return True
-
-
-async def get_user_payment_method(telegram_id: int) -> Optional[Dict[str, Any]]:
-    """
-    Get saved payment method info for a user.
-
-    Returns:
-        {"payment_method_id": str, "title": str, "auto_renew_card": bool} or None
-    """
-    pool = await database.get_pool()
-    if not pool:
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """SELECT saved_payment_method_id, saved_payment_method_title, auto_renew_card
-               FROM subscriptions
-               WHERE telegram_id = $1""",
-            telegram_id,
-        )
-        if not row or not row.get("saved_payment_method_id"):
-            return None
-        return {
-            "payment_method_id": row["saved_payment_method_id"],
-            "title": row["saved_payment_method_title"],
-            "auto_renew_card": row.get("auto_renew_card", False),
-        }
-
-
-async def remove_user_payment_method(telegram_id: int) -> bool:
-    """
-    Remove saved payment method and disable card auto-renewal.
-
-    Args:
-        telegram_id: User's Telegram ID
-
-    Returns:
-        True if removed successfully
-    """
-    pool = await database.get_pool()
-    if not pool:
-        return False
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """UPDATE subscriptions
-               SET saved_payment_method_id = NULL,
-                   saved_payment_method_title = NULL,
-                   auto_renew_card = FALSE
-               WHERE telegram_id = $1""",
-            telegram_id,
-        )
-    logger.info(f"REMOVED_PAYMENT_METHOD user={telegram_id}")
-    return True
-
-
-async def toggle_card_auto_renew(telegram_id: int, enabled: bool) -> bool:
-    """
-    Enable/disable card-based auto-renewal.
-
-    Args:
-        telegram_id: User's Telegram ID
-        enabled: Whether to enable card auto-renewal
-
-    Returns:
-        True if toggled successfully
-    """
-    pool = await database.get_pool()
-    if not pool:
-        return False
-    async with pool.acquire() as conn:
-        # Only enable if payment method is saved
-        if enabled:
-            row = await conn.fetchrow(
-                "SELECT saved_payment_method_id FROM subscriptions WHERE telegram_id = $1",
-                telegram_id,
-            )
-            if not row or not row.get("saved_payment_method_id"):
-                return False
-
-        await conn.execute(
-            "UPDATE subscriptions SET auto_renew_card = $1 WHERE telegram_id = $2",
-            enabled, telegram_id,
-        )
-    logger.info(f"TOGGLE_CARD_AUTO_RENEW user={telegram_id} enabled={enabled}")
-    return True
