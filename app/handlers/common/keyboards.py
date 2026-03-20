@@ -14,7 +14,7 @@ from app.services.trials import service as trial_service
 
 logger = logging.getLogger(__name__)
 
-MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
+MINI_APP_URL = config.MINI_APP_URL
 
 
 def get_connect_button(uuid: Optional[str] = None, telegram_id: Optional[int] = None):

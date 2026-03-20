@@ -1,6 +1,17 @@
 """
 Pytest configuration and shared fixtures for service layer tests.
 """
+import os
+
+# Set required env vars BEFORE any project imports (config.py does sys.exit if missing)
+os.environ.setdefault("APP_ENV", "local")
+os.environ.setdefault("LOCAL_BOT_TOKEN", "test-token-000")
+os.environ.setdefault("LOCAL_ADMIN_TELEGRAM_ID", "999999")
+os.environ.setdefault("LOCAL_DATABASE_URL", "postgresql://test:test@localhost:5432/testdb")
+os.environ.setdefault("LOCAL_WEBHOOK_URL", "https://test.example.com/telegram/webhook")
+os.environ.setdefault("LOCAL_WEBHOOK_SECRET", "test-webhook-secret")
+os.environ.setdefault("LOCAL_TG_PROVIDER_TOKEN", "test-provider-token")
+
 import pytest
 from datetime import datetime
 from typing import Dict, Any, Optional
