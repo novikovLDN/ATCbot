@@ -210,7 +210,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         )
 
         expires_str = subscription_end.strftime("%d.%m.%Y")
-        success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str)
+        success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, vpn_key=vpn_key)
         try:
             if _degradation_notice:
                 success_text += "\n\n⏳ Возможны небольшие задержки"
