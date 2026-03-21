@@ -211,7 +211,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
         expires_str = subscription_end.strftime("%d.%m.%Y")
         from html import escape as html_escape
-        success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, vpn_key=html_escape(vpn_key))
+        sub_url = f"{config.VPN_SERVER_URL}/sub/{uuid}" if config.VPN_SERVER_URL else vpn_key
+        success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, sub_url=html_escape(sub_url))
         try:
             if _degradation_notice:
                 success_text += "\n\n⏳ Возможны небольшие задержки"
