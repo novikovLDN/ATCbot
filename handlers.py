@@ -829,10 +829,10 @@ def get_reissue_notification_keyboard(language: str = "ru"):
     return keyboard
 
 
-def get_reissue_notification_text(vpn_key: str, language: str = "ru") -> str:
+def get_reissue_notification_text(sub_url: str, language: str = "ru") -> str:
     """Текст уведомления о перевыпуске VPN-ключа"""
     title = i18n_get_text(language, "main.reissue_notification_title")
-    text_body = i18n_get_text(language, "main.reissue_notification_text", vpn_key=vpn_key)
+    text_body = i18n_get_text(language, "main.reissue_notification_text", sub_url=sub_url)
     return f"{title}\n\n{text_body}"
 
 

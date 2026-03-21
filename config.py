@@ -374,6 +374,9 @@ _log.info("Using WEBHOOK_URL from %s_WEBHOOK_URL", APP_ENV.upper())
 BOT_USERNAME = env("BOT_USERNAME", default="atlassecure_bot")
 MINI_APP_NAME = env("MINI_APP_NAME", default="app")
 
+# Mini App URL — used for subscription link generation and WebApp buttons.
+APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app").rstrip("/")
+
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
