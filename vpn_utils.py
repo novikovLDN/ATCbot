@@ -889,3 +889,34 @@ async def reissue_vpn_access(old_uuid: str, telegram_id: int, subscription_end: 
         # КРИТИЧНО: Если не удалось создать новый UUID - старый уже удалён
         # Это критическая ситуация, но мы не можем восстановить старый UUID
         raise VPNAPIError(error_msg) from e
+
+
+# ============================================================================
+# Subscription URL generation (matches mini-app's /api/sub/{token}?id={id})
+# ============================================================================
+
+def generate_sub_token(bot_token: str, telegram_id: int) -> str:
+    """
+    HMAC-SHA256(bot_token, str(telegram_id)) → base64url → first 32 chars.
+    Identical to the Node.js implementation in the mini-app.
+    """
+    import hmac
+    import hashlib
+    import base64
+
+    signature = hmac.new(
+        bot_token.encode(),
+        str(telegram_id).encode(),
+        hashlib.sha256,
+    ).digest()
+    token = base64.urlsafe_b64encode(signature).rstrip(b"=").decode()[:32]
+    return token
+
+
+def build_sub_url(telegram_id: int) -> str:
+    """
+    Build the subscription URL for a user:
+    https://{APP_URL}/api/sub/{token}?id={telegram_id}
+    """
+    token = generate_sub_token(config.BOT_TOKEN, telegram_id)
+    return f"{config.APP_URL}/api/sub/{token}?id={telegram_id}"

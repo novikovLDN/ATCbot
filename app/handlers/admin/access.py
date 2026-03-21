@@ -141,10 +141,13 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                     notify_lang = await resolve_user_language(telegram_id)
                     
                     try:
-                        user_text = i18n_get_text(notify_lang, "admin.reissue_user_notification", vpn_key=f"<code>{new_vpn_key}</code>")
+                        from vpn_utils import build_sub_url
+                        _sub_url = build_sub_url(telegram_id)
+                        user_text = i18n_get_text(notify_lang, "admin.reissue_user_notification", sub_url=f"<code>{_sub_url}</code>")
                     except (KeyError, TypeError):
                         # Fallback to default if localization not found
-                        user_text = get_reissue_notification_text(new_vpn_key)
+                        from vpn_utils import build_sub_url
+                        user_text = get_reissue_notification_text(build_sub_url(telegram_id))
                     
                     keyboard = get_reissue_notification_keyboard(notify_lang)
                     await bot.send_message(telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
@@ -2046,7 +2049,8 @@ async def callback_admin_user_reissue(callback: CallbackQuery):
 
         # Уведомляем пользователя
         try:
-            user_text = get_reissue_notification_text(new_vpn_key)
+            from vpn_utils import build_sub_url
+            user_text = get_reissue_notification_text(build_sub_url(target_user_id))
             keyboard = get_reissue_notification_keyboard()
             await callback.bot.send_message(target_user_id, user_text, reply_markup=keyboard, parse_mode="HTML")
         except Exception as e:

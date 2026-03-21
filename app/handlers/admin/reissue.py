@@ -60,7 +60,8 @@ async def cmd_reissue_key(message: Message):
         
         # Уведомляем пользователя
         try:
-            user_text = get_reissue_notification_text(new_vpn_key)
+            from vpn_utils import build_sub_url
+            user_text = get_reissue_notification_text(build_sub_url(target_telegram_id))
             keyboard = get_reissue_notification_keyboard()
             await message.bot.send_message(target_telegram_id, user_text, reply_markup=keyboard, parse_mode="HTML")
             logging.info(f"Reissue notification sent to user {target_telegram_id}")
