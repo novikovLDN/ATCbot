@@ -375,6 +375,49 @@ while True:
 
 ---
 
+## Site Integration (Atlas Secure Website ↔ Bot Sync)
+
+### Overview
+Website and bot share a common PostgreSQL database. Site integration adds bi-directional sync:
+- **Site → Bot**: User clicks "Перейти в Telegram" on site → `/start TOKEN` → bot links accounts
+- **Bot → Site**: User pays in bot → `POST /api/bot/extend` → site extends subscription
+
+### Components
+- **Config**: `SITE_API_URL`, `BOT_API_KEY` env vars → `SITE_INTEGRATION_ENABLED` flag
+- **Client**: `app/services/site_client.py` — HTTP client with X-Bot-Api-Key auth
+- **Start handler**: `app/handlers/user/start.py` — 16-char hex token detection
+- **Payment sync**: `app/services/payments/confirmation.py` + `app/handlers/payments/payments_messages.py`
+
+### API Endpoints (all require X-Bot-Api-Key header)
+| Method | URL | Purpose |
+|--------|-----|---------|
+| GET | `/api/bot/user?token=XXX` | Get user by telegram_link_token |
+| GET | `/api/bot/user-by-telegram?telegram_id=XXX` | Get user by telegram_id |
+| POST | `/api/bot/link` | Link Telegram to site account |
+| POST | `/api/bot/extend` | Extend subscription after bot payment |
+
+### Flow: Site Token Linking (`/start TOKEN`)
+1. User registers on site → gets unique `telegram_link_token` (16 hex chars)
+2. User clicks "Перейти в Telegram" → `https://t.me/atlassecure_bot?start=TOKEN`
+3. Bot receives `/start TOKEN`:
+   - Calls `GET /api/bot/user?token=TOKEN` → gets user data
+   - Calls `POST /api/bot/link` with `{token, telegramId}` → links accounts
+   - If user has active subscription → shows main menu (skips trial)
+   - If no subscription → normal `/start` flow continues
+
+### Flow: Payment Sync (Bot → Site)
+1. User pays in bot → `finalize_purchase()` succeeds
+2. Fire-and-forget `POST /api/bot/extend` with `{telegramId, days}`
+3. Site extends subscription, regenerates VPN key if deleted, credits referrer
+
+### Safety Guarantees
+- **Feature flag**: disabled if `SITE_API_URL` or `BOT_API_KEY` not set
+- **Best-effort**: all site API calls wrapped in try/except, failures logged but never break bot
+- **Fire-and-forget**: extend calls run as background tasks, don't block payment webhook
+- **No existing code changed**: all additions are new `if` blocks and new files
+
+---
+
 ## Key Design Decisions
 
 1. **DB is source of truth** — Xray is stateless executor, xray_sync recovers from crashes
