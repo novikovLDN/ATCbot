@@ -420,6 +420,17 @@ async def callback_get_sub_key(callback: CallbackQuery):
     from vpn_utils import build_sub_url
     sub_url = build_sub_url(telegram_id)
     await callback.message.answer(
-        f"🔑 Ваша ссылка подписки:\n\n<code>{sub_url}</code>",
+        "🔑 <b>Ваш ключ подключения</b>\n"
+        "\n"
+        f"<code>{sub_url}</code>\n"
+        "\n"
+        "📲 <b>Как подключить на телефоне:</b>\n"
+        "1. Скачайте приложение <b>V2Box</b> (iOS) или <b>V2rayNG</b> (Android)\n"
+        "2. Скопируйте ссылку выше (нажмите на неё)\n"
+        "3. В приложении нажмите <b>+</b> → <b>Импорт из буфера обмена</b>\n"
+        "4. Нажмите кнопку подключения ▶️\n"
+        "\n"
+        "⚠️ <i>Мини-приложение временно работает нестабильно — мы уже чиним. "
+        "Пока используйте ключ выше для подключения.</i>",
         parse_mode="HTML",
     )
