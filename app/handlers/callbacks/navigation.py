@@ -395,3 +395,31 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
         "🚀 Нажмите кнопку ниже чтобы подключиться:",
         reply_markup=get_connect_keyboard(),
     )
+
+
+@router.callback_query(F.data == "get_sub_key")
+async def callback_get_sub_key(callback: CallbackQuery):
+    """Отправить ссылку подписки (subscription URL) пользователю в чат."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
+        return
+
+    telegram_id = callback.from_user.id
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription:
+        language = await resolve_user_language(telegram_id)
+        await callback.message.answer(
+            i18n_get_text(language, "get_key.no_subscription", "❌ У вас нет активной подписки."),
+        )
+        return
+
+    from vpn_utils import build_sub_url
+    sub_url = build_sub_url(telegram_id)
+    await callback.message.answer(
+        f"🔑 Ваша ссылка подписки:\n\n<code>{sub_url}</code>",
+        parse_mode="HTML",
+    )

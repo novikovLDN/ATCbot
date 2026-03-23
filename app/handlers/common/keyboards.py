@@ -92,11 +92,17 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
     # === ПЕРВАЯ КНОПКА: 3 состояния ===
     if has_active_sub:
-        # Состояние 2: Активная подписка → "Подключиться" (WebApp)
-        buttons.append([InlineKeyboardButton(
-            text="🚀 Подключиться",
-            web_app=WebAppInfo(url=MINI_APP_URL),
-        )])
+        # Состояние 2: Активная подписка → "Подключиться" (WebApp) + "Получить ключ"
+        buttons.append([
+            InlineKeyboardButton(
+                text="🚀 Подключиться",
+                web_app=WebAppInfo(url=MINI_APP_URL),
+            ),
+            InlineKeyboardButton(
+                text="🔑 Получить ключ",
+                callback_data="get_sub_key",
+            ),
+        ])
     elif telegram_id and database.DB_READY:
         # Проверяем trial
         trial_available = False
