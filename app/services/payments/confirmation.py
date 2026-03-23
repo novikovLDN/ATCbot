@@ -85,6 +85,21 @@ async def process_confirmed_payment(
                 f"error={type(notif_err).__name__}: {notif_err} — payment was successful"
             )
 
+        # SITE SYNC: extend subscription on site (best-effort, fire-and-forget)
+        if not is_balance_topup and config.SITE_INTEGRATION_ENABLED:
+            try:
+                period_days = result.get("period_days")
+                if not period_days:
+                    tariff, period_days = await _lookup_purchase_tariff(purchase_id)
+                if period_days and period_days > 0:
+                    from app.services.site_client import extend_subscription
+                    asyncio.ensure_future(_safe_site_extend(telegram_id, period_days))
+            except Exception as site_err:
+                logger.warning(
+                    "SITE_EXTEND_SCHEDULE_FAILED: user=%s purchase=%s error=%s",
+                    telegram_id, purchase_id, site_err,
+                )
+
     except ValueError as e:
         logger.info(
             f"{provider} webhook: purchase already processed (ValueError): "
@@ -255,3 +270,13 @@ async def _send_confirmation(
         )
 
 
+async def _safe_site_extend(telegram_id: int, days: int) -> None:
+    """Fire-and-forget wrapper for site subscription extension."""
+    try:
+        from app.services.site_client import extend_subscription
+        await extend_subscription(telegram_id, days)
+    except Exception as e:
+        logger.warning(
+            "SITE_EXTEND_BACKGROUND_FAILED: user=%s days=%s error=%s: %s",
+            telegram_id, days, type(e).__name__, e,
+        )

@@ -165,6 +165,52 @@ async def cmd_start(message: Message, state: FSMContext):
                     await message.answer(text, reply_markup=keyboard)
                     return
 
+    # SITE LINK: /start TOKEN (16-char hex from site "Перейти в Telegram" button)
+    # Token format: exactly 16 hex chars, no prefix (not gift_, not ref_)
+    if message.text and config.SITE_INTEGRATION_ENABLED:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1:
+            site_token = start_parts[1]
+            # Site token: 16 hex chars, no known prefix
+            if (
+                len(site_token) == 16
+                and all(c in "0123456789abcdef" for c in site_token.lower())
+                and not site_token.startswith(("gift_", "ref_"))
+            ):
+                try:
+                    from app.services.site_client import get_user_by_token, link_telegram
+
+                    site_user = await get_user_by_token(site_token)
+                    if site_user:
+                        # Link Telegram to site account
+                        await link_telegram(site_token, telegram_id)
+                        logger.info(
+                            "SITE_LINK_VIA_START user=%s token=%s...%s email=%s",
+                            telegram_id, site_token[:4], site_token[-4:],
+                            site_user.get("email", "N/A"),
+                        )
+
+                        # If user has active subscription on site → show main menu (skip trial)
+                        language = await resolve_user_language(telegram_id)
+                        if site_user.get("subscription") or site_user.get("days", 0) > 0:
+                            text = i18n_get_text(language, "main.welcome")
+                            keyboard = await get_main_menu_keyboard(language, telegram_id)
+                            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                            return
+
+                        # No active subscription on site — continue to normal flow
+                    else:
+                        logger.warning(
+                            "SITE_TOKEN_NOT_FOUND user=%s token=%s...%s",
+                            telegram_id, site_token[:4], site_token[-4:],
+                        )
+                except Exception as e:
+                    # Site API failure must NOT break /start
+                    logger.warning(
+                        "SITE_LINK_ERROR user=%s error=%s: %s",
+                        telegram_id, type(e).__name__, e,
+                    )
+
     # 1. REFERRAL REGISTRATION: Process ONLY for new users
     # Protects against: self-referral and existing users clicking referral links later
     referral_result = None
