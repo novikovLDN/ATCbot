@@ -178,7 +178,7 @@ async def cmd_start(message: Message, state: FSMContext):
                 and not site_token.startswith(("gift_", "ref_"))
             ):
                 try:
-                    from app.services.site_client import get_user_by_token, link_telegram
+                    from app.services.site_client import get_user_by_token, link_telegram, extend_subscription
 
                     site_user = await get_user_by_token(site_token)
                     if site_user:
@@ -191,7 +191,29 @@ async def cmd_start(message: Message, state: FSMContext):
                         )
 
                         language = await resolve_user_language(telegram_id)
-                        days_left = site_user.get("daysLeft", 0) or site_user.get("days", 0) or 0
+                        site_days = site_user.get("daysLeft", 0) or site_user.get("days", 0) or 0
+
+                        # Sync bot subscription → site if bot has more days
+                        bot_days = 0
+                        try:
+                            bot_sub = await database.get_subscription(telegram_id)
+                            if bot_sub and bot_sub.get("expires_at"):
+                                delta = bot_sub["expires_at"] - datetime.now(timezone.utc)
+                                bot_days = max(0, delta.days)
+                        except Exception as e:
+                            logger.warning("SITE_SYNC_BOT_SUB_ERROR user=%s: %s", telegram_id, e)
+
+                        if bot_days > site_days:
+                            extra_days = bot_days - site_days
+                            ok = await extend_subscription(telegram_id, extra_days)
+                            if ok:
+                                logger.info(
+                                    "SITE_SYNC_EXTEND user=%s bot_days=%s site_days=%s extended_by=%s",
+                                    telegram_id, bot_days, site_days, extra_days,
+                                )
+                                site_days = bot_days
+
+                        days_left = site_days
 
                         if days_left > 0:
                             # Active subscription on site
