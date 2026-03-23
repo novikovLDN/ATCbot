@@ -1018,16 +1018,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         f"tariff={tariff_type}, period_days={period_days}, amount={payment_amount_rubles} RUB, "
         f"purchase_id={purchase_id}, expires_at={expires_str}, vpn_key_sent=True, subscription_visible=True]"
     )
-
-    # SITE SYNC: extend subscription on site (best-effort, fire-and-forget)
-    if config.SITE_INTEGRATION_ENABLED and period_days and period_days > 0:
-        try:
-            import asyncio
-            from app.services.payments.confirmation import _safe_site_extend
-            asyncio.ensure_future(_safe_site_extend(telegram_id, period_days))
-        except Exception as site_err:
-            logger.warning("SITE_EXTEND_SCHEDULE_FAILED: user=%s error=%s", telegram_id, site_err)
-
+    
     # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
     await clear_promo_session(state)
     
