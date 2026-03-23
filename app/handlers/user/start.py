@@ -183,22 +183,38 @@ async def cmd_start(message: Message, state: FSMContext):
                     site_user = await get_user_by_token(site_token)
                     if site_user:
                         # Link Telegram to site account
-                        await link_telegram(site_token, telegram_id)
+                        link_result = await link_telegram(site_token, telegram_id)
+                        email = site_user.get("email", "N/A")
                         logger.info(
                             "SITE_LINK_VIA_START user=%s token=%s...%s email=%s",
-                            telegram_id, site_token[:4], site_token[-4:],
-                            site_user.get("email", "N/A"),
+                            telegram_id, site_token[:4], site_token[-4:], email,
                         )
 
-                        # If user has active subscription on site → show main menu (skip trial)
                         language = await resolve_user_language(telegram_id)
-                        if site_user.get("subscription") or site_user.get("days", 0) > 0:
-                            text = i18n_get_text(language, "main.welcome")
-                            keyboard = await get_main_menu_keyboard(language, telegram_id)
-                            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-                            return
+                        days_left = site_user.get("daysLeft", 0) or site_user.get("days", 0) or 0
 
-                        # No active subscription on site — continue to normal flow
+                        if days_left > 0:
+                            # Active subscription on site
+                            await message.answer(
+                                i18n_get_text(language, "site.linked_active",
+                                    f"Telegram привязан к аккаунту {email}\n"
+                                    f"Подписка: {days_left} дн.\n"
+                                    f"Ваш VPN-ключ активен на сайте",
+                                    email=email, days=days_left),
+                                reply_markup=await get_main_menu_keyboard(language, telegram_id),
+                                parse_mode="HTML",
+                            )
+                        else:
+                            # No active subscription — offer payment
+                            await message.answer(
+                                i18n_get_text(language, "site.linked_expired",
+                                    f"Telegram привязан к {email}\n"
+                                    f"Подписка истекла. Оплатите для продления.",
+                                    email=email),
+                                reply_markup=await get_main_menu_keyboard(language, telegram_id),
+                                parse_mode="HTML",
+                            )
+                        return
                     else:
                         logger.warning(
                             "SITE_TOKEN_NOT_FOUND user=%s token=%s...%s",
@@ -210,6 +226,35 @@ async def cmd_start(message: Message, state: FSMContext):
                         "SITE_LINK_ERROR user=%s error=%s: %s",
                         telegram_id, type(e).__name__, e,
                     )
+
+    # SITE STATUS: Returning user without token — check site subscription status
+    if not is_new_user and config.SITE_INTEGRATION_ENABLED:
+        # Only check if no payload (pure /start) to avoid double-checking after token/gift/ref
+        has_payload = message.text and len(message.text.strip().split(maxsplit=1)) > 1
+        if not has_payload:
+            try:
+                from app.services.site_client import get_user_by_telegram
+                site_user = await get_user_by_telegram(telegram_id)
+                if site_user:
+                    language = await resolve_user_language(telegram_id)
+                    days_left = site_user.get("daysLeft", 0) or site_user.get("days", 0) or 0
+                    email = site_user.get("email", "")
+                    status_icon = "active" if days_left > 0 else "expired"
+                    await message.answer(
+                        i18n_get_text(language, f"site.status_{status_icon}",
+                            f"С возвращением!\n"
+                            f"Подписка: {days_left} дн.\n"
+                            f"{'Активна' if days_left > 0 else 'Истекла'}",
+                            days=days_left, email=email),
+                        reply_markup=await get_main_menu_keyboard(language, telegram_id),
+                        parse_mode="HTML",
+                    )
+                    return
+            except Exception as e:
+                logger.warning(
+                    "SITE_STATUS_CHECK_ERROR user=%s error=%s: %s",
+                    telegram_id, type(e).__name__, e,
+                )
 
     # 1. REFERRAL REGISTRATION: Process ONLY for new users
     # Protects against: self-referral and existing users clicking referral links later

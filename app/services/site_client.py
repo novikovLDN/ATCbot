@@ -82,14 +82,14 @@ async def get_user_by_telegram(telegram_id: int) -> Optional[Dict[str, Any]]:
         return None
 
 
-async def link_telegram(token: str, telegram_id: int) -> bool:
+async def link_telegram(token: str, telegram_id: int) -> Optional[Dict[str, Any]]:
     """
     POST /api/bot/link {token, telegramId}
 
-    Links Telegram account to site user. Returns True on success.
+    Links Telegram account to site user. Returns user data dict on success, None on failure.
     """
     if not config.SITE_INTEGRATION_ENABLED:
-        return False
+        return None
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.post(
@@ -97,21 +97,20 @@ async def link_telegram(token: str, telegram_id: int) -> bool:
                 json={"token": token, "telegramId": telegram_id},
                 headers=_headers(),
             )
-            success = resp.status_code in (200, 201)
-            if success:
+            if resp.status_code in (200, 201):
                 logger.info(
                     "SITE_LINK_TELEGRAM: user=%s token=%s...%s linked",
                     telegram_id, token[:4], token[-4:],
                 )
-            else:
-                logger.warning(
-                    "SITE_LINK_TELEGRAM_FAILED: user=%s status=%s body=%s",
-                    telegram_id, resp.status_code, resp.text[:200],
-                )
-            return success
+                return resp.json()
+            logger.warning(
+                "SITE_LINK_TELEGRAM_FAILED: user=%s status=%s body=%s",
+                telegram_id, resp.status_code, resp.text[:200],
+            )
+            return None
     except Exception as e:
         logger.warning("SITE_LINK_TELEGRAM_ERROR: user=%s %s: %s", telegram_id, type(e).__name__, e)
-        return False
+        return None
 
 
 async def extend_subscription(telegram_id: int, days: int) -> bool:
