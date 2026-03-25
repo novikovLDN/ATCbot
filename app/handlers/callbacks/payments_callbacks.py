@@ -684,11 +684,9 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # SITE SYNC: Extend subscription on site after balance payment
         if config.SITE_SYNC_ENABLED and period_days and tariff_type:
             try:
-                from app.services.site_api import extend_subscription, sync_vpn_key_to_local
+                from app.services.site_api import extend_subscription
                 plan = "plus" if tariff_type in ("plus",) + config.BIZ_TARIFFS else "basic"
-                site_data = await extend_subscription(telegram_id, period_days, plan)
-                if site_data and site_data.get("vpnKey"):
-                    await sync_vpn_key_to_local(telegram_id, site_data["vpnKey"])
+                await extend_subscription(telegram_id, period_days, plan)
                 logger.info(f"SITE_SYNC_EXTEND: user={telegram_id}, days={period_days}, plan={plan}")
             except Exception as sync_err:
                 logger.warning(f"SITE_SYNC_EXTEND_FAILED: user={telegram_id}, error={sync_err}")

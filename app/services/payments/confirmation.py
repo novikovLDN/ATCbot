@@ -71,12 +71,9 @@ async def process_confirmed_payment(
             try:
                 tariff_for_sync, period_for_sync = await _lookup_purchase_tariff(purchase_id)
                 if tariff_for_sync and period_for_sync:
-                    from app.services.site_api import extend_subscription, sync_vpn_key_to_local
+                    from app.services.site_api import extend_subscription
                     plan = "plus" if tariff_for_sync in ("plus",) + config.BIZ_TARIFFS else "basic"
-                    site_data = await extend_subscription(telegram_id, period_for_sync, plan)
-                    # Sync vpnKey from site to local DB
-                    if site_data and site_data.get("vpnKey"):
-                        await sync_vpn_key_to_local(telegram_id, site_data["vpnKey"])
+                    await extend_subscription(telegram_id, period_for_sync, plan)
                     logger.info(
                         f"SITE_SYNC_EXTEND: user={telegram_id}, days={period_for_sync}, "
                         f"plan={plan}, purchase_id={purchase_id}"
