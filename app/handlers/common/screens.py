@@ -191,7 +191,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
 
 
 async def show_profile(message_or_query, language: str):
-    """Показать профиль пользователя (обновленная версия с балансом)"""
+    """Показать профиль пользователя (обновленная версия с балансом и синхронизацией с сайтом)"""
     telegram_id = None
     send_func = None
 
@@ -209,6 +209,15 @@ async def show_profile(message_or_query, language: str):
     # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
     if telegram_id:
         await check_subscription_expiry_service(telegram_id)
+
+    # SITE SYNC: Fetch status from site API for VPN key and time display
+    site_status = None
+    if config.SITE_SYNC_ENABLED:
+        try:
+            from app.services.site_api import get_status
+            site_status = await get_status(telegram_id)
+        except Exception as e:
+            logger.warning(f"Site status fetch failed for user={telegram_id}: {e}")
 
     try:
         # Дополнительная защита: проверка истечения подписки
@@ -302,8 +311,24 @@ async def show_profile(message_or_query, language: str):
             text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
             text += i18n_get_text(language, "profile.auto_renew_none")
+        # SITE SYNC: show time remaining from site API (more accurate)
+        if site_status and has_active_subscription:
+            from app.services.site_api import format_subscription_time
+            time_str = format_subscription_time(
+                site_status.get("daysLeft", 0),
+                site_status.get("hoursLeft", 0),
+                site_status.get("minutesLeft", 0),
+                site_status.get("isExpired", False),
+            )
+            text += i18n_get_text(language, "profile.time_remaining", time=time_str, default=f"⏳ Осталось: {time_str}") + "\n"
+
         text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
-        vpn_key = subscription.get("vpn_key") if subscription else None
+
+        # SITE SYNC: Use VPN key from site API (single source of truth)
+        if site_status and site_status.get("vpnKey"):
+            vpn_key = site_status["vpnKey"]
+        else:
+            vpn_key = subscription.get("vpn_key") if subscription else None
         vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
