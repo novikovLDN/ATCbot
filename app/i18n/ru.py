@@ -592,6 +592,7 @@ LANG = {
     'profile.auto_renew_on': "🔁 Автопродление: {date}",
     'profile.auto_renew_off': "🔁 Автопродление: выкл",
     'profile.auto_renew_none': "🔁 Автопродление: —",
+    'profile.time_remaining': "⏳ Осталось: {time}",
     'profile.renewal_hint': "При продлении выбранный срок\nдобавляется к текущему автоматически",
     'profile.default_name': "Пользователь",
     'profile.status_active': "активна",
@@ -833,4 +834,12 @@ LANG = {
     'gift.status_pending': "❌ Не активирован",
     'gift.detail_activated': "🎁 <b>{tariff_name} — {period}</b>\n\n✅ Этот подарок уже активирован.",
     'gift.detail_pending': "🎁 <b>Отправьте подарок близкому!</b>\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {period}\n\n❌ Не активирован\n\n🔗 Ссылка для активации:\n<code>{gift_link}</code>",
+
+    # --- Site sync (Telegram ↔ Site) ---
+    'site.auth_success': "✅ Вы авторизованы на сайте!",
+    'site.auth_error': "❌ Ошибка авторизации. Попробуйте позже.",
+    'site.open_site': "🌐 Открыть сайт",
+    'site.weblogin_prompt': "Нажмите кнопку, чтобы войти на сайт:",
+    'site.link_success': "✅ Telegram привязан к вашему аккаунту на сайте!",
+    'site.link_error': "❌ Ссылка недействительна или аккаунт уже привязан.",
 }

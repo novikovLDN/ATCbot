@@ -741,4 +741,13 @@ LANG = {
     'subscription.tariff_basic': '⚡️ Plan: Basic',
     'subscription.tariff_business': '🏢 Plan: Business',
     'subscription.tariff_plus': '👑 Plan: Plus',
+
+    # --- Site sync (Telegram ↔ Site) ---
+    'profile.time_remaining': "⏳ Remaining: {time}",
+    'site.auth_success': "✅ You are logged in on the website!",
+    'site.auth_error': "❌ Authorization error. Try again later.",
+    'site.open_site': "🌐 Open Website",
+    'site.weblogin_prompt': "Press the button to log in to the website:",
+    'site.link_success': "✅ Telegram linked to your website account!",
+    'site.link_error': "❌ Invalid link or account already linked.",
 }

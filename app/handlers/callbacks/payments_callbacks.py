@@ -680,7 +680,17 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             f"amount={final_price_rubles:.2f} RUB, "
             f"scenario={'renewal' if is_renewal else 'first_purchase'}"
         )
-        
+
+        # SITE SYNC: Extend subscription on site after balance payment
+        if config.SITE_SYNC_ENABLED and period_days and tariff_type:
+            try:
+                from app.services.site_api import extend_subscription
+                plan = "plus" if tariff_type in ("plus",) + config.BIZ_TARIFFS else "basic"
+                await extend_subscription(telegram_id, period_days, plan)
+                logger.info(f"SITE_SYNC_EXTEND: user={telegram_id}, days={period_days}, plan={plan}")
+            except Exception as sync_err:
+                logger.warning(f"SITE_SYNC_EXTEND_FAILED: user={telegram_id}, error={sync_err}")
+
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
         error_text = i18n_get_text(language, "errors.payment_processing")
