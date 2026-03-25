@@ -65,25 +65,6 @@ async def process_confirmed_payment(
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
 
-        # SITE SYNC: Extend subscription on site after successful bot payment
-        # Best-effort: failure here must NOT fail the payment
-        if not is_balance_topup and config.SITE_SYNC_ENABLED:
-            try:
-                tariff_for_sync, period_for_sync = await _lookup_purchase_tariff(purchase_id)
-                if tariff_for_sync and period_for_sync:
-                    from app.services.site_api import extend_subscription
-                    plan = "plus" if tariff_for_sync in ("plus",) + config.BIZ_TARIFFS else "basic"
-                    await extend_subscription(telegram_id, period_for_sync, plan)
-                    logger.info(
-                        f"SITE_SYNC_EXTEND: user={telegram_id}, days={period_for_sync}, "
-                        f"plan={plan}, purchase_id={purchase_id}"
-                    )
-            except Exception as sync_err:
-                logger.warning(
-                    f"SITE_SYNC_EXTEND_FAILED: user={telegram_id}, "
-                    f"purchase_id={purchase_id}, error={sync_err}"
-                )
-
         # Notification failure must NOT fail the payment — DB is already committed
         try:
             await _send_confirmation(
