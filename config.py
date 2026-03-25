@@ -380,3 +380,14 @@ APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railw
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
+# Atlas Secure Site API — синхронизация бота с сайтом
+# SITE_API_URL: базовый URL сайта (https://atlassecure.uk)
+# BOT_API_KEY: общий секретный ключ для авторизации запросов бота
+SITE_API_URL = os.getenv("SITE_API_URL", "").rstrip("/")
+BOT_API_KEY = os.getenv("BOT_API_KEY", "")
+SITE_SYNC_ENABLED = bool(SITE_API_URL and BOT_API_KEY)
+if SITE_SYNC_ENABLED:
+    _log.info("Site sync enabled: SITE_API_URL=%s", SITE_API_URL)
+else:
+    _log.warning("Site sync disabled: SITE_API_URL or BOT_API_KEY not set")
+
