@@ -250,8 +250,20 @@ async def show_profile(message_or_query, language: str):
         has_active_subscription = subscription_status.is_active
         expires_at = subscription_status.expires_at
 
+        # SITE SYNC: Override subscription status from site if available
+        # Site is the source of truth — if site says expired, trust it
+        if site_status:
+            if site_status.get("isExpired"):
+                has_active_subscription = False
+            site_plan = site_status.get("subscriptionPlan")
+            if site_plan and site_plan != "expired":
+                has_active_subscription = True
+
         auto_renew = bool(subscription and subscription.get("auto_renew"))
         sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
+        # SITE SYNC: Use plan from site if available
+        if site_status and site_status.get("subscriptionPlan") and site_status["subscriptionPlan"] != "expired":
+            sub_type = site_status["subscriptionPlan"]
         if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
 
