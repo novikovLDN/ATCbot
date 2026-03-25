@@ -224,6 +224,30 @@ async def extend_subscription(
 
 
 # =============================================================================
+# Helper: sync vpn_key from site to local DB
+# =============================================================================
+
+async def sync_vpn_key_to_local(telegram_id: int, vpn_key: str | None) -> None:
+    """
+    Update local bot DB subscription's vpn_key with the one from the site.
+    This ensures the bot shows the same subscription URL as the site.
+    """
+    if not vpn_key:
+        return
+    try:
+        import database
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
+                vpn_key, telegram_id
+            )
+        logger.info("SITE_SYNC_VPN_KEY: user=%s key_length=%s", telegram_id, len(vpn_key))
+    except Exception as e:
+        logger.warning("SITE_SYNC_VPN_KEY_FAILED: user=%s error=%s", telegram_id, e)
+
+
+# =============================================================================
 # Helper: format time display like the site
 # =============================================================================
 
