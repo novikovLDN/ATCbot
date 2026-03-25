@@ -179,8 +179,11 @@ async def _sync_register_on_site(telegram_id: int, referral_code: str | None = N
     if not config.SITE_SYNC_ENABLED:
         return
     try:
-        from app.services.site_api import register_user
-        await register_user(telegram_id, referral_code)
+        from app.services.site_api import register_user, sync_vpn_key_to_local
+        site_data = await register_user(telegram_id, referral_code)
+        # Sync vpnKey from site to local DB
+        if site_data and site_data.get("vpnKey"):
+            await sync_vpn_key_to_local(telegram_id, site_data["vpnKey"])
         logger.info("SITE_REGISTER_SYNC user=%s", telegram_id)
     except Exception as e:
         # Non-critical: site registration failure should not block bot flow
