@@ -191,7 +191,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
 
 
 async def show_profile(message_or_query, language: str):
-    """Показать профиль пользователя (обновленная версия с балансом и синхронизацией с сайтом)"""
+    """Показать профиль пользователя (обновленная версия с балансом)"""
     telegram_id = None
     send_func = None
 
@@ -209,15 +209,6 @@ async def show_profile(message_or_query, language: str):
     # REAL-TIME EXPIRATION CHECK: Проверяем и отключаем истекшие подписки сразу
     if telegram_id:
         await check_subscription_expiry_service(telegram_id)
-
-    # SITE SYNC: Fetch status from site API for VPN key and time display
-    site_status = None
-    if config.SITE_SYNC_ENABLED:
-        try:
-            from app.services.site_api import get_status
-            site_status = await get_status(telegram_id)
-        except Exception as e:
-            logger.warning(f"Site status fetch failed for user={telegram_id}: {e}")
 
     try:
         # Дополнительная защита: проверка истечения подписки
@@ -250,20 +241,8 @@ async def show_profile(message_or_query, language: str):
         has_active_subscription = subscription_status.is_active
         expires_at = subscription_status.expires_at
 
-        # SITE SYNC: Override subscription status from site if available
-        # Site is the source of truth — if site says expired, trust it
-        if site_status:
-            if site_status.get("isExpired"):
-                has_active_subscription = False
-            site_plan = site_status.get("subscriptionPlan")
-            if site_plan and site_plan != "expired":
-                has_active_subscription = True
-
         auto_renew = bool(subscription and subscription.get("auto_renew"))
         sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
-        # SITE SYNC: Use plan from site if available
-        if site_status and site_status.get("subscriptionPlan") and site_status["subscriptionPlan"] != "expired":
-            sub_type = site_status["subscriptionPlan"]
         if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
 
@@ -323,24 +302,8 @@ async def show_profile(message_or_query, language: str):
             text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
             text += i18n_get_text(language, "profile.auto_renew_none")
-        # SITE SYNC: show time remaining from site API (more accurate)
-        if site_status and has_active_subscription:
-            from app.services.site_api import format_subscription_time
-            time_str = format_subscription_time(
-                site_status.get("daysLeft", 0),
-                site_status.get("hoursLeft", 0),
-                site_status.get("minutesLeft", 0),
-                site_status.get("isExpired", False),
-            )
-            text += i18n_get_text(language, "profile.time_remaining", time=time_str, default=f"⏳ Осталось: {time_str}") + "\n"
-
         text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
-
-        # SITE SYNC: Use VPN key from site API (single source of truth)
-        if site_status and site_status.get("vpnKey"):
-            vpn_key = site_status["vpnKey"]
-        else:
-            vpn_key = subscription.get("vpn_key") if subscription else None
+        vpn_key = subscription.get("vpn_key") if subscription else None
         vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
