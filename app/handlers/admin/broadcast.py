@@ -688,92 +688,120 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             reply_markup=None
         )
 
-        semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
-        sent_count = 0
-        failed_list = []
-        processed = 0
-
-        async def _send_one(
-            user_id: int,
-            msg: str,
-            variant,
-            photo_file_id: str | None = None,
-            caption: str | None = None,
-        ):
-            ok = await _safe_send_with_buttons(
-                bot, user_id, msg, semaphore,
-                reply_markup=reply_markup,
-                photo_file_id=photo_file_id, caption=caption,
-            )
-            return (user_id, variant, ok)
-
-        for i in range(0, total, BROADCAST_BATCH_SIZE):
-            batch = user_ids[i:i + BROADCAST_BATCH_SIZE]
-            batch_items = []
-            for user_id in batch:
-                if is_ab_test:
-                    variant = "A" if random.random() < 0.5 else "B"
-                    msg = final_message_a if variant == "A" else final_message_b
-                    batch_items.append((user_id, msg, variant, None, None))
-                else:
-                    variant = None
-                    if has_photo:
-                        msg = final_message
-                        batch_items.append((user_id, msg, variant, photo_file_id, final_message))
-                    else:
-                        msg = final_message
-                        batch_items.append((user_id, msg, variant, None, None))
-
-            tasks = [
-                _send_one(uid, msg, variant, p_file_id, cap)
-                for uid, msg, variant, p_file_id, cap in batch_items
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for r in results:
-                if isinstance(r, Exception):
-                    logger.warning(f"BROADCAST_TASK_ERROR broadcast_id={broadcast_id} error={r}")
-                    continue
-                user_id, variant, ok = r
-                if ok:
-                    await database.log_broadcast_send(broadcast_id, user_id, "sent", variant)
-                    sent_count += 1
-                else:
-                    failed_list.append({"telegram_id": user_id, "error": "Send failed"})
-                    await database.log_broadcast_send(broadcast_id, user_id, "failed", variant)
-            
-            processed += len(batch)
-            logger.info(f"BROADCAST_PROGRESS processed={processed}/{total}")
-            await asyncio.sleep(BROADCAST_BATCH_PAUSE)
-        
-        failed_count = len(failed_list)
-        total_users = total
-        logger.info(f"BROADCAST_COMPLETED total={total}")
-        
-        await database._log_audit_event_atomic_standalone(
-            "broadcast_sent",
-            callback.from_user.id,
-            None,
-            f"Broadcast ID: {broadcast_id}, Segment: {segment}, Sent: {sent_count}, Failed: {failed_count}"
-        )
-        
-        # Admin report (localized)
-        if failed_count == 0:
-            result_text = i18n_get_text(language, "broadcast._report_success", total=total_users, sent=sent_count, broadcast_id=broadcast_id)
+        # Prepare message variants before launching background task
+        if is_ab_test:
+            msg_variants = {"a": final_message_a, "b": final_message_b}
+        elif has_photo:
+            msg_variants = {"text": final_message, "photo_file_id": photo_file_id}
         else:
-            failed_lines = "\n".join(
-                f"{f['telegram_id']} — {f['error']}" for f in failed_list[:20]
-            )
-            if len(failed_list) > 20:
-                failed_lines += f"\n... and {len(failed_list) - 20} more"
-            result_text = i18n_get_text(language, "broadcast._report_partial", total=total_users, sent=sent_count, failed=failed_count, broadcast_id=broadcast_id, failed_list=failed_lines)
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back_to_broadcast"), callback_data="admin:broadcast")],
-        ])
-        
-        await callback.message.edit_text(result_text, reply_markup=keyboard)
-        
+            msg_variants = {"text": final_message}
+
+        admin_id = callback.from_user.id
+        chat_id = callback.message.chat.id
+
+        async def _run_broadcast_send():
+            try:
+                semaphore = asyncio.Semaphore(BROADCAST_CONCURRENCY)
+                sent_count = 0
+                failed_list = []
+                processed = 0
+
+                async def _send_one(
+                    user_id: int,
+                    msg: str,
+                    variant,
+                    p_file_id: str | None = None,
+                    cap: str | None = None,
+                ):
+                    ok = await _safe_send_with_buttons(
+                        bot, user_id, msg, semaphore,
+                        reply_markup=reply_markup,
+                        photo_file_id=p_file_id, caption=cap,
+                    )
+                    return (user_id, variant, ok)
+
+                for i in range(0, total, BROADCAST_BATCH_SIZE):
+                    batch = user_ids[i:i + BROADCAST_BATCH_SIZE]
+                    batch_items = []
+                    for user_id in batch:
+                        if is_ab_test:
+                            variant = "A" if random.random() < 0.5 else "B"
+                            msg = msg_variants["a"] if variant == "A" else msg_variants["b"]
+                            batch_items.append((user_id, msg, variant, None, None))
+                        else:
+                            variant = None
+                            if has_photo:
+                                batch_items.append((user_id, msg_variants["text"], variant, msg_variants["photo_file_id"], msg_variants["text"]))
+                            else:
+                                batch_items.append((user_id, msg_variants["text"], variant, None, None))
+
+                    tasks = [
+                        _send_one(uid, msg, v, p_fid, cap)
+                        for uid, msg, v, p_fid, cap in batch_items
+                    ]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    for r in results:
+                        if isinstance(r, Exception):
+                            logger.warning(f"BROADCAST_TASK_ERROR broadcast_id={broadcast_id} error={r}")
+                            continue
+                        uid, v, ok = r
+                        if ok:
+                            await database.log_broadcast_send(broadcast_id, uid, "sent", v)
+                            sent_count += 1
+                        else:
+                            failed_list.append({"telegram_id": uid, "error": "Send failed"})
+                            await database.log_broadcast_send(broadcast_id, uid, "failed", v)
+
+                    processed += len(batch)
+                    logger.info(f"BROADCAST_PROGRESS processed={processed}/{total}")
+                    await asyncio.sleep(BROADCAST_BATCH_PAUSE)
+
+                failed_count = len(failed_list)
+                total_users = total
+                logger.info(f"BROADCAST_COMPLETED total={total}")
+
+                await database._log_audit_event_atomic_standalone(
+                    "broadcast_sent",
+                    admin_id,
+                    None,
+                    f"Broadcast ID: {broadcast_id}, Segment: {segment}, Sent: {sent_count}, Failed: {failed_count}"
+                )
+
+                # Admin report (localized)
+                if failed_count == 0:
+                    result_text = i18n_get_text(language, "broadcast._report_success", total=total_users, sent=sent_count, broadcast_id=broadcast_id)
+                else:
+                    failed_lines = "\n".join(
+                        f"{f['telegram_id']} — {f['error']}" for f in failed_list[:20]
+                    )
+                    if len(failed_list) > 20:
+                        failed_lines += f"\n... and {len(failed_list) - 20} more"
+                    result_text = i18n_get_text(language, "broadcast._report_partial", total=total_users, sent=sent_count, failed=failed_count, broadcast_id=broadcast_id, failed_list=failed_lines)
+
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=i18n_get_text(language, "admin.back_to_broadcast"), callback_data="admin:broadcast")],
+                ])
+
+                await bot.edit_message_text(result_text, chat_id=chat_id, message_id=callback.message.message_id, reply_markup=keyboard)
+
+            except asyncio.CancelledError:
+                logger.info(f"BROADCAST_CANCELLED broadcast_id={broadcast_id}")
+                raise
+            except Exception as e:
+                logger.exception(f"Error in broadcast send: {e}")
+                try:
+                    await bot.send_message(chat_id, f"Ошибка при отправке уведомления: {e}")
+                except Exception:
+                    pass
+                try:
+                    from app.services.admin_alerts import send_alert
+                    await send_alert(bot, "worker", f"Broadcast send error: {type(e).__name__}: {str(e)[:200]}")
+                except Exception:
+                    pass
+
+        asyncio.create_task(_run_broadcast_send())
+
     except Exception as e:
         logger.exception(f"Error in broadcast send: {e}")
         await callback.message.answer(f"Ошибка при отправке уведомления: {e}")
@@ -782,7 +810,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             await send_alert(callback.bot, "worker", f"Broadcast send error: {type(e).__name__}: {str(e)[:200]}")
         except Exception:
             pass
-    
+
     finally:
         await state.clear()
 
