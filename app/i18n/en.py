@@ -298,6 +298,7 @@ LANG = {
     'get_key.download_v2raytun': "📲 Download V2RayTun",
     'get_key.instruction_text': "📖 <b>Connection Guide</b>\n\n<b>Happ</b> — open the app → tap the clipboard icon 🗒️ at the bottom → the key will be added automatically\n\n<b>V2RayTun</b> — open the app → tap <b>+</b> in the top right corner → «Import from clipboard»\n\n⸻\n\n👇 Tap the key to copy:",
     'get_key.no_subscription': "❌ You don't have an active subscription.",
+    'setup.auto_text': "⚡ <b>Automatic Setup</b>\n\nTap the client below — the key will be automatically imported into the app.",
     'setup.auto_happ': "⚡ Auto setup Happ",
     'setup.auto_hiddify': "⚡ Auto setup Hiddify",
     'setup.auto_v2raytun': "⚡ Auto setup V2RayTun",
