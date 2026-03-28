@@ -432,12 +432,8 @@ async def callback_get_sub_key(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "get_key.download_happ", "📲 Скачать Happ"),
-            url="https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "get_key.download_v2raytun", "📲 Скачать V2RayTun"),
-            url="https://apps.apple.com/tr/app/v2raytun/id6476628951",
+            text=i18n_get_text(language, "setup.device_button"),
+            callback_data="setup_device",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
@@ -446,3 +442,119 @@ async def callback_get_sub_key(callback: CallbackQuery):
     ])
 
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
+
+
+# ── Device setup flow ──────────────────────────────────────────────
+
+_DOWNLOAD_LINKS = {
+    "ios": {
+        "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+        "v2raytun": "https://apps.apple.com/tr/app/v2raytun/id6476628951",
+        "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
+    },
+    "android": {
+        "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
+        "v2raytun": "https://play.google.com/store/apps/details?id=com.v2raytun.android&hl=ru",
+        "hiddify": "https://play.google.com/store/apps/details?id=app.hiddify.com&hl=ru",
+    },
+    "macos": {
+        "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+        "v2raytun": "https://apps.apple.com/tr/app/v2raytun/id6476628951",
+        "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
+    },
+    "windows": {
+        "hiddify": "https://github.com/hiddify/hiddify-app/releases/latest",
+        "v2rayn": "https://github.com/2dust/v2rayN/releases/latest",
+    },
+}
+
+_AUTO_SETUP_SCHEMES = {
+    "hiddify": "hiddify://import/",
+    "happ": "happ://add/",
+    "v2raytun": "v2raytun://import/",
+}
+
+
+@router.callback_query(F.data == "setup_device")
+async def callback_setup_device(callback: CallbackQuery):
+    """Выбор устройства для настройки."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "setup.select_device")
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📱 iOS", callback_data="setup_platform:ios"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_platform:android"),
+        ],
+        [
+            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_platform:macos"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_platform:windows"),
+        ],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main",
+        )],
+    ])
+
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+
+@router.callback_query(F.data.startswith("setup_platform:"))
+async def callback_setup_platform(callback: CallbackQuery):
+    """Инструкция для выбранного устройства с кнопками скачивания и авто-настройки."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    subscription = await database.get_subscription(telegram_id)
+    if subscription:
+        from vpn_utils import build_sub_url
+        sub_url = build_sub_url(telegram_id)
+    else:
+        sub_url = None
+
+    text = i18n_get_text(language, f"setup.instruction_{platform}")
+    if sub_url:
+        key_label = i18n_get_text(language, "setup.copy_key_label")
+        text += f"\n\n{key_label}\n<code>{sub_url}</code>"
+
+    buttons = []
+    links = _DOWNLOAD_LINKS.get(platform, {})
+
+    for client, url in links.items():
+        label = i18n_get_text(language, f"setup.download_{client}")
+        buttons.append([InlineKeyboardButton(text=label, url=url)])
+
+    if sub_url:
+        if platform in ("ios", "macos"):
+            auto_clients = ["happ", "v2raytun", "hiddify"]
+        elif platform == "android":
+            auto_clients = ["happ", "v2raytun", "hiddify"]
+        elif platform == "windows":
+            auto_clients = ["hiddify"]
+        else:
+            auto_clients = []
+
+        for client in auto_clients:
+            scheme = _AUTO_SETUP_SCHEMES.get(client)
+            if scheme:
+                label = i18n_get_text(language, f"setup.auto_{client}")
+                buttons.append([InlineKeyboardButton(text=label, url=f"{scheme}{sub_url}")])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="setup_device",
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)

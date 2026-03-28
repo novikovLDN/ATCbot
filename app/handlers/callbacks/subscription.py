@@ -223,8 +223,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         from app.handlers.common.keyboards import get_connect_keyboard, MINI_APP_URL
         trial_keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=i18n_get_text(language, "trial.activated_btn_connect"),
-                web_app=__import__('aiogram.types', fromlist=['WebAppInfo']).WebAppInfo(url=MINI_APP_URL),
+                text=i18n_get_text(language, "setup.device_button"),
+                callback_data="setup_device",
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "trial.activated_btn_profile"),
