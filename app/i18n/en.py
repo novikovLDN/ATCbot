@@ -464,7 +464,7 @@ LANG = {
     'main.topup_invoice_label': "Balance Top-Up",
     'main.topup_invoice_title': "Atlas Secure Balance Top-Up",
     'main.topup_select_payment_method': "Balance top-up for {amount} ₽\n\nSelect payment method:",
-    'main.trial_activated_text': "✅ <b>Trial access activated</b>\n\n👇 Tap the key to copy:\n<code>{sub_url}</code>\n\n<b>Happ</b> → clipboard 🗒️ → key added automatically\n<b>V2RayTun</b> → <b>+</b> top right → «Import from clipboard»\n\n⏰ Valid until {expires_date}",
+    'main.trial_activated_text': "✅ <b>Trial access activated</b>\n\n📦 Plan: Basic · 3 days\n📅 Until: {expires_date}\n\nTo get started — tap <b>📲 Set up device</b> and follow the simple step-by-step guide.",
     'main.trial_activation_error': "❌ Error activating trial period. Please try again later or contact support.",
     'main.trial_button': "🎁 3-Day Trial Period",
     'main.trial_expired_text': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YAbx30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",
@@ -613,7 +613,7 @@ LANG = {
     'withdraw.too_many_attempts': "Too many failed attempts. Please try again.",
     'withdraw.invalid_requisites': "Enter card number (16 digits) or phone number (+7...).",
     'trial.button': "🎁 3-Day Trial Period",
-    'trial.activated': "✅ <b>Trial access activated</b>\n\n📦 Plan: Basic · 3 days\n📅 Until: {expires_date}\n\n👇 Tap the key to copy:\n<code>{sub_url}</code>\n\n<b>Happ</b> → clipboard 🗒️ → key added automatically\n<b>V2RayTun</b> → <b>+</b> top right → «Import from clipboard»",
+    'trial.activated': "✅ <b>Trial access activated</b>\n\n📦 Plan: Basic · 3 days\n📅 Until: {expires_date}\n\nTo get started — tap <b>📲 Set up device</b> and follow the simple step-by-step guide.",
     'trial.activated_btn_connect': "🚀 Connect",
     'trial.activated_btn_profile': "👤 My Profile",
     'trial.expired': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YABX30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",
@@ -625,7 +625,8 @@ LANG = {
     'reminder.paid_3d': "📅 Your Atlas Secure subscription is active for 3 more days\n\nRenew in advance so your access never stops for a second 🤍",
     'reminder.paid_24h': "⚡️ Less than 24 hours of subscription left\n\nRenew now with one tap so VPN keeps working without interruption 🛡",
     'reminder.paid_3h': "🚨 Your subscription expires in 3 hours!\n\nRenew right now so you don't lose access to a protected internet 🔒",
-    'connect.press_button': "🚀 Press the button below to connect:",
+    'connect.press_button': "🚀 Press the button below to connect:\n\nIf the mini app doesn't open — tap <b>📲 Set up device</b> and follow the step-by-step setup.",
+    'connect.setup_device_button': "📲 Set up device",
 
     # Gift subscription
     'main.gift_subscription': "🎁 Gift Subscription",

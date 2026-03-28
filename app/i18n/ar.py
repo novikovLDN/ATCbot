@@ -457,7 +457,7 @@ LANG = {
     'main.topup_invoice_label': 'شحن الرصيد',
     'main.topup_invoice_title': 'شحن رصيد Atlas Secure',
     'main.topup_select_payment_method': 'شحن الرصيد بمبلغ {amount} ₽\n\nاختر طريقة الدفع:',
-    'main.trial_activated_text': "✅ <b>تم تفعيل الوصول التجريبي</b>\n\n👇 اضغط على المفتاح للنسخ:\n<code>{sub_url}</code>\n\n<b>Happ</b> → الحافظة 🗒️ → يُضاف المفتاح تلقائياً\n<b>V2RayTun</b> → <b>+</b> أعلى اليمين → «استيراد من الحافظة»\n\n⏰ صالح حتى {expires_date}",
+    'main.trial_activated_text': "✅ <b>تم تفعيل الوصول التجريبي</b>\n\n📦 الخطة: Basic · 3 أيام\n📅 حتى: {expires_date}\n\nللبدء — اضغط على <b>📲 إعداد الجهاز</b> واتبع التعليمات خطوة بخطوة.",
     'main.trial_activation_error': '❌ خطأ في تفعيل الفترة التجريبية. يرجى المحاولة لاحقاً أو التواصل مع الدعم.',
     'main.trial_button': '🎁 فترة تجريبية 3 أيام',
     'main.trial_expired_text': '🔓 <b>انتهى الوصول التجريبي</b>\n\nانتهت فترة التجربة.\n\n🎟 استخدم رمز الترويج <b>YAbx30</b> للحصول على خصم 30% على اشتراكك الأول.\n\nاشترك الآن لمواصلة استخدام الوصول الآمن.',
@@ -597,7 +597,7 @@ LANG = {
     'subscription.renew': '🔁 تجديد الوصول',
     'support.write_button': '💬 الكتابة إلى الدعم',
     'trial.button': '🎁 فترة تجريبية 3 أيام',
-    'trial.activated': "✅ <b>تم تفعيل الوصول التجريبي</b>\n\n📦 الخطة: Basic · 3 أيام\n📅 حتى: {expires_date}\n\n👇 اضغط على المفتاح للنسخ:\n<code>{sub_url}</code>\n\n<b>Happ</b> → الحافظة 🗒️ → يُضاف المفتاح تلقائياً\n<b>V2RayTun</b> → <b>+</b> أعلى اليمين → «استيراد من الحافظة»",
+    'trial.activated': "✅ <b>تم تفعيل الوصول التجريبي</b>\n\n📦 الخطة: Basic · 3 أيام\n📅 حتى: {expires_date}\n\nللبدء — اضغط على <b>📲 إعداد الجهاز</b> واتبع التعليمات خطوة بخطوة.",
     'trial.activated_btn_connect': "🚀 اتصال",
     'trial.activated_btn_profile': "👤 ملفي الشخصي",
     'trial.expired': '🔓 <b>انتهى الوصول التجريبي</b>\n\nانتهت فترة التجربة.\n\n🎟 استخدم رمز الترويج <b>YABX30</b> للحصول على خصم 30٪ على اشتراكك الأول.\n\nاشترك الآن لمتابعة استخدام الوصول الآمن.',
@@ -661,7 +661,8 @@ LANG = {
     'buy.tariff_biz_team_desc': '🏢 Team — خادم مخصص\n\n⚙️ 4 vCPU · 16 GB RAM · 20 TB حركة بيانات\n👥 حتى 15 مستخدم\n🔒 تحكم كامل في الوصول',
     'buy.tariff_biz_ultimate_desc': '🏢 Ultimate — خادم مخصص\n\n⚙️ 48 vCPU · 192 GB RAM · 60 TB حركة بيانات\n👥 حتى 500 مستخدم\n🔒 تحكم كامل في الوصول',
 
-    'connect.press_button': '🚀 اضغط الزر أدناه للاتصال:',
+    'connect.press_button': '🚀 اضغط الزر أدناه للاتصال:\n\nإذا لم يفتح التطبيق المصغر — اضغط على <b>📲 إعداد الجهاز</b> واتبع خطوات الإعداد.',
+    'connect.setup_device_button': '📲 إعداد الجهاز',
 
     'farm.back': '🔙 رجوع',
     'farm.back_to_games': '🔙 إلى الألعاب',

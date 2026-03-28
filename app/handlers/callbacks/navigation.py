@@ -393,9 +393,11 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
 
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
+    language = await resolve_user_language(callback.from_user.id)
     await callback.message.answer(
-        "🚀 Нажмите кнопку ниже чтобы подключиться:",
-        reply_markup=get_connect_keyboard(),
+        i18n_get_text(language, "connect.press_button"),
+        parse_mode="HTML",
+        reply_markup=get_connect_keyboard(language),
     )
 
 
