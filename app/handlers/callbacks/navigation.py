@@ -695,5 +695,6 @@ async def callback_setup_qr(callback: CallbackQuery):
         chat_id=telegram_id,
         photo=BufferedInputFile(buf.read(), filename="subscription_qr.png"),
         caption=qr_text,
+        parse_mode="HTML",
         reply_markup=keyboard,
     )
