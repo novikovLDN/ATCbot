@@ -506,7 +506,39 @@ async def callback_setup_device(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("setup_platform:"))
 async def callback_setup_platform(callback: CallbackQuery):
-    """Инструкция для выбранного устройства с кнопками скачивания и авто-настройки."""
+    """Экран 1: инструкция для устройства + кнопки скачать клиенты + кнопка Далее."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    language = await resolve_user_language(callback.from_user.id)
+
+    text = i18n_get_text(language, f"setup.instruction_{platform}")
+
+    buttons = []
+    links = _DOWNLOAD_LINKS.get(platform, {})
+    for client, url in links.items():
+        label = i18n_get_text(language, f"setup.download_{client}")
+        buttons.append([InlineKeyboardButton(text=label, url=url)])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.next_button"),
+        callback_data=f"setup_key:{platform}",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="setup_device",
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+
+@router.callback_query(F.data.startswith("setup_key:"))
+async def callback_setup_key(callback: CallbackQuery):
+    """Экран 2: ключ подписки + кнопки авто-настройки."""
     try:
         await callback.answer()
     except Exception:
@@ -523,37 +555,37 @@ async def callback_setup_platform(callback: CallbackQuery):
     else:
         sub_url = None
 
-    text = i18n_get_text(language, f"setup.instruction_{platform}")
-    if sub_url:
-        key_label = i18n_get_text(language, "setup.copy_key_label")
-        text += f"\n\n{key_label}\n<code>{sub_url}</code>"
+    if not sub_url:
+        text = i18n_get_text(language, "get_key.no_subscription")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_platform:{platform}",
+        )]])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+        return
+
+    key_label = i18n_get_text(language, "setup.copy_key_label")
+    text = f"{key_label}\n<code>{sub_url}</code>"
 
     buttons = []
-    links = _DOWNLOAD_LINKS.get(platform, {})
+    if platform in ("ios", "macos"):
+        auto_clients = ["happ", "v2raytun", "hiddify"]
+    elif platform == "android":
+        auto_clients = ["happ", "v2raytun", "hiddify"]
+    elif platform == "windows":
+        auto_clients = ["hiddify"]
+    else:
+        auto_clients = []
 
-    for client, url in links.items():
-        label = i18n_get_text(language, f"setup.download_{client}")
-        buttons.append([InlineKeyboardButton(text=label, url=url)])
-
-    if sub_url:
-        if platform in ("ios", "macos"):
-            auto_clients = ["happ", "v2raytun", "hiddify"]
-        elif platform == "android":
-            auto_clients = ["happ", "v2raytun", "hiddify"]
-        elif platform == "windows":
-            auto_clients = ["hiddify"]
-        else:
-            auto_clients = []
-
-        for client in auto_clients:
-            scheme = _AUTO_SETUP_SCHEMES.get(client)
-            if scheme:
-                label = i18n_get_text(language, f"setup.auto_{client}")
-                buttons.append([InlineKeyboardButton(text=label, url=f"{scheme}{sub_url}")])
+    for client in auto_clients:
+        scheme = _AUTO_SETUP_SCHEMES.get(client)
+        if scheme:
+            label = i18n_get_text(language, f"setup.auto_{client}")
+            buttons.append([InlineKeyboardButton(text=label, url=f"{scheme}{sub_url}")])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data="setup_device",
+        callback_data=f"setup_platform:{platform}",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any
 from uuid import uuid4
 import httpx
 from aiogram import Bot
+from app.services.payments.confirmation import TransientPaymentError
 from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
@@ -143,8 +144,8 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
         Response dict with "status" key
     """
     if not database.DB_READY:
-        logger.warning("Platega webhook: DB not ready")
-        return {"status": "degraded"}
+        logger.warning("Platega webhook: DB not ready — returning 500 for retry")
+        raise TransientPaymentError("DB not ready")
 
     # Verify authentication headers (case-insensitive lookup)
     merchant_id = headers.get("x-merchantid", "") or headers.get("X-MerchantId", "")

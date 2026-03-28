@@ -300,6 +300,7 @@ LANG = {
     'setup.download_hiddify': "📲 Hiddify herunterladen",
     'setup.download_v2rayn': "📲 v2rayN herunterladen",
     'setup.download_v2raytun': "📲 V2RayTun herunterladen",
+    'setup.next_button': "Weiter ➡️",
     'setup.instruction_android': "🤖 <b>Android einrichten</b>\n\n<b>Happ</b>\nÖffnen → unten Zwischenablage 🗒️ → Schlüssel wird automatisch hinzugefügt\n\n<b>V2RayTun</b>\nÖffnen → <b>+</b> oben rechts → «Aus Zwischenablage importieren»\n\n<b>Hiddify</b>\nÖffnen → <b>+</b> → «Aus Zwischenablage hinzufügen»",
     'setup.instruction_ios': "📱 <b>iOS einrichten</b>\n\n<b>Happ</b>\nÖffnen → unten Zwischenablage 🗒️ → Schlüssel wird automatisch hinzugefügt\n\n<b>V2RayTun</b>\nÖffnen → <b>+</b> oben rechts → «Aus Zwischenablage importieren»\n\n<b>Hiddify</b>\nÖffnen → <b>+</b> → «Aus Zwischenablage hinzufügen»",
     'setup.instruction_macos': "🍎 <b>macOS einrichten</b>\n\n<b>Happ</b>\nÖffnen → unten Zwischenablage 🗒️ → Schlüssel wird automatisch hinzugefügt\n\n<b>V2RayTun</b>\nÖffnen → <b>+</b> oben rechts → «Aus Zwischenablage importieren»\n\n<b>Hiddify</b>\nÖffnen → <b>+</b> → «Aus Zwischenablage hinzufügen»",

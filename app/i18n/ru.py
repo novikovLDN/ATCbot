@@ -356,6 +356,7 @@ LANG = {
     'setup.download_hiddify': "📲 Скачать Hiddify",
     'setup.download_v2rayn': "📲 Скачать v2rayN",
     'setup.download_v2raytun': "📲 Скачать V2RayTun",
+    'setup.next_button': "Далее ➡️",
     'setup.instruction_android': "🤖 <b>Настройка на Android</b>\n\n<b>Happ</b>\nОткройте → внизу буфер обмена 🗒️ → ключ добавится сам\n\n<b>V2RayTun</b>\nОткройте → <b>+</b> справа вверху → «Импорт из буфера обмена»\n\n<b>Hiddify</b>\nОткройте → <b>+</b> → «Добавить из буфера обмена»",
     'setup.instruction_ios': "📱 <b>Настройка на iOS</b>\n\n<b>Happ</b>\nОткройте → внизу буфер обмена 🗒️ → ключ добавится сам\n\n<b>V2RayTun</b>\nОткройте → <b>+</b> справа вверху → «Импорт из буфера обмена»\n\n<b>Hiddify</b>\nОткройте → <b>+</b> → «Добавить из буфера обмена»",
     'setup.instruction_macos': "🍎 <b>Настройка на macOS</b>\n\n<b>Happ</b>\nОткройте → внизу буфер обмена 🗒️ → ключ добавится сам\n\n<b>V2RayTun</b>\nОткройте → <b>+</b> справа вверху → «Импорт из буфера обмена»\n\n<b>Hiddify</b>\nОткройте → <b>+</b> → «Добавить из буфера обмена»",

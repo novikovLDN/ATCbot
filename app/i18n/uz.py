@@ -300,6 +300,7 @@ LANG = {
     'setup.download_hiddify': "📲 Hiddify yuklab olish",
     'setup.download_v2rayn': "📲 v2rayN yuklab olish",
     'setup.download_v2raytun': "📲 V2RayTun yuklab olish",
+    'setup.next_button': "Keyingi ➡️",
     'setup.instruction_android': "🤖 <b>Android sozlash</b>\n\n<b>Happ</b>\nOching → pastda bufer almashish 🗒️ → kalit avtomatik qo'shiladi\n\n<b>V2RayTun</b>\nOching → yuqorida <b>+</b> → «Buferdan import»\n\n<b>Hiddify</b>\nOching → <b>+</b> → «Buferdan qo'shish»",
     'setup.instruction_ios': "📱 <b>iOS sozlash</b>\n\n<b>Happ</b>\nOching → pastda bufer almashish 🗒️ → kalit avtomatik qo'shiladi\n\n<b>V2RayTun</b>\nOching → yuqorida <b>+</b> → «Buferdan import»\n\n<b>Hiddify</b>\nOching → <b>+</b> → «Buferdan qo'shish»",
     'setup.instruction_macos': "🍎 <b>macOS sozlash</b>\n\n<b>Happ</b>\nOching → pastda bufer almashish 🗒️ → kalit avtomatik qo'shiladi\n\n<b>V2RayTun</b>\nOching → yuqorida <b>+</b> → «Buferdan import»\n\n<b>Hiddify</b>\nOching → <b>+</b> → «Buferdan qo'shish»",

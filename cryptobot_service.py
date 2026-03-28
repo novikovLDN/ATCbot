@@ -16,6 +16,7 @@ from typing import Dict, Any
 
 import httpx
 from aiogram import Bot
+from app.services.payments.confirmation import TransientPaymentError
 from app.utils.retry import retry_async
 
 logger = logging.getLogger(__name__)
@@ -150,8 +151,8 @@ async def process_webhook_data(headers: dict, raw_body: bytes, body: dict, bot: 
         Response dict with "status" key
     """
     if not database.DB_READY:
-        logger.warning("CryptoBot webhook: DB not ready")
-        return {"status": "degraded"}
+        logger.warning("CryptoBot webhook: DB not ready — returning 500 for retry")
+        raise TransientPaymentError("DB not ready")
 
     # Verify signature
     signature = headers.get("crypto-pay-api-signature", "")
