@@ -595,23 +595,31 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
-    msg = await callback.message.answer("🎉")
-    await asyncio.sleep(2)
-
     telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "main.welcome")
-    text = await format_text_with_incident(text)
-    keyboard = await get_main_menu_keyboard(telegram_id, language)
 
+    # 1. Удаляем старый экран (инструкции)
     try:
         await callback.message.delete()
     except Exception:
         pass
+
+    # 2. Отправляем 🎉
+    msg = await callback.bot.send_message(chat_id=telegram_id, text="🎉")
+
+    # 3. Ждём 2 секунды
+    await asyncio.sleep(2)
+
+    # 4. Удаляем 🎉
     try:
         await msg.delete()
     except Exception:
         pass
+
+    # 5. Отправляем главное меню
+    language = await resolve_user_language(telegram_id)
+    text = i18n_get_text(language, "main.welcome")
+    text = await format_text_with_incident(text)
+    keyboard = await get_main_menu_keyboard(telegram_id, language)
 
     await callback.bot.send_message(
         chat_id=telegram_id,
