@@ -620,7 +620,7 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
     # 5. Отправляем главное меню
     language = await resolve_user_language(telegram_id)
     text = i18n_get_text(language, "main.welcome")
-    text = await format_text_with_incident(text)
+    text = await format_text_with_incident(text, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
 
     await callback.bot.send_message(
