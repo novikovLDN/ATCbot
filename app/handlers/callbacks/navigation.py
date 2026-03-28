@@ -540,7 +540,7 @@ async def callback_setup_platform(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("setup_key:"))
 async def callback_setup_key(callback: CallbackQuery):
-    """Экран 2: ключ подписки + кнопки авто-настройки."""
+    """Экран 2: авто-настройка — кнопки открытия клиентов + подробная инструкция."""
     try:
         await callback.answer()
     except Exception:
@@ -566,9 +566,7 @@ async def callback_setup_key(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
 
-    connect_text = i18n_get_text(language, f"setup.connect_{platform}")
-    key_label = i18n_get_text(language, "setup.copy_key_label")
-    text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
+    text = i18n_get_text(language, f"setup.autosetup_{platform}")
 
     from urllib.parse import quote, urlparse
     if config.PUBLIC_BASE_URL:
@@ -576,24 +574,87 @@ async def callback_setup_key(callback: CallbackQuery):
     else:
         parsed = urlparse(config.WEBHOOK_URL)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-    happ_redirect_url = f"{base_url}/open/happ?url={quote(sub_url, safe='')}"
+
+    # Кнопки авто-настройки по платформе
+    _platform_clients = {
+        "ios": ["happ", "v2raytun", "hiddify"],
+        "android": ["happ", "v2raytun", "hiddify"],
+        "macos": ["happ", "v2raytun", "hiddify"],
+        "windows": ["hiddify", "v2rayn"],
+    }
+    _client_labels = {
+        "happ": "Авто настройка Happ ⚡️",
+        "v2raytun": "Авто настройка V2RayTun ⚡️",
+        "hiddify": "Авто настройка Hiddify ⚡️",
+        "v2rayn": "Авто настройка v2rayN ⚡️",
+    }
+    _client_deeplink = {
+        "happ": "happ",
+        "v2raytun": "v2raytun",
+        "hiddify": "hiddify",
+        "v2rayn": "hiddify",  # v2rayN использует hiddify-совместимый импорт
+    }
+
+    buttons = []
+    for client in _platform_clients.get(platform, []):
+        dl_client = _client_deeplink[client]
+        redirect_url = f"{base_url}/open/{dl_client}?url={quote(sub_url, safe='')}"
+        buttons.append([InlineKeyboardButton(
+            text=_client_labels[client],
+            url=redirect_url,
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.manual_button"),
+        callback_data=f"setup_manual:{platform}",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.done_button"),
+        callback_data="setup_done",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"setup_platform:{platform}",
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+
+@router.callback_query(F.data.startswith("setup_manual:"))
+async def callback_setup_manual(callback: CallbackQuery):
+    """Экран подробной инструкции по ручной настройке."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    subscription = await database.get_subscription(telegram_id)
+    if subscription:
+        from vpn_utils import build_sub_url
+        sub_url = build_sub_url(telegram_id)
+    else:
+        sub_url = None
+
+    connect_text = i18n_get_text(language, f"setup.connect_{platform}")
+    key_label = i18n_get_text(language, "setup.copy_key_label")
+    if sub_url:
+        text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
+    else:
+        text = connect_text
 
     buttons = [
-        [InlineKeyboardButton(
-            text="🧪 Тест Happ",
-            url=happ_redirect_url,
-        )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.done_button"),
             callback_data="setup_done",
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.help_button"),
-            url="https://t.me/Atlas_SupportSecurity",
-        )],
-        [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_platform:{platform}",
+            callback_data=f"setup_key:{platform}",
         )],
     ]
 
