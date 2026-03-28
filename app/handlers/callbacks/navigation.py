@@ -571,12 +571,14 @@ async def callback_setup_key(callback: CallbackQuery):
     text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
 
     # Auto-setup buttons via HTTPS redirect (Telegram blocks custom URL schemes)
-    from urllib.parse import quote
+    from urllib.parse import quote, urlparse
     buttons = []
-    base_url = config.PUBLIC_BASE_URL.rstrip("/") if config.PUBLIC_BASE_URL else ""
-    if not base_url:
-        # Fallback: derive from APP_URL
-        base_url = config.APP_URL.rstrip("/")
+    if config.PUBLIC_BASE_URL:
+        base_url = config.PUBLIC_BASE_URL.rstrip("/")
+    else:
+        # Derive base from WEBHOOK_URL (e.g. https://api.domain.com/webhook/... → https://api.domain.com)
+        parsed = urlparse(config.WEBHOOK_URL)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
 
     for client in _AUTO_CLIENTS.get(platform, []):
         label = i18n_get_text(language, f"setup.auto_{client}")
