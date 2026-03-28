@@ -291,6 +291,7 @@ LANG = {
     'get_key.download_v2raytun': "📲 تحميل V2RayTun",
     'get_key.instruction_text': "📖 <b>دليل الاتصال</b>\n\n<b>Happ</b> — افتح التطبيق → اضغط على أيقونة الحافظة 🗒️ في الأسفل → سيُضاف المفتاح تلقائياً\n\n<b>V2RayTun</b> — افتح التطبيق → اضغط على <b>+</b> في الزاوية العلوية اليمنى → «استيراد من الحافظة»\n\n⸻\n\n👇 اضغط على المفتاح للنسخ:",
     'get_key.no_subscription': "❌ ليس لديك اشتراك نشط.",
+    'setup.auto_text': "⚡ <b>إعداد تلقائي</b>\n\nاضغط على التطبيق المطلوب أدناه — سيتم استيراد المفتاح تلقائياً إلى التطبيق.",
     'setup.auto_happ': "⚡ إعداد تلقائي Happ",
     'setup.auto_hiddify': "⚡ إعداد تلقائي Hiddify",
     'setup.auto_v2raytun': "⚡ إعداد تلقائي V2RayTun",

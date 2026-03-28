@@ -291,6 +291,7 @@ LANG = {
     'get_key.download_v2raytun': "📲 V2RayTun yuklab olish",
     'get_key.instruction_text': "📖 <b>Ulanish bo'yicha ko'rsatma</b>\n\n<b>Happ</b> — ilovani oching → pastda bufer almashish 🗒️ belgisini bosing → kalit avtomatik qo'shiladi\n\n<b>V2RayTun</b> — ilovani oching → yuqori o'ng burchakda <b>+</b> bosing → «Buferdan import qilish»\n\n⸻\n\n👇 Kalitni nusxalash uchun bosing:",
     'get_key.no_subscription': "❌ Sizda faol obuna yo'q.",
+    'setup.auto_text': "⚡ <b>Avtomatik sozlash</b>\n\nPastdagi kerakli klientni bosing — kalit avtomatik ravishda ilovaga import qilinadi.",
     'setup.auto_happ': "⚡ Avtomatik sozlash Happ",
     'setup.auto_hiddify': "⚡ Avtomatik sozlash Hiddify",
     'setup.auto_v2raytun': "⚡ Avtomatik sozlash V2RayTun",

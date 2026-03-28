@@ -564,8 +564,9 @@ async def callback_setup_key(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
 
+    auto_text = i18n_get_text(language, "setup.auto_text")
     key_label = i18n_get_text(language, "setup.copy_key_label")
-    text = f"{key_label}\n<code>{sub_url}</code>"
+    text = f"{auto_text}\n\n{key_label}\n<code>{sub_url}</code>"
 
     buttons = []
     if platform in ("ios", "macos"):
