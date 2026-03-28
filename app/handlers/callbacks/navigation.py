@@ -1,10 +1,12 @@
 """
 Simple navigation callbacks: menu_main, back_to_main, settings, about, support, etc.
 """
+import asyncio
+import io
 import logging
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
 from aiogram.filters import StateFilter
@@ -518,6 +520,10 @@ async def callback_setup_platform(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(text=label, url=url)])
 
     buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.qr_button"),
+        callback_data=f"setup_qr:{platform}",
+    )])
+    buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_button"),
         callback_data=f"setup_key:{platform}",
     )])
@@ -562,10 +568,124 @@ async def callback_setup_key(callback: CallbackQuery):
     key_label = i18n_get_text(language, "setup.copy_key_label")
     text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
 
-    buttons = [[InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data=f"setup_platform:{platform}",
-    )]]
+    buttons = [
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.done_button"),
+            callback_data="setup_done",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.help_button"),
+            url="https://t.me/Atlas_SupportSecurity",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_platform:{platform}",
+        )],
+    ]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+
+@router.callback_query(F.data == "setup_done")
+async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
+    """Готово — отправить 🎉 и через 2 сек показать главный экран."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    msg = await callback.message.answer("🎉")
+    await asyncio.sleep(2)
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    text = i18n_get_text(language, "main.welcome")
+    text = await format_text_with_incident(text)
+    keyboard = await get_main_menu_keyboard(telegram_id, language)
+
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+    await callback.bot.send_message(
+        chat_id=telegram_id,
+        text=text,
+        reply_markup=keyboard,
+    )
+
+
+@router.callback_query(F.data.startswith("setup_qr:"))
+async def callback_setup_qr(callback: CallbackQuery):
+    """Генерация QR-кода подписки и отправка в чат."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    subscription = await database.get_subscription(telegram_id)
+    if subscription:
+        from vpn_utils import build_sub_url
+        sub_url = build_sub_url(telegram_id)
+    else:
+        sub_url = None
+
+    if not sub_url:
+        text = i18n_get_text(language, "get_key.no_subscription")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_platform:{platform}",
+        )]])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+        return
+
+    # Generate QR code
+    import qrcode
+    qr = qrcode.QRCode(version=1, box_size=10, border=2)
+    qr.add_data(sub_url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    qr_text = i18n_get_text(language, "setup.qr_instruction")
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.done_button"),
+            callback_data="setup_done",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.help_button"),
+            url="https://t.me/Atlas_SupportSecurity",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_platform:{platform}",
+        )],
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    # Delete current message and send photo with QR
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    await callback.bot.send_photo(
+        chat_id=telegram_id,
+        photo=BufferedInputFile(buf.read(), filename="subscription_qr.png"),
+        caption=qr_text,
+        reply_markup=keyboard,
+    )
