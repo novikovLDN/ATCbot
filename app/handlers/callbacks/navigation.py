@@ -570,8 +570,12 @@ async def callback_setup_key(callback: CallbackQuery):
     key_label = i18n_get_text(language, "setup.copy_key_label")
     text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
 
-    from urllib.parse import quote
-    base_url = config.PUBLIC_BASE_URL or config.WEBHOOK_URL.rsplit("/", 1)[0]
+    from urllib.parse import quote, urlparse
+    if config.PUBLIC_BASE_URL:
+        base_url = config.PUBLIC_BASE_URL
+    else:
+        parsed = urlparse(config.WEBHOOK_URL)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
     happ_redirect_url = f"{base_url}/open/happ?url={quote(sub_url, safe='')}"
 
     buttons = [
