@@ -23,5 +23,6 @@ async def cmd_connect(message: Message):
     language = await resolve_user_language(message.from_user.id)
     await message.answer(
         i18n_get_text(language, "connect.press_button"),
-        reply_markup=get_connect_keyboard(),
+        parse_mode="HTML",
+        reply_markup=get_connect_keyboard(language),
     )

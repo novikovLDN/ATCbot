@@ -625,7 +625,8 @@ LANG = {
     'reminder.paid_3d': "📅 Your Atlas Secure subscription is active for 3 more days\n\nRenew in advance so your access never stops for a second 🤍",
     'reminder.paid_24h': "⚡️ Less than 24 hours of subscription left\n\nRenew now with one tap so VPN keeps working without interruption 🛡",
     'reminder.paid_3h': "🚨 Your subscription expires in 3 hours!\n\nRenew right now so you don't lose access to a protected internet 🔒",
-    'connect.press_button': "🚀 Press the button below to connect:",
+    'connect.press_button': "🚀 Press the button below to connect:\n\nIf the mini app doesn't open — tap <b>📲 Set up device</b> and follow the step-by-step setup.",
+    'connect.setup_device_button': "📲 Set up device",
 
     # Gift subscription
     'main.gift_subscription': "🎁 Gift Subscription",

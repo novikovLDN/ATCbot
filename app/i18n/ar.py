@@ -661,7 +661,8 @@ LANG = {
     'buy.tariff_biz_team_desc': '🏢 Team — خادم مخصص\n\n⚙️ 4 vCPU · 16 GB RAM · 20 TB حركة بيانات\n👥 حتى 15 مستخدم\n🔒 تحكم كامل في الوصول',
     'buy.tariff_biz_ultimate_desc': '🏢 Ultimate — خادم مخصص\n\n⚙️ 48 vCPU · 192 GB RAM · 60 TB حركة بيانات\n👥 حتى 500 مستخدم\n🔒 تحكم كامل في الوصول',
 
-    'connect.press_button': '🚀 اضغط الزر أدناه للاتصال:',
+    'connect.press_button': '🚀 اضغط الزر أدناه للاتصال:\n\nإذا لم يفتح التطبيق المصغر — اضغط على <b>📲 إعداد الجهاز</b> واتبع خطوات الإعداد.',
+    'connect.setup_device_button': '📲 إعداد الجهاز',
 
     'farm.back': '🔙 رجوع',
     'farm.back_to_games': '🔙 إلى الألعاب',

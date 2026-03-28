@@ -27,12 +27,16 @@ def get_connect_button():
     ]])
 
 
-def get_connect_keyboard():
-    """Клавиатура: Подключиться (WebApp) + Профиль. Для замены отправки ключа кодом."""
+def get_connect_keyboard(language: str = "ru"):
+    """Клавиатура: Подключиться (WebApp) + Настроить устройство + Профиль."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="🚀 Подключиться",
             web_app=WebAppInfo(url=MINI_APP_URL),
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "connect.setup_device_button"),
+            callback_data="setup_device",
         )],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile")],
     ])
