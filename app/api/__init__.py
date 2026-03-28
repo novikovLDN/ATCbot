@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import telegram_webhook
 from app.api import payment_webhook
+from app.api import deeplink_redirect
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RequestSizeLimitMiddleware, max_size=1 * 1024 * 1024)
 app.include_router(telegram_webhook.router)
 app.include_router(payment_webhook.router)
+app.include_router(deeplink_redirect.router)
 
 
 @app.get("/health")

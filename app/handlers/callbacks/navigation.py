@@ -446,6 +446,14 @@ async def callback_get_sub_key(callback: CallbackQuery):
 
 # ── Device setup flow ──────────────────────────────────────────────
 
+# Clients available per platform for auto-setup deep links
+_AUTO_CLIENTS = {
+    "ios": ["happ", "v2raytun", "hiddify"],
+    "android": ["happ", "v2raytun", "hiddify"],
+    "macos": ["happ", "v2raytun", "hiddify"],
+    "windows": ["hiddify"],
+}
+
 _DOWNLOAD_LINKS = {
     "ios": {
         "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
@@ -562,10 +570,23 @@ async def callback_setup_key(callback: CallbackQuery):
     key_label = i18n_get_text(language, "setup.copy_key_label")
     text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
 
-    buttons = [[InlineKeyboardButton(
+    # Auto-setup buttons via HTTPS redirect (Telegram blocks custom URL schemes)
+    from urllib.parse import quote
+    buttons = []
+    base_url = config.PUBLIC_BASE_URL.rstrip("/") if config.PUBLIC_BASE_URL else ""
+    if not base_url:
+        # Fallback: derive from APP_URL
+        base_url = config.APP_URL.rstrip("/")
+
+    for client in _AUTO_CLIENTS.get(platform, []):
+        label = i18n_get_text(language, f"setup.auto_{client}")
+        redirect_url = f"{base_url}/open/{client}?url={quote(sub_url, safe='')}"
+        buttons.append([InlineKeyboardButton(text=label, url=redirect_url)])
+
+    buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"setup_platform:{platform}",
-    )]]
+    )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
