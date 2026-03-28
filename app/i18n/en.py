@@ -307,6 +307,7 @@ LANG = {
     'setup.download_hiddify': "📲 Download Hiddify",
     'setup.download_v2rayn': "📲 Download v2rayN",
     'setup.download_v2raytun': "📲 Download V2RayTun",
+    'setup.next_button': "Next ➡️",
     'setup.instruction_android': "🤖 <b>Android Setup</b>\n\n<b>Happ</b>\nOpen → tap clipboard 🗒️ at the bottom → key added automatically\n\n<b>V2RayTun</b>\nOpen → <b>+</b> top right → «Import from clipboard»\n\n<b>Hiddify</b>\nOpen → <b>+</b> → «Add from clipboard»",
     'setup.instruction_ios': "📱 <b>iOS Setup</b>\n\n<b>Happ</b>\nOpen → tap clipboard 🗒️ at the bottom → key added automatically\n\n<b>V2RayTun</b>\nOpen → <b>+</b> top right → «Import from clipboard»\n\n<b>Hiddify</b>\nOpen → <b>+</b> → «Add from clipboard»",
     'setup.instruction_macos': "🍎 <b>macOS Setup</b>\n\n<b>Happ</b>\nOpen → tap clipboard 🗒️ at the bottom → key added automatically\n\n<b>V2RayTun</b>\nOpen → <b>+</b> top right → «Import from clipboard»\n\n<b>Hiddify</b>\nOpen → <b>+</b> → «Add from clipboard»",

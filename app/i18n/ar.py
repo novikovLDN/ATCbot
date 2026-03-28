@@ -300,6 +300,7 @@ LANG = {
     'setup.download_hiddify': "📲 تحميل Hiddify",
     'setup.download_v2rayn': "📲 تحميل v2rayN",
     'setup.download_v2raytun': "📲 تحميل V2RayTun",
+    'setup.next_button': "➡️ التالي",
     'setup.instruction_android': "🤖 <b>إعداد Android</b>\n\n<b>Happ</b>\nافتح → اضغط الحافظة 🗒️ في الأسفل → يُضاف المفتاح تلقائياً\n\n<b>V2RayTun</b>\nافتح → <b>+</b> أعلى اليمين → «استيراد من الحافظة»\n\n<b>Hiddify</b>\nافتح → <b>+</b> → «إضافة من الحافظة»",
     'setup.instruction_ios': "📱 <b>إعداد iOS</b>\n\n<b>Happ</b>\nافتح → اضغط الحافظة 🗒️ في الأسفل → يُضاف المفتاح تلقائياً\n\n<b>V2RayTun</b>\nافتح → <b>+</b> أعلى اليمين → «استيراد من الحافظة»\n\n<b>Hiddify</b>\nافتح → <b>+</b> → «إضافة من الحافظة»",
     'setup.instruction_macos': "🍎 <b>إعداد macOS</b>\n\n<b>Happ</b>\nافتح → اضغط الحافظة 🗒️ في الأسفل → يُضاف المفتاح تلقائياً\n\n<b>V2RayTun</b>\nافتح → <b>+</b> أعلى اليمين → «استيراد من الحافظة»\n\n<b>Hiddify</b>\nافتح → <b>+</b> → «إضافة من الحافظة»",

@@ -300,6 +300,7 @@ LANG = {
     'setup.download_hiddify': "📲 Hiddify боргирӣ",
     'setup.download_v2rayn': "📲 v2rayN боргирӣ",
     'setup.download_v2raytun': "📲 V2RayTun боргирӣ",
+    'setup.next_button': "Давом ➡️",
     'setup.instruction_android': "🤖 <b>Танзим дар Android</b>\n\n<b>Happ</b>\nКушоед → дар поён буфери мубодила 🗒️ → калид худкор илова мешавад\n\n<b>V2RayTun</b>\nКушоед → <b>+</b> дар боло → «Аз буфер ворид кунед»\n\n<b>Hiddify</b>\nКушоед → <b>+</b> → «Аз буфер илова кунед»",
     'setup.instruction_ios': "📱 <b>Танзим дар iOS</b>\n\n<b>Happ</b>\nКушоед → дар поён буфери мубодила 🗒️ → калид худкор илова мешавад\n\n<b>V2RayTun</b>\nКушоед → <b>+</b> дар боло → «Аз буфер ворид кунед»\n\n<b>Hiddify</b>\nКушоед → <b>+</b> → «Аз буфер илова кунед»",
     'setup.instruction_macos': "🍎 <b>Танзим дар macOS</b>\n\n<b>Happ</b>\nКушоед → дар поён буфери мубодила 🗒️ → калид худкор илова мешавад\n\n<b>V2RayTun</b>\nКушоед → <b>+</b> дар боло → «Аз буфер ворид кунед»\n\n<b>Hiddify</b>\nКушоед → <b>+</b> → «Аз буфер илова кунед»",

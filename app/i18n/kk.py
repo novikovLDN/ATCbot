@@ -300,6 +300,7 @@ LANG = {
     'setup.download_hiddify': "📲 Hiddify жүктеу",
     'setup.download_v2rayn': "📲 v2rayN жүктеу",
     'setup.download_v2raytun': "📲 V2RayTun жүктеу",
+    'setup.next_button': "Келесі ➡️",
     'setup.instruction_android': "🤖 <b>Android баптау</b>\n\n<b>Happ</b>\nАшыңыз → төменде алмасу буфері 🗒️ → кілт автоматты қосылады\n\n<b>V2RayTun</b>\nАшыңыз → жоғарыда <b>+</b> → «Буферден импорт»\n\n<b>Hiddify</b>\nАшыңыз → <b>+</b> → «Буферден қосу»",
     'setup.instruction_ios': "📱 <b>iOS баптау</b>\n\n<b>Happ</b>\nАшыңыз → төменде алмасу буфері 🗒️ → кілт автоматты қосылады\n\n<b>V2RayTun</b>\nАшыңыз → жоғарыда <b>+</b> → «Буферден импорт»\n\n<b>Hiddify</b>\nАшыңыз → <b>+</b> → «Буферден қосу»",
     'setup.instruction_macos': "🍎 <b>macOS баптау</b>\n\n<b>Happ</b>\nАшыңыз → төменде алмасу буфері 🗒️ → кілт автоматты қосылады\n\n<b>V2RayTun</b>\nАшыңыз → жоғарыда <b>+</b> → «Буферден импорт»\n\n<b>Hiddify</b>\nАшыңыз → <b>+</b> → «Буферден қосу»",
