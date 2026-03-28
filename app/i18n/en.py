@@ -444,7 +444,7 @@ LANG = {
     'main.topup_invoice_label': "Balance Top-Up",
     'main.topup_invoice_title': "Atlas Secure Balance Top-Up",
     'main.topup_select_payment_method': "Balance top-up for {amount} ₽\n\nSelect payment method:",
-    'main.trial_activated_text': "🔒 <b>Trial access activated</b>\n\nYou are protected for 3 days.\n\n🔑 <b>Your connection key:</b>\n<code>{sub_url}</code>\n\nUse it in your VPN app.\n\n⏰ <b>Valid until:</b> {expires_date}",
+    'main.trial_activated_text': "✅ <b>Trial access activated</b>\n\n👇 Tap the key to copy:\n<code>{sub_url}</code>\n\n<b>Happ</b> → clipboard 🗒️ → key added automatically\n<b>V2RayTun</b> → <b>+</b> top right → «Import from clipboard»\n\n⏰ Valid until {expires_date}",
     'main.trial_activation_error': "❌ Error activating trial period. Please try again later or contact support.",
     'main.trial_button': "🎁 3-Day Trial Period",
     'main.trial_expired_text': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YAbx30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",

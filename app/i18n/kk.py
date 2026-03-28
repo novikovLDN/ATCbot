@@ -437,7 +437,7 @@ LANG = {
     'main.topup_invoice_label': 'Балансты толықтыру',
     'main.topup_invoice_title': 'Atlas Secure балансын толықтыру',
     'main.topup_select_payment_method': 'Балансты толықтыру {amount} ₽ үшін\n\nТөлем әдісін таңдаңыз:',
-    'main.trial_activated_text': '🔒 <b>Тrial қатысу белсендірілді</b>\n\nСіз 3 күнге қорғалдыңыз.\n\n🔑 <b>Қосылым кілтіңіз:</b>\n<code>{sub_url}</code>\n\nVPN қосымшасында қолданыңыз.\n\n⏰ <b>Жарамдылық:</b> {expires_date}',
+    'main.trial_activated_text': "✅ <b>Сынақ қатысу белсендірілді</b>\n\n👇 Кілтті көшіру үшін басыңыз:\n<code>{sub_url}</code>\n\n<b>Happ</b> → алмасу буфері 🗒️ → кілт автоматты қосылады\n<b>V2RayTun</b> → жоғарыда <b>+</b> → «Буферден импорт»\n\n⏰ {expires_date} дейін жарамды",
     'main.trial_activation_error': '❌ Тrial мерзімін белсендіру қатесі. Кейінірек қайта көріңіз немесе қолдауға хабарласыңыз.',
     'main.trial_button': '🎁 3 күндік тrial мерзімі',
     'main.trial_expired_text': '🔓 <b>Тrial қатысу аяқталды</b>\n\nТrial мерзіміңіз аяқталды.\n\n🎟 Алғашқы жазылымға 30% жеңілдік үшін <b>YAbx30</b> промокодты қолданыңыз.\n\nҚорғалған қатысуды жалғастыру үшін жазылыңыз.',

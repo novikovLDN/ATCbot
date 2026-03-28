@@ -437,7 +437,7 @@ LANG = {
     'main.topup_invoice_label': "Balansni to'ldirish",
     'main.topup_invoice_title': "Atlas Secure balansini to'ldirish",
     'main.topup_select_payment_method': "Balansni {amount} ₽ ga to'ldirish\n\nTo'lov usulini tanlang:",
-    'main.trial_activated_text': '🔒 <b>Sinov kirishi faollashtirildi</b>\n\nSiz 3 kun davomida himoyalansiz.\n\n🔑 <b>Ulanish kalitingiz:</b>\n<code>{sub_url}</code>\n\nVPN ilovasida ishlating.\n\n⏰ <b>Amal qilish muddati:</b> {expires_date}',
+    'main.trial_activated_text': "✅ <b>Sinov kirishi faollashtirildi</b>\n\n👇 Kalitni nusxalash uchun bosing:\n<code>{sub_url}</code>\n\n<b>Happ</b> → bufer almashish 🗒️ → kalit avtomatik qo'shiladi\n<b>V2RayTun</b> → yuqorida <b>+</b> → «Buferdan import»\n\n⏰ {expires_date} gacha amal qiladi",
     'main.trial_activation_error': "❌ Sinov muddatini faollashtirishda xatolik. Keyinroq qayta urinib ko'ring yoki qo'llab-quvvatlash bilan bog'laning.",
     'main.trial_button': '🎁 3 kunlik sinov muddati',
     'main.trial_expired_text': "🔓 <b>Sinov kirishi tugadi</b>\n\nSinov muddatingiz tugadi.\n\n🎟 Birinchi obunangiz uchun 30% chegirma olish uchun <b>YAbx30</b> promo kodidan foydalaning.\n\nXavfsiz kirishdan foydalanishni davom etish uchun obuna bo'ling.",

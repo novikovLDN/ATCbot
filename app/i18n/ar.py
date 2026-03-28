@@ -437,7 +437,7 @@ LANG = {
     'main.topup_invoice_label': 'شحن الرصيد',
     'main.topup_invoice_title': 'شحن رصيد Atlas Secure',
     'main.topup_select_payment_method': 'شحن الرصيد بمبلغ {amount} ₽\n\nاختر طريقة الدفع:',
-    'main.trial_activated_text': '🔒 <b>تم تفعيل الوصول التجريبي</b>\n\nأنت محمي لمدة 3 أيام.\n\n🔑 <b>مفتاح الاتصال:</b>\n<code>{sub_url}</code>\n\nاستخدمه في تطبيق VPN.\n\n⏰ <b>صالح حتى:</b> {expires_date}',
+    'main.trial_activated_text': "✅ <b>تم تفعيل الوصول التجريبي</b>\n\n👇 اضغط على المفتاح للنسخ:\n<code>{sub_url}</code>\n\n<b>Happ</b> → الحافظة 🗒️ → يُضاف المفتاح تلقائياً\n<b>V2RayTun</b> → <b>+</b> أعلى اليمين → «استيراد من الحافظة»\n\n⏰ صالح حتى {expires_date}",
     'main.trial_activation_error': '❌ خطأ في تفعيل الفترة التجريبية. يرجى المحاولة لاحقاً أو التواصل مع الدعم.',
     'main.trial_button': '🎁 فترة تجريبية 3 أيام',
     'main.trial_expired_text': '🔓 <b>انتهى الوصول التجريبي</b>\n\nانتهت فترة التجربة.\n\n🎟 استخدم رمز الترويج <b>YAbx30</b> للحصول على خصم 30% على اشتراكك الأول.\n\nاشترك الآن لمواصلة استخدام الوصول الآمن.',

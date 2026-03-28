@@ -437,7 +437,7 @@ LANG = {
     'main.topup_invoice_label': 'Guthaben aufladen',
     'main.topup_invoice_title': 'Atlas Secure Guthaben aufladen',
     'main.topup_select_payment_method': 'Guthaben aufladen für {amount} ₽\n\nZahlungsart wählen:',
-    'main.trial_activated_text': '🔒 <b>Testzugang aktiviert</b>\n\nSie sind für 3 Tage geschützt.\n\n🔑 <b>Ihr Verbindungsschlüssel:</b>\n<code>{sub_url}</code>\n\nVerwenden Sie ihn in Ihrer VPN-App.\n\n⏰ <b>Gültig bis:</b> {expires_date}',
+    'main.trial_activated_text': "✅ <b>Testzugang aktiviert</b>\n\n👇 Tippen Sie zum Kopieren:\n<code>{sub_url}</code>\n\n<b>Happ</b> → Zwischenablage 🗒️ → Schlüssel wird automatisch hinzugefügt\n<b>V2RayTun</b> → <b>+</b> oben rechts → «Aus Zwischenablage importieren»\n\n⏰ Gültig bis {expires_date}",
     'main.trial_activation_error': '❌ Fehler bei der Aktivierung der Testphase. Bitte später erneut versuchen oder Kundenservice kontaktieren.',
     'main.trial_button': '🎁 3-Tage-Testphase',
     'main.trial_expired_text': '🔓 <b>Testzugang beendet</b>\n\nIhre Testphase ist abgelaufen.\n\n🎟 Nutzen Sie den Promocode <b>YAbx30</b> für 30% Rabatt auf Ihr erstes Abo.\n\nAbonnieren Sie jetzt, um den sicheren Zugang weiter zu nutzen.',
