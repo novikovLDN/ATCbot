@@ -565,10 +565,8 @@ async def callback_setup_key(callback: CallbackQuery):
         return
 
     auto_text = i18n_get_text(language, "setup.auto_text")
-    key_label = i18n_get_text(language, "setup.copy_key_label")
-    text = f"{auto_text}\n\n{key_label}\n<code>{sub_url}</code>"
 
-    buttons = []
+    # Build clickable deep links in message text (Telegram blocks custom URL schemes in buttons)
     if platform in ("ios", "macos"):
         auto_clients = ["happ", "v2raytun", "hiddify"]
     elif platform == "android":
@@ -578,16 +576,20 @@ async def callback_setup_key(callback: CallbackQuery):
     else:
         auto_clients = []
 
+    links_text = ""
     for client in auto_clients:
         scheme = _AUTO_SETUP_SCHEMES.get(client)
         if scheme:
             label = i18n_get_text(language, f"setup.auto_{client}")
-            buttons.append([InlineKeyboardButton(text=label, url=f"{scheme}{sub_url}")])
+            links_text += f"\n▸ <a href=\"{scheme}{sub_url}\">{label}</a>"
 
-    buttons.append([InlineKeyboardButton(
+    key_label = i18n_get_text(language, "setup.copy_key_label")
+    text = f"{auto_text}\n{links_text}\n\n{key_label}\n<code>{sub_url}</code>"
+
+    buttons = [[InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=f"setup_platform:{platform}",
-    )])
+    )]]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
