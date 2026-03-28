@@ -468,12 +468,6 @@ _DOWNLOAD_LINKS = {
     },
 }
 
-_AUTO_SETUP_SCHEMES = {
-    "hiddify": "hiddify://import/",
-    "happ": "happ://add/",
-    "v2raytun": "v2raytun://import/",
-}
-
 
 @router.callback_query(F.data == "setup_device")
 async def callback_setup_device(callback: CallbackQuery):
@@ -564,27 +558,9 @@ async def callback_setup_key(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
 
-    auto_text = i18n_get_text(language, "setup.auto_text")
-
-    # Build clickable deep links in message text (Telegram blocks custom URL schemes in buttons)
-    if platform in ("ios", "macos"):
-        auto_clients = ["happ", "v2raytun", "hiddify"]
-    elif platform == "android":
-        auto_clients = ["happ", "v2raytun", "hiddify"]
-    elif platform == "windows":
-        auto_clients = ["hiddify"]
-    else:
-        auto_clients = []
-
-    links_text = ""
-    for client in auto_clients:
-        scheme = _AUTO_SETUP_SCHEMES.get(client)
-        if scheme:
-            label = i18n_get_text(language, f"setup.auto_{client}")
-            links_text += f"\n▸ <a href=\"{scheme}{sub_url}\">{label}</a>"
-
+    connect_text = i18n_get_text(language, f"setup.connect_{platform}")
     key_label = i18n_get_text(language, "setup.copy_key_label")
-    text = f"{auto_text}\n{links_text}\n\n{key_label}\n<code>{sub_url}</code>"
+    text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
 
     buttons = [[InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
