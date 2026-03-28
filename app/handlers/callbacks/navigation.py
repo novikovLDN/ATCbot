@@ -399,7 +399,7 @@ async def callback_connect_instead_of_copy(callback: CallbackQuery):
 
 @router.callback_query(F.data == "get_sub_key")
 async def callback_get_sub_key(callback: CallbackQuery):
-    """Отправить ссылку подписки (subscription URL) пользователю в чат."""
+    """Отправить ключ подписки с инструкцией по подключению."""
     try:
         await callback.answer()
     except Exception:
@@ -417,9 +417,32 @@ async def callback_get_sub_key(callback: CallbackQuery):
         )
         return
 
+    language = await resolve_user_language(telegram_id)
     from vpn_utils import build_sub_url
     sub_url = build_sub_url(telegram_id)
-    await callback.message.answer(
-        f"🔑 Ваша ссылка подписки:\n\n<code>{sub_url}</code>",
-        parse_mode="HTML",
-    )
+
+    text = i18n_get_text(language, "get_key.instruction_text",
+        "📖 <b>Инструкция по подключению</b>\n\n"
+        "<b>Happ</b> — откройте приложение → внизу нажмите на буфер обмена 🗒️ → ключ добавится автоматически\n\n"
+        "<b>V2RayTun</b> — откройте приложение → в правом верхнем углу нажмите <b>+</b> → «Импорт из буфера обмена»\n\n"
+        "⸻\n\n"
+        "👇 Скопируйте ключ одним нажатием:")
+
+    full_text = f"{text}\n\n<code>{sub_url}</code>"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "get_key.download_happ", "📲 Скачать Happ"),
+            url="https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "get_key.download_v2raytun", "📲 Скачать V2RayTun"),
+            url="https://apps.apple.com/tr/app/v2raytun/id6476628951",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main",
+        )],
+    ])
+
+    await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
