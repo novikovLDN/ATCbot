@@ -63,13 +63,11 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
     link_result = await site_api.link_account(token, telegram_id)
 
     if not link_result:
-        # 404 or error — token invalid or already used
         await message.answer(
             i18n_get_text(language, "site_link.token_invalid")
         )
         return True
 
-    # Check for success field in response
     if isinstance(link_result, dict) and link_result.get("success") is False:
         await message.answer(
             i18n_get_text(language, "site_link.token_invalid")
@@ -84,27 +82,30 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
     if site_user_id:
         await database.set_site_user_id(telegram_id, str(site_user_id))
 
-    # Check for subscription conflict
+    # Check subscriptions on both sides
     bot_sub = await database.get_subscription(telegram_id)
-    site_status = await site_api.get_status(telegram_id, force=True)
+    site_has_sub = data.get("hasActiveSubscription", False) and not data.get("isExpired", True)
+    site_days = data.get("daysLeft", 0)
+    site_plan = (data.get("subscriptionPlan") or "basic").lower()
 
     bot_has_sub = (
         bot_sub
         and bot_sub.get("status") == "active"
         and bot_sub.get("expires_at")
     )
-    site_has_sub = site_status and site_status.get("daysLeft", 0) > 0
 
     if bot_has_sub and site_has_sub:
-        # Both have active subscriptions — ask user which to keep
+        # Case C: Both have active subscriptions — ask user which key to keep
         bot_days = _days_left(bot_sub["expires_at"])
-        site_days = site_status.get("daysLeft", 0)
+        bot_plan = (bot_sub.get("subscription_type") or "basic").lower()
 
         text = i18n_get_text(
             language,
             "site_link.choose_subscription",
             bot_days=bot_days,
             site_days=site_days,
+            bot_plan=bot_plan,
+            site_plan=site_plan,
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
@@ -119,15 +120,26 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
         await message.answer(text, reply_markup=keyboard)
         return True
 
-    # No conflict — linked successfully
+    if bot_has_sub and not site_has_sub:
+        # Case B: Bot has sub, site doesn't → push bot key to site
+        await _sync_bot_to_site(telegram_id, bot_sub)
+        await message.answer(
+            i18n_get_text(language, "site_link.linked_success", email=email)
+        )
+        return True
+
+    if not bot_has_sub and site_has_sub:
+        # Case A: Site has sub, bot doesn't → pull site data into bot
+        await _sync_site_to_bot(telegram_id, data)
+        await message.answer(
+            i18n_get_text(language, "site_link.linked_success", email=email)
+        )
+        return True
+
+    # Neither has subscription — just linked
     await message.answer(
         i18n_get_text(language, "site_link.linked_success", email=email)
     )
-
-    # If bot has sub but site doesn't — push bot data to site
-    if bot_has_sub and not site_has_sub:
-        await _sync_bot_to_site(telegram_id, bot_sub)
-
     return True
 
 
@@ -161,7 +173,6 @@ async def callback_open_website(callback: CallbackQuery, state: FSMContext):
     # Ensure user has a site account
     site_user_id = await database.get_site_user_id(telegram_id)
     if not site_user_id:
-        # Try to find existing account or register new one
         await auto_register_on_site(telegram_id)
         site_user_id = await database.get_site_user_id(telegram_id)
 
@@ -171,7 +182,7 @@ async def callback_open_website(callback: CallbackQuery, state: FSMContext):
             )
             return
 
-        # Sync bot subscription to site
+        # After registration, sync bot subscription to site
         bot_sub = await database.get_subscription(telegram_id)
         if bot_sub and bot_sub.get("status") == "active":
             await _sync_bot_to_site(telegram_id, bot_sub)
@@ -313,7 +324,7 @@ async def auto_register_on_site(telegram_id: int):
 async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
     """
     Called after successful payment in bot to sync with site.
-    Extends subscription on site side.
+    Calls POST /api/bot/extend and updates bot data from response.
     """
     if not config.SITE_SYNC_ENABLED:
         return
@@ -321,20 +332,37 @@ async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
     # Ensure user is registered on site
     await auto_register_on_site(telegram_id)
 
-    # Sync current subscription to site
-    bot_sub = await database.get_subscription(telegram_id)
-    if bot_sub and bot_sub.get("status") == "active":
-        await _sync_bot_to_site(telegram_id, bot_sub)
-
-    # Also call extend for proper site-side handling
+    # Call extend — site returns updated subscription data
     result = await site_api.extend_subscription(telegram_id, days, plan)
     if not result:
         logger.warning("Failed to extend subscription on site for user %s", telegram_id)
-    else:
-        logger.info(
-            "Site subscription extended for user %s: +%d days (%s)",
-            telegram_id, days, plan,
-        )
+        return
+
+    logger.info(
+        "Site subscription extended for user %s: +%d days (%s)",
+        telegram_id, days, plan,
+    )
+
+    # Update bot data from extend response (vpnKey must stay in sync)
+    resp_data = result.get("data", result)
+    site_vpn_key = resp_data.get("vpnKey")
+    if site_vpn_key:
+        pool = await database.get_pool()
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    current_key = await conn.fetchval(
+                        "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                        telegram_id,
+                    )
+                    if current_key and current_key != site_vpn_key:
+                        await conn.execute(
+                            "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
+                            site_vpn_key, telegram_id,
+                        )
+                        logger.info("Updated bot vpn_key from extend response for user %s", telegram_id)
+            except Exception as e:
+                logger.warning("Failed to update vpn_key from extend response: %s", e)
 
 
 async def sync_key_to_site(telegram_id: int, vpn_key: str, xray_uuid: str):
@@ -376,41 +404,68 @@ async def _sync_bot_to_site(telegram_id: int, bot_sub: dict) -> bool:
     return result is not None
 
 
-async def _sync_site_to_bot(telegram_id: int, site_status: dict):
-    """Update bot DB from site status data."""
-    vpn_key = site_status.get("vpnKey")
-    subscription_end = site_status.get("subscriptionEnd")
-    plan = site_status.get("subscriptionPlan", "basic")
+async def _sync_site_to_bot(telegram_id: int, site_data: dict):
+    """
+    Update bot DB from site data.
+    Handles both UPDATE (existing subscription) and INSERT (no subscription row).
+    """
+    vpn_key = site_data.get("vpnKey")
+    subscription_end = site_data.get("subscriptionEnd")
+    plan = (site_data.get("subscriptionPlan") or "basic").lower()
+    xray_uuid = site_data.get("xrayUuid")
 
-    if vpn_key and subscription_end:
-        pool = await database.get_pool()
-        if pool:
-            async with pool.acquire() as conn:
-                if isinstance(subscription_end, str):
-                    try:
-                        sub_end = datetime.fromisoformat(
-                            subscription_end.replace("Z", "+00:00")
-                        )
-                    except ValueError:
-                        logger.error(
-                            "Invalid subscriptionEnd from site: %s",
-                            subscription_end,
-                        )
-                        return
-                else:
-                    sub_end = subscription_end
+    if not vpn_key or not subscription_end:
+        return
 
-                # Ensure naive UTC for DB (TIMESTAMP WITHOUT TIME ZONE)
-                if sub_end.tzinfo is not None:
-                    sub_end = sub_end.replace(tzinfo=None)
+    # Parse subscription end date
+    if isinstance(subscription_end, str):
+        try:
+            sub_end = datetime.fromisoformat(
+                subscription_end.replace("Z", "+00:00")
+            )
+        except ValueError:
+            logger.error("Invalid subscriptionEnd from site: %s", subscription_end)
+            return
+    else:
+        sub_end = subscription_end
 
-                await conn.execute(
-                    """UPDATE subscriptions
-                       SET vpn_key = $1, expires_at = $2,
-                           subscription_type = $3, status = 'active'
-                       WHERE telegram_id = $4""",
-                    vpn_key, sub_end, plan, telegram_id,
-                )
+    # Ensure naive UTC for DB (TIMESTAMP WITHOUT TIME ZONE)
+    if sub_end.tzinfo is not None:
+        sub_end = sub_end.replace(tzinfo=None)
+
+    pool = await database.get_pool()
+    if not pool:
+        return
+
+    async with pool.acquire() as conn:
+        # Check if subscription row exists
+        existing = await conn.fetchval(
+            "SELECT id FROM subscriptions WHERE telegram_id = $1",
+            telegram_id,
+        )
+
+        if existing:
+            await conn.execute(
+                """UPDATE subscriptions
+                   SET vpn_key = $1, expires_at = $2,
+                       subscription_type = $3, status = 'active'
+                   WHERE telegram_id = $4""",
+                vpn_key, sub_end, plan, telegram_id,
+            )
+        else:
+            # INSERT new subscription from site data
+            await conn.execute(
+                """INSERT INTO subscriptions (
+                       telegram_id, uuid, vpn_key, expires_at, status, source,
+                       subscription_type, activated_at, activation_status
+                   ) VALUES ($1, $2, $3, $4, 'active', 'site', $5, NOW(), 'active')""",
+                telegram_id,
+                xray_uuid or "",
+                vpn_key,
+                sub_end,
+                plan,
+            )
+            logger.info("Created bot subscription from site data for user %s", telegram_id)
 
 
 # =========================================================================
