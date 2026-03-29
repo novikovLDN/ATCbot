@@ -383,9 +383,26 @@ async def _sync_bot_to_site(telegram_id: int, bot_sub: dict) -> bool:
     )
     if result is None:
         logger.warning("SYNC_BOT→SITE: /api/bot/sync returned None for user %s", telegram_id)
+        return False
+
+    logger.info("SYNC_BOT→SITE: success for user %s, response=%s", telegram_id, result)
+
+    # Verify: read back from site to confirm data was saved
+    site_api.invalidate_status_cache(telegram_id)
+    verify = await site_api.get_status(telegram_id, force=True)
+    if verify:
+        logger.info(
+            "SYNC_BOT→SITE_VERIFY: user=%s hasActiveSub=%s sitePlan=%s siteExpires=%s siteVpnKey=%s",
+            telegram_id,
+            verify.get("hasActiveSubscription"),
+            verify.get("subscriptionPlan"),
+            verify.get("subscriptionEnd"),
+            bool(verify.get("vpnKey")),
+        )
     else:
-        logger.info("SYNC_BOT→SITE: success for user %s", telegram_id)
-    return result is not None
+        logger.warning("SYNC_BOT→SITE_VERIFY: could not read back status for user %s", telegram_id)
+
+    return True
 
 
 async def _sync_site_to_bot(telegram_id: int, site_data: dict):

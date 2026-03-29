@@ -68,6 +68,9 @@ async def _request(method: str, path: str, **kwargs) -> Optional[Dict[str, Any]]
                     return None
                 data = await resp.json()
                 logger.debug("Site API OK: %s %s -> %s", method, path, resp.status)
+                # Log sync/extend responses at INFO level for debugging
+                if "/sync" in path or "/extend" in path:
+                    logger.info("Site API response: %s %s -> %s", method, path, data)
                 # Unwrap {"success": ..., "data": {...}} envelope
                 if isinstance(data, dict) and "data" in data and data["data"] is not None:
                     return data["data"]
@@ -188,7 +191,9 @@ async def sync_overwrite_site(
         "xrayUuid": xray_uuid or "",
     }
 
+    logger.info("SYNC_OVERWRITE_SITE: sending body=%s", body)
     result = await _request("POST", "/api/bot/sync", json=body)
+    logger.info("SYNC_OVERWRITE_SITE: result=%s", result)
     if result:
         invalidate_status_cache(telegram_id)
     return result
