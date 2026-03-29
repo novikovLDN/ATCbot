@@ -371,7 +371,9 @@ async def _sync_bot_to_site(telegram_id: int, bot_sub: dict) -> bool:
 
     logger.info(
         "SYNC_BOT→SITE: user=%s plan=%s expires=%s vpnKey=%s uuid=%s",
-        telegram_id, plan, sub_end_iso, bool(vpn_key), bool(xray_uuid),
+        telegram_id, plan, sub_end_iso,
+        (vpn_key[:40] + "...") if vpn_key else "<empty>",
+        (xray_uuid[:12] + "...") if xray_uuid else "<empty>",
     )
 
     result = await site_api.sync_overwrite_site(
