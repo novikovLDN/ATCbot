@@ -477,7 +477,7 @@ async def main():
         background_tasks.append(xray_sync_task)
     
     # Site sync worker (hourly sync with Atlas Secure website)
-    if workers_lock_acquired:
+    if database.DB_READY and config.SITE_SYNC_ENABLED:
         site_sync_task = asyncio.create_task(site_sync_worker.start_site_sync_worker())
         background_tasks.append(site_sync_task)
 
