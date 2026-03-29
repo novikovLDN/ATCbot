@@ -67,6 +67,7 @@ async def _request(method: str, path: str, **kwargs) -> Optional[Dict[str, Any]]
                     )
                     return None
                 data = await resp.json()
+                logger.debug("Site API OK: %s %s -> %s", method, path, resp.status)
                 return data
     except aiohttp.ClientError as e:
         logger.error("Site API connection error: %s %s -> %s", method, path, e)
@@ -176,11 +177,9 @@ async def sync_overwrite_site(
         "action": "overwrite_site",
         "subscriptionEnd": subscription_end,
         "plan": plan,
+        "vpnKey": vpn_key or "",
+        "xrayUuid": xray_uuid or "",
     }
-    if vpn_key:
-        body["vpnKey"] = vpn_key
-    if xray_uuid:
-        body["xrayUuid"] = xray_uuid
 
     result = await _request("POST", "/api/bot/sync", json=body)
     if result:
