@@ -774,4 +774,14 @@ LANG = {
     'subscription.tariff_basic': '⚡️ Plan: Basic',
     'subscription.tariff_business': '🏢 Plan: Business',
     'subscription.tariff_plus': '👑 Plan: Plus',
+
+    # Site account linking
+    'site_link.link_failed': "Failed to link account. Please try again or contact support.",
+    'site_link.linked_success': "Account linked successfully ({email}).\nYour data is now synced with the website.",
+    'site_link.choose_subscription': "You have active subscriptions in two places:\n\n📱 Telegram: {bot_days} days, plan {bot_plan}\n🌐 Website: {site_days} days, plan {site_plan}\n\nWhich subscription would you like to keep?",
+    'site_link.keep_telegram': "📱 Keep Telegram",
+    'site_link.keep_site': "🌐 Keep Website",
+    'site_link.synced_to_site': "Telegram data synced to website.",
+    'site_link.synced_from_site': "Website data synced to Telegram.",
+    'site_link.sync_failed': "Sync error. Please try again later.",
 }

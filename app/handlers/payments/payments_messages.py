@@ -616,7 +616,14 @@ async def process_successful_payment(message: Message, state: FSMContext):
         if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
         vpn_key_plus = getattr(result, "vpn_key_plus", None)
-        
+
+        # Sync with website (fire-and-forget)
+        try:
+            from app.handlers.user.site_link import notify_site_after_payment
+            await notify_site_after_payment(telegram_id, period_days, tariff_type)
+        except Exception as site_err:
+            logger.warning("SITE_SYNC_AFTER_PAYMENT_FAILED: user=%s, error=%s", telegram_id, site_err)
+
         # Проверяем статус активации подписки
         activation_status = result.activation_status
         is_pending_activation = (

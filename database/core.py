@@ -461,6 +461,12 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_level TEXT DEFAULT 'base' CHECK (referral_level IN ('base', 'vip'))")
         except Exception:
             pass
+
+        # Миграция: site_user_id для связки с сайтом Atlas Secure
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS site_user_id TEXT")
+        except Exception:
+            pass
         
         # Таблица pending_purchases - контекст покупки для защиты от устаревших кнопок
         await conn.execute("""

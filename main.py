@@ -35,6 +35,7 @@ except Exception as e:
     XRAY_SYNC_AVAILABLE = False
     xray_sync = None
     print(f"[XRAY_SYNC] disabled: {e}")
+import site_sync_worker
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -475,6 +476,11 @@ async def main():
     if xray_sync_task:
         background_tasks.append(xray_sync_task)
     
+    # Site sync worker (hourly sync with Atlas Secure website)
+    if workers_lock_acquired:
+        site_sync_task = asyncio.create_task(site_sync_worker.start_site_sync_worker())
+        background_tasks.append(site_sync_task)
+
     # Bot initialization complete
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")

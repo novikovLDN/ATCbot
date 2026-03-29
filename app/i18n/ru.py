@@ -863,4 +863,14 @@ LANG = {
     'gift.status_pending': "❌ Не активирован",
     'gift.detail_activated': "🎁 <b>{tariff_name} — {period}</b>\n\n✅ Этот подарок уже активирован.",
     'gift.detail_pending': "🎁 <b>Отправьте подарок близкому!</b>\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {period}\n\n❌ Не активирован\n\n🔗 Ссылка для активации:\n<code>{gift_link}</code>",
+
+    # Site account linking
+    'site_link.link_failed': "Не удалось привязать аккаунт. Попробуйте ещё раз или обратитесь в поддержку.",
+    'site_link.linked_success': "Аккаунт успешно привязан ({email}).\nТеперь ваши данные синхронизированы с сайтом.",
+    'site_link.choose_subscription': "У вас есть активная подписка в дву�� местах:\n\n📱 Telegram: {bot_days} дн, тариф {bot_plan}\n🌐 Сайт: {site_days} дн, тариф {site_plan}\n\nКакую подписку оставить?",
+    'site_link.keep_telegram': "📱 Оставить Telegram",
+    'site_link.keep_site': "🌐 Оставить с сайта",
+    'site_link.synced_to_site': "Данные из Telegram синхронизированы на сайт.",
+    'site_link.synced_from_site': "Данные с сайта синхронизированы в Telegram.",
+    'site_link.sync_failed': "Ошибка синхронизации. Попробуйте позже.",
 }
