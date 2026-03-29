@@ -68,6 +68,13 @@ async def _request(method: str, path: str, **kwargs) -> Optional[Dict[str, Any]]
                     return None
                 data = await resp.json()
                 logger.debug("Site API OK: %s %s -> %s", method, path, resp.status)
+                # Unwrap {"success": ..., "data": {...}} envelope
+                if isinstance(data, dict) and "data" in data and data["data"] is not None:
+                    return data["data"]
+                # Check for success=false without data
+                if isinstance(data, dict) and data.get("success") is False:
+                    logger.warning("Site API success=false: %s %s -> %s", method, path, data)
+                    return None
                 return data
     except aiohttp.ClientError as e:
         logger.error("Site API connection error: %s %s -> %s", method, path, e)

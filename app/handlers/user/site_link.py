@@ -69,15 +69,8 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
         )
         return True
 
-    if isinstance(link_result, dict) and link_result.get("success") is False:
-        logger.warning("SITE_LINK: /api/bot/link success=false for user %s: %s", telegram_id, link_result)
-        await message.answer(
-            i18n_get_text(language, "site_link.token_invalid")
-        )
-        return True
-
-    # Extract site data
-    data = link_result.get("data", link_result)
+    # Extract site data (already unwrapped from {"data": ...} by _request)
+    data = link_result
     site_user_id = data.get("userId") or data.get("id")
     email = data.get("email", "")
     site_has_sub = bool(data.get("hasActiveSubscription", False))
@@ -270,8 +263,7 @@ async def auto_register_on_site(telegram_id: int):
     # Check if account already exists on site by telegram_id
     site_user = await site_api.get_user_by_telegram(telegram_id)
     if site_user:
-        data = site_user.get("data", site_user)
-        site_id = data.get("userId") or data.get("id")
+        site_id = site_user.get("userId") or site_user.get("id")
         if site_id:
             await database.set_site_user_id(telegram_id, str(site_id))
             logger.info("SITE_REGISTER: found existing site account for user %s, site_id=%s", telegram_id, site_id)
@@ -283,8 +275,7 @@ async def auto_register_on_site(telegram_id: int):
 
     result = await site_api.register_account(telegram_id, referral_code)
     if result:
-        data = result.get("data", result)
-        site_id = data.get("userId") or data.get("id")
+        site_id = result.get("userId") or result.get("id")
         if site_id:
             await database.set_site_user_id(telegram_id, str(site_id))
             logger.info("SITE_REGISTER: created site account for user %s, site_id=%s", telegram_id, site_id)
@@ -321,8 +312,7 @@ async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
     )
 
     # Update bot vpnKey from extend response if changed
-    resp_data = result.get("data", result)
-    site_vpn_key = resp_data.get("vpnKey")
+    site_vpn_key = result.get("vpnKey")
     if site_vpn_key:
         pool = await database.get_pool()
         if pool:
