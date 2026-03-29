@@ -18,8 +18,8 @@ from app.services import site_api
 
 logger = logging.getLogger(__name__)
 
-# Sync interval: 1 hour
-SYNC_INTERVAL_SECONDS = 3600
+# Sync interval: 5 minutes
+SYNC_INTERVAL_SECONDS = 300
 
 # Max users to sync per iteration (avoid API overload)
 MAX_USERS_PER_ITERATION = 100

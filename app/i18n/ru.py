@@ -866,10 +866,10 @@ LANG = {
 
     # Site account linking
     'site_link.link_failed': "Не удалось привязать аккаунт. Попробуйте ещё раз или обратитесь в поддержку.",
-    'site_link.linked_success': "Аккаунт успешно привязан ({email}).\nТеперь ваши данные синхронизированы с сайтом.",
-    'site_link.choose_subscription': "У вас есть активная подписка в дву�� местах:\n\n📱 Telegram: {bot_days} дн, тариф {bot_plan}\n🌐 Сайт: {site_days} дн, тариф {site_plan}\n\nКакую подписку оставить?",
-    'site_link.keep_telegram': "📱 Оставить Telegram",
-    'site_link.keep_site': "🌐 Оставить с сайта",
+    'site_link.linked_success': "✅ Telegram привязан к аккаунту {email}\nПодписка синхронизирована с сайтом.\nКлюч: один на сайте и в боте.",
+    'site_link.transfer_offer': "✅ Telegram привязан к {email}\n\nНа сайте нет активной подписки.\nПеренести вашу подписку из бота на сайт?",
+    'site_link.transfer_yes': "Да, перенести",
+    'site_link.transfer_done': "✅ Подписка перенесена на сайт. Ключ один на сайте и в боте.",
     'site_link.synced_to_site': "Данные из Telegram синхронизированы на сайт.",
     'site_link.synced_from_site': "Данные с сайта синхронизированы в Telegram.",
     'site_link.sync_failed': "Ошибка синхронизации. Попробуйте позже.",

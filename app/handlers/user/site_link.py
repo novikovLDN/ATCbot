@@ -1,11 +1,10 @@
 """
 Site account linking and navigation handlers.
 
-Scenarios:
-A) Site → Bot: User clicks "Link Telegram" on site → /start {telegramLinkToken}
-B) Bot → Site: User clicks "Open website" in bot → auto-login via nonce
-C) Subscription conflict: Both bot and site have active subscriptions → user picks
-D) No site account: Auto-register on site when needed
+Rules:
+- Link FROM SITE  → site is master → bot takes site data
+- Link FROM BOT   → bot is master  → site takes bot data
+- After linking   → any change syncs both ways
 """
 import logging
 import re
@@ -44,14 +43,14 @@ def is_telegram_link_token(payload: str) -> bool:
 
 
 # =========================================================================
-# A) Site → Bot: Deep link handling
+# A) Site → Bot: Deep link handling  (SITE IS MASTER)
 # =========================================================================
 
 async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
     """
     Handle /start {telegramLinkToken} deep link from website.
+    Site is the source of truth — bot ALWAYS overwrites its data with site data.
 
-    Called from cmd_start when payload is detected as 16-char hex token.
     Returns True if handled (even on error), False only if site sync disabled.
     """
     if not config.SITE_SYNC_ENABLED:
@@ -59,7 +58,7 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
 
     language = await resolve_user_language(telegram_id)
 
-    # Call POST /api/bot/link to bind telegram_id to site account
+    # POST /api/bot/link
     link_result = await site_api.link_account(token, telegram_id)
 
     if not link_result:
@@ -74,69 +73,45 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
         )
         return True
 
-    # Extract user data from response
+    # Extract site data
     data = link_result.get("data", link_result)
     site_user_id = data.get("userId") or data.get("id")
     email = data.get("email", "")
+    site_has_sub = data.get("hasActiveSubscription", False) and not data.get("isExpired", True)
 
+    # Save site_user_id mapping
     if site_user_id:
         await database.set_site_user_id(telegram_id, str(site_user_id))
 
-    # Check subscriptions on both sides
-    bot_sub = await database.get_subscription(telegram_id)
-    site_has_sub = data.get("hasActiveSubscription", False) and not data.get("isExpired", True)
-    site_days = data.get("daysLeft", 0)
-    site_plan = (data.get("subscriptionPlan") or "basic").lower()
+    # Site is master → overwrite bot data with site data
+    if site_has_sub:
+        await _sync_site_to_bot(telegram_id, data)
 
+    # Check: bot had sub but site doesn't → offer to transfer
+    bot_sub = await database.get_subscription(telegram_id)
     bot_has_sub = (
         bot_sub
         and bot_sub.get("status") == "active"
         and bot_sub.get("expires_at")
     )
 
-    if bot_has_sub and site_has_sub:
-        # Case C: Both have active subscriptions — ask user which key to keep
-        bot_days = _days_left(bot_sub["expires_at"])
-        bot_plan = (bot_sub.get("subscription_type") or "basic").lower()
-
+    if bot_has_sub and not site_has_sub:
+        # Offer to transfer bot subscription to site
         text = i18n_get_text(
             language,
-            "site_link.choose_subscription",
-            bot_days=bot_days,
-            site_days=site_days,
-            bot_plan=bot_plan,
-            site_plan=site_plan,
+            "site_link.transfer_offer",
+            email=email,
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text=i18n_get_text(language, "site_link.keep_telegram"),
-                callback_data="site_sync:keep_bot",
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "site_link.keep_site"),
-                callback_data="site_sync:keep_site",
+                text=i18n_get_text(language, "site_link.transfer_yes"),
+                callback_data="site_sync:transfer_to_site",
             )],
         ])
         await message.answer(text, reply_markup=keyboard)
         return True
 
-    if bot_has_sub and not site_has_sub:
-        # Case B: Bot has sub, site doesn't → push bot key to site
-        await _sync_bot_to_site(telegram_id, bot_sub)
-        await message.answer(
-            i18n_get_text(language, "site_link.linked_success", email=email)
-        )
-        return True
-
-    if not bot_has_sub and site_has_sub:
-        # Case A: Site has sub, bot doesn't → pull site data into bot
-        await _sync_site_to_bot(telegram_id, data)
-        await message.answer(
-            i18n_get_text(language, "site_link.linked_success", email=email)
-        )
-        return True
-
-    # Neither has subscription — just linked
+    # Normal success message
     await message.answer(
         i18n_get_text(language, "site_link.linked_success", email=email)
     )
@@ -144,14 +119,14 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
 
 
 # =========================================================================
-# B) Bot → Site: "Open website" with auto-login
+# B) Bot → Site: "Open website" with auto-login  (BOT IS MASTER)
 # =========================================================================
 
 @site_link_router.callback_query(F.data == "open_website")
 async def callback_open_website(callback: CallbackQuery, state: FSMContext):
     """
     Generate one-time auth link and send user to site.
-    If user not linked — auto-register first.
+    If user not linked — auto-register first, then push bot data to site.
     """
     if not await ensure_db_ready_callback(callback):
         return
@@ -182,7 +157,7 @@ async def callback_open_website(callback: CallbackQuery, state: FSMContext):
             )
             return
 
-        # After registration, sync bot subscription to site
+        # Bot is master → push bot subscription to site after registration
         bot_sub = await database.get_subscription(telegram_id)
         if bot_sub and bot_sub.get("status") == "active":
             await _sync_bot_to_site(telegram_id, bot_sub)
@@ -218,12 +193,12 @@ async def callback_open_website(callback: CallbackQuery, state: FSMContext):
 
 
 # =========================================================================
-# C) Subscription conflict callbacks
+# C) Transfer bot subscription to site (offered when site has no sub)
 # =========================================================================
 
-@site_link_router.callback_query(F.data == "site_sync:keep_bot")
-async def callback_keep_bot_subscription(callback: CallbackQuery, state: FSMContext):
-    """User chose to keep Telegram bot subscription — overwrite site."""
+@site_link_router.callback_query(F.data == "site_sync:transfer_to_site")
+async def callback_transfer_to_site(callback: CallbackQuery, state: FSMContext):
+    """User confirmed to transfer bot subscription to site."""
     if not await ensure_db_ready_callback(callback):
         return
 
@@ -245,39 +220,12 @@ async def callback_keep_bot_subscription(callback: CallbackQuery, state: FSMCont
     result = await _sync_bot_to_site(telegram_id, bot_sub)
     if result:
         await callback.message.edit_text(
-            i18n_get_text(language, "site_link.synced_to_site")
+            i18n_get_text(language, "site_link.transfer_done")
         )
     else:
         await callback.message.edit_text(
             i18n_get_text(language, "site_link.sync_failed")
         )
-
-
-@site_link_router.callback_query(F.data == "site_sync:keep_site")
-async def callback_keep_site_subscription(callback: CallbackQuery, state: FSMContext):
-    """User chose to keep site subscription — update bot data from site."""
-    if not await ensure_db_ready_callback(callback):
-        return
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    site_status = await site_api.get_status(telegram_id, force=True)
-    if not site_status:
-        await callback.message.edit_text(
-            i18n_get_text(language, "site_link.sync_failed")
-        )
-        return
-
-    await _sync_site_to_bot(telegram_id, site_status)
-    await callback.message.edit_text(
-        i18n_get_text(language, "site_link.synced_from_site")
-    )
 
 
 # =========================================================================
@@ -292,12 +240,11 @@ async def auto_register_on_site(telegram_id: int):
     if not config.SITE_SYNC_ENABLED:
         return
 
-    # Check if already linked
     existing = await database.get_site_user_id(telegram_id)
     if existing:
         return
 
-    # Check if account exists on site by telegram_id
+    # Check if account already exists on site by telegram_id
     site_user = await site_api.get_user_by_telegram(telegram_id)
     if site_user:
         site_id = site_user.get("userId") or site_user.get("id")
@@ -305,7 +252,7 @@ async def auto_register_on_site(telegram_id: int):
             await database.set_site_user_id(telegram_id, str(site_id))
         return
 
-    # Register new account on site
+    # Register new account
     user = await database.get_user(telegram_id)
     referral_code = user.get("referral_code") if user else None
 
@@ -323,8 +270,8 @@ async def auto_register_on_site(telegram_id: int):
 
 async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
     """
-    Called after successful payment in bot to sync with site.
-    Calls POST /api/bot/extend and updates bot data from response.
+    Called after successful payment in bot.
+    POST /api/bot/extend → site updated, bot updates vpnKey from response.
     """
     if not config.SITE_SYNC_ENABLED:
         return
@@ -343,7 +290,7 @@ async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
         telegram_id, days, plan,
     )
 
-    # Update bot data from extend response (vpnKey must stay in sync)
+    # Update bot vpnKey from extend response if changed
     resp_data = result.get("data", result)
     site_vpn_key = resp_data.get("vpnKey")
     if site_vpn_key:
@@ -406,8 +353,8 @@ async def _sync_bot_to_site(telegram_id: int, bot_sub: dict) -> bool:
 
 async def _sync_site_to_bot(telegram_id: int, site_data: dict):
     """
-    Update bot DB from site data.
-    Handles both UPDATE (existing subscription) and INSERT (no subscription row).
+    Overwrite bot DB from site data.
+    Handles both UPDATE (existing subscription) and INSERT (no row).
     """
     vpn_key = site_data.get("vpnKey")
     subscription_end = site_data.get("subscriptionEnd")
@@ -417,7 +364,6 @@ async def _sync_site_to_bot(telegram_id: int, site_data: dict):
     if not vpn_key or not subscription_end:
         return
 
-    # Parse subscription end date
     if isinstance(subscription_end, str):
         try:
             sub_end = datetime.fromisoformat(
@@ -429,7 +375,7 @@ async def _sync_site_to_bot(telegram_id: int, site_data: dict):
     else:
         sub_end = subscription_end
 
-    # Ensure naive UTC for DB (TIMESTAMP WITHOUT TIME ZONE)
+    # Ensure naive UTC for DB
     if sub_end.tzinfo is not None:
         sub_end = sub_end.replace(tzinfo=None)
 
@@ -438,7 +384,6 @@ async def _sync_site_to_bot(telegram_id: int, site_data: dict):
         return
 
     async with pool.acquire() as conn:
-        # Check if subscription row exists
         existing = await conn.fetchval(
             "SELECT id FROM subscriptions WHERE telegram_id = $1",
             telegram_id,
@@ -453,7 +398,6 @@ async def _sync_site_to_bot(telegram_id: int, site_data: dict):
                 vpn_key, sub_end, plan, telegram_id,
             )
         else:
-            # INSERT new subscription from site data
             await conn.execute(
                 """INSERT INTO subscriptions (
                        telegram_id, uuid, vpn_key, expires_at, status, source,
