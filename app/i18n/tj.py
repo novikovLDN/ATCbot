@@ -732,6 +732,8 @@ LANG = {
     'payment.crypto_waiting': '₿ Пардохт бо криптовалюта\n\nМаблағ: {amount:.2f} ₽\n\n⏳ Барои пардохт тавассути @CryptoBot ба истинод гузаред.\nПас аз тасдиқ обуна худкор фаол мешавад.',
     'profile.key_atlas': '🇩🇪 Atlas DE нусхабардорӣ',
     'profile.key_whitelist': '⚪️ White List нусхабардорӣ',
+    'profile.site_connected': "Ба QoDev пайваст шудааст",
+    'profile.site_not_connected': "Ба QoDev пайваст нашудааст",
     'referral.cashback_invite_button': '👥 Дӯстони бештар даъват кунед',
     'referral.cashback_x2_notification': "🔥 <b>x2 кешбэк — танҳо дар ин ҳафта!</b>\n\nАз <b>{start_date}</b> то <b>{end_date}</b> ҳар як харидори дӯстатон ба шумо <b>ду баробар кешбэк</b> меорад.\n\nДӯстонатонро ҳозир даъват кунед — ҳарчи бештар пайвастшавӣ, ҳамон қадар бештар даромад!\n\n💰 x2 кешбэк барои ҳар як обунаи пардохтшуда ба таври худкор ҳисоб карда мешавад.",
     'referral.cashback_x2_btn_invite': "👥 Дӯстро даъват кунед",

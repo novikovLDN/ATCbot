@@ -741,6 +741,8 @@ LANG = {
 
     'profile.key_atlas': '🇩🇪 نسخ Atlas DE',
     'profile.key_whitelist': '⚪️ نسخ White List',
+    'profile.site_connected': "متصل بـ QoDev",
+    'profile.site_not_connected': "غير متصل بـ QoDev",
 
     'referral.cashback_invite_button': '👥 دعوة المزيد من الأصدقاء',
     'referral.cashback_x2_notification': "🔥 <b>x2 استرداد نقدي — هذا الأسبوع فقط!</b>\n\nمن <b>{start_date}</b> إلى <b>{end_date}</b>، كل عملية شراء من صديقك تمنحك <b>استرداد نقدي مضاعف</b> في رصيدك.\n\nادعُ أصدقاءك الآن — كلما زادت الاتصالات، زادت أرباحك!\n\n💰 يُضاف x2 استرداد نقدي تلقائيًا لكل اشتراك مدفوع.",

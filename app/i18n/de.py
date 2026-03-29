@@ -732,6 +732,8 @@ LANG = {
     'payment.crypto_waiting': '₿ Kryptozahlung\n\nBetrag: {amount:.2f} ₽\n\n⏳ Folgen Sie dem Link zur Zahlung über @CryptoBot.\nIhr Abo wird nach Bestätigung automatisch aktiviert.',
     'profile.key_atlas': '🇩🇪 Atlas DE kopieren',
     'profile.key_whitelist': '⚪️ White List kopieren',
+    'profile.site_connected': "Mit QoDev verbunden",
+    'profile.site_not_connected': "Nicht mit QoDev verbunden",
     'referral.cashback_invite_button': '👥 Mehr Freunde einladen',
     'referral.cashback_x2_notification': "🔥 <b>x2 Cashback — nur diese Woche!</b>\n\nVon <b>{start_date}</b> bis <b>{end_date}</b> bringt Ihnen jeder Kauf eines Freundes <b>doppelten Cashback</b> auf Ihr Guthaben.\n\nLaden Sie jetzt Freunde ein — je mehr Verbindungen, desto mehr verdienen Sie!\n\n💰 x2 Cashback wird automatisch für jedes bezahlte Abonnement gutgeschrieben.",
     'referral.cashback_x2_btn_invite': "👥 Freund einladen",

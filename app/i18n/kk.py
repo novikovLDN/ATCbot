@@ -732,6 +732,8 @@ LANG = {
     'payment.crypto_waiting': '₿ Криптовалюта төлемі\n\nСома: {amount:.2f} ₽\n\n⏳ @CryptoBot арқылы төлеу үшін сілтемеге өтіңіз.\nРастаудан кейін жазылым автоматты белсендіріледі.',
     'profile.key_atlas': '🇩🇪 Atlas DE көшіру',
     'profile.key_whitelist': '⚪️ White List көшіру',
+    'profile.site_connected': "QoDev-ке қосылған",
+    'profile.site_not_connected': "QoDev-ке қосылмаған",
     'referral.cashback_invite_button': '👥 Көбірек достарды шақыру',
     'referral.cashback_x2_notification': "🔥 <b>x2 кешбэк — тек осы аптада!</b>\n\n<b>{start_date}</b> бастап <b>{end_date}</b> дейін досыңыздың әрбір сатып алуы сізге <b>екі есе кешбэк</b> әкеледі.\n\nДостарыңызды қазір шақырыңыз — неғұрлым көп қосылу, соғұрлым көп табыс!\n\n💰 x2 кешбэк әрбір төленген жазылым үшін автоматты түрде есептеледі.",
     'referral.cashback_x2_btn_invite': "👥 Досты шақыру",

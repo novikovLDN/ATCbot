@@ -756,6 +756,8 @@ LANG = {
     # profile
     'profile.key_atlas': '🇩🇪 Copy Atlas DE',
     'profile.key_whitelist': '⚪️ Copy White List',
+    'profile.site_connected': "Connected to QoDev",
+    'profile.site_not_connected': "Not connected to QoDev",
 
     # referral
     'referral.cashback_referred': '👤 Referral: {referred}',

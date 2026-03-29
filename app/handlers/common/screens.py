@@ -347,6 +347,14 @@ async def show_profile(message_or_query, language: str):
             text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
             text += i18n_get_text(language, "profile.auto_renew_none")
+        # Site sync indicator
+        if config.SITE_SYNC_ENABLED:
+            site_user_id = await database.get_site_user_id(telegram_id)
+            if site_user_id:
+                text += "\n🌐 " + i18n_get_text(language, "profile.site_connected", "Подключен к QoDev")
+            else:
+                text += "\n🔗 " + i18n_get_text(language, "profile.site_not_connected", "Не подключен к QoDev")
+
         text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
         # Prefer site vpnKey over local DB
         if site_status and site_status.get("vpnKey"):

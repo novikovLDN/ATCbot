@@ -732,6 +732,8 @@ LANG = {
     'payment.crypto_waiting': "₿ Kriptovalyuta to'lovi\n\nSumma: {amount:.2f} ₽\n\n⏳ @CryptoBot orqali to'lash uchun havolaga o'ting.\nTasdiqlashdan so'ng obuna avtomatik faollashtiriladi.",
     'profile.key_atlas': '🇩🇪 Atlas DE nusxalash',
     'profile.key_whitelist': '⚪️ White List nusxalash',
+    'profile.site_connected': "QoDev-ga ulangan",
+    'profile.site_not_connected': "QoDev-ga ulanmagan",
     'referral.cashback_invite_button': "👥 Ko'proq do'stlarni taklif qilish",
     'referral.cashback_x2_notification': "🔥 <b>x2 keshbek — faqat shu hafta!</b>\n\n<b>{start_date}</b> dan <b>{end_date}</b> gacha do'stingizning har bir xaridi sizga <b>ikki baravar keshbek</b> olib keladi.\n\nDo'stlaringizni hoziroq taklif qiling — qancha ko'p ulanish bo'lsa, shuncha ko'p daromad!\n\n💰 x2 keshbek har bir to'langan obuna uchun avtomatik hisoblanadi.",
     'referral.cashback_x2_btn_invite': "👥 Do'stni taklif qilish",

@@ -169,12 +169,19 @@ async def callback_open_website(callback: CallbackQuery, state: FSMContext):
             )
             return
 
-    # Bot is master → ALWAYS sync bot subscription to site before opening
+    # Bot is master → sync bot subscription to site before opening
+    # Also pull site data into bot if site has updates
     site_api.invalidate_status_cache(telegram_id)
     bot_sub = await database.get_subscription(telegram_id)
     if bot_sub and bot_sub.get("status") == "active":
         logger.info("SITE_OPEN: syncing bot→site for user %s", telegram_id)
         await _sync_bot_to_site(telegram_id, bot_sub)
+    else:
+        # No bot subscription — check if site has one and pull it
+        site_status = await site_api.get_status(telegram_id, force=True)
+        if site_status and site_status.get("hasActiveSubscription"):
+            logger.info("SITE_OPEN: site has sub, syncing site→bot for user %s", telegram_id)
+            await _sync_site_to_bot(telegram_id, site_status)
 
     # Generate nonce and call auth-login
     nonce = str(uuid_lib.uuid4())

@@ -882,4 +882,8 @@ LANG = {
 
     # Main menu — site button
     'main.open_website': "🌐 Личный кабинет",
+
+    # Profile — site sync indicator
+    'profile.site_connected': "Подключен к QoDev",
+    'profile.site_not_connected': "Не подключен к QoDev",
 }
