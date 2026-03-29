@@ -80,32 +80,29 @@ async def site_sync_iteration():
 
 
 async def _sync_user_from_status(pool, telegram_id: int, status: dict):
-    """Sync a single user's subscription from site status response."""
+    """
+    Bidirectional sync for a single user.
+
+    Compares bot and site expires_at:
+    - Bot is newer → push bot data to site
+    - Site is newer → pull site data into bot
+    - Same → no-op (or sync vpnKey if different)
+    """
     is_expired = status.get("isExpired", False)
+    has_active_sub = status.get("hasActiveSubscription", False)
     site_vpn_key = status.get("vpnKey")
     site_sub_end_raw = status.get("subscriptionEnd")
     site_plan = (status.get("subscriptionPlan") or "basic").lower()
 
     async with pool.acquire() as conn:
         current = await conn.fetchrow(
-            """SELECT vpn_key, expires_at, subscription_type, status
+            """SELECT vpn_key, uuid, expires_at, subscription_type, status
                FROM subscriptions WHERE telegram_id = $1""",
             telegram_id,
         )
 
-        if is_expired:
-            # Site says expired → deactivate bot subscription if active
-            if current and current["status"] == "active":
-                await conn.execute(
-                    """UPDATE subscriptions SET status = 'expired'
-                       WHERE telegram_id = $1 AND status = 'active'""",
-                    telegram_id,
-                )
-                logger.info("SITE_SYNC: deactivated subscription for user %s (site expired)", telegram_id)
-            return
-
-        if not site_vpn_key:
-            return
+        bot_is_active = current and current["status"] == "active"
+        bot_expires = current["expires_at"] if current else None
 
         # Parse site subscriptionEnd
         site_sub_end = None
@@ -120,51 +117,120 @@ async def _sync_user_from_status(pool, telegram_id: int, status: dict):
                 except ValueError:
                     pass
 
-        if not current:
-            # No subscription row in bot — create from site data
-            xray_uuid = status.get("xrayUuid") or ""
-            if site_sub_end:
-                await conn.execute(
-                    """INSERT INTO subscriptions (
-                           telegram_id, uuid, vpn_key, expires_at, status, source,
-                           subscription_type, activated_at, activation_status
-                       ) VALUES ($1, $2, $3, $4, 'active', 'site', $5, NOW(), 'active')""",
-                    telegram_id, xray_uuid, site_vpn_key, site_sub_end, site_plan,
-                )
-                logger.info("SITE_SYNC: created subscription from site for user %s", telegram_id)
+        # === Case 1: Bot has subscription, site doesn't (or expired) → push to site ===
+        if bot_is_active and bot_expires and (not has_active_sub or is_expired):
+            if isinstance(bot_expires, datetime):
+                sub_end_iso = bot_expires.isoformat()
+            else:
+                sub_end_iso = str(bot_expires)
+            plan = (current["subscription_type"] or "basic").lower()
+            vpn_key = current["vpn_key"] or ""
+            xray_uuid = current["uuid"] or ""
+            logger.info(
+                "SITE_SYNC: bot has active sub, site doesn't → pushing bot→site for user %s",
+                telegram_id,
+            )
+            await site_api.sync_overwrite_site(
+                telegram_id=telegram_id,
+                subscription_end=sub_end_iso,
+                plan=plan,
+                vpn_key=vpn_key,
+                xray_uuid=xray_uuid,
+            )
             return
 
-        # Update existing subscription if any field changed
-        updates = []
-        params = []
-        param_idx = 1
+        # === Case 2: Site has subscription, bot doesn't → pull from site ===
+        if has_active_sub and not is_expired and site_vpn_key and not bot_is_active:
+            xray_uuid = status.get("xrayUuid") or ""
+            if site_sub_end:
+                if current:
+                    # Update existing inactive row
+                    await conn.execute(
+                        """UPDATE subscriptions
+                           SET vpn_key = $1, expires_at = $2, subscription_type = $3,
+                               status = 'active', uuid = $4
+                           WHERE telegram_id = $5""",
+                        site_vpn_key, site_sub_end, site_plan, xray_uuid, telegram_id,
+                    )
+                else:
+                    await conn.execute(
+                        """INSERT INTO subscriptions (
+                               telegram_id, uuid, vpn_key, expires_at, status, source,
+                               subscription_type, activated_at, activation_status
+                           ) VALUES ($1, $2, $3, $4, 'active', 'site', $5, NOW(), 'active')""",
+                        telegram_id, xray_uuid, site_vpn_key, site_sub_end, site_plan,
+                    )
+                logger.info("SITE_SYNC: site has active sub, bot doesn't → pulled site→bot for user %s", telegram_id)
+            return
 
-        if current["vpn_key"] != site_vpn_key:
-            updates.append(f"vpn_key = ${param_idx}")
-            params.append(site_vpn_key)
-            param_idx += 1
+        # === Case 3: Both have active subscriptions → compare expires_at ===
+        if bot_is_active and has_active_sub and not is_expired and bot_expires and site_sub_end:
+            # Normalize both to naive UTC for comparison
+            bot_exp = bot_expires.replace(tzinfo=None) if bot_expires.tzinfo else bot_expires
+            site_exp = site_sub_end.replace(tzinfo=None) if site_sub_end.tzinfo else site_sub_end
 
-        if site_sub_end and current["expires_at"] != site_sub_end:
-            updates.append(f"expires_at = ${param_idx}")
-            params.append(site_sub_end)
-            param_idx += 1
+            if bot_exp > site_exp:
+                # Bot is newer → push to site
+                if isinstance(bot_expires, datetime):
+                    sub_end_iso = bot_expires.isoformat()
+                else:
+                    sub_end_iso = str(bot_expires)
+                plan = (current["subscription_type"] or "basic").lower()
+                vpn_key = current["vpn_key"] or ""
+                xray_uuid = current["uuid"] or ""
+                logger.info(
+                    "SITE_SYNC: bot expires %s > site expires %s → pushing bot→site for user %s",
+                    bot_exp, site_exp, telegram_id,
+                )
+                await site_api.sync_overwrite_site(
+                    telegram_id=telegram_id,
+                    subscription_end=sub_end_iso,
+                    plan=plan,
+                    vpn_key=vpn_key,
+                    xray_uuid=xray_uuid,
+                )
+            elif site_exp > bot_exp:
+                # Site is newer → pull into bot
+                updates = []
+                params = []
+                param_idx = 1
 
-        if current["subscription_type"] != site_plan:
-            updates.append(f"subscription_type = ${param_idx}")
-            params.append(site_plan)
-            param_idx += 1
+                if site_vpn_key and current["vpn_key"] != site_vpn_key:
+                    updates.append(f"vpn_key = ${param_idx}")
+                    params.append(site_vpn_key)
+                    param_idx += 1
 
-        # Re-activate if site has active sub but bot shows expired
-        if current["status"] != "active":
-            updates.append(f"status = ${param_idx}")
-            params.append("active")
-            param_idx += 1
+                if current["expires_at"] != site_sub_end:
+                    updates.append(f"expires_at = ${param_idx}")
+                    params.append(site_sub_end)
+                    param_idx += 1
 
-        if updates:
-            params.append(telegram_id)
-            query = f"UPDATE subscriptions SET {', '.join(updates)} WHERE telegram_id = ${param_idx}"
-            await conn.execute(query, *params)
-            logger.info("SITE_SYNC: updated subscription for user %s (fields: %s)", telegram_id, ", ".join(updates))
+                if current["subscription_type"] != site_plan:
+                    updates.append(f"subscription_type = ${param_idx}")
+                    params.append(site_plan)
+                    param_idx += 1
+
+                if updates:
+                    params.append(telegram_id)
+                    query = f"UPDATE subscriptions SET {', '.join(updates)} WHERE telegram_id = ${param_idx}"
+                    await conn.execute(query, *params)
+                    logger.info(
+                        "SITE_SYNC: site expires %s > bot expires %s → pulled site→bot for user %s (fields: %s)",
+                        site_exp, bot_exp, telegram_id, ", ".join(updates),
+                    )
+            else:
+                # Same expires_at → sync vpnKey if different
+                if site_vpn_key and current["vpn_key"] != site_vpn_key:
+                    await conn.execute(
+                        "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
+                        site_vpn_key, telegram_id,
+                    )
+                    logger.info("SITE_SYNC: same expires, synced vpnKey for user %s", telegram_id)
+
+        # === Case 4: Site expired, bot active → site should get bot data ===
+        # (already handled in Case 1 above)
+
+        # === Case 5: Both expired → no-op ===
 
 
 async def start_site_sync_worker():
