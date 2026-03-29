@@ -265,20 +265,9 @@ async def show_profile(message_or_query, language: str):
             else:
                 expires_at = None
             sub_type = (site_status.get("subscriptionPlan") or "basic").lower()
-            # Update local vpn_key from site if available
-            site_vpn_key = site_status.get("vpnKey")
-            if site_vpn_key and subscription:
-                if subscription.get("vpn_key") != site_vpn_key:
-                    try:
-                        pool = await database.get_pool()
-                        if pool:
-                            async with pool.acquire() as conn:
-                                await conn.execute(
-                                    "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
-                                    site_vpn_key, telegram_id,
-                                )
-                    except Exception:
-                        pass
+            # NOTE: Do NOT overwrite bot vpn_key from site here.
+            # Key sync happens only in dedicated sync functions (site_link.py).
+            # Profile always shows bot's own key.
         else:
             # Fallback to local DB
             subscription_status = get_subscription_status(subscription)
@@ -356,11 +345,8 @@ async def show_profile(message_or_query, language: str):
                 text += "\n🔗 " + i18n_get_text(language, "profile.site_not_connected", "Не подключен к QoDev")
 
         text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
-        # Prefer site vpnKey over local DB
-        if site_status and site_status.get("vpnKey"):
-            vpn_key = site_status["vpnKey"]
-        else:
-            vpn_key = subscription.get("vpn_key") if subscription else None
+        # Always use bot's own vpn_key (synced via dedicated sync functions)
+        vpn_key = subscription.get("vpn_key") if subscription else None
         vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,

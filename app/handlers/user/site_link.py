@@ -464,7 +464,10 @@ async def _sync_site_to_bot(telegram_id: int, site_data: dict):
 
     logger.info(
         "SYNC_SITE→BOT: user=%s vpnKey=%s subEnd=%s plan=%s uuid=%s",
-        telegram_id, bool(vpn_key), subscription_end, plan, bool(xray_uuid),
+        telegram_id,
+        (vpn_key[:40] + "...") if vpn_key else "<empty>",
+        subscription_end, plan,
+        (xray_uuid[:12] + "...") if xray_uuid else "<empty>",
     )
 
     if not subscription_end:
@@ -498,18 +501,20 @@ async def _sync_site_to_bot(telegram_id: int, site_data: dict):
         )
 
         if existing:
+            # Don't overwrite existing vpn_key with empty value
+            effective_vpn_key = vpn_key if vpn_key else (existing["vpn_key"] or "")
             await conn.execute(
                 """UPDATE subscriptions
                    SET vpn_key = $1, expires_at = $2,
                        subscription_type = $3, status = 'active'
                    WHERE telegram_id = $4""",
-                vpn_key, sub_end, plan, telegram_id,
+                effective_vpn_key, sub_end, plan, telegram_id,
             )
             logger.info(
                 "SYNC_SITE→BOT: UPDATED subscription for user %s "
                 "(vpnKey changed: %s, expires changed: %s)",
                 telegram_id,
-                existing["vpn_key"] != vpn_key,
+                existing["vpn_key"] != effective_vpn_key,
                 existing["expires_at"] != sub_end,
             )
         else:
