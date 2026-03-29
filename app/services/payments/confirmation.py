@@ -158,12 +158,25 @@ async def lookup_pending_purchase(
     telegram_id = pending_purchase["telegram_id"]
     purchase_status = pending_purchase.get("status")
 
-    if purchase_status != "pending":
+    if purchase_status == "paid":
         logger.info(
             f"{provider} webhook: purchase already processed: "
             f"purchase_id={purchase_id}, status={purchase_status}"
         )
         return {"status": "already_processed"}
+
+    if purchase_status not in ("pending", "expired"):
+        logger.warning(
+            f"{provider} webhook: unexpected purchase status: "
+            f"purchase_id={purchase_id}, status={purchase_status}"
+        )
+        return {"status": "invalid_status"}
+
+    if purchase_status == "expired":
+        logger.info(
+            f"{provider} webhook: recovering expired purchase (payment arrived after new purchase created): "
+            f"purchase_id={purchase_id}"
+        )
 
     return {
         "status": "ok",
