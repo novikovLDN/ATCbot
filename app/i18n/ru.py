@@ -873,4 +873,13 @@ LANG = {
     'site_link.synced_to_site': "Данные из Telegram синхронизированы на сайт.",
     'site_link.synced_from_site': "Данные с сайта синхронизированы в Telegram.",
     'site_link.sync_failed': "Ошибка синхронизации. Попробуйте позже.",
+    'site_link.token_invalid': "Ссылка недействительна или уже использована. Попробуйте привязать аккаунт заново на сайте.",
+    'site_link.site_unavailable': "Сайт временно недоступен. Попробуйте позже.",
+    'site_link.register_failed': "Не удалось создать аккаунт на сайте. Попробуйте позже.",
+    'site_link.auth_failed': "Ошибка авторизации. Попробуйте позже.",
+    'site_link.open_site_button': "🌐 Открыть сайт",
+    'site_link.open_site_text': "Нажмите кнопку ниже, чтобы перейти на сайт. Вход будет выполнен автоматически.",
+
+    # Main menu — site button
+    'main.open_website': "🌐 Личный кабинет",
 }

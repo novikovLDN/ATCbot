@@ -755,4 +755,21 @@ LANG = {
     'withdraw.rejected': 'Ihre Transaktion wurde abgelehnt. Kontaktieren Sie den Support.',
     'withdraw.requisites_prompt': 'Kartennummer oder Telefonnummer eingeben:',
     'withdraw.too_many_attempts': 'Zu viele fehlgeschlagene Versuche. Versuchen Sie es erneut.',
+
+    'site_link.link_failed': "Failed to link account. Please try again or contact support.",
+    'site_link.linked_success': "Account linked successfully ({email}).\nYour data is now synced with the website.",
+    'site_link.choose_subscription': "You have active subscriptions in two places:\n\n📱 Telegram: {bot_days} days, plan {bot_plan}\n🌐 Website: {site_days} days, plan {site_plan}\n\nWhich subscription would you like to keep?",
+    'site_link.keep_telegram': "📱 Keep Telegram",
+    'site_link.keep_site': "🌐 Keep Website",
+    'site_link.synced_to_site': "Telegram data synced to website.",
+    'site_link.synced_from_site': "Website data synced to Telegram.",
+    'site_link.sync_failed': "Sync error. Please try again later.",
+    'site_link.token_invalid': "This link is invalid or has already been used. Try linking your account again from the website.",
+    'site_link.site_unavailable': "Website is temporarily unavailable. Please try again later.",
+    'site_link.register_failed': "Failed to create a website account. Please try again later.",
+    'site_link.auth_failed': "Authorization error. Please try again later.",
+    'site_link.open_site_button': "🌐 Open website",
+    'site_link.open_site_text': "Click the button below to open the website. You will be logged in automatically.",
+
+    'main.open_website': "🌐 My Account",
 }

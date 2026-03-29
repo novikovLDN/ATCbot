@@ -784,4 +784,13 @@ LANG = {
     'site_link.synced_to_site': "Telegram data synced to website.",
     'site_link.synced_from_site': "Website data synced to Telegram.",
     'site_link.sync_failed': "Sync error. Please try again later.",
+    'site_link.token_invalid': "This link is invalid or has already been used. Try linking your account again from the website.",
+    'site_link.site_unavailable': "Website is temporarily unavailable. Please try again later.",
+    'site_link.register_failed': "Failed to create a website account. Please try again later.",
+    'site_link.auth_failed': "Authorization error. Please try again later.",
+    'site_link.open_site_button': "🌐 Open website",
+    'site_link.open_site_text': "Click the button below to open the website. You will be logged in automatically.",
+
+    # Main menu — site button
+    'main.open_website': "🌐 My Account",
 }
