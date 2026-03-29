@@ -119,5 +119,9 @@ class GiftState(StatesGroup):
     processing_payment = State()
 
 
+class SiteLinkState(StatesGroup):
+    choosing_subscription = State()  # user picks bot or site subscription
+
+
 class BomberState(StatesGroup):
     playing = State()

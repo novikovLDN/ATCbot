@@ -57,7 +57,17 @@ async def cmd_reissue_key(message: Message):
         if new_vpn_key is None:
             await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
             return
-        
+
+        # Sync new key to website
+        try:
+            from app.handlers.user.site_link import sync_key_to_site
+            sub = await database.get_subscription(target_telegram_id)
+            new_uuid = sub.get("uuid") if sub else None
+            if new_uuid:
+                await sync_key_to_site(target_telegram_id, new_vpn_key, new_uuid)
+        except Exception as e:
+            logging.warning("Failed to sync reissued key to site for user %s: %s", target_telegram_id, e)
+
         # Уведомляем пользователя
         try:
             from vpn_utils import build_sub_url

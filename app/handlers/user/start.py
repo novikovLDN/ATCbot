@@ -88,6 +88,21 @@ async def cmd_start(message: Message, state: FSMContext):
                     referral_code, telegram_id
                 )
     
+    # SITE ACCOUNT LINKING: /start {telegramLinkToken} from website
+    if message.text and config.SITE_SYNC_ENABLED:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1:
+            payload = start_parts[1]
+            # Site link tokens are NOT prefixed with gift_ or ref_
+            if not payload.startswith("gift_") and not payload.startswith("ref_"):
+                try:
+                    from app.handlers.user.site_link import handle_site_deep_link
+                    handled = await handle_site_deep_link(telegram_id, payload, message)
+                    if handled:
+                        return
+                except Exception as e:
+                    logger.warning("Site deep link handling failed: user=%s, error=%s", telegram_id, e)
+
     # GIFT ACTIVATION: Обработка подарочной ссылки /start gift_XXXXX
     if message.text:
         start_parts = message.text.strip().split(maxsplit=1)

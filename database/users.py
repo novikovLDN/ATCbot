@@ -39,6 +39,50 @@ async def get_user(telegram_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+async def set_site_user_id(telegram_id: int, site_user_id: str) -> bool:
+    """Store site_user_id for a telegram user (website account link)."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET site_user_id = $1 WHERE telegram_id = $2",
+            site_user_id, telegram_id,
+        )
+        return "UPDATE 1" in result
+
+
+async def get_site_user_id(telegram_id: int) -> Optional[str]:
+    """Get site_user_id for a telegram user. Returns None if not linked."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT site_user_id FROM users WHERE telegram_id = $1",
+            telegram_id,
+        )
+
+
+async def clear_site_user_id(telegram_id: int) -> bool:
+    """Remove site link (unlink telegram from website)."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET site_user_id = NULL WHERE telegram_id = $1",
+            telegram_id,
+        )
+        return "UPDATE 1" in result
+
+
 async def get_user_balance(telegram_id: int) -> float:
     """
     Получить баланс пользователя в рублях

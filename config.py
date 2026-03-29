@@ -377,6 +377,15 @@ MINI_APP_NAME = env("MINI_APP_NAME", default="app")
 # Mini App URL — used for subscription link generation and WebApp buttons.
 APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app").rstrip("/")
 
+# Atlas Secure Website API (single source of truth for subscriptions)
+SITE_API_URL = env("SITE_API_URL", default="")
+BOT_API_KEY = env("BOT_API_KEY", default="")
+SITE_SYNC_ENABLED = bool(SITE_API_URL and BOT_API_KEY)
+if SITE_SYNC_ENABLED:
+    _log.info("Site API configured: %s", SITE_API_URL)
+else:
+    _log.info("Site API not configured (SITE_API_URL or BOT_API_KEY missing) — site sync disabled")
+
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
