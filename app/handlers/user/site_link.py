@@ -349,6 +349,51 @@ async def sync_key_to_site(telegram_id: int, vpn_key: str, xray_uuid: str):
         logger.warning("Failed to sync key to site for user %s", telegram_id)
 
 
+async def sync_bot_subscription_to_site(telegram_id: int):
+    """
+    Full bot→site sync. Reads current bot subscription and pushes to site.
+    Called after admin grant, gift activation, or any bot-side change.
+    """
+    if not config.SITE_SYNC_ENABLED:
+        return
+
+    # Ensure user is registered on site
+    await auto_register_on_site(telegram_id)
+
+    bot_sub = await database.get_subscription(telegram_id)
+    if bot_sub and bot_sub.get("status") == "active":
+        await _sync_bot_to_site(telegram_id, bot_sub)
+    else:
+        # Subscription was revoked/expired → tell site
+        await notify_site_subscription_revoked(telegram_id)
+
+
+async def notify_site_subscription_revoked(telegram_id: int):
+    """
+    Notify site that bot subscription was revoked/expired.
+    Sends overwrite_site with empty vpnKey and past date.
+    """
+    if not config.SITE_SYNC_ENABLED:
+        return
+
+    site_user_id = await database.get_site_user_id(telegram_id)
+    if not site_user_id:
+        return  # Not linked to site
+
+    logger.info("SYNC_REVOKE→SITE: notifying site of revoke for user %s", telegram_id)
+    result = await site_api.sync_overwrite_site(
+        telegram_id=telegram_id,
+        subscription_end="1970-01-01T00:00:00+00:00",
+        plan="none",
+        vpn_key="",
+        xray_uuid="",
+    )
+    if result is None:
+        logger.warning("SYNC_REVOKE→SITE: failed for user %s", telegram_id)
+    else:
+        logger.info("SYNC_REVOKE→SITE: success for user %s", telegram_id)
+
+
 # =========================================================================
 # Internal sync helpers
 # =========================================================================

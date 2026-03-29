@@ -1026,7 +1026,14 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
             await callback.answer("Ошибка создания ключа", show_alert=True)
             await state.clear()
             return
-        
+
+        # Sync with site (fire-and-forget)
+        try:
+            from app.handlers.user.site_link import sync_bot_subscription_to_site
+            await sync_bot_subscription_to_site(user_id)
+        except Exception as site_err:
+            logger.warning("SITE_SYNC_AFTER_ADMIN_GRANT_FAILED: user=%s, error=%s", user_id, site_err)
+
         # 2️⃣ STORE NOTIFY CONTEXT EXPLICITLY: Encode all data in callback_data
         # Format: admin:notify:yes:minutes:<user_id>:<minutes>
         text = f"✅ Доступ выдан на {minutes} минут\n\nУведомить пользователя?"
@@ -1309,7 +1316,14 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             
             expires_at = result["subscription_end"]
             vpn_key = result.get("vless_url") or result.get("uuid", "")
-            
+
+            # Sync with site (fire-and-forget)
+            try:
+                from app.handlers.user.site_link import sync_bot_subscription_to_site
+                await sync_bot_subscription_to_site(user_id)
+            except Exception as site_err:
+                logger.warning("SITE_SYNC_AFTER_ADMIN_GRANT_FAILED: user=%s, error=%s", user_id, site_err)
+
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(duration_unit, duration_unit)
             text = f"✅ Доступ выдан на {duration_value} {unit_text}"
@@ -1480,7 +1494,14 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 await callback.answer("Ошибка выдачи доступа", show_alert=True)
                 await state.clear()
                 return
-            
+
+            # Sync with site (fire-and-forget)
+            try:
+                from app.handlers.user.site_link import sync_bot_subscription_to_site
+                await sync_bot_subscription_to_site(user_id)
+            except Exception as site_err:
+                logger.warning("SITE_SYNC_AFTER_ADMIN_GRANT_FAILED: user=%s, error=%s", user_id, site_err)
+
             text = f"✅ Доступ выдан на {days} дней"
             
             if notify:
@@ -1520,7 +1541,14 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 await callback.answer("Ошибка выдачи доступа", show_alert=True)
                 await state.clear()
                 return
-            
+
+            # Sync with site (fire-and-forget)
+            try:
+                from app.handlers.user.site_link import sync_bot_subscription_to_site
+                await sync_bot_subscription_to_site(user_id)
+            except Exception as site_err:
+                logger.warning("SITE_SYNC_AFTER_ADMIN_GRANT_FAILED: user=%s, error=%s", user_id, site_err)
+
             text = "✅ Доступ на 1 год выдан"
             
             if notify:
@@ -1697,6 +1725,13 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Нет активной подписки", show_alert=True)
         else:
+            # Sync revoke with site (fire-and-forget)
+            try:
+                from app.handlers.user.site_link import notify_site_subscription_revoked
+                await notify_site_subscription_revoked(user_id)
+            except Exception as site_err:
+                logger.warning("SITE_SYNC_AFTER_ADMIN_REVOKE_FAILED: user=%s, error=%s", user_id, site_err)
+
             text = "✅ Доступ отозван"
             if notify:
                 text += "\nПользователь уведомлён."

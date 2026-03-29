@@ -150,6 +150,12 @@ async def cmd_start(message: Message, state: FSMContext):
                             keyboard = await get_main_menu_keyboard(language, telegram_id)
                             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code} new_user={is_new_user}")
+                        # Sync with site (fire-and-forget)
+                        try:
+                            from app.handlers.user.site_link import sync_bot_subscription_to_site
+                            await sync_bot_subscription_to_site(telegram_id)
+                        except Exception as site_err:
+                            logger.warning("SITE_SYNC_AFTER_GIFT_FAILED: user=%s, error=%s", telegram_id, site_err)
                         return
                     else:
                         error = activation_result.get("error", "unknown")
