@@ -13,6 +13,7 @@ API endpoints:
     POST /api/bot/register                 — create account from bot
     POST /api/bot/extend                   — extend subscription
     POST /api/bot/sync                     — sync data (overwrite_site / update_key)
+    POST /api/bot/auth-login               — create nonce for auto-login from bot to site
 """
 
 import logging
@@ -230,3 +231,23 @@ async def extend_subscription(telegram_id: int, days: int, plan: str) -> Optiona
     if result:
         invalidate_status_cache(telegram_id)
     return result
+
+
+# =========================================================================
+# Auth login (bot → site auto-login)
+# =========================================================================
+
+async def auth_login(telegram_id: int, nonce: str) -> Optional[Dict[str, Any]]:
+    """
+    Create a one-time auth nonce for auto-login from bot to site.
+
+    POST /api/bot/auth-login
+    Body: { "telegramId": "...", "nonce": "..." }
+
+    Site stores nonce → userId mapping. User opens site with ?tg_auth={nonce}.
+    Returns: { success: true } or None on error.
+    """
+    return await _request("POST", "/api/bot/auth-login", json={
+        "telegramId": str(telegram_id),
+        "nonce": nonce,
+    })

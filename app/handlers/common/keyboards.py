@@ -176,6 +176,11 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=i18n_get_text(language, "main.referral"),
         callback_data="menu_referral"
     )])
+    if config.SITE_SYNC_ENABLED:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.open_website"),
+            callback_data="open_website"
+        )])
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
