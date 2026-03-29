@@ -77,7 +77,7 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
     data = link_result.get("data", link_result)
     site_user_id = data.get("userId") or data.get("id")
     email = data.get("email", "")
-    site_has_sub = data.get("hasActiveSubscription", False) and not data.get("isExpired", True)
+    site_has_sub = bool(data.get("hasActiveSubscription", False))
 
     # Save site_user_id mapping
     if site_user_id:
