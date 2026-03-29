@@ -93,6 +93,9 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
     if site_user_id:
         await database.set_site_user_id(telegram_id, str(site_user_id))
 
+    # Invalidate status cache so profile shows fresh data
+    site_api.invalidate_status_cache(telegram_id)
+
     # Site is master → ALWAYS overwrite bot data with site data if site has subscription
     if site_has_sub:
         logger.info("SITE_LINK: site has active sub, syncing site→bot for user %s", telegram_id)
@@ -174,6 +177,7 @@ async def callback_open_website(callback: CallbackQuery, state: FSMContext):
             return
 
     # Bot is master → ALWAYS sync bot subscription to site before opening
+    site_api.invalidate_status_cache(telegram_id)
     bot_sub = await database.get_subscription(telegram_id)
     if bot_sub and bot_sub.get("status") == "active":
         logger.info("SITE_OPEN: syncing bot→site for user %s", telegram_id)

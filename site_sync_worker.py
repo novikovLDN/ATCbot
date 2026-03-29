@@ -81,7 +81,7 @@ async def site_sync_iteration():
 
 async def _sync_user_from_status(pool, telegram_id: int, status: dict):
     """Sync a single user's subscription from site status response."""
-    is_expired = status.get("isExpired", True)
+    is_expired = status.get("isExpired", False)
     site_vpn_key = status.get("vpnKey")
     site_sub_end_raw = status.get("subscriptionEnd")
     site_plan = (status.get("subscriptionPlan") or "basic").lower()

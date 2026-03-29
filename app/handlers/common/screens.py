@@ -252,8 +252,9 @@ async def show_profile(message_or_query, language: str):
             site_days = site_status.get("daysLeft", 0)
             site_hours = site_status.get("hoursLeft", 0)
             site_minutes = site_status.get("minutesLeft", 0)
-            is_expired = site_status.get("isExpired", True)
-            has_active_subscription = not is_expired and site_days >= 0
+            is_expired = site_status.get("isExpired", False)
+            has_active_sub_flag = site_status.get("hasActiveSubscription", False)
+            has_active_subscription = has_active_sub_flag or (not is_expired and site_days >= 0)
             site_sub_end = site_status.get("subscriptionEnd")
             if site_sub_end:
                 from datetime import datetime as _dt
