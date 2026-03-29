@@ -389,6 +389,17 @@ async def process_auto_renewals(bot: Bot):
                         logger.error(
                             f"AUTO_RENEWAL_XRAY_SYNC_FAILED user={item['telegram_id']} error={e}"
                         )
+                # Sync with website (fire-and-forget)
+                try:
+                    from app.handlers.user.site_link import notify_site_after_payment
+                    await notify_site_after_payment(
+                        item["telegram_id"],
+                        item.get("period_days", 30),
+                        item.get("tariff_type", "basic"),
+                    )
+                except Exception as site_err:
+                    logger.warning("SITE_SYNC_AFTER_AUTO_RENEWAL_FAILED: user=%s, error=%s", item["telegram_id"], site_err)
+
                 try:
                     tariff_label = "Plus" if item.get("tariff_type") == "plus" else "Basic"
                     tariff_emoji = "⭐️" if item.get("tariff_type") == "plus" else "📦"

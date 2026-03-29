@@ -680,6 +680,13 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             f"amount={final_price_rubles:.2f} RUB, "
             f"scenario={'renewal' if is_renewal else 'first_purchase'}"
         )
+
+        # Sync with website (fire-and-forget, must not fail payment)
+        try:
+            from app.handlers.user.site_link import notify_site_after_payment
+            await notify_site_after_payment(telegram_id, period_days, tariff_type)
+        except Exception as site_err:
+            logger.warning("SITE_SYNC_AFTER_BALANCE_PAYMENT_FAILED: user=%s, error=%s", telegram_id, site_err)
         
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
