@@ -3915,10 +3915,10 @@ async def mark_pending_purchase_paid(purchase_id: str) -> bool:
     pool = await get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status = 'pending'",
+            "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
             purchase_id
         )
-        
+
         if result == "UPDATE 1":
             logger.info(f"Pending purchase marked as paid: purchase_id={purchase_id}")
             return True
@@ -4079,12 +4079,12 @@ async def finalize_purchase(
                 )
                 logger.info(
                     f"payment_verified: purchase_id={purchase_id}, user={telegram_id}, "
-                    f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status=pending"
+                    f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status={status}"
                 )
 
                 # STEP 3: Обновляем pending_purchase → paid
                 result = await conn.execute(
-                    "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status = 'pending'",
+                    "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
                     purchase_id
                 )
             
