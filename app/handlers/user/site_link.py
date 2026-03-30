@@ -89,6 +89,12 @@ async def handle_site_deep_link(telegram_id: int, token: str, message) -> bool:
     # Invalidate status cache so profile shows fresh data
     site_api.invalidate_status_cache(telegram_id)
 
+    # Sync referral counters after link (fire-and-forget)
+    try:
+        await sync_referrals_to_site(telegram_id)
+    except Exception as e:
+        logger.warning("SITE_SYNC_REFERRALS_AFTER_LINK_FAILED: user=%s, error=%s", telegram_id, e)
+
     # Site is master → ALWAYS overwrite bot data with site data if site has subscription
     if site_has_sub:
         logger.info("SITE_LINK: site has active sub, syncing site→bot for user %s", telegram_id)
@@ -293,7 +299,58 @@ async def auto_register_on_site(telegram_id: int):
 
 
 # =========================================================================
-# Post-payment and key sync (called from other modules)
+# Referral sync (called from other modules)
+# =========================================================================
+
+async def sync_referrals_to_site(referrer_telegram_id: int):
+    """
+    Sync referral counters for a referrer to site.
+    Called after new referral registration or activation (first payment).
+    """
+    if not config.SITE_SYNC_ENABLED:
+        return
+
+    site_user_id = await database.get_site_user_id(referrer_telegram_id)
+    if not site_user_id:
+        return  # Not linked to site, skip
+
+    try:
+        pool = await database.get_pool()
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            referrals_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
+                referrer_telegram_id,
+            )
+            paid_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL",
+                referrer_telegram_id,
+            )
+            referral_code = await conn.fetchval(
+                "SELECT referral_code FROM users WHERE telegram_id = $1",
+                referrer_telegram_id,
+            )
+
+        result = await site_api.sync_referrals(
+            telegram_id=referrer_telegram_id,
+            referrals=referrals_count or 0,
+            paid_referrals=paid_count or 0,
+            referral_code=referral_code or "",
+        )
+        if result:
+            logger.info(
+                "SYNC_REFERRALS→SITE: user=%s referrals=%d paid=%d → site response=%s",
+                referrer_telegram_id, referrals_count or 0, paid_count or 0, result,
+            )
+        else:
+            logger.warning("SYNC_REFERRALS→SITE: failed for user %s", referrer_telegram_id)
+    except Exception as e:
+        logger.warning("SYNC_REFERRALS→SITE: error for user %s: %s", referrer_telegram_id, e)
+
+
+# =========================================================================
+# Post-payment sync (called from other modules)
 # =========================================================================
 
 async def notify_site_after_payment(telegram_id: int, days: int, plan: str):

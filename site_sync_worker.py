@@ -62,6 +62,7 @@ async def site_sync_iteration():
                     logger.info("SITE_SYNC: user %s unlinked (404)", telegram_id)
                 else:
                     await _sync_user_from_status(pool, telegram_id, status)
+                    await _sync_referrals(pool, telegram_id, status)
                     synced += 1
 
                 await asyncio.sleep(0.1)
@@ -201,6 +202,49 @@ async def _sync_user_from_status(pool, telegram_id: int, status: dict):
                         site_exp, bot_exp, telegram_id, ", ".join(updates),
                     )
             # Same expires_at → no-op
+
+
+async def _sync_referrals(pool, telegram_id: int, status: dict):
+    """Sync referral counters between bot and site."""
+    # Get bot counts
+    try:
+        async with pool.acquire() as conn:
+            bot_referrals = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1",
+                telegram_id,
+            ) or 0
+            bot_paid = await conn.fetchval(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_user_id = $1 AND first_paid_at IS NOT NULL",
+                telegram_id,
+            ) or 0
+            referral_code = await conn.fetchval(
+                "SELECT referral_code FROM users WHERE telegram_id = $1",
+                telegram_id,
+            ) or ""
+    except Exception as e:
+        logger.warning("SITE_SYNC_REFERRALS: failed to get bot counts for user %s: %s", telegram_id, e)
+        return
+
+    # Get site counts from status response
+    site_referrals = status.get("referrals", 0) or 0
+    site_paid = status.get("paidReferrals", 0) or 0
+
+    # Only sync if there's something to sync (either side has referrals)
+    if bot_referrals == 0 and site_referrals == 0:
+        return
+
+    # Push to site — site applies MAX logic
+    result = await site_api.sync_referrals(
+        telegram_id=telegram_id,
+        referrals=bot_referrals,
+        paid_referrals=bot_paid,
+        referral_code=referral_code,
+    )
+    if result:
+        logger.debug(
+            "SITE_SYNC_REFERRALS: user=%s bot(%d/%d) site(%d/%d)",
+            telegram_id, bot_referrals, bot_paid, site_referrals, site_paid,
+        )
 
 
 async def start_site_sync_worker():

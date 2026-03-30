@@ -195,6 +195,32 @@ async def sync_overwrite_site(
     return result
 
 
+async def sync_referrals(
+    telegram_id: int,
+    referrals: int,
+    paid_referrals: int,
+    referral_code: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Sync referral counters to site.
+
+    POST /api/bot/sync-referrals
+    Body: { "telegramId": "...", "referrals": N, "paidReferrals": N, "referralCode": "..." }
+
+    Site applies MAX(bot, site) and returns merged values.
+    """
+    body = {
+        "telegramId": str(telegram_id),
+        "referrals": referrals,
+        "paidReferrals": paid_referrals,
+        "referralCode": referral_code,
+    }
+    result = await _request("POST", "/api/bot/sync-referrals", json=body)
+    if result:
+        invalidate_status_cache(telegram_id)
+    return result
+
+
 async def extend_subscription(telegram_id: int, days: int, plan: str) -> Optional[Dict[str, Any]]:
     """
     Extend subscription on site after bot payment.
