@@ -1,9 +1,8 @@
 """
 Site API Client — integration between Telegram Bot and Atlas Secure website.
 
-The website is the single source of truth for subscriptions and VPN keys.
-Bot stores only telegram_id → site_user_id mapping.
-All subscription/key data is fetched from the site API.
+Syncs subscription dates and plan between bot and site.
+Each side manages its own VPN keys independently.
 
 API endpoints:
     GET  /api/bot/status?telegram_id=X     — full subscription status
@@ -11,9 +10,10 @@ API endpoints:
     GET  /api/bot/user?token=X             — find by telegramLinkToken
     POST /api/bot/link                     — link telegram_id to account
     POST /api/bot/register                 — create account from bot
-    POST /api/bot/extend                   — extend subscription
-    POST /api/bot/sync                     — sync data (overwrite_site / update_key)
-    POST /api/bot/auth-login               — create nonce for auto-login from bot to site
+    POST /api/bot/extend                   — extend subscription (days + plan)
+    POST /api/bot/sync                     — sync subscription (overwrite_site)
+    POST /api/bot/sync-referrals           — sync referral counters
+    POST /api/bot/auth-login               — create nonce for auto-login
 """
 
 import logging
