@@ -173,11 +173,9 @@ async def sync_overwrite_site(
     telegram_id: int,
     subscription_end: str,
     plan: str,
-    vpn_key: Optional[str] = None,
-    xray_uuid: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Overwrite site subscription with bot data.
+    Overwrite site subscription with bot data (dates + plan only).
 
     POST /api/bot/sync
     action = "overwrite_site"
@@ -187,8 +185,6 @@ async def sync_overwrite_site(
         "action": "overwrite_site",
         "subscriptionEnd": subscription_end,
         "plan": plan,
-        "vpnKey": vpn_key or "",
-        "xrayUuid": xray_uuid or "",
     }
 
     logger.info("SYNC_OVERWRITE_SITE: sending body=%s", body)
@@ -198,32 +194,6 @@ async def sync_overwrite_site(
         invalidate_status_cache(telegram_id)
     return result
 
-
-async def sync_update_key(
-    telegram_id: int,
-    vpn_key: str,
-    xray_uuid: str,
-) -> Optional[Dict[str, Any]]:
-    """
-    Update only vpnKey and xrayUuid on site.
-
-    POST /api/bot/sync
-    action = "update_key"
-    """
-    result = await _request("POST", "/api/bot/sync", json={
-        "telegramId": str(telegram_id),
-        "action": "update_key",
-        "vpnKey": vpn_key,
-        "xrayUuid": xray_uuid,
-    })
-    if result:
-        invalidate_status_cache(telegram_id)
-    return result
-
-
-# =========================================================================
-# Extend (after payment in bot)
-# =========================================================================
 
 async def extend_subscription(telegram_id: int, days: int, plan: str) -> Optional[Dict[str, Any]]:
     """

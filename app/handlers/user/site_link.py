@@ -299,7 +299,8 @@ async def auto_register_on_site(telegram_id: int):
 async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
     """
     Called after successful payment in bot.
-    POST /api/bot/extend → site updated, bot updates vpnKey from response.
+    POST /api/bot/extend → site updates subscription dates+plan.
+    Bot keeps its own vpnKey — no key sync.
     """
     if not config.SITE_SYNC_ENABLED:
         return
@@ -307,7 +308,7 @@ async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
     # Ensure user is registered on site
     await auto_register_on_site(telegram_id)
 
-    # Call extend — site returns updated subscription data
+    # Call extend — site adds days to subscription
     result = await site_api.extend_subscription(telegram_id, days, plan)
     if not result:
         logger.warning("Failed to extend subscription on site for user %s", telegram_id)
@@ -317,36 +318,6 @@ async def notify_site_after_payment(telegram_id: int, days: int, plan: str):
         "Site subscription extended for user %s: +%d days (%s)",
         telegram_id, days, plan,
     )
-
-    # Update bot vpnKey from extend response if changed
-    site_vpn_key = result.get("vpnKey")
-    if site_vpn_key:
-        pool = await database.get_pool()
-        if pool:
-            try:
-                async with pool.acquire() as conn:
-                    current_key = await conn.fetchval(
-                        "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
-                        telegram_id,
-                    )
-                    if current_key != site_vpn_key:
-                        await conn.execute(
-                            "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
-                            site_vpn_key, telegram_id,
-                        )
-                        logger.info("Updated bot vpn_key from extend response for user %s", telegram_id)
-            except Exception as e:
-                logger.warning("Failed to update vpn_key from extend response: %s", e)
-
-
-async def sync_key_to_site(telegram_id: int, vpn_key: str, xray_uuid: str):
-    """Sync updated VPN key to site after key reissue in bot."""
-    if not config.SITE_SYNC_ENABLED:
-        return
-
-    result = await site_api.sync_update_key(telegram_id, vpn_key, xray_uuid)
-    if not result:
-        logger.warning("Failed to sync key to site for user %s", telegram_id)
 
 
 async def sync_bot_subscription_to_site(telegram_id: int):
@@ -385,8 +356,6 @@ async def notify_site_subscription_revoked(telegram_id: int):
         telegram_id=telegram_id,
         subscription_end="1970-01-01T00:00:00+00:00",
         plan="none",
-        vpn_key="",
-        xray_uuid="",
     )
     if result is None:
         logger.warning("SYNC_REVOKE→SITE: failed for user %s", telegram_id)
@@ -399,7 +368,7 @@ async def notify_site_subscription_revoked(telegram_id: int):
 # =========================================================================
 
 async def _sync_bot_to_site(telegram_id: int, bot_sub: dict) -> bool:
-    """Push bot subscription data to site (overwrite_site)."""
+    """Push bot subscription dates+plan to site (no vpnKey sync)."""
     expires_at = bot_sub.get("expires_at")
     if not expires_at:
         logger.warning("SYNC_BOT→SITE: no expires_at for user %s, skipping", telegram_id)
@@ -411,22 +380,16 @@ async def _sync_bot_to_site(telegram_id: int, bot_sub: dict) -> bool:
         sub_end_iso = str(expires_at)
 
     plan = (bot_sub.get("subscription_type") or "basic").lower()
-    vpn_key = bot_sub.get("vpn_key") or ""
-    xray_uuid = bot_sub.get("uuid") or ""
 
     logger.info(
-        "SYNC_BOT→SITE: user=%s plan=%s expires=%s vpnKey=%s uuid=%s",
+        "SYNC_BOT→SITE: user=%s plan=%s expires=%s",
         telegram_id, plan, sub_end_iso,
-        (vpn_key[:40] + "...") if vpn_key else "<empty>",
-        (xray_uuid[:12] + "...") if xray_uuid else "<empty>",
     )
 
     result = await site_api.sync_overwrite_site(
         telegram_id=telegram_id,
         subscription_end=sub_end_iso,
         plan=plan,
-        vpn_key=vpn_key,
-        xray_uuid=xray_uuid,
     )
     if result is None:
         logger.warning("SYNC_BOT→SITE: /api/bot/sync returned None for user %s", telegram_id)
@@ -454,20 +417,16 @@ async def _sync_bot_to_site(telegram_id: int, bot_sub: dict) -> bool:
 
 async def _sync_site_to_bot(telegram_id: int, site_data: dict):
     """
-    Overwrite bot DB from site data.
+    Sync subscription dates+plan from site to bot DB.
+    Does NOT touch vpn_key — each side manages its own keys.
     Handles both UPDATE (existing subscription) and INSERT (no row).
     """
-    vpn_key = site_data.get("vpnKey") or ""
     subscription_end = site_data.get("subscriptionEnd")
     plan = (site_data.get("subscriptionPlan") or "basic").lower()
-    xray_uuid = site_data.get("xrayUuid") or ""
 
     logger.info(
-        "SYNC_SITE→BOT: user=%s vpnKey=%s subEnd=%s plan=%s uuid=%s",
-        telegram_id,
-        (vpn_key[:40] + "...") if vpn_key else "<empty>",
-        subscription_end, plan,
-        (xray_uuid[:12] + "...") if xray_uuid else "<empty>",
+        "SYNC_SITE→BOT: user=%s subEnd=%s plan=%s",
+        telegram_id, subscription_end, plan,
     )
 
     if not subscription_end:
@@ -496,40 +455,35 @@ async def _sync_site_to_bot(telegram_id: int, site_data: dict):
 
     async with pool.acquire() as conn:
         existing = await conn.fetchrow(
-            "SELECT id, vpn_key, expires_at FROM subscriptions WHERE telegram_id = $1",
+            "SELECT id, expires_at FROM subscriptions WHERE telegram_id = $1",
             telegram_id,
         )
 
         if existing:
-            # Don't overwrite existing vpn_key with empty value
-            effective_vpn_key = vpn_key if vpn_key else (existing["vpn_key"] or "")
             await conn.execute(
                 """UPDATE subscriptions
-                   SET vpn_key = $1, expires_at = $2,
-                       subscription_type = $3, status = 'active'
-                   WHERE telegram_id = $4""",
-                effective_vpn_key, sub_end, plan, telegram_id,
+                   SET expires_at = $1, subscription_type = $2, status = 'active'
+                   WHERE telegram_id = $3""",
+                sub_end, plan, telegram_id,
             )
             logger.info(
-                "SYNC_SITE→BOT: UPDATED subscription for user %s "
-                "(vpnKey changed: %s, expires changed: %s)",
+                "SYNC_SITE→BOT: UPDATED subscription for user %s (expires changed: %s)",
                 telegram_id,
-                existing["vpn_key"] != effective_vpn_key,
                 existing["expires_at"] != sub_end,
             )
         else:
+            # No subscription row — create minimal row; vpn_key will be empty
+            # until user gets their own key from bot
             await conn.execute(
                 """INSERT INTO subscriptions (
                        telegram_id, uuid, vpn_key, expires_at, status, source,
                        subscription_type, activated_at, activation_status
-                   ) VALUES ($1, $2, $3, $4, 'active', 'site', $5, NOW(), 'active')""",
+                   ) VALUES ($1, '', '', $2, 'active', 'site', $3, NOW(), 'active')""",
                 telegram_id,
-                xray_uuid,
-                vpn_key,
                 sub_end,
                 plan,
             )
-            logger.info("SYNC_SITE→BOT: INSERTED new subscription for user %s", telegram_id)
+            logger.info("SYNC_SITE→BOT: INSERTED new subscription for user %s (no vpn_key)", telegram_id)
 
 
 # =========================================================================

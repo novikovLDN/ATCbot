@@ -1,10 +1,11 @@
 """
 Periodic site sync worker.
 
-Runs every hour, checks site API for subscription status updates
+Runs every 5 minutes, checks site API for subscription status updates
 for linked users, and syncs any changes to local DB.
 
-Syncs: vpnKey, subscriptionEnd, subscriptionPlan, isExpired.
+Syncs: subscriptionEnd, subscriptionPlan only.
+Does NOT sync vpnKey — each side manages its own keys.
 Also handles: detecting site-side unlink (404 → remove site_user_id).
 """
 import asyncio
@@ -49,7 +50,6 @@ async def site_sync_iteration():
 
         synced = 0
         unlinked = 0
-        deactivated = 0
 
         for row in rows:
             telegram_id = row["telegram_id"]
@@ -69,7 +69,7 @@ async def site_sync_iteration():
             except Exception as e:
                 logger.warning("SITE_SYNC: error for user %s: %s", telegram_id, e)
 
-        if synced > 0 or unlinked > 0 or deactivated > 0:
+        if synced > 0 or unlinked > 0:
             logger.info(
                 "SITE_SYNC_ITERATION: synced=%d, unlinked=%d, total=%d",
                 synced, unlinked, len(rows),
@@ -81,22 +81,21 @@ async def site_sync_iteration():
 
 async def _sync_user_from_status(pool, telegram_id: int, status: dict):
     """
-    Bidirectional sync for a single user.
+    Bidirectional sync for a single user (dates + plan only, no vpnKey).
 
     Compares bot and site expires_at:
-    - Bot is newer → push bot data to site
-    - Site is newer → pull site data into bot
-    - Same → no-op (or sync vpnKey if different)
+    - Bot is newer → push bot dates+plan to site
+    - Site is newer → pull site dates+plan into bot
+    - Same → no-op
     """
     is_expired = status.get("isExpired", False)
     has_active_sub = status.get("hasActiveSubscription", False)
-    site_vpn_key = status.get("vpnKey")
     site_sub_end_raw = status.get("subscriptionEnd")
     site_plan = (status.get("subscriptionPlan") or "basic").lower()
 
     async with pool.acquire() as conn:
         current = await conn.fetchrow(
-            """SELECT vpn_key, uuid, expires_at, subscription_type, status
+            """SELECT expires_at, subscription_type, status
                FROM subscriptions WHERE telegram_id = $1""",
             telegram_id,
         )
@@ -117,15 +116,13 @@ async def _sync_user_from_status(pool, telegram_id: int, status: dict):
                 except ValueError:
                     pass
 
-        # === Case 1: Bot has subscription, site doesn't (or expired) → push to site ===
+        # === Case 1: Bot has active sub, site doesn't → push dates+plan to site ===
         if bot_is_active and bot_expires and (not has_active_sub or is_expired):
             if isinstance(bot_expires, datetime):
                 sub_end_iso = bot_expires.isoformat()
             else:
                 sub_end_iso = str(bot_expires)
             plan = (current["subscription_type"] or "basic").lower()
-            vpn_key = current["vpn_key"] or ""
-            xray_uuid = current["uuid"] or ""
             logger.info(
                 "SITE_SYNC: bot has active sub, site doesn't → pushing bot→site for user %s",
                 telegram_id,
@@ -134,38 +131,32 @@ async def _sync_user_from_status(pool, telegram_id: int, status: dict):
                 telegram_id=telegram_id,
                 subscription_end=sub_end_iso,
                 plan=plan,
-                vpn_key=vpn_key,
-                xray_uuid=xray_uuid,
             )
             return
 
-        # === Case 2: Site has subscription, bot doesn't → pull from site ===
-        if has_active_sub and not is_expired and site_vpn_key and not bot_is_active:
-            xray_uuid = status.get("xrayUuid") or ""
+        # === Case 2: Site has active sub, bot doesn't → pull dates+plan from site ===
+        if has_active_sub and not is_expired and not bot_is_active:
             if site_sub_end:
                 if current:
-                    # Update existing inactive row
                     await conn.execute(
                         """UPDATE subscriptions
-                           SET vpn_key = $1, expires_at = $2, subscription_type = $3,
-                               status = 'active', uuid = $4
-                           WHERE telegram_id = $5""",
-                        site_vpn_key, site_sub_end, site_plan, xray_uuid, telegram_id,
+                           SET expires_at = $1, subscription_type = $2, status = 'active'
+                           WHERE telegram_id = $3""",
+                        site_sub_end, site_plan, telegram_id,
                     )
                 else:
                     await conn.execute(
                         """INSERT INTO subscriptions (
                                telegram_id, uuid, vpn_key, expires_at, status, source,
                                subscription_type, activated_at, activation_status
-                           ) VALUES ($1, $2, $3, $4, 'active', 'site', $5, NOW(), 'active')""",
-                        telegram_id, xray_uuid, site_vpn_key, site_sub_end, site_plan,
+                           ) VALUES ($1, '', '', $2, 'active', 'site', $3, NOW(), 'active')""",
+                        telegram_id, site_sub_end, site_plan,
                     )
                 logger.info("SITE_SYNC: site has active sub, bot doesn't → pulled site→bot for user %s", telegram_id)
             return
 
-        # === Case 3: Both have active subscriptions → compare expires_at ===
+        # === Case 3: Both have active subs → compare expires_at ===
         if bot_is_active and has_active_sub and not is_expired and bot_expires and site_sub_end:
-            # Normalize both to naive UTC for comparison
             bot_exp = bot_expires.replace(tzinfo=None) if bot_expires.tzinfo else bot_expires
             site_exp = site_sub_end.replace(tzinfo=None) if site_sub_end.tzinfo else site_sub_end
 
@@ -176,8 +167,6 @@ async def _sync_user_from_status(pool, telegram_id: int, status: dict):
                 else:
                     sub_end_iso = str(bot_expires)
                 plan = (current["subscription_type"] or "basic").lower()
-                vpn_key = current["vpn_key"] or ""
-                xray_uuid = current["uuid"] or ""
                 logger.info(
                     "SITE_SYNC: bot expires %s > site expires %s → pushing bot→site for user %s",
                     bot_exp, site_exp, telegram_id,
@@ -186,19 +175,12 @@ async def _sync_user_from_status(pool, telegram_id: int, status: dict):
                     telegram_id=telegram_id,
                     subscription_end=sub_end_iso,
                     plan=plan,
-                    vpn_key=vpn_key,
-                    xray_uuid=xray_uuid,
                 )
             elif site_exp > bot_exp:
-                # Site is newer → pull into bot
+                # Site is newer → pull dates+plan into bot
                 updates = []
                 params = []
                 param_idx = 1
-
-                if site_vpn_key and current["vpn_key"] != site_vpn_key:
-                    updates.append(f"vpn_key = ${param_idx}")
-                    params.append(site_vpn_key)
-                    param_idx += 1
 
                 if current["expires_at"] != site_sub_end:
                     updates.append(f"expires_at = ${param_idx}")
@@ -218,23 +200,11 @@ async def _sync_user_from_status(pool, telegram_id: int, status: dict):
                         "SITE_SYNC: site expires %s > bot expires %s → pulled site→bot for user %s (fields: %s)",
                         site_exp, bot_exp, telegram_id, ", ".join(updates),
                     )
-            else:
-                # Same expires_at → sync vpnKey if different
-                if site_vpn_key and current["vpn_key"] != site_vpn_key:
-                    await conn.execute(
-                        "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
-                        site_vpn_key, telegram_id,
-                    )
-                    logger.info("SITE_SYNC: same expires, synced vpnKey for user %s", telegram_id)
-
-        # === Case 4: Site expired, bot active → site should get bot data ===
-        # (already handled in Case 1 above)
-
-        # === Case 5: Both expired → no-op ===
+            # Same expires_at → no-op
 
 
 async def start_site_sync_worker():
-    """Background worker: runs site sync every hour."""
+    """Background worker: runs site sync every 5 minutes."""
     if not config.SITE_SYNC_ENABLED:
         logger.info("Site sync worker disabled (SITE_API_URL or BOT_API_KEY not set)")
         return
