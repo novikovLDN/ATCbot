@@ -176,6 +176,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=i18n_get_text(language, "main.referral"),
         callback_data="menu_referral"
     )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "premium.main_button"),
+        callback_data="premium_buy"
+    )])
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),

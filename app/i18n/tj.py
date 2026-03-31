@@ -755,4 +755,19 @@ LANG = {
     'withdraw.rejected': 'Транзаксияи шумо рад карда шуд. Ба дастгирӣ муроҷиат кунед.',
     'withdraw.requisites_prompt': 'Рақами корт ё рақами телефонро ворид кунед:',
     'withdraw.too_many_attempts': 'Кӯшишҳои нокомёб зиёд аст. Аз нав оғоз кунед.',
+
+    # --- Telegram Premium ---
+    'premium.main_button': "💎 Харидани Telegram Premium 💎",
+    'premium.enter_username': "💎 <b>Харидани Telegram Premium</b>\n\nНоми корбарии Telegram-и худро ворид кунед, агар барои худ мехаред, ё номи корбарии дӯстатонро.\n\n⚠️ Бо <b>@</b> сар шавад\nМисол: <code>@username</code>",
+    'premium.invalid_username': "❌ Номи корбарӣ нодуруст. Номи корбарии дурустро бо @ ворид кунед\n\nМисол: <code>@username</code>\n\nКӯшишҳои боқимонда: {attempts}",
+    'premium.attempts_exhausted': "❌ Ҳамаи кӯшишҳо тамом шуд. Аз нав кӯшиш кунед.",
+    'premium.choose_period': "💎 <b>Мӯҳлати обунаи Telegram Premium-ро интихоб кунед</b>\n\n👤 Номи корбарӣ: <code>{username}</code>",
+    'premium.period_3m': "3 моҳ | 1 590 ₽",
+    'premium.period_6m': "6 моҳ | 2 690 ₽",
+    'premium.period_12m': "12 моҳ | 3 790 ₽",
+    'premium.choose_payment': "💎 <b>Пардохти Telegram Premium</b>\n\n👤 Номи корбарӣ: <code>{username}</code>\n📅 Мӯҳлат: {period}\n💰 Маблағ: {price} ₽\n\nУсули пардохтро интихоб кунед:",
+    'premium.success': "✅ <b>Пардохт бомуваффақият анҷом ёфт!</b>\n\n💎 Маҳсулот: Telegram Premium\n👤 Номи корбарӣ: <code>{username}</code>\n📅 Мӯҳлат: {period}\n💰 Маблағ: {price} ₽\n\n⏳ Telegram Premium-ро дар давоми <b>5-15 дақиқа</b> интизор шавед.\n\nАгар Premium нагирифтед, ба мо нависед:",
+    'premium.support_button': "💬 Дастгирӣ",
+    'premium.back_button': "🔙 Бозгашт",
+    'premium.admin_notification': "💎 <b>ХАРИДАНИ TELEGRAM PREMIUM</b>\n\n👤 Харидор: {buyer_id}\n🎯 Номи корбарӣ: <code>{username}</code>\n📅 Мӯҳлат: {period}\n💰 Маблағ: {price} ₽\n🕐 Сана: {date}",
 }
