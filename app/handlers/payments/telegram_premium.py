@@ -10,7 +10,6 @@ Screens:
 import asyncio
 import logging
 import re
-import time
 from datetime import datetime, timezone
 
 from aiogram import Router, F, Bot
@@ -28,7 +27,6 @@ import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
-from app.services.subscriptions import service as subscription_service
 from app.core.rate_limit import check_rate_limit
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.states import TelegramPremiumState
@@ -380,15 +378,23 @@ async def callback_premium_pay_card(callback: CallbackQuery, state: FSMContext):
 # Instead, we provide a helper that can be called from process_successful_payment
 # to send the Premium-specific success screen + admin notification.
 
-async def send_premium_success(bot: Bot, telegram_id: int, purchase_id: str):
+async def send_premium_success(
+    bot: Bot,
+    telegram_id: int,
+    purchase_id: str,
+    purchase: dict | None = None,
+):
     """
     Called after successful payment for a telegram_premium purchase.
     Sends user confirmation + admin notification.
+
+    Args:
+        purchase: Pre-fetched purchase dict (avoids re-querying after status change).
     """
     language = await resolve_user_language(telegram_id)
 
-    # Fetch purchase details
-    purchase = await database.get_pending_purchase_by_id(purchase_id)
+    if not purchase:
+        purchase = await database.get_pending_purchase_by_id(purchase_id)
     if not purchase:
         logger.error("PREMIUM_SUCCESS_NO_PURCHASE purchase_id=%s", purchase_id)
         return
@@ -400,10 +406,7 @@ async def send_premium_success(bot: Bot, telegram_id: int, purchase_id: str):
     plan = PREMIUM_PLANS.get(period_days)
     period_text = plan["period_text"] if plan else f"{period_days} дн."
 
-    # Try to get username from FSM data — not available here,
-    # so we store it in the purchase country field as a workaround.
-    # Actually, let's retrieve it from a dedicated column approach:
-    # We'll use the 'country' field to store the target username for premium purchases.
+    # Username stored in `country` field for telegram_premium purchases
     username = purchase.get("country") or "N/A"
 
     price_str = f"{price_rubles:,.0f}".replace(",", " ")

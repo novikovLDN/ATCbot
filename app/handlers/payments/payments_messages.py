@@ -601,15 +601,17 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # --- Telegram Premium purchase: mark paid + send success + notify admin ---
     is_premium_purchase = pending_purchase.get("purchase_type") == "telegram_premium"
     if is_premium_purchase:
-        payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
         try:
+            # Send success screen BEFORE marking paid (purchase data still accessible)
+            from app.handlers.payments.telegram_premium import send_premium_success
+            await send_premium_success(
+                message.bot, telegram_id, purchase_id, pending_purchase,
+            )
             await database.mark_pending_purchase_paid(purchase_id)
             logger.info(
                 "PREMIUM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
                 purchase_id, telegram_id, payment_amount_rubles,
             )
-            from app.handlers.payments.telegram_premium import send_premium_success
-            await send_premium_success(message.bot, telegram_id, purchase_id)
         except Exception as e:
             logger.exception("PREMIUM_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
             await message.answer(i18n_get_text(language, "errors.payment_processing"))
