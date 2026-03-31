@@ -774,4 +774,19 @@ LANG = {
     'subscription.tariff_basic': '⚡️ Plan: Basic',
     'subscription.tariff_business': '🏢 Plan: Business',
     'subscription.tariff_plus': '👑 Plan: Plus',
+
+    # --- Telegram Premium ---
+    'premium.main_button': "💎 Buy Telegram Premium 💎",
+    'premium.enter_username': "💎 <b>Buy Telegram Premium</b>\n\nEnter your Telegram username if buying for yourself, or a friend's username if buying as a gift.\n\n⚠️ Must start with <b>@</b>\nExample: <code>@username</code>",
+    'premium.invalid_username': "❌ Invalid username. Enter a valid username starting with @\n\nExample: <code>@username</code>\n\nAttempts left: {attempts}",
+    'premium.attempts_exhausted': "❌ You've used all attempts. Please try again.",
+    'premium.choose_period': "💎 <b>Choose Telegram Premium subscription period</b>\n\n👤 Username: <code>{username}</code>",
+    'premium.period_3m': "3 months | 1 590 ₽",
+    'premium.period_6m': "6 months | 2 690 ₽",
+    'premium.period_12m': "12 months | 3 790 ₽",
+    'premium.choose_payment': "💎 <b>Telegram Premium Payment</b>\n\n👤 Username: <code>{username}</code>\n📅 Period: {period}\n💰 Amount: {price} ₽\n\nChoose payment method:",
+    'premium.success': "✅ <b>Payment successful!</b>\n\n💎 Product: Telegram Premium\n👤 Username: <code>{username}</code>\n📅 Period: {period}\n💰 Amount: {price} ₽\n\n⏳ Expect to receive Telegram Premium within <b>5-15 minutes</b>.\n\nIf you haven't received Premium, contact us:",
+    'premium.support_button': "💬 Support",
+    'premium.back_button': "🔙 Back",
+    'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM PURCHASE</b>\n\n👤 Buyer: {buyer_id}\n🎯 Username: <code>{username}</code>\n📅 Period: {period}\n💰 Amount: {price} ₽\n🕐 Date: {date}",
 }

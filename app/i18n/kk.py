@@ -755,4 +755,19 @@ LANG = {
     'withdraw.rejected': 'Транзакция қабылданбады. Қолдауға хабарласыңыз.',
     'withdraw.requisites_prompt': 'Карта нөмірін немесе телефон нөмірін енгізіңіз:',
     'withdraw.too_many_attempts': 'Сәтсіз әрекеттер тым көп. Қайтадан бастаңыз.',
+
+    # --- Telegram Premium ---
+    'premium.main_button': "💎 Telegram Premium сатып алу 💎",
+    'premium.enter_username': "💎 <b>Telegram Premium сатып алу</b>\n\nӨзіңіз үшін сатып алсаңыз Telegram username-іңізді, досыңыз үшін алсаңыз досыңыздың username-ін енгізіңіз.\n\n⚠️ <b>@</b> белгісімен басталуы керек\nМысалы: <code>@username</code>",
+    'premium.invalid_username': "❌ Қате username. @ белгісімен дұрыс username енгізіңіз\n\nМысалы: <code>@username</code>\n\nҚалған әрекеттер: {attempts}",
+    'premium.attempts_exhausted': "❌ Барлық әрекеттер таусылды. Қайтадан көріңіз.",
+    'premium.choose_period': "💎 <b>Telegram Premium жазылым мерзімін таңдаңыз</b>\n\n👤 Username: <code>{username}</code>",
+    'premium.period_3m': "3 ай | 1 590 ₽",
+    'premium.period_6m': "6 ай | 2 690 ₽",
+    'premium.period_12m': "12 ай | 3 790 ₽",
+    'premium.choose_payment': "💎 <b>Telegram Premium төлемі</b>\n\n👤 Username: <code>{username}</code>\n📅 Мерзімі: {period}\n💰 Сомасы: {price} ₽\n\nТөлем әдісін таңдаңыз:",
+    'premium.success': "✅ <b>Төлем сәтті өтті!</b>\n\n💎 Өнім: Telegram Premium\n👤 Username: <code>{username}</code>\n📅 Мерзімі: {period}\n💰 Сомасы: {price} ₽\n\n⏳ Telegram Premium-ді <b>5-15 минут</b> ішінде күтіңіз.\n\nPremium алмасаңыз, бізге жазыңыз:",
+    'premium.support_button': "💬 Қолдау",
+    'premium.back_button': "🔙 Артқа",
+    'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM САТЫП АЛУ</b>\n\n👤 Сатып алушы: {buyer_id}\n🎯 Username: <code>{username}</code>\n📅 Мерзімі: {period}\n💰 Сомасы: {price} ₽\n🕐 Күні: {date}",
 }

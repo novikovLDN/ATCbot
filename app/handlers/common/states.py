@@ -119,5 +119,12 @@ class GiftState(StatesGroup):
     processing_payment = State()
 
 
+class TelegramPremiumState(StatesGroup):
+    waiting_for_username = State()
+    choose_period = State()
+    choose_payment_method = State()
+    processing_payment = State()
+
+
 class BomberState(StatesGroup):
     playing = State()

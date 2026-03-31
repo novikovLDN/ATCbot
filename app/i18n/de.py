@@ -755,4 +755,19 @@ LANG = {
     'withdraw.rejected': 'Ihre Transaktion wurde abgelehnt. Kontaktieren Sie den Support.',
     'withdraw.requisites_prompt': 'Kartennummer oder Telefonnummer eingeben:',
     'withdraw.too_many_attempts': 'Zu viele fehlgeschlagene Versuche. Versuchen Sie es erneut.',
+
+    # --- Telegram Premium ---
+    'premium.main_button': "💎 Telegram Premium kaufen 💎",
+    'premium.enter_username': "💎 <b>Telegram Premium kaufen</b>\n\nGeben Sie Ihren Telegram-Benutzernamen ein, wenn Sie für sich kaufen, oder den Benutzernamen eines Freundes.\n\n⚠️ Muss mit <b>@</b> beginnen\nBeispiel: <code>@username</code>",
+    'premium.invalid_username': "❌ Ungültiger Benutzername. Geben Sie einen gültigen Benutzernamen mit @ ein\n\nBeispiel: <code>@username</code>\n\nVerbleibende Versuche: {attempts}",
+    'premium.attempts_exhausted': "❌ Alle Versuche aufgebraucht. Bitte versuchen Sie es erneut.",
+    'premium.choose_period': "💎 <b>Wählen Sie die Telegram Premium Laufzeit</b>\n\n👤 Benutzername: <code>{username}</code>",
+    'premium.period_3m': "3 Monate | 1 590 ₽",
+    'premium.period_6m': "6 Monate | 2 690 ₽",
+    'premium.period_12m': "12 Monate | 3 790 ₽",
+    'premium.choose_payment': "💎 <b>Telegram Premium Zahlung</b>\n\n👤 Benutzername: <code>{username}</code>\n📅 Laufzeit: {period}\n💰 Betrag: {price} ₽\n\nZahlungsmethode wählen:",
+    'premium.success': "✅ <b>Zahlung erfolgreich!</b>\n\n💎 Produkt: Telegram Premium\n👤 Benutzername: <code>{username}</code>\n📅 Laufzeit: {period}\n💰 Betrag: {price} ₽\n\n⏳ Erwarten Sie Telegram Premium innerhalb von <b>5-15 Minuten</b>.\n\nWenn Sie Premium nicht erhalten haben, kontaktieren Sie uns:",
+    'premium.support_button': "💬 Support",
+    'premium.back_button': "🔙 Zurück",
+    'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM KAUF</b>\n\n👤 Käufer: {buyer_id}\n🎯 Benutzername: <code>{username}</code>\n📅 Laufzeit: {period}\n💰 Betrag: {price} ₽\n🕐 Datum: {date}",
 }

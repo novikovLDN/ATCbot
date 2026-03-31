@@ -755,4 +755,19 @@ LANG = {
     'withdraw.rejected': "Tranzaksiyangiz rad etildi. Qo'llab-quvvatlashga murojaat qiling.",
     'withdraw.requisites_prompt': 'Karta raqami yoki telefon raqamini kiriting:',
     'withdraw.too_many_attempts': "Muvaffaqiyatsiz urinishlar ko'p. Qaytadan boshlang.",
+
+    # --- Telegram Premium ---
+    'premium.main_button': "💎 Telegram Premium sotib olish 💎",
+    'premium.enter_username': "💎 <b>Telegram Premium sotib olish</b>\n\nO'zingiz uchun sotib olsangiz Telegram username'ingizni, do'stingiz uchun olsangiz do'stingizning username'ini kiriting.\n\n⚠️ <b>@</b> bilan boshlanishi kerak\nMisol: <code>@username</code>",
+    'premium.invalid_username': "❌ Noto'g'ri username. @ bilan to'g'ri username kiriting\n\nMisol: <code>@username</code>\n\nQolgan urinishlar: {attempts}",
+    'premium.attempts_exhausted': "❌ Barcha urinishlar tugadi. Qaytadan urinib ko'ring.",
+    'premium.choose_period': "💎 <b>Telegram Premium obuna muddatini tanlang</b>\n\n👤 Username: <code>{username}</code>",
+    'premium.period_3m': "3 oy | 1 590 ₽",
+    'premium.period_6m': "6 oy | 2 690 ₽",
+    'premium.period_12m': "12 oy | 3 790 ₽",
+    'premium.choose_payment': "💎 <b>Telegram Premium to'lovi</b>\n\n👤 Username: <code>{username}</code>\n📅 Muddat: {period}\n💰 Summa: {price} ₽\n\nTo'lov usulini tanlang:",
+    'premium.success': "✅ <b>To'lov muvaffaqiyatli o'tdi!</b>\n\n💎 Mahsulot: Telegram Premium\n👤 Username: <code>{username}</code>\n📅 Muddat: {period}\n💰 Summa: {price} ₽\n\n⏳ Telegram Premium'ni <b>5-15 daqiqa</b> ichida kuting.\n\nPremium olmagan bo'lsangiz, bizga yozing:",
+    'premium.support_button': "💬 Qo'llab-quvvatlash",
+    'premium.back_button': "🔙 Orqaga",
+    'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM SOTIB OLISH</b>\n\n👤 Xaridor: {buyer_id}\n🎯 Username: <code>{username}</code>\n📅 Muddat: {period}\n💰 Summa: {price} ₽\n🕐 Sana: {date}",
 }

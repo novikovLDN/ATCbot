@@ -863,4 +863,19 @@ LANG = {
     'gift.status_pending': "❌ Не активирован",
     'gift.detail_activated': "🎁 <b>{tariff_name} — {period}</b>\n\n✅ Этот подарок уже активирован.",
     'gift.detail_pending': "🎁 <b>Отправьте подарок близкому!</b>\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {period}\n\n❌ Не активирован\n\n🔗 Ссылка для активации:\n<code>{gift_link}</code>",
+
+    # --- Telegram Premium ---
+    'premium.main_button': "💎 Купить Telegram Premium 💎",
+    'premium.enter_username': "💎 <b>Купить Telegram Premium</b>\n\nВведите свой username Telegram, если покупаете для себя, или username друга, если покупаете другу.\n\n⚠️ Обязательно через <b>@</b>\nПример: <code>@username</code>",
+    'premium.invalid_username': "❌ Неверный username. Введите корректный username через @\n\nПример: <code>@username</code>\n\nОсталось попыток: {attempts}",
+    'premium.attempts_exhausted': "❌ Вы исчерпали все попытки ввода username. Попробуйте ещё раз.",
+    'premium.choose_period': "💎 <b>Выберите срок подписки Telegram Premium</b>\n\n👤 Username: <code>{username}</code>",
+    'premium.period_3m': "3 месяца | 1 590 ₽",
+    'premium.period_6m': "6 месяцев | 2 690 ₽",
+    'premium.period_12m': "12 месяцев | 3 790 ₽",
+    'premium.choose_payment': "💎 <b>Оплата Telegram Premium</b>\n\n👤 Username: <code>{username}</code>\n📅 Срок: {period}\n💰 Сумма: {price} ₽\n\nВыберите способ оплаты:",
+    'premium.success': "✅ <b>Оплата прошла успешно!</b>\n\n💎 Товар: Telegram Premium\n👤 Username: <code>{username}</code>\n📅 Срок: {period}\n💰 Сумма: {price} ₽\n\n⏳ Ожидайте получения Telegram Premium в течение <b>5-15 минут</b>.\n\nЕсли вы не получили Premium, напишите нам:",
+    'premium.support_button': "💬 Поддержка",
+    'premium.back_button': "🔙 Назад",
+    'premium.admin_notification': "💎 <b>ПОКУПКА TELEGRAM PREMIUM</b>\n\n👤 Покупатель: {buyer_id}\n🎯 Username: <code>{username}</code>\n📅 Срок: {period}\n💰 Сумма: {price} ₽\n🕐 Дата: {date}",
 }
