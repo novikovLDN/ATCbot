@@ -757,7 +757,7 @@ LANG = {
     'withdraw.too_many_attempts': 'Кӯшишҳои нокомёб зиёд аст. Аз нав оғоз кунед.',
 
     # --- Telegram Premium ---
-    'premium.main_button': "💎 Харидани Telegram Premium 💎",
+    'premium.main_button': "⚡️ Харидани Telegram Premium ⚡️",
     'premium.enter_username': "💎 <b>Харидани Telegram Premium</b>\n\nНоми корбарии Telegram-и худро ворид кунед, агар барои худ мехаред, ё номи корбарии дӯстатонро.\n\n⚠️ Бо <b>@</b> сар шавад\nМисол: <code>@username</code>",
     'premium.invalid_username': "❌ Номи корбарӣ нодуруст. Номи корбарии дурустро бо @ ворид кунед\n\nМисол: <code>@username</code>\n\nКӯшишҳои боқимонда: {attempts}",
     'premium.attempts_exhausted': "❌ Ҳамаи кӯшишҳо тамом шуд. Аз нав кӯшиш кунед.",
