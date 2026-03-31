@@ -776,7 +776,7 @@ LANG = {
     'subscription.tariff_plus': '👑 Plan: Plus',
 
     # --- Telegram Premium ---
-    'premium.main_button': "💎 Buy Telegram Premium 💎",
+    'premium.main_button': "⚡️ Buy Telegram Premium ⚡️",
     'premium.enter_username': "💎 <b>Buy Telegram Premium</b>\n\nEnter your Telegram username if buying for yourself, or a friend's username if buying as a gift.\n\n⚠️ Must start with <b>@</b>\nExample: <code>@username</code>",
     'premium.invalid_username': "❌ Invalid username. Enter a valid username starting with @\n\nExample: <code>@username</code>\n\nAttempts left: {attempts}",
     'premium.attempts_exhausted': "❌ You've used all attempts. Please try again.",

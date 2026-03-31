@@ -769,7 +769,7 @@ LANG = {
     'withdraw.too_many_attempts': 'محاولات فاشلة كثيرة. حاول مرة أخرى.',
 
     # --- Telegram Premium ---
-    'premium.main_button': "💎 شراء Telegram Premium 💎",
+    'premium.main_button': "⚡️ شراء Telegram Premium ⚡️",
     'premium.enter_username': "💎 <b>شراء Telegram Premium</b>\n\nأدخل اسم المستخدم الخاص بك في تيليجرام إذا كنت تشتري لنفسك، أو اسم مستخدم صديقك.\n\n⚠️ يجب أن يبدأ بـ <b>@</b>\nمثال: <code>@username</code>",
     'premium.invalid_username': "❌ اسم مستخدم غير صالح. أدخل اسم مستخدم صحيح يبدأ بـ @\n\nمثال: <code>@username</code>\n\nالمحاولات المتبقية: {attempts}",
     'premium.attempts_exhausted': "❌ لقد استنفدت جميع المحاولات. حاول مرة أخرى.",
