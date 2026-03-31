@@ -122,6 +122,16 @@ def _build_broadcast_reply_markup(
             rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")])
         elif btn == "referral":
             rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="menu_referral")])
+        elif btn == "happ_ios":
+            rows.append([InlineKeyboardButton(
+                text="📲 Скачать Happ для iOS ⚡️",
+                url="https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+            )])
+        elif btn == "happ_android":
+            rows.append([InlineKeyboardButton(
+                text="📲 Скачать Happ для Android 🤖",
+                url="https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
+            )])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -491,10 +501,12 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
             reply_markup=get_broadcast_segment_keyboard(language)
         )
     else:
-        # Add button to list: buy, channel, support, referral
+        # Toggle button in list (add or remove)
         data = await state.get_data()
         buttons = data.get("broadcast_buttons", [])
-        if btn_type not in buttons:
+        if btn_type in buttons:
+            buttons.remove(btn_type)
+        else:
             buttons.append(btn_type)
         await state.update_data(broadcast_buttons=buttons)
         # Show updated keyboard with selected buttons
@@ -513,6 +525,8 @@ def _btn_label(btn_type: str) -> str:
         "channel": "📢 Наш канал",
         "support": "💬 Поддержка",
         "referral": "👥 Реферальная программа",
+        "happ_ios": "📲 Скачать Happ iOS",
+        "happ_android": "📲 Скачать Happ Android",
     }
     return labels.get(btn_type, btn_type)
 
