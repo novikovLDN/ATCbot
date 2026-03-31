@@ -147,6 +147,8 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("📢 Наш канал", "channel"),
         ("💬 Поддержка", "support"),
         ("👥 Пригласить друга", "referral"),
+        ("📲 Скачать Happ для iOS ⚡️", "happ_ios"),
+        ("📲 Скачать Happ для Android 🤖", "happ_android"),
     ]
     rows = []
     for label, key in buttons:
