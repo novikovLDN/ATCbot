@@ -919,4 +919,4 @@ def build_sub_url(telegram_id: int) -> str:
     https://{APP_URL}/api/sub/{token}?id={telegram_id}
     """
     token = generate_sub_token(config.BOT_TOKEN, telegram_id)
-    return f"{config.APP_URL}/api/sub/{token}?id={telegram_id}"
+    return f"{config.SUB_BASE_URL}/api/sub/{token}?id={telegram_id}"
