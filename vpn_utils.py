@@ -504,12 +504,32 @@ async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscriptio
         logger.error("ensure_user_in_xray: cannot add without uuid; DB is source of truth")
         return None
     try:
-        await add_vless_user(
+        result = await add_vless_user(
             telegram_id=telegram_id,
             subscription_end=subscription_end,
             uuid=uuid_clean
         )
         logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={uuid_preview}")
+        # Update vpn_key in DB if API returned a new vless_url (server config may have changed)
+        new_vless_url = result.get("vless_url") if result else None
+        if new_vless_url:
+            try:
+                import database
+                pool = await database.subscriptions.get_pool()
+                if pool:
+                    async with pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE subscriptions SET vpn_key = $1 WHERE telegram_id = $2",
+                            new_vless_url, telegram_id,
+                        )
+                    logger.info(
+                        f"XRAY_FALLBACK_VPN_KEY_UPDATED telegram_id={telegram_id} uuid={uuid_preview} "
+                        f"vpn_key_length={len(new_vless_url)}"
+                    )
+            except Exception as db_err:
+                logger.error(
+                    f"XRAY_FALLBACK_VPN_KEY_UPDATE_FAILED telegram_id={telegram_id} error={db_err}"
+                )
         return uuid_clean
     except Exception as add_e:
         logger.critical(f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}", exc_info=True)
