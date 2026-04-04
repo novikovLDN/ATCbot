@@ -62,13 +62,17 @@ async def _get_user_with_recovery(telegram_id: int, rmn_uuid: str):
         return user_data
 
     # If stored UUID is not a valid full UUID, it's likely a shortUuid from the old bug.
-    # Try looking up by username (telegram_id) via Remnawave's get-by-username endpoint.
+    # Try looking up by shortUuid first, then by username.
     if not _is_valid_full_uuid(rmn_uuid):
         logger.warning(
             "REMNAWAVE_UUID_RECOVERY: tg=%s stored_uuid=%s is not a valid full UUID, "
-            "trying username lookup", telegram_id, rmn_uuid,
+            "trying alternative lookups", telegram_id, rmn_uuid,
         )
-        user_data = await remnawave_api.get_user_by_username(str(telegram_id))
+        # Try by-short-uuid (stored value might be a shortUuid)
+        user_data = await remnawave_api.get_user_by_short_uuid(rmn_uuid)
+        if not user_data:
+            # Try by-username (username = telegram_id as string)
+            user_data = await remnawave_api.get_user_by_username(str(telegram_id))
         if user_data:
             # Fix the stored UUID
             full_uuid = user_data.get("uuid")

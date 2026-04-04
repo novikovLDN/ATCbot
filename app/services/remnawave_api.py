@@ -99,6 +99,11 @@ async def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     return await _request("POST", "/api/users/by-username", json={"username": username})
 
 
+async def get_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
+    """POST /api/users/by-short-uuid — look up user by shortUuid."""
+    return await _request("POST", "/api/users/by-short-uuid", json={"shortUuid": short_uuid})
+
+
 async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
     """POST /api/users/{uuid}/reset-traffic"""
     return await _request("POST", f"/api/users/{uuid}/reset-traffic")
