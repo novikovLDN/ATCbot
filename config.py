@@ -422,7 +422,7 @@ TRAFFIC_NOTIFY_THRESHOLDS = [
 ]
 
 # Subscription link base for Remnawave bypass
-REMNAWAVE_SUB_BASE_URL = env("REMNAWAVE_SUB_BASE_URL", default="https://sub.atlassecure.ru").rstrip("/")
+REMNAWAVE_SUB_BASE_URL = env("REMNAWAVE_SUB_BASE_URL", default="https://rmnw.atlassecure.ru/api/sub").rstrip("/")
 
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
