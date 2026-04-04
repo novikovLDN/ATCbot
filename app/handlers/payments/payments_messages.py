@@ -627,6 +627,65 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         return
 
+    # --- Traffic pack purchase: finalize + add Remnawave traffic ---
+    is_traffic_pack = pending_purchase.get("purchase_type") == "traffic_pack"
+    if is_traffic_pack:
+        payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
+        try:
+            traffic_result = await database.finalize_purchase(
+                purchase_id=purchase_id,
+                payment_provider=payment_provider_name,
+                amount_rubles=payment_amount_rubles,
+            )
+            if traffic_result and traffic_result.get("is_traffic_pack"):
+                traffic_gb = traffic_result.get("traffic_gb", 0)
+                # Add traffic via Remnawave
+                pack = config.TRAFFIC_PACKS.get(traffic_gb)
+                if pack:
+                    try:
+                        from app.services.remnawave_service import add_traffic
+                        success = await add_traffic(telegram_id, pack["bytes"])
+                        if not success:
+                            logger.error(
+                                "TRAFFIC_PACK_REMNAWAVE_FAIL: user=%s gb=%s purchase=%s",
+                                telegram_id, traffic_gb, purchase_id,
+                            )
+                    except Exception as rmn_err:
+                        logger.error(
+                            "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
+                            telegram_id, traffic_gb, rmn_err,
+                        )
+
+                text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=i18n_get_text(language, "traffic.back_to_traffic"),
+                        callback_data="traffic_info",
+                    )],
+                ])
+                await message.answer(text, reply_markup=kb, parse_mode="HTML")
+                logger.info(
+                    "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s",
+                    purchase_id, telegram_id, traffic_gb,
+                )
+            else:
+                logger.error(f"Traffic pack finalization unexpected result: {traffic_result}")
+                await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        except Exception as e:
+            logger.exception(f"Traffic pack payment finalization failed: user={telegram_id}, error={e}")
+            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await state.clear()
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="success",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            duration_ms=duration_ms,
+            payment_type="traffic_pack",
+        )
+        return
+
     # Finalize subscription payment through payment service
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:

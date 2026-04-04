@@ -7,13 +7,16 @@ Callbacks:
 - buy_traffic        — show available traffic packs
 - buy_traffic_pack:N — confirm purchase of N GB pack
 - traffic_pay_balance:N — pay for N GB pack from balance
+- traffic_pay_card:N — pay for N GB pack via YooKassa (card)
+- traffic_pay_sbp:N  — pay for N GB pack via SBP (Platega)
 """
 import logging
+import math
 
 import config
 import database
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
 
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
@@ -231,6 +234,10 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
     balance = await database.get_user_balance(telegram_id)
     price = pack["price"]
 
+    # SBP price with markup
+    sbp_price_kopecks = math.ceil(price * 100 * (1 + config.SBP_MARKUP_PERCENT / 100.0))
+    sbp_price = sbp_price_kopecks / 100.0
+
     text = i18n_get_text(
         language,
         "traffic.confirm_purchase",
@@ -239,16 +246,34 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         balance=f"{balance:.0f}",
     )
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_balance", price=price),
             callback_data=f"traffic_pay_balance:{gb}",
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="buy_traffic",
-        )],
-    ])
+    ]
+
+    # Card (YooKassa) button — requires TG_PROVIDER_TOKEN
+    if config.TG_PROVIDER_TOKEN:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_card", price=price),
+            callback_data=f"traffic_pay_card:{gb}",
+        )])
+
+    # SBP (Platega) button
+    import platega_service
+    if platega_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_sbp", price=f"{sbp_price:.0f}"),
+            callback_data=f"traffic_pay_sbp:{gb}",
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="buy_traffic",
+    )])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
 
 
@@ -344,3 +369,155 @@ async def callback_traffic_pay_balance(callback: CallbackQuery):
         )],
     ])
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
+
+
+# ── Card payment (YooKassa via Telegram Payments) ────────────────────
+
+@traffic_router.callback_query(F.data.startswith("traffic_pay_card:"))
+async def callback_traffic_pay_card(callback: CallbackQuery):
+    """Pay for traffic pack via card (Telegram Payments / YooKassa)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    pack = config.TRAFFIC_PACKS.get(gb)
+    if not pack:
+        return
+
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
+        return
+
+    price = pack["price"]
+    price_kopecks = price * 100
+
+    # Minimum Telegram payment: 64 RUB = 6400 kopecks
+    MIN_PAYMENT_AMOUNT_KOPECKS = 6400
+    if price_kopecks < MIN_PAYMENT_AMOUNT_KOPECKS:
+        await callback.answer(i18n_get_text(language, "errors.payment_min_amount"), show_alert=True)
+        return
+
+    try:
+        # Create pending_purchase with purchase_type='traffic_pack'
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"traffic_{gb}gb",
+            period_days=0,
+            price_kopecks=price_kopecks,
+            purchase_type="traffic_pack",
+        )
+
+        payload = f"purchase:{purchase_id}"
+        description = f"Atlas Secure — {gb} GB traffic"
+        prices = [LabeledPrice(label=f"{gb} GB", amount=price_kopecks)]
+
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title=f"Atlas Secure — {gb} GB",
+            description=description,
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=prices,
+        )
+
+        logger.info(
+            "TRAFFIC_CARD_INVOICE_SENT user=%s purchase_id=%s gb=%s price=%s",
+            telegram_id, purchase_id, gb, price,
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("TRAFFIC_CARD_INVOICE_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+# ── SBP payment (Platega) ────────────────────────────────────────────
+
+@traffic_router.callback_query(F.data.startswith("traffic_pay_sbp:"))
+async def callback_traffic_pay_sbp(callback: CallbackQuery):
+    """Pay for traffic pack via SBP (Platega, +11% markup)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    pack = config.TRAFFIC_PACKS.get(gb)
+    if not pack:
+        return
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.sbp_unavailable"), show_alert=True)
+        return
+
+    price = pack["price"]
+    price_kopecks = price * 100
+
+    try:
+        # Apply SBP markup (+11%)
+        sbp_price_kopecks = platega_service.apply_sbp_markup(price_kopecks)
+
+        # Create pending_purchase with purchase_type='traffic_pack'
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"traffic_{gb}gb",
+            period_days=0,
+            price_kopecks=sbp_price_kopecks,
+            purchase_type="traffic_pack",
+        )
+
+        sbp_price_rubles = sbp_price_kopecks / 100.0
+
+        # Create Platega transaction
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=sbp_price_rubles,
+            description=f"Atlas Secure — {gb} GB traffic",
+            purchase_id=purchase_id,
+        )
+
+        transaction_id = tx_data["transaction_id"]
+        redirect_url = tx_data["redirect_url"]
+
+        # Save invoice_id
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+        except Exception as e:
+            logger.error("Failed to save SBP transaction_id: purchase_id=%s error=%s", purchase_id, e)
+
+        logger.info(
+            "TRAFFIC_SBP_INVOICE_SENT user=%s purchase_id=%s gb=%s sbp_price=%.2f tx=%s",
+            telegram_id, purchase_id, gb, sbp_price_rubles, transaction_id,
+        )
+
+        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.sbp_pay_button"),
+                url=redirect_url,
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="buy_traffic",
+            )],
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("TRAFFIC_SBP_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)

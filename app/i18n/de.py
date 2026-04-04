@@ -787,6 +787,8 @@ LANG = {
     'traffic.buy_title': "📦 <b>Traffic kaufen — Umgehung</b> 🇷🇺\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nTraffic wird zum aktuellen Guthaben hinzugefügt.\nWählen Sie ein Paket:",
     'traffic.confirm_purchase': "💳 <b>Zahlung: {gb} GB — {price} ₽</b>\n\n💰 Ihr Guthaben: {balance} ₽",
     'traffic.pay_balance': "💰 Vom Guthaben bezahlen ({price} ₽)",
+    'traffic.pay_card': "💳 Mit Karte bezahlen ({price} ₽)",
+    'traffic.pay_sbp': "🏦 Per SBP bezahlen ({price} ₽)",
     'traffic.insufficient_balance': "❌ Guthaben reicht nicht aus",
     'traffic.purchase_success': "✅ <b>Traffic hinzugefügt!</b>\n\n📦 +{gb} GB\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Fehler beim Hinzufügen. Guthaben wurde zurückerstattet.",

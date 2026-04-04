@@ -19,4 +19,7 @@ CREATE TABLE IF NOT EXISTS traffic_purchases (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure payment_method column exists (table may have been created by earlier migration)
+ALTER TABLE traffic_purchases ADD COLUMN IF NOT EXISTS payment_method TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_traffic_purchases_tg ON traffic_purchases(telegram_id);
