@@ -110,7 +110,7 @@ async def create_user(
         "username": username,
         "shortUuid": short_uuid,
         "trafficLimitBytes": traffic_limit_bytes,
-        "trafficLimitStrategy": "no_reset",
+        "trafficLimitStrategy": "NO_RESET",
         "status": "ACTIVE",
         "expireAt": expire_str,
     }
