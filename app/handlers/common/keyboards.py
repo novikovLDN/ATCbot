@@ -144,6 +144,21 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                     callback_data="menu_buy_vpn"
                 )])
 
+    # Traffic buttons (only for active Basic/Plus with Remnawave enabled)
+    if has_active_sub and config.REMNAWAVE_ENABLED:
+        sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else ""
+        if sub_type in ("basic", "plus"):
+            buttons.append([
+                InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.traffic_btn"),
+                    callback_data="traffic_info",
+                ),
+                InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy_traffic_btn"),
+                    callback_data="buy_traffic",
+                ),
+            ])
+
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.profile"),
         callback_data="menu_profile"

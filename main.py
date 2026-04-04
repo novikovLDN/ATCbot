@@ -28,6 +28,7 @@ import admin_notifications
 import trial_notifications
 import activation_worker
 from app.workers import farm_notifications
+from app.workers import traffic_monitor
 try:
     import xray_sync
     XRAY_SYNC_AVAILABLE = True
@@ -265,6 +266,18 @@ async def main():
     else:
         logger.warning("Farm notifications task skipped (DB not ready)")
     
+    # Запуск фоновой задачи для мониторинга трафика Remnawave (только если БД готова и Remnawave включен)
+    traffic_monitor_task_instance = None
+    if database.DB_READY and config.REMNAWAVE_ENABLED:
+        traffic_monitor_task_instance = asyncio.create_task(traffic_monitor.traffic_monitor_task(bot))
+        background_tasks.append(traffic_monitor_task_instance)
+        logger.info("Traffic monitor task started")
+    else:
+        if not config.REMNAWAVE_ENABLED:
+            logger.info("Traffic monitor task skipped (REMNAWAVE_ENABLED=false)")
+        else:
+            logger.warning("Traffic monitor task skipped (DB not ready)")
+
     # Запуск фоновой задачи для health-check
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
     background_tasks.append(healthcheck_task)

@@ -349,6 +349,7 @@ async def process_auto_renewals(bot: Bot):
                                 "payment_id": payment_id,
                                 "language": language,
                                 "expires_str": expires_str,
+                                "expires_at": expires_at,
                                 "duration_days": duration_days,
                                 "amount_rubles": amount_rubles,
                                 "tariff_type": tariff_type,
@@ -389,6 +390,16 @@ async def process_auto_renewals(bot: Bot):
                         logger.error(
                             f"AUTO_RENEWAL_XRAY_SYNC_FAILED user={item['telegram_id']} error={e}"
                         )
+                # Fire-and-forget: renew Remnawave bypass user
+                try:
+                    from app.services.remnawave_service import renew_remnawave_user_bg
+                    _ar_tariff = item.get("tariff_type", "basic")
+                    _ar_expires = item.get("expires_at")
+                    if _ar_tariff in ("basic", "plus") and _ar_expires:
+                        renew_remnawave_user_bg(item["telegram_id"], _ar_tariff, _ar_expires)
+                except Exception as rmn_err:
+                    logger.warning("REMNAWAVE_AUTORENEW_FAIL: tg=%s %s", item["telegram_id"], rmn_err)
+
                 try:
                     tariff_label = "Plus" if item.get("tariff_type") == "plus" else "Basic"
                     tariff_emoji = "⭐️" if item.get("tariff_type") == "plus" else "📦"
