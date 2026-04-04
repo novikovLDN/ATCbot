@@ -598,35 +598,6 @@ async def process_successful_payment(message: Message, state: FSMContext):
             await message.answer(i18n_get_text(language, "errors.payment_processing"))
             return
 
-    # --- Telegram Premium purchase: mark paid + send success + notify admin ---
-    is_premium_purchase = pending_purchase.get("purchase_type") == "telegram_premium"
-    if is_premium_purchase:
-        try:
-            # Send success screen BEFORE marking paid (purchase data still accessible)
-            from app.handlers.payments.telegram_premium import send_premium_success
-            await send_premium_success(
-                message.bot, telegram_id, purchase_id, pending_purchase,
-            )
-            await database.mark_pending_purchase_paid(purchase_id)
-            logger.info(
-                "PREMIUM_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
-                purchase_id, telegram_id, payment_amount_rubles,
-            )
-        except Exception as e:
-            logger.exception("PREMIUM_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"))
-        await state.clear()
-        duration_ms = (time.time() - start_time) * 1000
-        log_handler_exit(
-            handler_name="process_successful_payment",
-            outcome="success",
-            telegram_id=telegram_id,
-            operation="payment_finalization",
-            duration_ms=duration_ms,
-            payment_type="telegram_premium",
-        )
-        return
-
     # Finalize subscription payment through payment service
     payment_provider_name = "telegram_stars" if is_stars_payment else "telegram_payment"
     try:
@@ -645,7 +616,22 @@ async def process_successful_payment(message: Message, state: FSMContext):
         if subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
             subscription_type = "basic"
         vpn_key_plus = getattr(result, "vpn_key_plus", None)
-        
+
+        # Sync with website (fire-and-forget)
+        try:
+            from app.handlers.user.site_link import notify_site_after_payment
+            await notify_site_after_payment(telegram_id, period_days, tariff_type)
+        except Exception as site_err:
+            logger.warning("SITE_SYNC_AFTER_PAYMENT_FAILED: user=%s, error=%s", telegram_id, site_err)
+
+        # Remnawave: renew/create user on Yandex node (fire-and-forget)
+        try:
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            if expires_at:
+                renew_remnawave_user_bg(telegram_id, expires_at, tariff_type)
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_AFTER_STARS_PAYMENT_FAILED: user=%s, error=%s", telegram_id, rmn_err)
+
         # Проверяем статус активации подписки
         activation_status = result.activation_status
         is_pending_activation = (

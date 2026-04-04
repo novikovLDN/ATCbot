@@ -65,6 +65,33 @@ async def process_confirmed_payment(
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
 
+        # Sync with website (fire-and-forget, must not fail payment)
+        try:
+            from app.handlers.user.site_link import notify_site_after_payment
+            purchase = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+            if purchase and not is_balance_topup:
+                tariff = purchase.get("tariff", "basic")
+                period_days = purchase.get("period_days", 30)
+                await notify_site_after_payment(telegram_id, period_days, tariff)
+        except Exception as site_err:
+            logger.warning(
+                "SITE_SYNC_AFTER_PAYMENT_FAILED: user=%s, purchase_id=%s, error=%s",
+                telegram_id, purchase_id, site_err,
+            )
+
+        # Remnawave: renew/create user on Yandex node (fire-and-forget)
+        try:
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            if not is_balance_topup and expires_at:
+                purchase = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+                tariff = purchase.get("tariff", "basic") if purchase else "basic"
+                renew_remnawave_user_bg(telegram_id, expires_at, tariff)
+        except Exception as rmn_err:
+            logger.warning(
+                "REMNAWAVE_AFTER_PAYMENT_FAILED: user=%s, error=%s",
+                telegram_id, rmn_err,
+            )
+
         # Notification failure must NOT fail the payment — DB is already committed
         try:
             await _send_confirmation(
@@ -158,25 +185,12 @@ async def lookup_pending_purchase(
     telegram_id = pending_purchase["telegram_id"]
     purchase_status = pending_purchase.get("status")
 
-    if purchase_status == "paid":
+    if purchase_status != "pending":
         logger.info(
             f"{provider} webhook: purchase already processed: "
             f"purchase_id={purchase_id}, status={purchase_status}"
         )
         return {"status": "already_processed"}
-
-    if purchase_status not in ("pending", "expired"):
-        logger.warning(
-            f"{provider} webhook: unexpected purchase status: "
-            f"purchase_id={purchase_id}, status={purchase_status}"
-        )
-        return {"status": "invalid_status"}
-
-    if purchase_status == "expired":
-        logger.info(
-            f"{provider} webhook: recovering expired purchase (payment arrived after new purchase created): "
-            f"purchase_id={purchase_id}"
-        )
 
     return {
         "status": "ok",

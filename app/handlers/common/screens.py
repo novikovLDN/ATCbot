@@ -235,14 +235,48 @@ async def show_profile(message_or_query, language: str):
         balance_rubles = await database.get_user_balance(telegram_id)
         balance_str = f"{balance_rubles:.2f}"
 
-        # Получаем информацию о подписке (активной или истекшей)
+        # Получаем информацию о подписке
+        # Try site API first (single source of truth), fallback to local DB
+        site_status = None
+        if config.SITE_SYNC_ENABLED:
+            try:
+                from app.services import site_api
+                site_status = await site_api.get_status(telegram_id)
+            except Exception as e:
+                logger.warning("Site API status fetch failed for user %s: %s", telegram_id, e)
+
         subscription = await database.get_subscription_any(telegram_id)
-        subscription_status = get_subscription_status(subscription)
-        has_active_subscription = subscription_status.is_active
-        expires_at = subscription_status.expires_at
+
+        if site_status and not site_status.get("error"):
+            # Use site data as source of truth
+            site_days = site_status.get("daysLeft", 0)
+            site_hours = site_status.get("hoursLeft", 0)
+            site_minutes = site_status.get("minutesLeft", 0)
+            is_expired = site_status.get("isExpired", False)
+            has_active_sub_flag = site_status.get("hasActiveSubscription", False)
+            has_active_subscription = has_active_sub_flag or (not is_expired and site_days >= 0)
+            site_sub_end = site_status.get("subscriptionEnd")
+            if site_sub_end:
+                from datetime import datetime as _dt
+                try:
+                    expires_at = _dt.fromisoformat(site_sub_end.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    expires_at = None
+            else:
+                expires_at = None
+            sub_type = (site_status.get("subscriptionPlan") or "basic").lower()
+            # NOTE: Do NOT overwrite bot vpn_key from site here.
+            # Key sync happens only in dedicated sync functions (site_link.py).
+            # Profile always shows bot's own key.
+        else:
+            # Fallback to local DB
+            subscription_status = get_subscription_status(subscription)
+            has_active_subscription = subscription_status.is_active
+            expires_at = subscription_status.expires_at
+            sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
 
         auto_renew = bool(subscription and subscription.get("auto_renew"))
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
+
         if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
             sub_type = "basic"
 
@@ -302,7 +336,16 @@ async def show_profile(message_or_query, language: str):
             text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
             text += i18n_get_text(language, "profile.auto_renew_none")
+        # Site sync indicator
+        if config.SITE_SYNC_ENABLED:
+            site_user_id = await database.get_site_user_id(telegram_id)
+            if site_user_id:
+                text += "\n🌐 " + i18n_get_text(language, "profile.site_connected", "Подключен к QoDev")
+            else:
+                text += "\n🔗 " + i18n_get_text(language, "profile.site_not_connected", "Не подключен к QoDev")
+
         text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
+        # Always use bot's own vpn_key (synced via dedicated sync functions)
         vpn_key = subscription.get("vpn_key") if subscription else None
         vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
         keyboard = get_profile_keyboard(

@@ -374,11 +374,52 @@ _log.info("Using WEBHOOK_URL from %s_WEBHOOK_URL", APP_ENV.upper())
 BOT_USERNAME = env("BOT_USERNAME", default="atlassecure_bot")
 MINI_APP_NAME = env("MINI_APP_NAME", default="app")
 
-# Mini App URL — used for WebApp buttons.
+# Mini App URL — used for subscription link generation and WebApp buttons.
 APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app").rstrip("/")
 
-# Subscription link base URL (domain serving /api/sub/{token}?id={id}).
-SUB_BASE_URL = env("SUB_BASE_URL", default="https://atlassecure.ru").rstrip("/")
+# Atlas Secure Website API (single source of truth for subscriptions)
+SITE_API_URL = env("SITE_API_URL", default="")
+BOT_API_KEY = env("BOT_API_KEY", default="")
+SITE_SYNC_ENABLED = bool(SITE_API_URL and BOT_API_KEY)
+if SITE_SYNC_ENABLED:
+    _log.info("Site API configured: %s", SITE_API_URL)
+else:
+    _log.info("Site API not configured (SITE_API_URL or BOT_API_KEY missing) — site sync disabled")
+
+# ====================================================================================
+# REMNAWAVE (Яндекс нода) — VPN с лимитом трафика
+# ====================================================================================
+REMNAWAVE_API_URL = env("REMNAWAVE_API_URL", default="")
+REMNAWAVE_API_TOKEN = env("REMNAWAVE_API_TOKEN", default="")
+REMNAWAVE_ENABLED = bool(REMNAWAVE_API_URL and REMNAWAVE_API_TOKEN)
+if REMNAWAVE_ENABLED:
+    _log.info("Remnawave API configured: %s", REMNAWAVE_API_URL)
+else:
+    _log.info("Remnawave API not configured — Yandex node disabled")
+
+# Лимиты трафика по тарифам (в байтах, только Яндекс нода)
+TRAFFIC_LIMITS = {
+    "trial": 5 * 1024 * 1024 * 1024,      # 5 GB
+    "basic": 15 * 1024 * 1024 * 1024,      # 15 GB
+    "plus": 25 * 1024 * 1024 * 1024,       # 25 GB
+}
+
+# Пакеты трафика для покупки (ГБ → цена в рублях)
+TRAFFIC_PACKS = {
+    5:  {"price": 44,  "label": "5 ГБ — 44 ₽"},
+    15: {"price": 115, "label": "15 ГБ — 115 ₽ 🔥 -13%"},
+    25: {"price": 175, "label": "25 ГБ — 175 ₽ 🔥 -20%"},
+    45: {"price": 270, "label": "45 ГБ — 270 ₽ 🔥 -32%"},
+    60: {"price": 318, "label": "60 ГБ — 318 ₽ 🔥 -40%"},
+}
+
+# Пороги уведомлений о трафике (в байтах, по убыванию)
+TRAFFIC_NOTIFY_THRESHOLDS = [
+    (3 * 1024 * 1024 * 1024,  "3gb"),    # 3 GB
+    (1 * 1024 * 1024 * 1024,  "1gb"),    # 1 GB
+    (512 * 1024 * 1024,       "500mb"),  # 500 MB
+    (0,                        "0"),      # 0
+]
 
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")

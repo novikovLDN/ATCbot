@@ -88,6 +88,21 @@ async def cmd_start(message: Message, state: FSMContext):
                     referral_code, telegram_id
                 )
     
+    # SITE ACCOUNT LINKING: /start {telegramLinkToken} from website
+    # telegramLinkToken = exactly 16 hex chars (a-f, 0-9)
+    if message.text and config.SITE_SYNC_ENABLED:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1:
+            payload = start_parts[1]
+            from app.handlers.user.site_link import is_telegram_link_token, handle_site_deep_link
+            if is_telegram_link_token(payload):
+                try:
+                    handled = await handle_site_deep_link(telegram_id, payload, message)
+                    if handled:
+                        return
+                except Exception as e:
+                    logger.warning("Site deep link handling failed: user=%s, error=%s", telegram_id, e)
+
     # GIFT ACTIVATION: Обработка подарочной ссылки /start gift_XXXXX
     if message.text:
         start_parts = message.text.strip().split(maxsplit=1)
@@ -135,6 +150,20 @@ async def cmd_start(message: Message, state: FSMContext):
                             keyboard = await get_main_menu_keyboard(language, telegram_id)
                             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code} new_user={is_new_user}")
+                        # Sync with site (fire-and-forget)
+                        try:
+                            from app.handlers.user.site_link import sync_bot_subscription_to_site
+                            await sync_bot_subscription_to_site(telegram_id)
+                        except Exception as site_err:
+                            logger.warning("SITE_SYNC_AFTER_GIFT_FAILED: user=%s, error=%s", telegram_id, site_err)
+                        # Remnawave: create/renew user on Yandex node (fire-and-forget)
+                        try:
+                            from app.services.remnawave_service import renew_remnawave_user_bg
+                            sub = await database.get_subscription(telegram_id)
+                            if sub and sub.get("expires_at"):
+                                renew_remnawave_user_bg(telegram_id, sub["expires_at"], sub.get("subscription_type", "basic"))
+                        except Exception as rmn_err:
+                            logger.warning("REMNAWAVE_AFTER_GIFT_FAILED: user=%s, error=%s", telegram_id, rmn_err)
                         return
                     else:
                         error = activation_result.get("error", "unknown")

@@ -1649,6 +1649,12 @@ async def admin_revoke_access_atomic(telegram_id: int, admin_telegram_id: int) -
                     "ADMIN_REVOKE_UUID_REMOVAL_FAILED",
                     extra={"uuid": uuid_to_remove[:8] + "...", "error": str(e)[:200]}
                 )
+            # Remnawave: delete user from Yandex node (fire-and-forget)
+            try:
+                from app.services.remnawave_service import delete_remnawave_user_bg
+                delete_remnawave_user_bg(telegram_id)
+            except Exception:
+                pass
     return ret
 
 
@@ -2301,6 +2307,12 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             logger.info(f"ADMIN_DELETE_UUID_REMOVED uuid={uuid_to_remove[:8]}...")
         except Exception as e:
             logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
+        # Remnawave: delete user from Yandex node (fire-and-forget)
+        try:
+            from app.services.remnawave_service import delete_remnawave_user_bg
+            delete_remnawave_user_bg(telegram_id)
+        except Exception:
+            pass
 
     return True
 

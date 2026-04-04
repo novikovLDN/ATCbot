@@ -680,7 +680,22 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             f"amount={final_price_rubles:.2f} RUB, "
             f"scenario={'renewal' if is_renewal else 'first_purchase'}"
         )
-        
+
+        # Sync with website (fire-and-forget, must not fail payment)
+        try:
+            from app.handlers.user.site_link import notify_site_after_payment
+            await notify_site_after_payment(telegram_id, period_days, tariff_type)
+        except Exception as site_err:
+            logger.warning("SITE_SYNC_AFTER_BALANCE_PAYMENT_FAILED: user=%s, error=%s", telegram_id, site_err)
+
+        # Remnawave: renew/create user on Yandex node (fire-and-forget)
+        try:
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            if result.get("expires_at"):
+                renew_remnawave_user_bg(telegram_id, result["expires_at"], tariff_type)
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_AFTER_BALANCE_PAYMENT_FAILED: user=%s, error=%s", telegram_id, rmn_err)
+
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
         error_text = i18n_get_text(language, "errors.payment_processing")

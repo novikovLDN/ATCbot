@@ -209,6 +209,20 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
             f"uuid={uuid[:8]}..."
         )
 
+        # Sync with site (fire-and-forget)
+        try:
+            from app.handlers.user.site_link import sync_bot_subscription_to_site
+            await sync_bot_subscription_to_site(telegram_id)
+        except Exception as site_err:
+            logger.warning("SITE_SYNC_AFTER_TRIAL_FAILED: user=%s, error=%s", telegram_id, site_err)
+
+        # Remnawave: create user on Yandex node (fire-and-forget)
+        try:
+            from app.services.remnawave_service import create_remnawave_user_bg
+            create_remnawave_user_bg(telegram_id, uuid, subscription_end, "trial")
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_AFTER_TRIAL_FAILED: user=%s, error=%s", telegram_id, rmn_err)
+
         expires_str = subscription_end.strftime("%d.%m.%Y")
         from html import escape as html_escape
         from vpn_utils import build_sub_url

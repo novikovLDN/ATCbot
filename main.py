@@ -35,6 +35,7 @@ except Exception as e:
     XRAY_SYNC_AVAILABLE = False
     xray_sync = None
     print(f"[XRAY_SYNC] disabled: {e}")
+import site_sync_worker
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -451,6 +452,15 @@ async def main():
     else:
         logger.warning("Activation worker task skipped (DB not ready)")
 
+    # Traffic monitor: check Remnawave traffic usage and send notifications
+    if database.DB_READY and config.REMNAWAVE_ENABLED:
+        from app.workers.traffic_monitor import traffic_monitor_task
+        _traffic_task = asyncio.create_task(traffic_monitor_task(bot))
+        background_tasks.append(_traffic_task)
+        logger.info("Traffic monitor worker started (Remnawave enabled)")
+    else:
+        logger.info("Traffic monitor worker skipped (DB=%s, REMNAWAVE=%s)", database.DB_READY, config.REMNAWAVE_ENABLED)
+
     # Xray sync: safe optional background worker (fail-safe, never crashes bot)
     async def start_xray_sync_safe(bot_obj):
         if not XRAY_SYNC_AVAILABLE:
@@ -475,6 +485,11 @@ async def main():
     if xray_sync_task:
         background_tasks.append(xray_sync_task)
     
+    # Site sync worker (hourly sync with Atlas Secure website)
+    if database.DB_READY and config.SITE_SYNC_ENABLED:
+        site_sync_task = asyncio.create_task(site_sync_worker.start_site_sync_worker())
+        background_tasks.append(site_sync_task)
+
     # Bot initialization complete
     if database.DB_READY:
         logger.info("✅ Бот запущен в полнофункциональном режиме")

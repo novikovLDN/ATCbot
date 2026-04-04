@@ -97,6 +97,9 @@ from database.users import (  # noqa: F401
     process_referral_reward,
     update_user_language,
     update_username,
+    set_site_user_id,
+    get_site_user_id,
+    clear_site_user_id,
 )
 
 # Subscriptions: payments, subscriptions, trials, access, finalize, promo, reminders
@@ -224,4 +227,16 @@ from database.admin import (  # noqa: F401
     get_gift_subscription,
     activate_gift_subscription,
     get_user_gifts,
+)
+
+# Traffic: Remnawave traffic tracking, notification flags, purchases
+from database.traffic import (  # noqa: F401
+    get_remnawave_uuid,
+    set_remnawave_uuid,
+    clear_remnawave_uuid,
+    get_traffic_notification_flags,
+    set_traffic_notification_flag,
+    reset_traffic_notification_flags,
+    record_traffic_purchase,
+    get_active_remnawave_users,
 )

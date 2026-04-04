@@ -57,7 +57,7 @@ async def cmd_reissue_key(message: Message):
         if new_vpn_key is None:
             await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
             return
-        
+
         # Уведомляем пользователя
         try:
             from vpn_utils import build_sub_url

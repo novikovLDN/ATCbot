@@ -176,10 +176,16 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=i18n_get_text(language, "main.referral"),
         callback_data="menu_referral"
     )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "premium.main_button"),
-        callback_data="premium_buy"
-    )])
+    if config.REMNAWAVE_ENABLED and has_active_sub:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.menu_button", "📊 Трафик (Россия 🇷🇺)"),
+            callback_data="traffic_info"
+        )])
+    if config.SITE_SYNC_ENABLED:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.open_website"),
+            callback_data="open_website"
+        )])
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),

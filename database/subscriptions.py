@@ -241,6 +241,12 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
     if uuid_to_remove:
         try:
             await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_remove)
+            # Remnawave: delete user from Yandex node (fire-and-forget)
+            try:
+                from app.services.remnawave_service import delete_remnawave_user_bg
+                delete_remnawave_user_bg(telegram_id)
+            except Exception:
+                pass
             logger.info(
                 "EXPIRY_REMOVE_SUCCESS",
                 extra={"telegram_id": telegram_id, "uuid": uuid_to_remove[:8] + "..."}
@@ -3838,16 +3844,14 @@ async def get_pending_purchase_by_id(purchase_id: str, check_expiry: bool = Fals
     async with pool.acquire() as conn:
         if check_expiry:
             row = await conn.fetchrow(
-                """SELECT * FROM pending_purchases
+                """SELECT * FROM pending_purchases 
                    WHERE purchase_id = $1 AND status = 'pending' AND expires_at > NOW()""",
                 purchase_id
             )
         else:
-            # For webhooks: accept both 'pending' and 'expired' — payment may arrive
-            # after user created a new purchase (which expired the old one)
             row = await conn.fetchrow(
-                """SELECT * FROM pending_purchases
-                   WHERE purchase_id = $1 AND status IN ('pending', 'expired')""",
+                """SELECT * FROM pending_purchases 
+                   WHERE purchase_id = $1 AND status = 'pending'""",
                 purchase_id
             )
         return dict(row) if row else None
@@ -3915,10 +3919,10 @@ async def mark_pending_purchase_paid(purchase_id: str) -> bool:
     pool = await get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
+            "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status = 'pending'",
             purchase_id
         )
-
+        
         if result == "UPDATE 1":
             logger.info(f"Pending purchase marked as paid: purchase_id={purchase_id}")
             return True
@@ -3987,16 +3991,10 @@ async def finalize_purchase(
         telegram_id = pending_purchase["telegram_id"]
         status = pending_purchase.get("status")
         promo_code = pending_purchase.get("promo_code")
-        if status == "paid":
+        if status != "pending":
             error_msg = f"Pending purchase already processed: purchase_id={purchase_id}, status={status}"
             logger.warning(f"finalize_purchase: payment_rejected: reason=already_processed, {error_msg}")
             raise ValueError(error_msg)
-        if status not in ("pending", "expired"):
-            error_msg = f"Pending purchase invalid status: purchase_id={purchase_id}, status={status}"
-            logger.warning(f"finalize_purchase: payment_rejected: reason=invalid_status, {error_msg}")
-            raise ValueError(error_msg)
-        if status == "expired":
-            logger.info(f"finalize_purchase: recovering expired purchase: purchase_id={purchase_id}, user={telegram_id}")
         tariff_type = pending_purchase.get("tariff")
         period_days = pending_purchase.get("period_days")
         purchase_type = pending_purchase.get("purchase_type", "subscription")
@@ -4079,12 +4077,12 @@ async def finalize_purchase(
                 )
                 logger.info(
                     f"payment_verified: purchase_id={purchase_id}, user={telegram_id}, "
-                    f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status={status}"
+                    f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status=pending"
                 )
 
                 # STEP 3: Обновляем pending_purchase → paid
                 result = await conn.execute(
-                    "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
+                    "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status = 'pending'",
                     purchase_id
                 )
             

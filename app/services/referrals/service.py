@@ -206,6 +206,12 @@ async def process_referral_registration(
             f"REFERRAL_REGISTERED [referrer={referrer_user_id}, referred={telegram_id}, "
             f"code={referral_code}, state=REGISTERED]"
         )
+        # Sync referral counters to site (fire-and-forget)
+        try:
+            from app.handlers.user.site_link import sync_referrals_to_site
+            await sync_referrals_to_site(referrer_user_id)
+        except Exception as e:
+            logger.warning("SITE_SYNC_REFERRAL_REG_FAILED: referrer=%s, error=%s", referrer_user_id, e)
         return {
             "success": True,
             "state": ReferralState.REGISTERED,
@@ -278,9 +284,19 @@ async def activate_referral(
                 "was_activated": False
             }
         async with pool.acquire() as conn:
-            return await _activate_referral_internal(telegram_id, referrer_id, activation_type, conn)
+            result = await _activate_referral_internal(telegram_id, referrer_id, activation_type, conn)
     else:
-        return await _activate_referral_internal(telegram_id, referrer_id, activation_type, conn)
+        result = await _activate_referral_internal(telegram_id, referrer_id, activation_type, conn)
+
+    # Sync referral counters to site after activation (fire-and-forget)
+    if result.get("was_activated") and referrer_id:
+        try:
+            from app.handlers.user.site_link import sync_referrals_to_site
+            await sync_referrals_to_site(referrer_id)
+        except Exception as e:
+            logger.warning("SITE_SYNC_REFERRAL_ACTIVATE_FAILED: referrer=%s, error=%s", referrer_id, e)
+
+    return result
 
 
 async def _activate_referral_internal(
