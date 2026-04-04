@@ -94,6 +94,11 @@ async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
     return await _request("PATCH", f"/api/users/{uuid}", json=fields)
 
 
+async def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
+    """POST /api/users/by-username — look up user by username."""
+    return await _request("POST", "/api/users/by-username", json={"username": username})
+
+
 async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
     """POST /api/users/{uuid}/reset-traffic"""
     return await _request("POST", f"/api/users/{uuid}/reset-traffic")
@@ -111,8 +116,10 @@ async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
     user = await get_user(uuid)
     if not user:
         return None
+    # Traffic data may be nested in userTraffic or at top level
+    user_traffic = user.get("userTraffic") or {}
     return {
-        "usedTrafficBytes": user.get("usedTrafficBytes", 0),
+        "usedTrafficBytes": user_traffic.get("usedTrafficBytes", user.get("usedTrafficBytes", 0)),
         "trafficLimitBytes": user.get("trafficLimitBytes", 0),
         "deviceLimit": user.get("deviceLimit", 0),
         "onlineDevices": user.get("onlineDevices", 0),

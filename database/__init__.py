@@ -175,6 +175,8 @@ from database.subscriptions import (  # noqa: F401
 from database.traffic import (  # noqa: F401
     get_remnawave_uuid,
     set_remnawave_uuid,
+    set_remnawave_short_uuid,
+    get_remnawave_short_uuid,
     clear_remnawave_uuid,
     get_traffic_notification_flags,
     set_traffic_notification_flag,
