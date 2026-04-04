@@ -4,16 +4,12 @@ Low-level HTTP client for Remnawave Panel API.
 All methods return parsed JSON dict on success, None on failure.
 Errors are logged but never raised — callers must check for None.
 
-Endpoint reference (Remnawave Panel v2):
-- POST   /api/users                       — create user
-- GET    /api/users/uuid/{uuid}           — get by full UUID
-- GET    /api/users/username/{username}   — get by username
-- GET    /api/users/short-uuid/{shortUuid}— get by short UUID
-- PATCH  /api/users                       — update (uuid in body)
-- DELETE /api/users/{uuid}                — delete
+Verified endpoints on this panel instance:
+- POST   /api/users                       — create user (201)
+- GET    /api/users/{uuid}                — get by full UUID (400 if invalid)
+- PATCH  /api/users/{uuid}               — update user fields
+- DELETE /api/users/{uuid}                — delete user
 - POST   /api/users/{uuid}/reset-traffic  — reset traffic counter
-- POST   /api/users/{uuid}/enable         — enable
-- POST   /api/users/{uuid}/disable        — disable
 """
 import logging
 from typing import Optional, Dict, Any
@@ -96,34 +92,13 @@ async def create_user(
 
 
 async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/uuid/{uuid} — get user by full UUID."""
-    return await _request("GET", f"/api/users/uuid/{uuid}")
-
-
-async def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/username/{username} — look up user by username."""
-    return await _request("GET", f"/api/users/username/{username}")
-
-
-async def get_user_by_short_uuid(short_uuid: str) -> Optional[Dict[str, Any]]:
-    """GET /api/users/short-uuid/{shortUuid} — look up user by short UUID."""
-    return await _request("GET", f"/api/users/short-uuid/{short_uuid}")
+    """GET /api/users/{uuid} — get user by full UUID."""
+    return await _request("GET", f"/api/users/{uuid}")
 
 
 async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
-    """PATCH /api/users — update user fields (uuid sent in body)."""
-    body = {"uuid": uuid, **fields}
-    return await _request("PATCH", "/api/users", json=body)
-
-
-async def enable_user(uuid: str) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{uuid}/enable"""
-    return await _request("POST", f"/api/users/{uuid}/enable")
-
-
-async def disable_user(uuid: str) -> Optional[Dict[str, Any]]:
-    """POST /api/users/{uuid}/disable"""
-    return await _request("POST", f"/api/users/{uuid}/disable")
+    """PATCH /api/users/{uuid} — update user fields."""
+    return await _request("PATCH", f"/api/users/{uuid}", json=fields)
 
 
 async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
