@@ -125,11 +125,16 @@ async def _provision_missing_users() -> int:
 
         try:
             await create_remnawave_user(telegram_id, uuid, expires_at, tariff)
-            provisioned += 1
-            logger.info(
-                "TRAFFIC_PROVISION: created Remnawave for existing user %s (tariff=%s)",
-                telegram_id, tariff,
-            )
+            # Verify it actually worked (create_remnawave_user swallows errors)
+            saved_uuid = await database.get_remnawave_uuid(telegram_id)
+            if saved_uuid:
+                provisioned += 1
+                logger.info(
+                    "TRAFFIC_PROVISION: created Remnawave for existing user %s (tariff=%s)",
+                    telegram_id, tariff,
+                )
+            else:
+                logger.warning("TRAFFIC_PROVISION: create returned no error but uuid not saved for %s", telegram_id)
         except Exception as e:
             logger.warning("TRAFFIC_PROVISION: failed for user %s: %s", telegram_id, e)
 
