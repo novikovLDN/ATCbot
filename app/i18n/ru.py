@@ -895,6 +895,8 @@ LANG = {
     'traffic.buy_title': "📦 <b>Купить трафик — Обход</b> 🇷🇺\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nТрафик добавляется к текущему остатку.\nВыберите пакет:",
     'traffic.confirm_purchase': "💳 <b>Оплата: {gb} ГБ — {price} ₽</b>\n\n💰 Ваш баланс: {balance} ₽",
     'traffic.pay_balance': "💰 Оплатить с баланса ({price} ₽)",
+    'traffic.pay_card': "💳 Оплатить картой ({price} ₽)",
+    'traffic.pay_sbp': "🏦 Оплатить через СБП ({price} ₽)",
     'traffic.insufficient_balance': "❌ Недостаточно средств на балансе",
     'traffic.purchase_success': "✅ <b>Трафик добавлен!</b>\n\n📦 +{gb} ГБ\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Ошибка при добавлении трафика. Средства возвращены на баланс.",

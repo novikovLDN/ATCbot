@@ -787,6 +787,8 @@ LANG = {
     'traffic.buy_title': "📦 <b>Трафик сатып алу — Айналып өту</b> 🇷🇺\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nТрафик ағымдағы қалдыққа қосылады.\nПакетті таңдаңыз:",
     'traffic.confirm_purchase': "💳 <b>Төлем: {gb} ГБ — {price} ₽</b>\n\n💰 Балансыңыз: {balance} ₽",
     'traffic.pay_balance': "💰 Баланстан төлеу ({price} ₽)",
+    'traffic.pay_card': "💳 Картамен төлеу ({price} ₽)",
+    'traffic.pay_sbp': "🏦 SBP арқылы төле�� ({price} ₽)",
     'traffic.insufficient_balance': "❌ Балансыңызда қаражат жеткіліксіз",
     'traffic.purchase_success': "✅ <b>Трафик қосылды!</b>\n\n📦 +{gb} ГБ\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Трафик қосу кезінде қате. Қаражат балансқа қайтарылды.",

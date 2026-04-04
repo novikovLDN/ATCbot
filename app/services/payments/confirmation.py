@@ -64,20 +64,31 @@ async def process_confirmed_payment(
         payment_id = result["payment_id"]
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
+        is_traffic_pack = result.get("is_traffic_pack", False)
 
         # Notification failure must NOT fail the payment — DB is already committed
         try:
-            await _send_confirmation(
-                provider=provider,
-                bot=bot,
-                telegram_id=telegram_id,
-                payment_id=payment_id,
-                purchase_id=purchase_id,
-                is_balance_topup=is_balance_topup,
-                amount_rubles=amount_rubles,
-                result=result,
-                expires_at=expires_at,
-            )
+            if is_traffic_pack:
+                await _handle_traffic_pack_confirmation(
+                    provider=provider,
+                    bot=bot,
+                    telegram_id=telegram_id,
+                    payment_id=payment_id,
+                    purchase_id=purchase_id,
+                    traffic_gb=result.get("traffic_gb", 0),
+                )
+            else:
+                await _send_confirmation(
+                    provider=provider,
+                    bot=bot,
+                    telegram_id=telegram_id,
+                    payment_id=payment_id,
+                    purchase_id=purchase_id,
+                    is_balance_topup=is_balance_topup,
+                    amount_rubles=amount_rubles,
+                    result=result,
+                    expires_at=expires_at,
+                )
         except Exception as notif_err:
             logger.error(
                 f"PAYMENT_NOTIFICATION_FAILED: provider={provider}, user={telegram_id}, "
@@ -274,5 +285,53 @@ async def _send_confirmation(
                 renew_remnawave_user_bg(telegram_id, subscription_type, expires_at)
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
+
+
+async def _handle_traffic_pack_confirmation(
+    provider: str,
+    bot: Bot,
+    telegram_id: int,
+    payment_id: int,
+    purchase_id: str,
+    traffic_gb: int,
+) -> None:
+    """Send traffic pack purchase confirmation and add traffic via Remnawave."""
+    from app.services.language_service import resolve_user_language
+    from app.i18n import get_text as i18n_get_text
+
+    language = await resolve_user_language(telegram_id)
+
+    # Add traffic via Remnawave
+    pack = config.TRAFFIC_PACKS.get(traffic_gb)
+    if pack:
+        try:
+            from app.services.remnawave_service import add_traffic
+            success = await add_traffic(telegram_id, pack["bytes"])
+            if not success:
+                logger.error(
+                    "TRAFFIC_PACK_REMNAWAVE_FAIL: provider=%s tg=%s gb=%s purchase=%s",
+                    provider, telegram_id, traffic_gb, purchase_id,
+                )
+        except Exception as rmn_err:
+            logger.error(
+                "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
+                provider, telegram_id, traffic_gb, rmn_err,
+            )
+
+    text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.back_to_traffic"),
+            callback_data="traffic_info",
+        )],
+    ])
+    try:
+        await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
+    except Exception as send_err:
+        logger.warning(
+            "%s: failed to send traffic pack confirmation to user=%s: %s",
+            provider, telegram_id, send_err,
+        )
 
 

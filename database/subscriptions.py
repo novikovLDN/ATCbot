@@ -4010,8 +4010,9 @@ async def finalize_purchase(
         price_kopecks = pending_purchase["price_kopecks"]
         purchase_country = pending_purchase.get("country")
         expected_amount_rubles = price_kopecks / 100.0
-        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
+        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift"))
         is_gift_purchase = (purchase_type == "gift")
+        is_traffic_pack = (purchase_type == "traffic_pack")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
         # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
         # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
@@ -4220,6 +4221,59 @@ async def finalize_purchase(
                         "gift_code": gift_code,
                         "gift_tariff": tariff_type,
                         "gift_period_days": period_days,
+                    }
+
+                # STEP 4.6: ОБРАБОТКА ПОКУПКИ ТРАФИКА (traffic_pack)
+                if is_traffic_pack:
+                    logger.info(
+                        f"finalize_purchase: TRAFFIC_PACK [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"tariff={tariff_type}, amount={amount_rubles:.2f} RUB]"
+                    )
+                    now_utc = datetime.now(timezone.utc)
+                    payment_id = await conn.fetchval(
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        telegram_id,
+                        tariff_type or "traffic_pack",
+                        round(amount_rubles * 100),
+                        purchase_id,
+                        _to_db_utc(now_utc),
+                    )
+                    if not payment_id:
+                        raise Exception(f"Failed to create payment record for traffic pack: purchase_id={purchase_id}")
+
+                    # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5)
+                    _gb = 0
+                    if tariff_type and tariff_type.startswith("traffic_") and tariff_type.endswith("gb"):
+                        try:
+                            _gb = int(tariff_type[len("traffic_"):-len("gb")])
+                        except ValueError:
+                            pass
+
+                    # Record in traffic_purchases
+                    _payment_method = payment_provider or "card"
+                    await conn.execute(
+                        """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method, created_at)
+                           VALUES ($1, $2, $3, $4, $5)""",
+                        telegram_id,
+                        _gb,
+                        round(amount_rubles),
+                        _payment_method,
+                        _to_db_utc(now_utc),
+                    )
+
+                    logger.info(
+                        f"finalize_purchase: TRAFFIC_PACK_DONE [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"payment_id={payment_id}, gb={_gb}, method={_payment_method}]"
+                    )
+                    return {
+                        "success": True,
+                        "payment_id": payment_id,
+                        "expires_at": None,
+                        "vpn_key": None,
+                        "is_renewal": False,
+                        "is_traffic_pack": True,
+                        "traffic_gb": _gb,
                     }
 
                 # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)

@@ -806,6 +806,8 @@ LANG = {
     'traffic.buy_title': "📦 <b>Buy Traffic — Bypass</b> 🇷🇺\n━━━━━━━━━━━━━━━━━━━━━━━━\n\nTraffic is added to your current balance.\nChoose a pack:",
     'traffic.confirm_purchase': "💳 <b>Payment: {gb} GB — {price} ₽</b>\n\n💰 Your balance: {balance} ₽",
     'traffic.pay_balance': "💰 Pay from balance ({price} ₽)",
+    'traffic.pay_card': "💳 Pay by card ({price} ₽)",
+    'traffic.pay_sbp': "🏦 Pay via SBP ({price} ₽)",
     'traffic.insufficient_balance': "❌ Insufficient balance",
     'traffic.purchase_success': "✅ <b>Traffic added!</b>\n\n📦 +{gb} GB\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Error adding traffic. Funds returned to balance.",
