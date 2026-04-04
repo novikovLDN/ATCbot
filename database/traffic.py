@@ -164,3 +164,24 @@ async def get_active_remnawave_users() -> list:
                  AND s.remnawave_uuid != ''""",
         )
     return [dict(r) for r in rows]
+
+
+async def get_active_users_without_remnawave() -> list:
+    """
+    Get active subscriptions that do NOT have a remnawave_uuid yet.
+    Used to auto-provision existing subscribers on Remnawave.
+    Returns list of dicts with telegram_id, uuid, expires_at, subscription_type.
+    """
+    pool = await get_pool()
+    if not pool:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT s.telegram_id, s.uuid, s.expires_at, s.subscription_type
+               FROM subscriptions s
+               WHERE s.status = 'active'
+                 AND s.uuid IS NOT NULL AND s.uuid != ''
+                 AND (s.remnawave_uuid IS NULL OR s.remnawave_uuid = '')
+                 AND s.expires_at > NOW()""",
+        )
+    return [dict(r) for r in rows]

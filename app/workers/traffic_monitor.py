@@ -104,11 +104,58 @@ async def _send_traffic_notification(
         logger.warning("TRAFFIC_NOTIFY: failed to send to user %s: %s", telegram_id, e)
 
 
+async def _provision_missing_users() -> int:
+    """
+    Auto-provision Remnawave accounts for existing active subscribers
+    who don't have a remnawave_uuid yet.
+    Returns number of users provisioned.
+    """
+    from app.services.remnawave_service import create_remnawave_user
+
+    users = await database.get_active_users_without_remnawave()
+    if not users:
+        return 0
+
+    provisioned = 0
+    for user in users:
+        telegram_id = user["telegram_id"]
+        uuid = user["uuid"]
+        expires_at = user["expires_at"]
+        tariff = (user.get("subscription_type") or "basic").lower()
+
+        try:
+            await create_remnawave_user(telegram_id, uuid, expires_at, tariff)
+            provisioned += 1
+            logger.info(
+                "TRAFFIC_PROVISION: created Remnawave for existing user %s (tariff=%s)",
+                telegram_id, tariff,
+            )
+        except Exception as e:
+            logger.warning("TRAFFIC_PROVISION: failed for user %s: %s", telegram_id, e)
+
+        # Rate limit
+        if provisioned % BATCH_SIZE == 0:
+            await asyncio.sleep(1)
+
+    return provisioned
+
+
 async def traffic_monitor_iteration(bot: Bot) -> int:
     """
-    Single iteration: check all active Remnawave users.
+    Single iteration:
+    1. Auto-provision Remnawave for existing subscribers without it
+    2. Check traffic usage for all active Remnawave users
     Returns number of users checked.
     """
+    # Step 1: provision missing users
+    try:
+        provisioned = await _provision_missing_users()
+        if provisioned > 0:
+            logger.info("TRAFFIC_MONITOR: provisioned %d existing users", provisioned)
+    except Exception as e:
+        logger.warning("TRAFFIC_MONITOR: provisioning error: %s", e)
+
+    # Step 2: check traffic for all Remnawave users
     users = await database.get_active_remnawave_users()
     if not users:
         return 0

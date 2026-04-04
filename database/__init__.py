@@ -239,4 +239,5 @@ from database.traffic import (  # noqa: F401
     reset_traffic_notification_flags,
     record_traffic_purchase,
     get_active_remnawave_users,
+    get_active_users_without_remnawave,
 )
