@@ -37,6 +37,15 @@ def _fire_and_forget(coro) -> None:
         logger.warning("REMNAWAVE_BG_SCHEDULE_FAIL: %s", e)
 
 
+def _is_valid_full_uuid(s: str) -> bool:
+    """Check if string looks like a full UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)."""
+    try:
+        uuid_lib.UUID(s, version=4)
+        return True
+    except (ValueError, AttributeError):
+        return len(s) == 36 and s.count("-") == 4
+
+
 def _traffic_limit_for_tariff(tariff: str) -> int:
     """Return traffic limit bytes for tariff. 0 for trial/unknown."""
     return config.TRAFFIC_LIMITS.get(tariff, 0)
@@ -44,6 +53,37 @@ def _traffic_limit_for_tariff(tariff: str) -> int:
 
 def _device_limit_for_tariff(tariff: str) -> int:
     return config.DEVICE_LIMITS.get(tariff, 3)
+
+
+async def _get_user_with_recovery(telegram_id: int, rmn_uuid: str):
+    """Get user, with recovery if stored UUID is actually a shortUuid (legacy bug)."""
+    user_data = await remnawave_api.get_user(rmn_uuid)
+    if user_data:
+        return user_data
+
+    # If stored UUID is not a valid full UUID, it's likely a shortUuid from the old bug.
+    # Try looking up by username (telegram_id) via Remnawave's get-by-username endpoint.
+    if not _is_valid_full_uuid(rmn_uuid):
+        logger.warning(
+            "REMNAWAVE_UUID_RECOVERY: tg=%s stored_uuid=%s is not a valid full UUID, "
+            "trying username lookup", telegram_id, rmn_uuid,
+        )
+        user_data = await remnawave_api.get_user_by_username(str(telegram_id))
+        if user_data:
+            # Fix the stored UUID
+            full_uuid = user_data.get("uuid")
+            short_uuid = user_data.get("shortUuid")
+            if full_uuid:
+                await database.set_remnawave_uuid(telegram_id, full_uuid)
+                logger.info(
+                    "REMNAWAVE_UUID_FIXED: tg=%s old=%s new=%s",
+                    telegram_id, rmn_uuid, full_uuid,
+                )
+            if short_uuid:
+                await database.set_remnawave_short_uuid(telegram_id, short_uuid)
+            return user_data
+
+    return None
 
 
 # ── Create ──────────────────────────────────────────────────────────────
@@ -75,13 +115,17 @@ async def create_remnawave_user(
             device_limit=_device_limit_for_tariff(tariff),
         )
         if result:
-            # Save Remnawave's internal UUID (used for API lookups)
-            rmn_uuid = result.get("shortUuid") or result.get("uuid") or short_uuid
+            # Save full UUID for API calls (/api/users/{uuid})
+            rmn_uuid = result.get("uuid") or short_uuid
             await database.set_remnawave_uuid(telegram_id, rmn_uuid)
+            # Save shortUuid for subscription URLs (/api/sub/{shortUuid})
+            rmn_short = result.get("shortUuid")
+            if rmn_short:
+                await database.set_remnawave_short_uuid(telegram_id, rmn_short)
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
-                "REMNAWAVE_USER_CREATED: tg=%s uuid=%s tariff=%s limit=%d",
-                telegram_id, rmn_uuid[:8], tariff, traffic_limit,
+                "REMNAWAVE_USER_CREATED: tg=%s uuid=%s short=%s tariff=%s limit=%d",
+                telegram_id, rmn_uuid[:8], rmn_short or "N/A", tariff, traffic_limit,
             )
         else:
             logger.warning("REMNAWAVE_USER_CREATE_FAILED: tg=%s", telegram_id)
@@ -118,19 +162,21 @@ async def renew_remnawave_user(
             return
 
         # Get current limit and add tariff traffic
-        user_data = await remnawave_api.get_user(rmn_uuid)
+        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
         if not user_data:
             # User might have been deleted from Remnawave — recreate
             await database.clear_remnawave_uuid(telegram_id)
             await create_remnawave_user(telegram_id, tariff, subscription_end)
             return
 
+        # Use the full UUID from the API response (may differ from stored if recovered)
+        api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + traffic_add
         expire_str = subscription_end.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         await remnawave_api.update_user(
-            rmn_uuid,
+            api_uuid,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
             status="ACTIVE",
@@ -159,8 +205,12 @@ async def disable_remnawave_user(telegram_id: int) -> None:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return
-        await remnawave_api.update_user(rmn_uuid, status="DISABLED")
-        logger.info("REMNAWAVE_DISABLED: tg=%s uuid=%s", telegram_id, rmn_uuid[:8])
+        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
+        if not user_data:
+            return
+        api_uuid = user_data.get("uuid") or rmn_uuid
+        await remnawave_api.update_user(api_uuid, status="DISABLED")
+        logger.info("REMNAWAVE_DISABLED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
     except Exception as e:
         logger.error("REMNAWAVE_DISABLE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
@@ -179,9 +229,11 @@ async def delete_remnawave_user(telegram_id: int) -> None:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return
-        await remnawave_api.delete_user(rmn_uuid)
+        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
+        api_uuid = (user_data.get("uuid") if user_data else None) or rmn_uuid
+        await remnawave_api.delete_user(api_uuid)
         await database.clear_remnawave_uuid(telegram_id)
-        logger.info("REMNAWAVE_DELETED: tg=%s uuid=%s", telegram_id, rmn_uuid[:8])
+        logger.info("REMNAWAVE_DELETED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
     except Exception as e:
         logger.error("REMNAWAVE_DELETE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
@@ -201,18 +253,19 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
         if not rmn_uuid:
             return False
 
-        user_data = await remnawave_api.get_user(rmn_uuid)
+        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
         if not user_data:
             return False
 
+        api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + extra_bytes
 
-        result = await remnawave_api.update_user(rmn_uuid, trafficLimitBytes=new_limit)
+        result = await remnawave_api.update_user(api_uuid, trafficLimitBytes=new_limit)
         if result is not None:
             # Re-enable if disabled
             if user_data.get("status") != "ACTIVE":
-                await remnawave_api.update_user(rmn_uuid, status="ACTIVE")
+                await remnawave_api.update_user(api_uuid, status="ACTIVE")
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
                 "REMNAWAVE_TRAFFIC_ADDED: tg=%s +%d bytes, new_limit=%d",
@@ -239,8 +292,12 @@ async def update_tariff(telegram_id: int, new_tariff: str) -> None:
         new_devices = _device_limit_for_tariff(new_tariff)
         if new_limit <= 0:
             return
+        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
+        if not user_data:
+            return
+        api_uuid = user_data.get("uuid") or rmn_uuid
         await remnawave_api.update_user(
-            rmn_uuid,
+            api_uuid,
             trafficLimitBytes=new_limit,
             deviceLimit=new_devices,
         )

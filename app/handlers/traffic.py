@@ -100,8 +100,19 @@ async def callback_traffic_info(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
         return
 
-    # Fetch traffic from Remnawave
-    traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+    # Fetch traffic from Remnawave (with UUID recovery for legacy shortUuid bug)
+    user_data = await remnawave_service._get_user_with_recovery(telegram_id, rmn_uuid)
+    if user_data:
+        user_traffic = user_data.get("userTraffic") or {}
+        traffic = {
+            "usedTrafficBytes": user_traffic.get("usedTrafficBytes", user_data.get("usedTrafficBytes", 0)),
+            "trafficLimitBytes": user_data.get("trafficLimitBytes", 0),
+            "deviceLimit": user_data.get("deviceLimit", 0),
+            "onlineDevices": user_data.get("onlineDevices", 0),
+            "status": user_data.get("status", "UNKNOWN"),
+        }
+    else:
+        traffic = None
     if not traffic:
         text = i18n_get_text(language, "traffic.fetch_error")
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -131,7 +142,9 @@ async def callback_traffic_info(callback: CallbackQuery):
     elif remaining <= 3 * 1024**3:
         warning = "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
-    sub_url = f"{config.REMNAWAVE_SUB_BASE_URL}/{rmn_uuid}"
+    # Use shortUuid for subscription URL, fall back to full uuid
+    short_uuid = await database.get_remnawave_short_uuid(telegram_id)
+    sub_url = f"{config.REMNAWAVE_SUB_BASE_URL}/{short_uuid or rmn_uuid}"
 
     text = i18n_get_text(
         language,

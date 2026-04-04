@@ -42,6 +42,32 @@ async def set_remnawave_uuid(telegram_id: int, uuid: str) -> None:
         )
 
 
+async def set_remnawave_short_uuid(telegram_id: int, short_uuid: str) -> None:
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_short_uuid = $1 WHERE telegram_id = $2 AND status = 'active'",
+            short_uuid, telegram_id,
+        )
+
+
+async def get_remnawave_short_uuid(telegram_id: int) -> Optional[str]:
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT remnawave_short_uuid FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id,
+        )
+
+
 async def clear_remnawave_uuid(telegram_id: int) -> None:
     if not _core.DB_READY:
         return
@@ -50,7 +76,7 @@ async def clear_remnawave_uuid(telegram_id: int) -> None:
         return
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE subscriptions SET remnawave_uuid = NULL WHERE telegram_id = $1",
+            "UPDATE subscriptions SET remnawave_uuid = NULL, remnawave_short_uuid = NULL WHERE telegram_id = $1",
             telegram_id,
         )
 
