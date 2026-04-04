@@ -183,13 +183,15 @@ async def renew_remnawave_user(
             api_uuid,
             trafficLimitBytes=new_limit,
             expireAt=expire_str,
-            status="ACTIVE",
             deviceLimit=_device_limit_for_tariff(tariff),
         )
+        # Re-enable if disabled
+        if user_data.get("status") != "ACTIVE":
+            await remnawave_api.enable_user(api_uuid)
         await database.reset_traffic_notification_flags(telegram_id)
         logger.info(
             "REMNAWAVE_RENEWED: tg=%s uuid=%s old_limit=%d new_limit=%d",
-            telegram_id, rmn_uuid[:8], current_limit, new_limit,
+            telegram_id, api_uuid[:8], current_limit, new_limit,
         )
     except Exception as e:
         logger.error("REMNAWAVE_RENEW_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
@@ -213,7 +215,7 @@ async def disable_remnawave_user(telegram_id: int) -> None:
         if not user_data:
             return
         api_uuid = user_data.get("uuid") or rmn_uuid
-        await remnawave_api.update_user(api_uuid, status="DISABLED")
+        await remnawave_api.disable_user(api_uuid)
         logger.info("REMNAWAVE_DISABLED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
     except Exception as e:
         logger.error("REMNAWAVE_DISABLE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
@@ -269,7 +271,7 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
         if result is not None:
             # Re-enable if disabled
             if user_data.get("status") != "ACTIVE":
-                await remnawave_api.update_user(api_uuid, status="ACTIVE")
+                await remnawave_api.enable_user(api_uuid)
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
                 "REMNAWAVE_TRAFFIC_ADDED: tg=%s +%d bytes, new_limit=%d",
