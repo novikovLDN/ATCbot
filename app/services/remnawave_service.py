@@ -79,11 +79,14 @@ async def create_remnawave_user(
             expire_at=subscription_end,
         )
         if result:
-            await database.set_remnawave_uuid(telegram_id, uuid)
+            # Save the UUID that Remnawave uses for API lookups
+            # Prefer their 'uuid' field, fallback to our shortUuid
+            rmn_uuid = result.get("uuid") or result.get("shortUuid") or uuid
+            await database.set_remnawave_uuid(telegram_id, rmn_uuid)
             await database.reset_traffic_notification_flags(telegram_id)
             logger.info(
-                "REMNAWAVE_USER_CREATED: tg=%s uuid=%s limit=%d tariff=%s",
-                telegram_id, uuid[:8], traffic_limit, tariff,
+                "REMNAWAVE_USER_CREATED: tg=%s rmn_uuid=%s our_uuid=%s limit=%d tariff=%s",
+                telegram_id, rmn_uuid[:8], uuid[:8], traffic_limit, tariff,
             )
         else:
             logger.warning("REMNAWAVE_USER_CREATE_FAILED: tg=%s", telegram_id)

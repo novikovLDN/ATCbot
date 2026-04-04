@@ -122,7 +122,7 @@ async def create_user(
     )
     result = await _request("POST", "/api/users", json=body)
     if result:
-        logger.info("REMNAWAVE_CREATE: success for %s", username)
+        logger.info("REMNAWAVE_CREATE: success for %s, response=%s", username, result)
     else:
         logger.warning("REMNAWAVE_CREATE: failed for %s", username)
     return result
