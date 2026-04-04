@@ -286,6 +286,13 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
+                # Disable Remnawave bypass (fire-and-forget)
+                try:
+                    from app.services.remnawave_service import disable_remnawave_user_bg
+                    disable_remnawave_user_bg(telegram_id)
+                except Exception as rmn_err:
+                    logger.warning("REMNAWAVE_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
+
                 # Создаем спецпредложение -15% на 3 дня для пользователей с оплаченной подпиской
                 sub_source = subscription.get("source", "")
                 if sub_source == "payment":

@@ -2283,6 +2283,7 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             await conn.execute("DELETE FROM pending_purchases WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM payments WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM broadcast_log WHERE telegram_id = $1", telegram_id)
+            await conn.execute("DELETE FROM traffic_purchases WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM subscriptions WHERE telegram_id = $1", telegram_id)
             await conn.execute("DELETE FROM users WHERE telegram_id = $1", telegram_id)
 
@@ -2301,6 +2302,13 @@ async def admin_delete_user_complete(telegram_id: int, admin_telegram_id: int) -
             logger.info(f"ADMIN_DELETE_UUID_REMOVED uuid={uuid_to_remove[:8]}...")
         except Exception as e:
             logger.error(f"ADMIN_DELETE_UUID_REMOVAL_FAILED uuid={uuid_to_remove[:8]}... error={e}")
+
+    # Delete Remnawave user (fire-and-forget)
+    try:
+        from app.services.remnawave_service import delete_remnawave_user_bg
+        delete_remnawave_user_bg(telegram_id)
+    except Exception as rmn_err:
+        logger.warning("REMNAWAVE_ADMIN_DELETE_FAIL: tg=%s %s", telegram_id, rmn_err)
 
     return True
 

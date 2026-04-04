@@ -135,6 +135,17 @@ async def cmd_start(message: Message, state: FSMContext):
                             keyboard = await get_main_menu_keyboard(language, telegram_id)
                             await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         logger.info(f"GIFT_ACTIVATED_VIA_LINK user={telegram_id} code={gift_code} new_user={is_new_user}")
+
+                        # Fire-and-forget: create Remnawave bypass for gift recipient
+                        try:
+                            from app.services.remnawave_service import renew_remnawave_user_bg
+                            if tariff in ("basic", "plus"):
+                                sub = await database.get_subscription(telegram_id)
+                                if sub and sub.get("expires_at"):
+                                    renew_remnawave_user_bg(telegram_id, tariff, sub["expires_at"])
+                        except Exception as rmn_err:
+                            logger.warning("REMNAWAVE_GIFT_FAIL: tg=%s %s", telegram_id, rmn_err)
+
                         return
                     else:
                         error = activation_result.get("error", "unknown")

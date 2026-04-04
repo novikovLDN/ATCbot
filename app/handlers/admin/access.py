@@ -724,6 +724,15 @@ async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMCo
             )
         expires_date = expires_at.strftime("%d.%m.%Y")
         tariff_label = "Basic" if tariff == "basic" else "Plus"
+
+        # Fire-and-forget: create/renew Remnawave bypass
+        try:
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            if tariff in ("basic", "plus"):
+                renew_remnawave_user_bg(user_id, tariff, expires_at)
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_ADMIN_GRANT_FAIL: tg=%s %s", user_id, rmn_err)
+
         text_admin = (
             f"✅ Выдан {tariff_label} доступ\n"
             f"👤 Пользователь: {user_id}\n"
@@ -1691,7 +1700,15 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             telegram_id=user_id,
             admin_telegram_id=callback.from_user.id
         )
-        
+
+        # Fire-and-forget: disable Remnawave bypass
+        if revoked:
+            try:
+                from app.services.remnawave_service import disable_remnawave_user_bg
+                disable_remnawave_user_bg(user_id)
+            except Exception as rmn_err:
+                logger.warning("REMNAWAVE_ADMIN_REVOKE_FAIL: tg=%s %s", user_id, rmn_err)
+
         if not revoked:
             text = "❌ У пользователя нет активной подписки"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))

@@ -380,6 +380,50 @@ APP_URL = env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railw
 # Subscription link base URL (domain serving /api/sub/{token}?id={id}).
 SUB_BASE_URL = env("SUB_BASE_URL", default="https://atlassecure.ru").rstrip("/")
 
+# ====================================================================================
+# REMNAWAVE PANEL CONFIGURATION (Bypass / Traffic limits)
+# ====================================================================================
+REMNAWAVE_API_URL = env("REMNAWAVE_API_URL", default="").rstrip("/")
+REMNAWAVE_API_TOKEN = env("REMNAWAVE_API_TOKEN", default="")
+REMNAWAVE_ENABLED = bool(REMNAWAVE_API_URL and REMNAWAVE_API_TOKEN)
+
+if REMNAWAVE_ENABLED:
+    _log.info("REMNAWAVE_ENABLED=true, API_URL=%s", REMNAWAVE_API_URL)
+else:
+    _log.info("REMNAWAVE_ENABLED=false (URL or TOKEN not set)")
+
+# Traffic limits per tariff (in bytes). Trial has NO bypass.
+TRAFFIC_LIMITS = {
+    "basic": 15 * 1024**3,   # 15 GB
+    "plus":  25 * 1024**3,   # 25 GB
+}
+
+# Device limits per tariff
+DEVICE_LIMITS = {
+    "basic": 3,
+    "plus":  5,
+}
+
+# Traffic packs for purchase (gb -> {price, bytes, discount})
+TRAFFIC_PACKS = {
+    5:  {"price": 44,  "bytes": 5  * 1024**3, "discount": ""},
+    15: {"price": 115, "bytes": 15 * 1024**3, "discount": "🔥 -13%"},
+    25: {"price": 175, "bytes": 25 * 1024**3, "discount": "🔥 -20%"},
+    45: {"price": 270, "bytes": 45 * 1024**3, "discount": "🔥 -32%"},
+    60: {"price": 318, "bytes": 60 * 1024**3, "discount": "🔥 -40%"},
+}
+
+# Thresholds for traffic notifications (bytes remaining, flag key)
+TRAFFIC_NOTIFY_THRESHOLDS = [
+    (3 * 1024**3,       "traffic_notified_3gb"),
+    (1 * 1024**3,       "traffic_notified_1gb"),
+    (500 * 1024**2,     "traffic_notified_500mb"),
+    (0,                 "traffic_notified_0"),
+]
+
+# Subscription link base for Remnawave bypass
+REMNAWAVE_SUB_BASE_URL = env("REMNAWAVE_SUB_BASE_URL", default="https://sub.atlassecure.ru").rstrip("/")
+
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
