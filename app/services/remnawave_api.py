@@ -106,7 +106,7 @@ async def create_user(
         User dict from Remnawave or None on error.
     """
     expire_str = expire_at.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    body = {
+    body: Dict[str, Any] = {
         "username": username,
         "shortUuid": short_uuid,
         "trafficLimitBytes": traffic_limit_bytes,
@@ -114,6 +114,8 @@ async def create_user(
         "status": "ACTIVE",
         "expireAt": expire_str,
     }
+    if config.REMNAWAVE_INBOUND_UUID:
+        body["activeUserInbounds"] = [config.REMNAWAVE_INBOUND_UUID]
     logger.info(
         "REMNAWAVE_CREATE: username=%s uuid=%s limit=%d bytes expire=%s",
         username, short_uuid[:8], traffic_limit_bytes, expire_str,

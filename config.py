@@ -391,6 +391,7 @@ else:
 # ====================================================================================
 REMNAWAVE_API_URL = env("REMNAWAVE_API_URL", default="")
 REMNAWAVE_API_TOKEN = env("REMNAWAVE_API_TOKEN", default="")
+REMNAWAVE_INBOUND_UUID = env("REMNAWAVE_INBOUND_UUID", default="")
 REMNAWAVE_ENABLED = bool(REMNAWAVE_API_URL and REMNAWAVE_API_TOKEN)
 if REMNAWAVE_ENABLED:
     _log.info("Remnawave API configured: %s", REMNAWAVE_API_URL)
