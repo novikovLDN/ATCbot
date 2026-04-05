@@ -77,14 +77,20 @@ async def create_remnawave_user(
     telegram_id: int,
     tariff: str,
     subscription_end: datetime,
+    traffic_limit_override: Optional[int] = None,
 ) -> None:
-    """Create a Remnawave user for the given subscriber."""
+    """Create a Remnawave user for the given subscriber.
+
+    Args:
+        traffic_limit_override: if set, use this instead of tariff-based limit.
+            Used for auto-provisioning existing users with a smaller starter pack.
+    """
     if not config.REMNAWAVE_ENABLED:
         return
     if tariff == "trial":
         return  # Trial has NO bypass
 
-    traffic_limit = _traffic_limit_for_tariff(tariff)
+    traffic_limit = traffic_limit_override or _traffic_limit_for_tariff(tariff)
     if traffic_limit <= 0:
         return
 
