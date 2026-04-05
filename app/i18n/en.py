@@ -632,6 +632,10 @@ LANG = {
     'reminder.paid_3h': "🚨 Your subscription expires in 3 hours!\n\nRenew right now so you don't lose access to a protected internet 🔒",
     'connect.press_button': "🚀 Press the button below to connect:\n\nIf the mini app doesn't open — tap <b>📲 Set up device</b> and follow the step-by-step setup.",
     'connect.setup_device_button': "📲 Set up device",
+    'connect.instruction_screen': "📖 <b>Connection Instructions</b>\n\nTap «Connect» or\n«🌐 Open Mini App» below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇",
+    'connect.autosetup_btn': "📲 Connect",
+    'connect.open_miniapp_btn': "🌐 Open Mini App",
+    'connect.autosetup_screen': "📱 <b>Auto Setup</b>\n\n⚡️ Tap the button for the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.\n\n⸻\n\n⚡️ <b>Auto Setup</b> — regular servers\n🇷🇺 <b>Auto Setup Bypass</b> — servers for bypassing whitelists\n\n💡 You can install both keys at once.",
 
     # Gift subscription
     'main.gift_subscription': "🎁 Gift Subscription",
