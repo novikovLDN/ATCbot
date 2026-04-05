@@ -340,7 +340,7 @@ async def show_profile(message_or_query, language: str):
                     text += f"📥 {_fmt(used)} / {_fmt(limit_bytes)}\n"
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
-                        text += f"🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<code>{sub_url}</code>"
+                        text += f"🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
