@@ -306,7 +306,7 @@ LANG = {
     'setup.device_button': "📲 إعداد الجهاز",
     'setup.done_button': "✅ تم",
     'setup.help_button': "❓ أحتاج مساعدة",
-    'setup.qr_button': "📷 إضافة عبر QR",
+    'setup.qr_button': "📲 إضافة جهاز",
     'setup.qr_instruction': "📷 <b>إضافة عبر رمز QR</b>\n\nافتح التطبيق المثبت وامسح رمز QR أدناه:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nعلى الشاشة الرئيسية اضغط أيقونة الكاميرا 📸\nوجّه الكاميرا نحو رمز QR\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nاضغط <b>+</b> في الزاوية العلوية اليمنى\nاختر «مسح رمز QR»\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nعلى الشاشة الرئيسية اضغط <b>+</b>\nاختر «مسح رمز QR»",
     'setup.download_happ': "📲 تحميل Happ",
     'setup.download_hiddify': "📲 تحميل Hiddify",

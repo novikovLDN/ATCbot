@@ -306,7 +306,7 @@ LANG = {
     'setup.device_button': "📲 Gerät einrichten",
     'setup.done_button': "✅ Fertig",
     'setup.help_button': "❓ Hilfe benötigt",
-    'setup.qr_button': "📷 Per QR hinzufügen",
+    'setup.qr_button': "📲 Gerät hinzufügen",
     'setup.qr_instruction': "📷 <b>Per QR-Code hinzufügen</b>\n\nÖffnen Sie die installierte App und scannen Sie den QR-Code unten:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nAuf dem Hauptbildschirm tippen Sie auf das Kamera-Symbol 📸\nRichten Sie die Kamera auf den QR-Code\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nTippen Sie oben rechts auf <b>+</b>\nWählen Sie «QR-Code scannen»\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nTippen Sie auf dem Hauptbildschirm auf <b>+</b>\nWählen Sie «QR-Code scannen»",
     'setup.download_happ': "📲 Happ herunterladen",
     'setup.download_hiddify': "📲 Hiddify herunterladen",

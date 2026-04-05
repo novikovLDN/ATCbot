@@ -313,7 +313,7 @@ LANG = {
     'setup.device_button': "📲 Set up device",
     'setup.done_button': "✅ Done",
     'setup.help_button': "❓ Need help",
-    'setup.qr_button': "📷 Add via QR",
+    'setup.qr_button': "📲 Add device",
     'setup.qr_instruction': "📷 <b>Add via QR Code</b>\n\nOpen the installed app and scan the QR code below:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the camera icon 📸\nPoint the camera at the QR code\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nTap <b>+</b> in the top right corner\nSelect «Scan QR code»\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nTap <b>+</b> on the main screen\nSelect «Scan QR code»",
     'setup.download_happ': "📲 Download Happ",
     'setup.download_hiddify': "📲 Download Hiddify",

@@ -306,7 +306,7 @@ LANG = {
     'setup.device_button': "📲 Qurilmani sozlash",
     'setup.done_button': "✅ Tayyor",
     'setup.help_button': "❓ Yordam kerak",
-    'setup.qr_button': "📷 QR orqali qo'shish",
+    'setup.qr_button': "📲 Qurilma qo'shish",
     'setup.qr_instruction': "📷 <b>QR-kod orqali qo'shish</b>\n\nO'rnatilgan ilovani oching va pastdagi QR-kodni skanerlang:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nAsosiy ekranda kamera belgisini 📸 bosing\nKamerani QR-kodga yo'naltiring\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nYuqori o'ng burchakda <b>+</b> bosing\n«QR-kodni skanerlash» ni tanlang\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nAsosiy ekranda <b>+</b> bosing\n«QR-kodni skanerlash» ni tanlang",
     'setup.download_happ': "📲 Happ yuklab olish",
     'setup.download_hiddify': "📲 Hiddify yuklab olish",
