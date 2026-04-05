@@ -779,7 +779,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Mein Traffic",
-    'traffic.info': "📊 <b>Sperren umgehen</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Bis: {expires}\n\n🔗 <b>Abonnement:</b>\n<code>{sub_url}</code>",
+    'traffic.info': "📊 <b>Sperren umgehen</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Bis: {expires}\n\n🔗 <b>Umgehungsschlüssel</b> <i>(tippen zum Kopieren)</i>\n<code>{sub_url}</code>\n\n📲 <b>Wo einfügen:</b>\n├ <b>Happ</b> → Startseite → <b>+</b> → Aus Zwischenablage einfügen\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Sperren umgehen</b> 🇷🇺\n\n🔒 Kein aktives Abonnement.",
     'traffic.trial_no_bypass': "📊 <b>Sperren umgehen</b> 🇷🇺\n\n🔒 Umgehung ist bei Basic und Plus verfügbar.",
     'traffic.not_provisioned': "📊 Umgehung noch nicht eingerichtet. Versuchen Sie es später.",
