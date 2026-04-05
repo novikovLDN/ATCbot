@@ -28,6 +28,11 @@ traffic_router = Router()
 logger = logging.getLogger(__name__)
 
 
+def _strikethrough(text: str) -> str:
+    """Apply Unicode strikethrough to text (works in Telegram button labels)."""
+    return "".join(ch + "\u0336" for ch in str(text))
+
+
 def _format_bytes(b: int) -> str:
     """Format bytes to human-readable GB/MB string."""
     if b >= 1024**3:
@@ -218,7 +223,7 @@ async def callback_buy_traffic(callback: CallbackQuery):
         base_price = pack["price"]
         if discount_pct > 0:
             final_price = math.ceil(base_price * (1 - discount_pct / 100))
-            label = f"{gb} ГБ — {final_price} ₽  (−{discount_pct}%)"
+            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
         else:
             label = f"{gb} ГБ — {base_price} ₽"
             if pack["discount"]:
@@ -278,7 +283,7 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         balance=f"{balance:.0f}",
     )
     if discount_pct > 0:
-        text += f"\n🎁 Скидка {discount_pct}% применена"
+        text += f"\n🎁 Скидка {discount_pct}%: {_strikethrough(str(base_price))} ₽ → {price} ₽"
 
     buttons = [
         [InlineKeyboardButton(
