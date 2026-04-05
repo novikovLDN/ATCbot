@@ -16,12 +16,9 @@ from aiogram.types import Message, CallbackQuery
 
 logger = logging.getLogger(__name__)
 
-# Обычный лимит: 30 запросов за 60 секунд
+# Лимит: 30 запросов за 60 секунд
 RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 30
-
-# Лимит для /start: 8 за 60 секунд
-START_RATE_LIMIT_MAX = 8
 
 # Агрессивный флуд: если 60+ запросов за 60 сек → бан на 5 минут
 FLOOD_BAN_THRESHOLD = 60
@@ -70,7 +67,7 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
 
     # ── Redis-backed rate limiting ─────────────────────────────────────
 
-    async def _is_rate_limited_redis(self, user_id: int, is_start: bool = False) -> bool:
+    async def _is_rate_limited_redis(self, user_id: int) -> bool:
         """Check rate limit using Redis sorted set (sliding window)."""
         redis = self._redis
         now = time.time()
@@ -83,7 +80,7 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
                 return True
         except Exception:
             # Redis error — fall through to memory
-            return self._is_rate_limited_memory(user_id, is_start)
+            return self._is_rate_limited_memory(user_id)
 
         rate_key = f"{_REDIS_RATE_PREFIX}{user_id}"
         cutoff = now - RATE_LIMIT_WINDOW
@@ -102,7 +99,7 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
             request_count = results[2]
         except Exception as e:
             logger.warning("RATE_LIMIT Redis pipeline error: %s", e)
-            return self._is_rate_limited_memory(user_id, is_start)
+            return self._is_rate_limited_memory(user_id)
 
         # Aggressive flood → ban
         if request_count >= FLOOD_BAN_THRESHOLD:
@@ -116,8 +113,7 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
             )
             return True
 
-        max_requests = START_RATE_LIMIT_MAX if is_start else RATE_LIMIT_MAX
-        return request_count > max_requests
+        return request_count > RATE_LIMIT_MAX
 
     # ── In-memory fallback ─────────────────────────────────────────────
 
@@ -163,7 +159,7 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
             for uid, _ in sorted_bans[:evict_count]:
                 del self._banned_users[uid]
 
-    def _is_rate_limited_memory(self, user_id: int, is_start: bool = False) -> bool:
+    def _is_rate_limited_memory(self, user_id: int) -> bool:
         now = time.monotonic()
         self._cleanup_old()
 
@@ -187,8 +183,7 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
             )
             return True
 
-        max_requests = START_RATE_LIMIT_MAX if is_start else RATE_LIMIT_MAX
-        return request_count > max_requests
+        return request_count > RATE_LIMIT_MAX
 
     # ── Middleware entry point ─────────────────────────────────────────
 
@@ -199,27 +194,21 @@ class GlobalRateLimitMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         user_id = None
-        is_start = False
 
         if isinstance(event, Message):
             user_id = event.from_user.id if event.from_user else None
-            is_start = bool(
-                event.text and event.text.strip().startswith("/start")
-            )
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id if event.from_user else None
 
         if user_id:
             redis = await self._get_redis()
             if redis:
-                limited = await self._is_rate_limited_redis(user_id, is_start)
+                limited = await self._is_rate_limited_redis(user_id)
             else:
-                limited = self._is_rate_limited_memory(user_id, is_start)
+                limited = self._is_rate_limited_memory(user_id)
 
             if limited:
-                logger.warning(
-                    "RATE_LIMITED user=%s is_start=%s", user_id, is_start
-                )
+                logger.warning("RATE_LIMITED user=%s", user_id)
                 return
 
         return await handler(event, data)

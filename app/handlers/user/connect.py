@@ -4,10 +4,10 @@ User commands: /connect, /white, /main.
 import logging
 
 from aiogram import Router
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 
-from app.handlers.common.keyboards import get_connect_keyboard, get_main_menu_keyboard
+from app.handlers.common.keyboards import get_main_menu_keyboard
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 
@@ -17,15 +17,26 @@ logger = logging.getLogger(__name__)
 
 @user_router.message(Command("connect"))
 async def cmd_connect(message: Message):
-    """Отправить сообщение с кнопкой WebApp «Подключиться»."""
+    """Подключиться → сразу выбор устройства."""
     if message.chat.type != "private":
         return
     language = await resolve_user_language(message.from_user.id)
-    await message.answer(
-        i18n_get_text(language, "connect.press_button"),
-        parse_mode="HTML",
-        reply_markup=get_connect_keyboard(language),
-    )
+    text = i18n_get_text(language, "setup.select_device")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📱 iOS", callback_data="setup_platform:ios"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_platform:android"),
+        ],
+        [
+            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_platform:macos"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_platform:windows"),
+        ],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main",
+        )],
+    ])
+    await message.answer(text, reply_markup=keyboard)
 
 
 @user_router.message(Command("white"))

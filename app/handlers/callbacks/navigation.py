@@ -452,7 +452,7 @@ async def callback_get_sub_key(callback: CallbackQuery):
 
 @router.callback_query(F.data == "connect_instruction")
 async def callback_connect_instruction(callback: CallbackQuery):
-    """Экран инструкции по подключению."""
+    """Подключиться → сразу выбор устройства."""
     try:
         await callback.answer()
     except Exception:
@@ -483,30 +483,23 @@ async def callback_connect_instruction(callback: CallbackQuery):
                 remnawave_service.ensure_squad(telegram_id)
             )
 
-    text = i18n_get_text(language, "connect.instruction_screen")
-
-    from app.handlers.common.keyboards import MINI_APP_URL
-    from aiogram.types import WebAppInfo
+    text = i18n_get_text(language, "setup.select_device")
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "connect.autosetup_btn"),
-            callback_data="setup_device",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "connect.open_miniapp_btn"),
-            web_app=WebAppInfo(url=MINI_APP_URL),
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.help"),
-            url="https://t.me/Atlas_SupportSecurity",
-        )],
+        [
+            InlineKeyboardButton(text="📱 iOS", callback_data="setup_platform:ios"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_platform:android"),
+        ],
+        [
+            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_platform:macos"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_platform:windows"),
+        ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_main",
         )],
     ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
 
 
 # ── Device setup flow ──────────────────────────────────────────────
@@ -556,7 +549,7 @@ async def callback_setup_device(callback: CallbackQuery):
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="connect_instruction",
+            callback_data="menu_main",
         )],
     ])
 
@@ -565,43 +558,7 @@ async def callback_setup_device(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("setup_platform:"))
 async def callback_setup_platform(callback: CallbackQuery):
-    """Экран 1: инструкция для устройства + кнопки скачать клиенты + кнопка Далее."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    platform = callback.data.split(":")[1]
-    language = await resolve_user_language(callback.from_user.id)
-
-    text = i18n_get_text(language, f"setup.instruction_{platform}")
-
-    buttons = []
-    links = _DOWNLOAD_LINKS.get(platform, {})
-    for client, url in links.items():
-        label = i18n_get_text(language, f"setup.download_{client}")
-        buttons.append([InlineKeyboardButton(text=label, url=url)])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "setup.qr_button"),
-        callback_data=f"setup_qr:{platform}",
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "setup.next_button"),
-        callback_data=f"setup_key:{platform}",
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="setup_device",
-    )])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-
-
-@router.callback_query(F.data.startswith("setup_key:"))
-async def callback_setup_key(callback: CallbackQuery):
-    """Экран 2: авто-настройка — 2 ряда по 3 (стандарт + обход)."""
+    """Единый экран: скачать приложение + авто-настройка с кнопками."""
     try:
         await callback.answer()
     except Exception:
@@ -611,94 +568,115 @@ async def callback_setup_key(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
+    # Get subscription and keys
     subscription = await database.get_subscription(telegram_id)
+    sub_url = None
+    bypass_url = None
     if subscription:
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
-    else:
-        sub_url = None
 
-    if not sub_url:
-        text = i18n_get_text(language, "get_key.no_subscription")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_platform:{platform}",
-        )]])
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-        return
+        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
+            from app.services import remnawave_api
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    bypass_url = traffic.get("subscriptionUrl", "") or None
 
-    # Remnawave bypass URL
-    bypass_url = None
-    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-    if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or None
-
-    text = i18n_get_text(language, "connect.autosetup_screen")
-
-    from urllib.parse import quote, urlparse
-    if config.PUBLIC_BASE_URL:
-        base_url = config.PUBLIC_BASE_URL
-    else:
-        parsed = urlparse(config.WEBHOOK_URL)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
-
-    _platform_clients = {
-        "ios": ["happ", "v2raytun", "hiddify"],
-        "android": ["happ", "v2raytun", "hiddify"],
-        "macos": ["happ", "v2raytun", "hiddify"],
-        "windows": ["hiddify", "v2rayn"],
-    }
-    _client_deeplink = {
-        "happ": "happ",
-        "v2raytun": "v2raytun",
-        "hiddify": "hiddify",
-        "v2rayn": "hiddify",
-    }
-    _client_names = {
-        "happ": "Happ",
-        "v2raytun": "V2RayTun",
-        "hiddify": "Hiddify",
-        "v2rayn": "v2rayN",
-    }
-
-    clients = _platform_clients.get(platform, [])
+    # Build text
+    text = i18n_get_text(language, f"setup.combined_{platform}")
 
     buttons = []
-    # Each app in its own row: [VPN AppName | Обход AppName]
-    for client in clients:
-        dl = _client_deeplink[client]
-        name = _client_names[client]
-        row = [InlineKeyboardButton(
-            text=f"\U0001f310 {name}",
-            url=f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}",
-        )]
-        if bypass_url:
-            row.append(InlineKeyboardButton(
-                text=f"\U0001f90d {name}",
-                url=f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}",
-            ))
-        buttons.append(row)
 
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "setup.manual_button"),
-        callback_data=f"setup_manual:{platform}",
-    )])
+    # Auto-setup buttons (if user has subscription)
+    if sub_url:
+        from urllib.parse import quote, urlparse
+        if config.PUBLIC_BASE_URL:
+            base_url = config.PUBLIC_BASE_URL
+        else:
+            parsed = urlparse(config.WEBHOOK_URL)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        _platform_clients = {
+            "ios": ["happ", "v2raytun", "hiddify"],
+            "android": ["happ", "v2raytun", "hiddify"],
+            "macos": ["happ", "v2raytun", "hiddify"],
+            "windows": ["hiddify", "v2rayn"],
+        }
+        _client_deeplink = {
+            "happ": "happ", "v2raytun": "v2raytun",
+            "hiddify": "hiddify", "v2rayn": "hiddify",
+        }
+        _client_names = {
+            "happ": "Happ", "v2raytun": "V2RayTun",
+            "hiddify": "Hiddify", "v2rayn": "v2rayN",
+        }
+
+        clients = _platform_clients.get(platform, [])
+        for client in clients:
+            dl = _client_deeplink[client]
+            name = _client_names[client]
+            row = [InlineKeyboardButton(
+                text=f"\U0001f310 {name}",
+                url=f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}",
+            )]
+            if bypass_url:
+                row.append(InlineKeyboardButton(
+                    text=f"\U0001f90d {name}",
+                    url=f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}",
+                ))
+            buttons.append(row)
+
+    # Download links
+    links = _DOWNLOAD_LINKS.get(platform, {})
+    download_row = []
+    for client, url in links.items():
+        label = i18n_get_text(language, f"setup.download_{client}")
+        download_row.append(InlineKeyboardButton(text=label, url=url))
+        if len(download_row) == 2:
+            buttons.append(download_row)
+            download_row = []
+    if download_row:
+        buttons.append(download_row)
+
+    # Manual setup + QR
+    buttons.append([
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.manual_button"),
+            callback_data=f"setup_manual:{platform}",
+        ),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.qr_button"),
+            callback_data=f"setup_qr:{platform}",
+        ),
+    ])
+
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.done_button"),
         callback_data="setup_done",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
-        callback_data=f"setup_platform:{platform}",
+        callback_data="connect_instruction",
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("setup_key:"))
+async def callback_setup_key(callback: CallbackQuery):
+    """Legacy redirect — перенаправляем на объединённый экран."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    platform = callback.data.split(":")[1]
+    # Rewrite callback data and redirect
+    callback.data = f"setup_platform:{platform}"
+    await callback_setup_platform(callback)
 
 
 @router.callback_query(F.data.startswith("setup_manual:"))
@@ -750,7 +728,7 @@ async def callback_setup_manual(callback: CallbackQuery):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_key:{platform}",
+            callback_data=f"setup_platform:{platform}",
         )],
     ]
 
