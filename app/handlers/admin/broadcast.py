@@ -116,6 +116,9 @@ def _build_broadcast_reply_markup(
         elif btn == "promo_buy":
             label = f"🎁 Купить со скидкой {discount}%" if discount else "🎁 Купить со скидкой"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_buy:{broadcast_id}")])
+        elif btn == "promo_traffic":
+            label = f"📊 Купить трафик −{discount}%" if discount else "📊 Купить трафик"
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_traffic:{broadcast_id}")])
         elif btn == "channel":
             rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
         elif btn == "support":
@@ -181,6 +184,55 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
 
     except Exception as e:
         logger.exception(f"Error applying broadcast promo discount: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast_promo_traffic:"))
+async def callback_broadcast_promo_traffic(callback: CallbackQuery):
+    """User clicked 'Купить трафик промо' in broadcast — apply 1-day traffic discount."""
+    await callback.answer()
+
+    try:
+        broadcast_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    telegram_id = callback.from_user.id
+
+    try:
+        discount = await database.get_broadcast_discount(broadcast_id)
+        if not discount:
+            # No discount found, just redirect to traffic purchase
+            language = await resolve_user_language(telegram_id)
+            from app.handlers.traffic import callback_buy_traffic
+            await callback_buy_traffic(callback)
+            return
+
+        discount_percent = discount.get("discount_percent", 0)
+
+        # Apply 1-day traffic discount
+        from datetime import timedelta
+        expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+        await database.create_user_traffic_discount(
+            telegram_id=telegram_id,
+            discount_percent=discount_percent,
+            expires_at=expires_at,
+            created_by=config.ADMIN_TELEGRAM_ID,
+        )
+
+        # Show traffic purchase screen
+        language = await resolve_user_language(telegram_id)
+        await callback.message.answer(
+            f"🎁 Скидка {discount_percent}% на трафик применена! Действует 24 часа."
+        )
+
+        # Redirect to buy_traffic
+        from app.handlers.traffic import callback_buy_traffic
+        await callback_buy_traffic(callback)
+
+    except Exception as e:
+        logger.exception(f"Error applying broadcast traffic promo discount: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
@@ -487,12 +539,22 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
             "Выберите сегмент получателей:",
             reply_markup=get_broadcast_segment_keyboard(language)
         )
-    elif btn_type == "promo_buy":
+    elif btn_type in ("promo_buy", "promo_traffic"):
         # Need to ask for discount percentage
+        data = await state.get_data()
+        buttons = data.get("broadcast_buttons", [])
+        if btn_type not in buttons:
+            buttons.append(btn_type)
+        await state.update_data(broadcast_buttons=buttons, _pending_promo_type=btn_type)
         await state.set_state(BroadcastCreate.waiting_for_discount)
-        await callback.message.edit_text(
-            "Введите процент скидки для акции (число от 1 до 99):"
-        )
+        if btn_type == "promo_traffic":
+            await callback.message.edit_text(
+                "Введите процент скидки на трафик для акции (число от 1 до 99):"
+            )
+        else:
+            await callback.message.edit_text(
+                "Введите процент скидки для акции (число от 1 до 99):"
+            )
     elif btn_type == "done":
         # Finished selecting buttons, move to segment
         await state.set_state(BroadcastCreate.waiting_for_segment)
@@ -522,6 +584,7 @@ def _btn_label(btn_type: str) -> str:
     labels = {
         "buy": "🛒 Купить",
         "promo_buy": "🎁 Купить со скидкой",
+        "promo_traffic": "📊 Купить трафик промо",
         "channel": "📢 Наш канал",
         "support": "💬 Поддержка",
         "referral": "👥 Реферальная программа",
@@ -548,8 +611,10 @@ async def process_broadcast_discount(message: Message, state: FSMContext):
 
     data = await state.get_data()
     buttons = data.get("broadcast_buttons", [])
-    if "promo_buy" not in buttons:
-        buttons.append("promo_buy")
+    # The pending promo type was saved when the button was selected
+    pending_type = data.get("_pending_promo_type", "promo_buy")
+    if pending_type not in buttons:
+        buttons.append(pending_type)
     await state.update_data(broadcast_buttons=buttons, broadcast_discount=discount)
     await state.set_state(BroadcastCreate.waiting_for_segment)
     await message.answer(

@@ -200,12 +200,21 @@ async def callback_buy_traffic(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
         return
 
+    # Check for active traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+
     # Build pack buttons
     buttons = []
     for gb, pack in config.TRAFFIC_PACKS.items():
-        label = f"{gb} ГБ — {pack['price']} ₽"
-        if pack["discount"]:
-            label += f"  {pack['discount']}"
+        base_price = pack["price"]
+        if discount_pct > 0:
+            final_price = math.ceil(base_price * (1 - discount_pct / 100))
+            label = f"{gb} ГБ — {final_price} ₽  (−{discount_pct}%)"
+        else:
+            label = f"{gb} ГБ — {base_price} ₽"
+            if pack["discount"]:
+                label += f"  {pack['discount']}"
         buttons.append([InlineKeyboardButton(
             text=label,
             callback_data=f"buy_traffic_pack:{gb}",
@@ -217,6 +226,8 @@ async def callback_buy_traffic(callback: CallbackQuery):
     )])
 
     text = i18n_get_text(language, "traffic.buy_title")
+    if discount_pct > 0:
+        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
     await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot)
 
 
@@ -239,8 +250,13 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
     if not pack:
         return
 
+    # Check for active traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+
     balance = await database.get_user_balance(telegram_id)
-    price = pack["price"]
+    base_price = pack["price"]
+    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
 
     # SBP price with markup
     sbp_price_kopecks = math.ceil(price * 100 * (1 + config.SBP_MARKUP_PERCENT / 100.0))
@@ -253,6 +269,8 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         price=price,
         balance=f"{balance:.0f}",
     )
+    if discount_pct > 0:
+        text += f"\n🎁 Скидка {discount_pct}% применена"
 
     buttons = [
         [InlineKeyboardButton(
@@ -303,7 +321,12 @@ async def callback_traffic_pay_balance(callback: CallbackQuery):
     if not pack:
         return
 
-    price = pack["price"]
+    # Apply traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+    base_price = pack["price"]
+    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
+
     balance = await database.get_user_balance(telegram_id)
 
     if balance < price:
@@ -403,7 +426,11 @@ async def callback_traffic_pay_card(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
         return
 
-    price = pack["price"]
+    # Apply traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+    base_price = pack["price"]
+    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
     price_kopecks = price * 100
 
     # Minimum Telegram payment: 64 RUB = 6400 kopecks
@@ -472,7 +499,11 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "payment.sbp_unavailable"), show_alert=True)
         return
 
-    price = pack["price"]
+    # Apply traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+    base_price = pack["price"]
+    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
     price_kopecks = price * 100
 
     try:

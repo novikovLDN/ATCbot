@@ -4,8 +4,10 @@ Database operations for Remnawave traffic integration.
 - remnawave_uuid CRUD on subscriptions table
 - traffic notification flags on users table
 - traffic_purchases table
+- user_traffic_discounts table (promo discounts on traffic packs)
 """
 import logging
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 import database.core as _core
@@ -162,3 +164,62 @@ async def get_active_remnawave_users() -> List[Dict[str, Any]]:
                  AND s.remnawave_uuid != ''""",
         )
         return [dict(r) for r in rows]
+
+
+# ── Traffic discounts (promo from broadcasts) ─────────────────────────
+
+async def get_user_traffic_discount(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Return active (non-expired) traffic discount for user, or None."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT * FROM user_traffic_discounts
+               WHERE telegram_id = $1
+                 AND (expires_at IS NULL OR expires_at > NOW())
+               ORDER BY created_at DESC LIMIT 1""",
+            telegram_id,
+        )
+        return dict(row) if row else None
+
+
+async def create_user_traffic_discount(
+    telegram_id: int,
+    discount_percent: int,
+    expires_at: Optional[datetime],
+    created_by: int,
+) -> bool:
+    """Create or replace traffic discount for user. Returns True on success."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO user_traffic_discounts
+                   (telegram_id, discount_percent, expires_at, created_by)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (telegram_id) DO UPDATE
+                   SET discount_percent = $2, expires_at = $3, created_by = $4, created_at = NOW()""",
+            telegram_id, discount_percent, expires_at, created_by,
+        )
+        return True
+
+
+async def delete_user_traffic_discount(telegram_id: int) -> bool:
+    """Remove traffic discount for user."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM user_traffic_discounts WHERE telegram_id = $1",
+            telegram_id,
+        )
+        return result == "DELETE 1"
