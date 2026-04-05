@@ -301,6 +301,8 @@ LANG = {
     'setup.autosetup_windows': "🪟 <b>Auto-Einrichtung — Windows</b>\n\n⚡️ Tippen Sie auf die Schaltfläche mit der installierten App — der Schlüssel wird automatisch hinzugefügt.\n\nWenn die App nicht geöffnet wurde — nutzen Sie die ausführliche Anleitung.",
     'setup.manual_button': "📖 Ausführliche Anleitung",
     'setup.copy_key_label': "👇 Tippen Sie zum Kopieren:",
+    'setup.key_vpn_label': "🔑 <b>VPN-Schlüssel</b> (normale Server):",
+    'setup.key_bypass_label': "🔑 <b>Bypass-Schlüssel</b> (RU Whitelists):",
     'setup.device_button': "📲 Gerät einrichten",
     'setup.done_button': "✅ Fertig",
     'setup.help_button': "❓ Hilfe benötigt",
@@ -776,8 +778,7 @@ LANG = {
     'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM KAUF</b>\n\n👤 Käufer: {buyer_id}\n🎯 Benutzername: <code>{username}</code>\n📅 Laufzeit: {period}\n💰 Betrag: {price} ₽\n🕐 Datum: {date}",
 
     # --- Traffic / Bypass (Remnawave) ---
-    'main.traffic_btn': "📊 Traffic",
-    'main.buy_traffic_btn': "💳 Traffic kaufen",
+    'main.traffic_btn': "📊 Mein Traffic",
     'traffic.info': "📊 <b>Sperren umgehen</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Bis: {expires}\n\n🔗 <b>Abonnement:</b>\n<code>{sub_url}</code>",
     'traffic.no_subscription': "📊 <b>Sperren umgehen</b> 🇷🇺\n\n🔒 Kein aktives Abonnement.",
     'traffic.trial_no_bypass': "📊 <b>Sperren umgehen</b> 🇷🇺\n\n🔒 Umgehung ist bei Basic und Plus verfügbar.",

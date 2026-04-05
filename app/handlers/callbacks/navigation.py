@@ -448,7 +448,7 @@ async def callback_get_sub_key(callback: CallbackQuery):
     await safe_edit_text(callback.message, full_text, reply_markup=keyboard, bot=callback.bot)
 
 
-# ── Connect instruction & auto-setup ─────────────────────────────
+# ── Connect instruction ──────────────────────────────────────────
 
 @router.callback_query(F.data == "connect_instruction")
 async def callback_connect_instruction(callback: CallbackQuery):
@@ -468,7 +468,7 @@ async def callback_connect_instruction(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "connect.autosetup_btn"),
-            callback_data="connect_autosetup",
+            callback_data="setup_device",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "connect.open_miniapp_btn"),
@@ -483,88 +483,6 @@ async def callback_connect_instruction(callback: CallbackQuery):
             callback_data="menu_main",
         )],
     ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-
-
-@router.callback_query(F.data == "connect_autosetup")
-async def callback_connect_autosetup(callback: CallbackQuery):
-    """Авто-настройка: 2 ряда по 3 кнопки (стандарт + обход)."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    subscription = await database.get_subscription(telegram_id)
-    if not subscription:
-        text = i18n_get_text(language, "get_key.no_subscription")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="connect_instruction",
-        )]])
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-        return
-
-    # Standard subscription URL
-    from vpn_utils import build_sub_url
-    sub_url = build_sub_url(telegram_id)
-
-    # Remnawave bypass URL
-    bypass_url = None
-    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-    if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or None
-
-    from urllib.parse import quote, urlparse
-    if config.PUBLIC_BASE_URL:
-        base_url = config.PUBLIC_BASE_URL
-    else:
-        parsed = urlparse(config.WEBHOOK_URL)
-        base_url = f"{parsed.scheme}://{parsed.netloc}"
-
-    _client_deeplink = {
-        "happ": "happ",
-        "v2raytun": "v2raytun",
-        "hiddify": "hiddify",
-    }
-
-    text = i18n_get_text(language, "connect.autosetup_screen")
-
-    buttons = []
-    # Row 1: Standard servers
-    row_std = []
-    for client in ("happ", "v2raytun", "hiddify"):
-        dl = _client_deeplink[client]
-        url = f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}"
-        row_std.append(InlineKeyboardButton(text=f"⚡️ {client.capitalize()}", url=url))
-    buttons.append(row_std)
-
-    # Row 2: Bypass servers (Remnawave) — only if URL available
-    if bypass_url:
-        row_bypass = []
-        for client in ("happ", "v2raytun", "hiddify"):
-            dl = _client_deeplink[client]
-            url = f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}"
-            row_bypass.append(InlineKeyboardButton(text=f"🇷🇺 {client.capitalize()}", url=url))
-        buttons.append(row_bypass)
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "setup.manual_button"),
-        callback_data="setup_device",
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="connect_instruction",
-    )])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
@@ -615,7 +533,7 @@ async def callback_setup_device(callback: CallbackQuery):
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
+            callback_data="connect_instruction",
         )],
     ])
 
@@ -660,7 +578,7 @@ async def callback_setup_platform(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("setup_key:"))
 async def callback_setup_key(callback: CallbackQuery):
-    """Экран 2: авто-настройка — кнопки открытия клиентов + подробная инструкция."""
+    """Экран 2: авто-настройка — 2 ряда по 3 (стандарт + обход)."""
     try:
         await callback.answer()
     except Exception:
@@ -686,7 +604,18 @@ async def callback_setup_key(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
 
-    text = i18n_get_text(language, f"setup.autosetup_{platform}")
+    # Remnawave bypass URL
+    bypass_url = None
+    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+    if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
+
+    text = i18n_get_text(language, "connect.autosetup_screen")
 
     from urllib.parse import quote, urlparse
     if config.PUBLIC_BASE_URL:
@@ -695,34 +624,50 @@ async def callback_setup_key(callback: CallbackQuery):
         parsed = urlparse(config.WEBHOOK_URL)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-    # Кнопки авто-настройки по платформе
     _platform_clients = {
         "ios": ["happ", "v2raytun", "hiddify"],
         "android": ["happ", "v2raytun", "hiddify"],
         "macos": ["happ", "v2raytun", "hiddify"],
         "windows": ["hiddify", "v2rayn"],
     }
-    _client_labels = {
-        "happ": "Авто настройка Happ ⚡️",
-        "v2raytun": "Авто настройка V2RayTun ⚡️",
-        "hiddify": "Авто настройка Hiddify ⚡️",
-        "v2rayn": "Авто настройка v2rayN ⚡️",
-    }
     _client_deeplink = {
         "happ": "happ",
         "v2raytun": "v2raytun",
         "hiddify": "hiddify",
-        "v2rayn": "hiddify",  # v2rayN использует hiddify-совместимый импорт
+        "v2rayn": "hiddify",
+    }
+    _client_names = {
+        "happ": "Happ",
+        "v2raytun": "V2RayTun",
+        "hiddify": "Hiddify",
+        "v2rayn": "v2rayN",
     }
 
+    clients = _platform_clients.get(platform, [])
+
     buttons = []
-    for client in _platform_clients.get(platform, []):
-        dl_client = _client_deeplink[client]
-        redirect_url = f"{base_url}/open/{dl_client}?url={quote(sub_url, safe='')}"
-        buttons.append([InlineKeyboardButton(
-            text=_client_labels[client],
-            url=redirect_url,
-        )])
+    # Row 1: Standard servers
+    row_std = []
+    for client in clients:
+        dl = _client_deeplink[client]
+        url = f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}"
+        row_std.append(InlineKeyboardButton(
+            text=f"VPN {_client_names[client]}",
+            url=url,
+        ))
+    buttons.append(row_std)
+
+    # Row 2: Bypass servers (Remnawave)
+    if bypass_url:
+        row_bypass = []
+        for client in clients:
+            dl = _client_deeplink[client]
+            url = f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}"
+            row_bypass.append(InlineKeyboardButton(
+                text=f"Обход {_client_names[client]}",
+                url=url,
+            ))
+        buttons.append(row_bypass)
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.manual_button"),
@@ -738,12 +683,12 @@ async def callback_setup_key(callback: CallbackQuery):
     )])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("setup_manual:"))
 async def callback_setup_manual(callback: CallbackQuery):
-    """Экран подробной инструкции по ручной настройке."""
+    """Экран подробной инструкции по ручной настройке (стандарт + обход)."""
     try:
         await callback.answer()
     except Exception:
@@ -754,16 +699,32 @@ async def callback_setup_manual(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     subscription = await database.get_subscription(telegram_id)
+    sub_url = None
+    bypass_url = None
     if subscription:
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
-    else:
-        sub_url = None
+
+        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
+            from app.services import remnawave_api
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    bypass_url = traffic.get("subscriptionUrl", "") or None
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
-    key_label = i18n_get_text(language, "setup.copy_key_label")
+
+    # Build keys section
+    keys_section = ""
     if sub_url:
-        text = f"{connect_text}\n\n{key_label}\n<code>{sub_url}</code>"
+        keys_section += i18n_get_text(language, "setup.key_vpn_label") + "\n<code>" + sub_url + "</code>"
+    if bypass_url:
+        keys_section += "\n\n" + i18n_get_text(language, "setup.key_bypass_label") + "\n<code>" + bypass_url + "</code>"
+
+    if keys_section:
+        text = f"{connect_text}\n\n{keys_section}"
     else:
         text = connect_text
 
