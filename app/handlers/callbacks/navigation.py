@@ -651,12 +651,12 @@ async def callback_setup_key(callback: CallbackQuery):
         dl = _client_deeplink[client]
         name = _client_names[client]
         row = [InlineKeyboardButton(
-            text=f"VPN {name}",
+            text=f"\U0001f310 {name}",
             url=f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}",
         )]
         if bypass_url:
             row.append(InlineKeyboardButton(
-                text=f"Обход {name}",
+                text=f"\U0001f90d {name}",
                 url=f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}",
             ))
         buttons.append(row)

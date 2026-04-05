@@ -670,7 +670,7 @@ LANG = {
     'connect.instruction_screen': "📖 <b>Ulanish bo'yicha ko'rsatma</b>\n\n«Ulanish» yoki\n«🌐 Mini ilovani ochish» tugmasini bosing va barcha sozlash bosqichlarini bajaring.\n\nBiror narsa noto'g'ri bo'lsa — qo'llab-quvvatlash xizmatiga murojaat qiling.\n\n⸻\n\n👇",
     'connect.autosetup_btn': "📲 Ulanish",
     'connect.open_miniapp_btn': "🌐 Mini ilovani ochish",
-    'connect.autosetup_screen': "📱 <b>Avto sozlash</b>\n\n⚡️ O'rnatilgan ilova tugmasini bosing — kalit avtomatik qo'shiladi.\n\nIlova ochilmagan bo'lsa — batafsil ko'rsatmadan foydalaning.\n\n⸻\n\n⚡️ <b>Avto sozlash</b> — oddiy serverlar\n🇷🇺 <b>Avto sozlash Chetlab o'tish</b> — oq ro'yxatlarni chetlab o'tish serverlari\n\n💡 Ikkala kalitni bir vaqtda o'rnatishingiz mumkin.",
+    'connect.autosetup_screen': "📱 <b>Avto sozlash</b>\n\nO'rnatilgan ilova tugmasini bosing — kalit avtomatik qo'shiladi.\n\nIlova ochilmagan bo'lsa — batafsil ko'rsatmadan foydalaning.\n\n🌐 — oddiy serverlar\n🤍 — RU oq ro'yxatlarni chetlab o'tish serverlari\n\nIkkala kalitni bir vaqtda o'rnatishingiz mumkin.",
     'farm.back': '🔙 Orqaga',
     'farm.back_to_games': "🔙 O'yinlarga",
     'farm.balance': '\n💰 Balans: {balance:.2f} ₽',
