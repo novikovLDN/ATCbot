@@ -411,7 +411,8 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     text = (
         f"💎 Тарифы Atlas Secure\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
-        f"{i18n_get_text(language, 'buy.tariff_plus')}"
+        f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
+        f"{i18n_get_text(language, 'buy.tariff_business')}"
     )
     
     # Получаем текущую подписку для динамических кнопок
