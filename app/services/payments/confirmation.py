@@ -302,12 +302,13 @@ async def _handle_traffic_pack_confirmation(
     language = await resolve_user_language(telegram_id)
 
     # Add traffic via Remnawave
+    rmn_success = False
     pack = config.TRAFFIC_PACKS.get(traffic_gb)
     if pack:
         try:
             from app.services.remnawave_service import add_traffic
-            success = await add_traffic(telegram_id, pack["bytes"])
-            if not success:
+            rmn_success = await add_traffic(telegram_id, pack["bytes"])
+            if not rmn_success:
                 logger.error(
                     "TRAFFIC_PACK_REMNAWAVE_FAIL: provider=%s tg=%s gb=%s purchase=%s",
                     provider, telegram_id, traffic_gb, purchase_id,
@@ -317,8 +318,22 @@ async def _handle_traffic_pack_confirmation(
                 "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
                 provider, telegram_id, traffic_gb, rmn_err,
             )
+    else:
+        logger.error(
+            "TRAFFIC_PACK_INVALID_GB: provider=%s tg=%s gb=%s purchase=%s — pack not found in config",
+            provider, telegram_id, traffic_gb, purchase_id,
+        )
 
-    text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+    if rmn_success:
+        text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+    else:
+        # Payment was already processed — traffic will be added manually by support
+        text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+        text += "\n\n⚠️ Traffic activation delayed. Please contact support if not applied within 1 hour."
+        logger.error(
+            "TRAFFIC_PACK_NOT_APPLIED: provider=%s tg=%s gb=%s purchase=%s — needs manual resolution",
+            provider, telegram_id, traffic_gb, purchase_id,
+        )
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
