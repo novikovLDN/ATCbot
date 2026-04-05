@@ -646,28 +646,20 @@ async def callback_setup_key(callback: CallbackQuery):
     clients = _platform_clients.get(platform, [])
 
     buttons = []
-    # Row 1: Standard servers
-    row_std = []
+    # Each app in its own row: [VPN AppName | Обход AppName]
     for client in clients:
         dl = _client_deeplink[client]
-        url = f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}"
-        row_std.append(InlineKeyboardButton(
-            text=f"VPN {_client_names[client]}",
-            url=url,
-        ))
-    buttons.append(row_std)
-
-    # Row 2: Bypass servers (Remnawave)
-    if bypass_url:
-        row_bypass = []
-        for client in clients:
-            dl = _client_deeplink[client]
-            url = f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}"
-            row_bypass.append(InlineKeyboardButton(
-                text=f"Обход {_client_names[client]}",
-                url=url,
+        name = _client_names[client]
+        row = [InlineKeyboardButton(
+            text=f"VPN {name}",
+            url=f"{base_url}/open/{dl}?url={quote(sub_url, safe='')}",
+        )]
+        if bypass_url:
+            row.append(InlineKeyboardButton(
+                text=f"Обход {name}",
+                url=f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}",
             ))
-        buttons.append(row_bypass)
+        buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.manual_button"),
