@@ -165,7 +165,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.instruction"),
-            web_app=WebAppInfo(url=f"{MINI_APP_URL}?startapp=guide"),
+            callback_data="connect_instruction",
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
@@ -337,7 +337,7 @@ def get_profile_keyboard_old(language: str):
             ),
             InlineKeyboardButton(
                 text=i18n_get_text(language, "main.instruction"),
-                callback_data="menu_instruction"
+                callback_data="connect_instruction"
             ),
         ],
         [InlineKeyboardButton(
