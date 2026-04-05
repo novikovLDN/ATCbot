@@ -131,9 +131,8 @@ async def callback_traffic_info(callback: CallbackQuery):
     elif remaining <= 3 * 1024**3:
         warning = "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
-    # Use shortUuid for subscription URL, fall back to full uuid
-    short_uuid = await database.get_remnawave_short_uuid(telegram_id)
-    sub_url = f"{config.REMNAWAVE_SUB_BASE_URL}/{short_uuid or rmn_uuid}"
+    # Subscription URL comes directly from Remnawave API response
+    sub_url = traffic.get("subscriptionUrl", "")
 
     text = i18n_get_text(
         language,

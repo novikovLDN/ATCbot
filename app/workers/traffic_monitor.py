@@ -34,6 +34,7 @@ async def _check_user_traffic(bot: Bot, telegram_id: int, rmn_uuid: str) -> None
     try:
         traffic = await remnawave_api.get_user_traffic(rmn_uuid)
         if not traffic:
+            logger.warning("TRAFFIC_CHECK_NO_DATA: tg=%s uuid=%s", telegram_id, rmn_uuid[:8] if rmn_uuid else "N/A")
             return
 
         used = traffic["usedTrafficBytes"]

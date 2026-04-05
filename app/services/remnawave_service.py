@@ -60,29 +60,15 @@ async def _get_user_with_recovery(telegram_id: int, rmn_uuid: str):
     so the caller can recreate the user with proper UUID storage."""
     if not _is_valid_full_uuid(rmn_uuid):
         # Legacy bug: shortUuid was stored instead of full UUID.
-        # This panel has no lookup-by-shortUuid endpoint, so we can't recover.
-        # Clear the invalid UUID — caller will recreate user.
         logger.warning(
             "REMNAWAVE_INVALID_UUID: tg=%s stored=%s is not a full UUID, clearing",
             telegram_id, rmn_uuid,
         )
-        # Clear the invalid UUID — caller will recreate user with correct UUID.
-        # The old Remnawave user (with a different full UUID) becomes orphaned
-        # but can be cleaned up from the panel.
         await database.clear_remnawave_uuid(telegram_id)
         return None
 
     user_data = await remnawave_api.get_user(rmn_uuid)
-    if user_data:
-        # Opportunistically save shortUuid if not stored yet
-        short = user_data.get("shortUuid")
-        if short:
-            existing_short = await database.get_remnawave_short_uuid(telegram_id)
-            if not existing_short:
-                await database.set_remnawave_short_uuid(telegram_id, short)
-        return user_data
-
-    return None
+    return user_data
 
 
 # ── Create ──────────────────────────────────────────────────────────────
@@ -117,14 +103,11 @@ async def create_remnawave_user(
             # Save full UUID for API calls (/api/users/{uuid})
             rmn_uuid = result.get("uuid") or short_uuid
             await database.set_remnawave_uuid(telegram_id, rmn_uuid)
-            # Save shortUuid for subscription URLs (/api/sub/{shortUuid})
-            rmn_short = result.get("shortUuid")
-            if rmn_short:
-                await database.set_remnawave_short_uuid(telegram_id, rmn_short)
             await database.reset_traffic_notification_flags(telegram_id)
+            sub_url = result.get("subscriptionUrl", "")
             logger.info(
-                "REMNAWAVE_USER_CREATED: tg=%s uuid=%s short=%s tariff=%s limit=%d",
-                telegram_id, rmn_uuid[:8], rmn_short or "N/A", tariff, traffic_limit,
+                "REMNAWAVE_USER_CREATED: tg=%s uuid=%s sub_url=%s tariff=%s limit=%d",
+                telegram_id, rmn_uuid[:8], sub_url, tariff, traffic_limit,
             )
         else:
             logger.warning("REMNAWAVE_USER_CREATE_FAILED: tg=%s", telegram_id)
@@ -164,11 +147,9 @@ async def renew_remnawave_user(
         user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
         if not user_data:
             # User might have been deleted from Remnawave — recreate
-            await database.clear_remnawave_uuid(telegram_id)
             await create_remnawave_user(telegram_id, tariff, subscription_end)
             return
 
-        # Use the full UUID from the API response (may differ from stored if recovered)
         api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + traffic_add
@@ -220,7 +201,7 @@ def disable_remnawave_user_bg(telegram_id: int) -> None:
     _fire_and_forget(disable_remnawave_user(telegram_id))
 
 
-# ── Delete ────────��─────────────────────────────────────────────────────
+# ── Delete ─────────────────────────────────────────────────────────────
 
 async def delete_remnawave_user(telegram_id: int) -> None:
     """Delete Remnawave user and clear DB reference."""
@@ -243,7 +224,7 @@ def delete_remnawave_user_bg(telegram_id: int) -> None:
     _fire_and_forget(delete_remnawave_user(telegram_id))
 
 
-# ── Add traffic (purchased pack) ─────────────────────────────────────���─
+# ── Add traffic (purchased pack) ──────────────────────────────────────
 
 async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
     """Add purchased traffic to current limit. Returns True on success."""

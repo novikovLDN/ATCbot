@@ -4248,7 +4248,15 @@ async def finalize_purchase(
                         try:
                             _gb = int(tariff_type[len("traffic_"):-len("gb")])
                         except ValueError:
-                            pass
+                            logger.error(
+                                "finalize_purchase: TRAFFIC_PACK_GB_PARSE_FAIL tariff=%s purchase_id=%s",
+                                tariff_type, purchase_id,
+                            )
+                    if _gb <= 0:
+                        logger.error(
+                            "finalize_purchase: TRAFFIC_PACK_INVALID_GB gb=%s tariff=%s purchase_id=%s",
+                            _gb, tariff_type, purchase_id,
+                        )
 
                     # Record in traffic_purchases
                     _payment_method = payment_provider or "card"

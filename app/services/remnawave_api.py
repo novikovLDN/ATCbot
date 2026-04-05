@@ -83,6 +83,9 @@ async def create_user(
         "expireAt": expire_at,
         "deviceLimit": device_limit,
     }
+    # Assign to "Clients" squad if configured
+    if config.REMNAWAVE_SQUAD_UUID:
+        body["activeInternalSquads"] = [config.REMNAWAVE_SQUAD_UUID]
     result = await _request("POST", "/api/users", json=body)
     if result:
         logger.info("REMNAWAVE_CREATE: success for %s, response=%s", username, result)
@@ -114,7 +117,7 @@ async def delete_user(uuid: str) -> Optional[Dict[str, Any]]:
 # ── Convenience ───────────────────────────────────────────────────────
 
 async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
-    """Return {usedTrafficBytes, trafficLimitBytes, deviceLimit, onlineDevices} or None."""
+    """Return traffic info including subscriptionUrl, or None."""
     user = await get_user(uuid)
     if not user:
         return None
@@ -126,4 +129,5 @@ async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
         "deviceLimit": user.get("deviceLimit", 0),
         "onlineDevices": user.get("onlineDevices", 0),
         "status": user.get("status", "UNKNOWN"),
+        "subscriptionUrl": user.get("subscriptionUrl", ""),
     }
