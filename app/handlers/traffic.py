@@ -91,10 +91,14 @@ async def callback_traffic_info(callback: CallbackQuery):
     rmn_uuid = await database.get_remnawave_uuid(telegram_id)
     if not rmn_uuid:
         # Auto-provision Remnawave user for existing subscribers
+        # Existing users get 5 GB starter pack (not full tariff volume)
         expires_at = subscription.get("expires_at")
         if expires_at and config.REMNAWAVE_ENABLED:
             try:
-                await remnawave_service.create_remnawave_user(telegram_id, sub_type, expires_at)
+                await remnawave_service.create_remnawave_user(
+                    telegram_id, sub_type, expires_at,
+                    traffic_limit_override=5 * 1024**3,
+                )
                 rmn_uuid = await database.get_remnawave_uuid(telegram_id)
             except Exception as e:
                 logger.error("TRAFFIC_AUTO_PROVISION_ERROR: tg=%s %s", telegram_id, e)
