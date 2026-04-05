@@ -400,8 +400,8 @@ TRAFFIC_LIMITS = {
 
 # Device limits per tariff
 DEVICE_LIMITS = {
-    "basic": 3,
-    "plus":  5,
+    "basic": 5,
+    "plus":  7,
 }
 
 # Traffic packs for purchase (gb -> {price, bytes, discount})
