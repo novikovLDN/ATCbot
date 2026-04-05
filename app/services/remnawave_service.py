@@ -87,8 +87,8 @@ async def create_remnawave_user(
     """
     if not config.REMNAWAVE_ENABLED:
         return
-    if tariff == "trial":
-        return  # Trial has NO bypass
+    if tariff == "trial" and not traffic_limit_override:
+        return  # Trial without explicit override gets no bypass
 
     traffic_limit = traffic_limit_override or _traffic_limit_for_tariff(tariff)
     if traffic_limit <= 0:

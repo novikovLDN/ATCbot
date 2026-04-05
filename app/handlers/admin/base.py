@@ -623,7 +623,7 @@ async def callback_remnawave_mass_provision(callback: CallbackQuery):
                     continue
                 await remnawave_service.create_remnawave_user(
                     tg_id, sub_type, expires_at,
-                    traffic_limit_override=5 * 1024**3,
+                    traffic_limit_override=10 * 1024**3,
                 )
                 success += 1
             except Exception as e:

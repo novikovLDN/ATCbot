@@ -73,31 +73,19 @@ async def callback_traffic_info(callback: CallbackQuery):
         return
 
     sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-    if sub_type == "trial":
-        text = i18n_get_text(language, "traffic.trial_no_bypass")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "traffic.buy_subscription"),
-                callback_data="menu_buy_vpn",
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="menu_main",
-            )],
-        ])
-        await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
-        return
+    is_trial = sub_type == "trial"
 
     rmn_uuid = await database.get_remnawave_uuid(telegram_id)
     if not rmn_uuid:
         # Auto-provision Remnawave user for existing subscribers
-        # Existing users get 5 GB starter pack (not full tariff volume)
+        # Trial users get 5 GB, paid users get 10 GB starter pack
         expires_at = subscription.get("expires_at")
         if expires_at and config.REMNAWAVE_ENABLED:
+            override = 5 * 1024**3 if is_trial else 10 * 1024**3
             try:
                 await remnawave_service.create_remnawave_user(
                     telegram_id, sub_type, expires_at,
-                    traffic_limit_override=5 * 1024**3,
+                    traffic_limit_override=override,
                 )
                 rmn_uuid = await database.get_remnawave_uuid(telegram_id)
             except Exception as e:
@@ -163,12 +151,20 @@ async def callback_traffic_info(callback: CallbackQuery):
         sub_url=sub_url,
     ) + warning
 
-    buttons = [
-        [InlineKeyboardButton(
+    if is_trial:
+        text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
+
+    buttons = []
+    if is_trial:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.buy_subscription"),
+            callback_data="menu_buy_vpn",
+        )])
+    else:
+        buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.buy_traffic_btn"),
             callback_data="buy_traffic",
-        )],
-    ]
+        )])
     buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
