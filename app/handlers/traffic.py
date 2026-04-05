@@ -371,7 +371,7 @@ async def callback_buy_traffic_extended(callback: CallbackQuery):
     await callback.answer()
 
     telegram_id = callback.from_user.id
-    language = await get_user_language(telegram_id)
+    language = await resolve_user_language(telegram_id)
 
     # Check for active traffic promo discount
     traffic_discount = await database.get_user_traffic_discount(telegram_id)

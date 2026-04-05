@@ -794,6 +794,7 @@ LANG = {
     'traffic.buy_traffic_btn': "💳 Traffic kaufen",
     'traffic.back_to_traffic': "📊 Zum Traffic",
     'traffic.buy_title': "📦 <b>Traffic kaufen</b> 🇷🇺\n\nTraffic wird zum aktuellen Guthaben hinzugefügt.\n\n<b>Geschätzte Dauer (leichte Nutzung):</b>\n├ 5 GB — ~2 Wochen (Telegram + Instagram Feed)\n├ 15 GB — ~1,5 Monate\n├ 25 GB — ~2,5 Monate\n├ 45 GB — ~4 Monate\n└ 60 GB — ~6 Monate\n\n<i>Text, Sprache &amp; Fotos verbrauchen wenig.\nReels &amp; Videos deutlich mehr.</i>",
+    'traffic.buy_title_extended': "🌐 <b>Erweitertes Paket 🇷🇺</b>\n\nWird zum aktuellen Guthaben hinzugefügt.\n\n<blockquote>💼 Typische Anwendungsfälle:\n├ 300 GB — Familie oder kleines Büro\n├ 600 GB — Team von 5–10 Personen\n├ 1500 GB — Büro bis 25 Personen\n├ 3000 GB — Unternehmen bis 50 Personen\n└ 5400 GB — Großunternehmen / Firmenzugang</blockquote>",
     'traffic.confirm_purchase': "💳 <b>Zahlung: {gb} GB — {price} ₽</b>\n\n💰 Ihr Guthaben: {balance} ₽",
     'traffic.pay_balance': "💰 Vom Guthaben bezahlen ({price} ₽)",
     'traffic.pay_card': "💳 Mit Karte bezahlen ({price} ₽)",

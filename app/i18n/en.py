@@ -814,6 +814,7 @@ LANG = {
     'traffic.buy_traffic_btn': "💳 Buy Traffic",
     'traffic.back_to_traffic': "📊 Back to Traffic",
     'traffic.buy_title': "📦 <b>Buy Traffic</b> 🇷🇺\n\nTraffic is added to your current balance.\n\n<b>Estimated duration (light usage):</b>\n├ 5 GB — ~2 weeks (Telegram + Instagram feed)\n├ 15 GB — ~1.5 months\n├ 25 GB — ~2.5 months\n├ 45 GB — ~4 months\n└ 60 GB — ~6 months\n\n<i>Text, voice &amp; photos use little data.\nReels &amp; video use significantly more.</i>",
+    'traffic.buy_title_extended': "🌐 <b>Extended Pack 🇷🇺</b>\n\nAdded to your current balance.\n\n<blockquote>💼 Typical use cases:\n├ 300 GB — family or small office\n├ 600 GB — team of 5–10 people\n├ 1500 GB — office up to 25 people\n├ 3000 GB — company up to 50 people\n└ 5400 GB — large business / corporate access</blockquote>",
     'traffic.confirm_purchase': "💳 <b>Payment: {gb} GB — {price} ₽</b>\n\n💰 Your balance: {balance} ₽",
     'traffic.pay_balance': "💰 Pay from balance ({price} ₽)",
     'traffic.pay_card': "💳 Pay by card ({price} ₽)",
