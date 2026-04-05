@@ -805,6 +805,17 @@ async def callback_setup_qr(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
 
+    # Bypass URL
+    bypass_url = None
+    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+    if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
+
     # Generate QR code
     import qrcode
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
@@ -818,14 +829,18 @@ async def callback_setup_qr(callback: CallbackQuery):
 
     qr_text = i18n_get_text(language, "setup.qr_instruction")
 
+    # Append keys
+    keys_section = ""
+    if sub_url:
+        keys_section += "\n\n" + i18n_get_text(language, "setup.key_vpn_label") + "\n<blockquote><code>" + sub_url + "</code></blockquote>"
+    if bypass_url:
+        keys_section += "\n" + i18n_get_text(language, "setup.key_bypass_label") + "\n<blockquote><code>" + bypass_url + "</code></blockquote>"
+    qr_text += keys_section
+
     buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.done_button"),
             callback_data="setup_done",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.help_button"),
-            url="https://t.me/Atlas_SupportSecurity",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
