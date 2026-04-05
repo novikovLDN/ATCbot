@@ -410,7 +410,8 @@ TRAFFIC_PACKS = {
     15: {"price": 115, "bytes": 15 * 1024**3, "discount": "🔥 -13%"},
     25: {"price": 175, "bytes": 25 * 1024**3, "discount": "🔥 -20%"},
     45: {"price": 270, "bytes": 45 * 1024**3, "discount": "🔥 -32%"},
-    60: {"price": 318, "bytes": 60 * 1024**3, "discount": "🔥 -40%"},
+    60:  {"price": 318, "bytes": 60  * 1024**3, "discount": "🔥 -40%"},
+    120: {"price": 530, "bytes": 120 * 1024**3, "discount": "🔥 -50%"},
 }
 
 # Thresholds for traffic notifications (bytes remaining, flag key)
