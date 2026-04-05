@@ -301,6 +301,8 @@ LANG = {
     'setup.autosetup_windows': "🪟 <b>Avto sozlash — Windows</b>\n\n⚡️ Quyida o'rnatgan ilovangiz tugmasini bosing — kalit avtomatik qo'shiladi.\n\nAgar ilova ochilmasa — batafsil ko'rsatmadan foydalaning.",
     'setup.manual_button': "📖 Batafsil ko'rsatma",
     'setup.copy_key_label': "👇 Kalitni nusxalash uchun bosing:",
+    'setup.key_vpn_label': "🔑 <b>VPN kalit</b> (oddiy serverlar):",
+    'setup.key_bypass_label': "🔑 <b>Chetlab o'tish kaliti</b> (RU oq ro'yxatlar):",
     'setup.device_button': "📲 Qurilmani sozlash",
     'setup.done_button': "✅ Tayyor",
     'setup.help_button': "❓ Yordam kerak",
@@ -776,8 +778,7 @@ LANG = {
     'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM SOTIB OLISH</b>\n\n👤 Xaridor: {buyer_id}\n🎯 Username: <code>{username}</code>\n📅 Muddat: {period}\n💰 Summa: {price} ₽\n🕐 Sana: {date}",
 
     # --- Traffic / Bypass (Remnawave) ---
-    'main.traffic_btn': "📊 Trafik",
-    'main.buy_traffic_btn': "💳 Trafik sotib olish",
+    'main.traffic_btn': "📊 Mening trafigim",
     'traffic.info': "📊 <b>Bloklarni chetlab o'tish</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Gacha: {expires}\n\n🔗 <b>Obuna:</b>\n<code>{sub_url}</code>",
     'traffic.no_subscription': "📊 <b>Bloklarni chetlab o'tish</b> 🇷🇺\n\n🔒 Faol obuna yo'q.",
     'traffic.trial_no_bypass': "📊 <b>Bloklarni chetlab o'tish</b> 🇷🇺\n\n🔒 Chetlab o'tish Basic va Plus tariflarida mavjud.",

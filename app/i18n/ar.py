@@ -301,6 +301,8 @@ LANG = {
     'setup.autosetup_windows': "🪟 <b>إعداد تلقائي — Windows</b>\n\n⚡️ اضغط على الزر أدناه مع التطبيق الذي قمت بتثبيته — سيتم إضافة المفتاح تلقائياً.\n\nإذا لم يفتح التطبيق — استخدم التعليمات المفصّلة.",
     'setup.manual_button': "📖 تعليمات مفصّلة",
     'setup.copy_key_label': "👇 اضغط على المفتاح للنسخ:",
+    'setup.key_vpn_label': "🔑 <b>مفتاح VPN</b> (خوادم عادية):",
+    'setup.key_bypass_label': "🔑 <b>مفتاح التجاوز</b> (القوائم البيضاء RU):",
     'setup.device_button': "📲 إعداد الجهاز",
     'setup.done_button': "✅ تم",
     'setup.help_button': "❓ أحتاج مساعدة",
@@ -788,8 +790,7 @@ LANG = {
     'premium.admin_notification': "💎 <b>شراء TELEGRAM PREMIUM</b>\n\n👤 المشتري: {buyer_id}\n🎯 اسم المستخدم: <code>{username}</code>\n📅 المدة: {period}\n💰 المبلغ: {price} ₽\n🕐 التاريخ: {date}",
 
     # --- Traffic / Bypass (Remnawave) ---
-    'main.traffic_btn': "📊 حركة المرور",
-    'main.buy_traffic_btn': "💳 شراء حركة المرور",
+    'main.traffic_btn': "📊 حركة المرور الخاصة بي",
     'traffic.info': "📊 <b>تجاوز الحظر</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ حتى: {expires}\n\n🔗 <b>الاشتراك:</b>\n<code>{sub_url}</code>",
     'traffic.no_subscription': "📊 <b>تجاوز الحظر</b> 🇷🇺\n\n🔒 لا يوجد اشتراك نشط.",
     'traffic.trial_no_bypass': "📊 <b>تجاوز الحظر</b> 🇷🇺\n\n🔒 التجاوز متاح في خطط Basic و Plus.",

@@ -301,6 +301,8 @@ LANG = {
     'setup.autosetup_windows': "🪟 <b>Танзими худкор — Windows</b>\n\n⚡️ Тугмаи зеринро бо барномае, ки насб кардед, пахш кунед — калид худкор илова мешавад.\n\nАгар барнома кушода нашуд — дастури муфассалро истифода баред.",
     'setup.manual_button': "📖 Дастури муфассал",
     'setup.copy_key_label': "👇 Калидро бо як пахш нусхабардорӣ кунед:",
+    'setup.key_vpn_label': "🔑 <b>Калиди VPN</b> (серверҳои оддӣ):",
+    'setup.key_bypass_label': "🔑 <b>Калиди гузариш</b> (рӯйхатҳои сафеди РФ):",
     'setup.device_button': "📲 Танзими дастгоҳ",
     'setup.done_button': "✅ Тайёр",
     'setup.help_button': "❓ Кӯмак лозим",
@@ -776,8 +778,7 @@ LANG = {
     'premium.admin_notification': "💎 <b>ХАРИДАНИ TELEGRAM PREMIUM</b>\n\n👤 Харидор: {buyer_id}\n🎯 Номи корбарӣ: <code>{username}</code>\n📅 Мӯҳлат: {period}\n💰 Маблағ: {price} ₽\n🕐 Сана: {date}",
 
     # --- Traffic / Bypass (Remnawave) ---
-    'main.traffic_btn': "📊 Трафик",
-    'main.buy_traffic_btn': "💳 Харидани трафик",
+    'main.traffic_btn': "📊 Трафики ман",
     'traffic.info': "📊 <b>Гузариш аз блокҳо</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ То: {expires}\n\n🔗 <b>Обуна:</b>\n<code>{sub_url}</code>",
     'traffic.no_subscription': "📊 <b>Гузариш аз блокҳо</b> 🇷🇺\n\n🔒 Обунаи фаъол нест.",
     'traffic.trial_no_bypass': "📊 <b>Гузариш аз блокҳо</b> 🇷🇺\n\n🔒 Гузариш дар тарифҳои Basic ва Plus дастрас аст.",

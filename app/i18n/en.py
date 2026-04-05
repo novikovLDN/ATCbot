@@ -308,6 +308,8 @@ LANG = {
     'setup.autosetup_windows': "🪟 <b>Auto setup — Windows</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.manual_button': "📖 Detailed instructions",
     'setup.copy_key_label': "👇 Tap the key to copy:",
+    'setup.key_vpn_label': "🔑 <b>VPN key</b> (regular servers):",
+    'setup.key_bypass_label': "🔑 <b>Bypass key</b> (RU whitelists):",
     'setup.device_button': "📲 Set up device",
     'setup.done_button': "✅ Done",
     'setup.help_button': "❓ Need help",
@@ -795,8 +797,7 @@ LANG = {
     'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM PURCHASE</b>\n\n👤 Buyer: {buyer_id}\n🎯 Username: <code>{username}</code>\n📅 Period: {period}\n💰 Amount: {price} ₽\n🕐 Date: {date}",
 
     # --- Traffic / Bypass (Remnawave) ---
-    'main.traffic_btn': "📊 Traffic",
-    'main.buy_traffic_btn': "💳 Buy Traffic",
+    'main.traffic_btn': "📊 My Traffic",
     'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Subscription:</b>\n<code>{sub_url}</code>",
     'traffic.no_subscription': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 No active subscription.",
     'traffic.trial_no_bypass': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 Bypass is available on Basic and Plus plans.",

@@ -301,6 +301,8 @@ LANG = {
     'setup.autosetup_windows': "🪟 <b>Авто баптау — Windows</b>\n\n⚡️ Төменде орнатқан қолданбаңыздың батырмасын басыңыз — кілт автоматты қосылады.\n\nЕгер қолданба ашылмаса — толық нұсқаулықты қолданыңыз.",
     'setup.manual_button': "📖 Толық нұсқаулық",
     'setup.copy_key_label': "👇 Кілтті көшіру үшін басыңыз:",
+    'setup.key_vpn_label': "🔑 <b>VPN кілт</b> (қарапайым серверлер):",
+    'setup.key_bypass_label': "🔑 <b>Айналып өту кілті</b> (РФ ақ тізімдер):",
     'setup.device_button': "📲 Құрылғыны баптау",
     'setup.done_button': "✅ Дайын",
     'setup.help_button': "❓ Көмек керек",
@@ -776,8 +778,7 @@ LANG = {
     'premium.admin_notification': "💎 <b>TELEGRAM PREMIUM САТЫП АЛУ</b>\n\n👤 Сатып алушы: {buyer_id}\n🎯 Username: <code>{username}</code>\n📅 Мерзімі: {period}\n💰 Сомасы: {price} ₽\n🕐 Күні: {date}",
 
     # --- Traffic / Bypass (Remnawave) ---
-    'main.traffic_btn': "📊 Трафик",
-    'main.buy_traffic_btn': "💳 Трафик сатып алу",
+    'main.traffic_btn': "📊 Менің трафигім",
     'traffic.info': "📊 <b>Бұғаттауды айналып өту</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Дейін: {expires}\n\n🔗 <b>Жазылым:</b>\n<code>{sub_url}</code>",
     'traffic.no_subscription': "📊 <b>Бұғаттауды айналып өту</b> 🇷🇺\n\n🔒 Белсенді жазылым жоқ.",
     'traffic.trial_no_bypass': "📊 <b>Бұғаттауды айналып өту</b> 🇷🇺\n\n🔒 Айналып өту Basic және Plus тарифтерінде қолжетімді.",
