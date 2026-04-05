@@ -665,7 +665,7 @@ LANG = {
     'buy.tariff_biz_starter_desc': '🏢 Starter — dedizierter Server\n\n⚙️ 2 vCPU · 8 GB RAM · 20 TB Traffic\n👥 Bis zu 5 Benutzer\n🔒 Volle Zugangskontrolle',
     'buy.tariff_biz_team_desc': '🏢 Team — dedizierter Server\n\n⚙️ 4 vCPU · 16 GB RAM · 20 TB Traffic\n👥 Bis zu 15 Benutzer\n🔒 Volle Zugangskontrolle',
     'buy.tariff_biz_ultimate_desc': '🏢 Ultimate — dedizierter Server\n\n⚙️ 48 vCPU · 192 GB RAM · 60 TB Traffic\n👥 Bis zu 500 Benutzer\n🔒 Volle Zugangskontrolle',
-    'connect.press_button': '🚀 Drücken Sie die Taste unten, um sich zu verbinden:\n\nWenn die Mini-App nicht öffnet — tippen Sie auf <b>📲 Gerät einrichten</b> und folgen Sie der Schritt-für-Schritt-Anleitung.',
+    'connect.press_button': '📲 <b>Verbindung</b>\n\nTippen Sie auf <b>«Verbinden»</b> und folgen Sie den Anweisungen — die Einrichtung dauert nur ein paar Minuten.',
     'connect.setup_device_button': '📲 Gerät einrichten',
     'connect.instruction_screen': "📖 <b>Verbindungsanleitung</b>\n\nTippen Sie auf «Verbinden» oder\n«🌐 Mini App öffnen» und folgen Sie allen Einrichtungsschritten.\n\nWenn etwas schief geht — kontaktieren Sie den Support.\n\n⸻\n\n👇",
     'connect.autosetup_btn': "📲 Verbinden",

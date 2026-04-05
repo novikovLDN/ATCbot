@@ -665,7 +665,7 @@ LANG = {
     'buy.tariff_biz_starter_desc': "🏢 Starter — ajratilgan server\n\n⚙️ 2 vCPU · 8 GB RAM · 20 TB trafik\n👥 5 foydalanuvchigacha\n🔒 Kirishni to'liq nazorat",
     'buy.tariff_biz_team_desc': "🏢 Team — ajratilgan server\n\n⚙️ 4 vCPU · 16 GB RAM · 20 TB trafik\n👥 15 foydalanuvchigacha\n🔒 Kirishni to'liq nazorat",
     'buy.tariff_biz_ultimate_desc': "🏢 Ultimate — ajratilgan server\n\n⚙️ 48 vCPU · 192 GB RAM · 60 TB trafik\n👥 500 foydalanuvchigacha\n🔒 Kirishni to'liq nazorat",
-    'connect.press_button': "🚀 Ulanish uchun quyidagi tugmani bosing:\n\nAgar mini-ilova ochilmasa — <b>📲 Qurilmani sozlash</b> tugmasini bosing va bosqichma-bosqich sozlang.",
+    'connect.press_button': "📲 <b>Ulanish</b>\n\nPastdagi <b>«Ulanish»</b> tugmasini bosing va ko'rsatmalarga amal qiling — sozlash bir necha daqiqa oladi.",
     'connect.setup_device_button': "📲 Qurilmani sozlash",
     'connect.instruction_screen': "📖 <b>Ulanish bo'yicha ko'rsatma</b>\n\n«Ulanish» yoki\n«🌐 Mini ilovani ochish» tugmasini bosing va barcha sozlash bosqichlarini bajaring.\n\nBiror narsa noto'g'ri bo'lsa — qo'llab-quvvatlash xizmatiga murojaat qiling.\n\n⸻\n\n👇",
     'connect.autosetup_btn': "📲 Ulanish",
