@@ -794,6 +794,7 @@ LANG = {
     'traffic.buy_traffic_btn': "💳 Trafik sotib olish",
     'traffic.back_to_traffic': "📊 Trafikka qaytish",
     'traffic.buy_title': "📦 <b>Trafik sotib olish</b> 🇷🇺\n\nTrafik joriy qoldiqqa qo'shiladi.\n\n<b>Taxminiy davomiylik (yengil foydalanish):</b>\n├ 5 GB — ~2 hafta (Telegram + Instagram lenta)\n├ 15 GB — ~1.5 oy\n├ 25 GB — ~2.5 oy\n├ 45 GB — ~4 oy\n└ 60 GB — ~6 oy\n\n<i>Matn, ovozli va foto kam trafik sarflaydi.\nReels va video ancha ko'proq.</i>",
+    'traffic.buy_title_extended': "🌐 <b>Kengaytirilgan paket 🇷🇺</b>\n\nJoriy qoldiqqa qo'shiladi.\n\n<blockquote>💼 Qanday vazifalar uchun:\n├ 300 GB — oila yoki kichik ofis\n├ 600 GB — 5–10 kishilik jamoa\n├ 1500 GB — 25 kishigacha ofis\n├ 3000 GB — 50 kishigacha kompaniya\n└ 5400 GB — yirik biznes / korporativ kirish</blockquote>",
     'traffic.confirm_purchase': "💳 <b>To'lov: {gb} GB — {price} ₽</b>\n\n💰 Balansingiz: {balance} ₽",
     'traffic.pay_balance': "💰 Balansdan to'lash ({price} ₽)",
     'traffic.pay_card': "💳 Karta bilan to'lash ({price} ₽)",
