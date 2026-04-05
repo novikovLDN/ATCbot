@@ -119,6 +119,8 @@ def _build_broadcast_reply_markup(
         elif btn == "promo_traffic":
             label = f"📊 Купить трафик −{discount}%" if discount else "📊 Купить трафик"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_traffic:{broadcast_id}")])
+        elif btn == "bypass":
+            rows.append([InlineKeyboardButton(text="🌐 Включить обход", callback_data="traffic_info")])
         elif btn == "channel":
             rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
         elif btn == "support":
@@ -259,6 +261,7 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
         await callback.message.answer(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML",
         )
 
     except Exception as e:
@@ -615,6 +618,7 @@ def _btn_label(btn_type: str) -> str:
         "buy": "🛒 Купить",
         "promo_buy": "🎁 Купить со скидкой",
         "promo_traffic": "📊 Купить трафик промо",
+        "bypass": "🌐 Включить обход",
         "channel": "📢 Наш канал",
         "support": "💬 Поддержка",
         "referral": "👥 Реферальная программа",
