@@ -291,7 +291,7 @@ def get_profile_keyboard(
     row1 = []
     if show_traffic and not is_trial:
         row1.append(InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.buy_traffic_btn", "📊 Купить ГБ"),
+            text="🌐 Купить ГБ",
             callback_data="buy_traffic",
         ))
     buy_text = i18n_get_text(language, "main.buy_renew") if has_active_subscription else i18n_get_text(language, "main.buy_new")
@@ -301,7 +301,7 @@ def get_profile_keyboard(
     # Row 2: Автопродление + Пополнить
     row2 = []
     if has_active_subscription:
-        ar_text = "🔄 Вкл ✅" if auto_renew else "🔄 Выкл"
+        ar_text = "🔄 Автопродление ✅" if auto_renew else "🔄 Автопродление"
         ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
         row2.append(InlineKeyboardButton(text=ar_text, callback_data=ar_data))
     row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
