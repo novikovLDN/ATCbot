@@ -640,12 +640,13 @@ async def process_successful_payment(message: Message, state: FSMContext):
             if traffic_result and traffic_result.get("is_traffic_pack"):
                 traffic_gb = traffic_result.get("traffic_gb", 0)
                 # Add traffic via Remnawave
+                rmn_success = False
                 pack = config.TRAFFIC_PACKS.get(traffic_gb)
                 if pack:
                     try:
                         from app.services.remnawave_service import add_traffic
-                        success = await add_traffic(telegram_id, pack["bytes"])
-                        if not success:
+                        rmn_success = await add_traffic(telegram_id, pack["bytes"])
+                        if not rmn_success:
                             logger.error(
                                 "TRAFFIC_PACK_REMNAWAVE_FAIL: user=%s gb=%s purchase=%s",
                                 telegram_id, traffic_gb, purchase_id,
@@ -655,8 +656,19 @@ async def process_successful_payment(message: Message, state: FSMContext):
                             "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
                             telegram_id, traffic_gb, rmn_err,
                         )
+                else:
+                    logger.error(
+                        "TRAFFIC_PACK_INVALID_GB: user=%s gb=%s purchase=%s",
+                        telegram_id, traffic_gb, purchase_id,
+                    )
 
                 text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+                if not rmn_success:
+                    text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
+                    logger.error(
+                        "TRAFFIC_PACK_NOT_APPLIED: user=%s gb=%s purchase=%s — needs manual resolution",
+                        telegram_id, traffic_gb, purchase_id,
+                    )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text=i18n_get_text(language, "traffic.back_to_traffic"),

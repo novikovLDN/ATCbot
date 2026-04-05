@@ -4277,15 +4277,26 @@ async def finalize_purchase(
 
                     # Record in traffic_purchases
                     _payment_method = payment_provider or "card"
-                    await conn.execute(
-                        """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method, created_at)
-                           VALUES ($1, $2, $3, $4, $5)""",
-                        telegram_id,
-                        _gb,
-                        round(amount_rubles),
-                        _payment_method,
-                        _to_db_utc(now_utc),
-                    )
+                    try:
+                        await conn.execute(
+                            """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method, created_at)
+                               VALUES ($1, $2, $3, $4, $5)""",
+                            telegram_id,
+                            _gb,
+                            round(amount_rubles),
+                            _payment_method,
+                            _to_db_utc(now_utc),
+                        )
+                    except Exception as _tp_err:
+                        if "payment_method" in str(_tp_err):
+                            logger.warning("finalize_purchase: payment_method column missing, inserting without it")
+                            await conn.execute(
+                                """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, created_at)
+                                   VALUES ($1, $2, $3, $4)""",
+                                telegram_id, _gb, round(amount_rubles), _to_db_utc(now_utc),
+                            )
+                        else:
+                            raise
 
                     logger.info(
                         f"finalize_purchase: TRAFFIC_PACK_DONE [purchase_id={purchase_id}, user={telegram_id}, "
