@@ -126,7 +126,19 @@ async def callback_traffic_info(callback: CallbackQuery):
     used = traffic["usedTrafficBytes"]
     limit = traffic["trafficLimitBytes"]
     devices_online = traffic.get("onlineDevices", 0)
-    device_limit = traffic.get("deviceLimit", _get_device_limit(sub_type))
+    api_device_limit = traffic.get("deviceLimit", 0)
+    expected_device_limit = _get_device_limit(sub_type)
+    device_limit = api_device_limit or expected_device_limit
+
+    # Auto-fix deviceLimit if it was 0 or wrong (legacy accounts)
+    if api_device_limit != expected_device_limit and rmn_uuid:
+        try:
+            await remnawave_api.update_user(rmn_uuid, deviceLimit=expected_device_limit)
+            device_limit = expected_device_limit
+            logger.info("DEVICE_LIMIT_FIXED: tg=%s %d->%d", telegram_id, api_device_limit, expected_device_limit)
+        except Exception:
+            pass
+
     remaining = max(0, limit - used)
     pct = int(used / limit * 100) if limit > 0 else 0
 
@@ -135,10 +147,12 @@ async def callback_traffic_info(callback: CallbackQuery):
 
     bar = _progress_bar(used, limit)
     warning = ""
+    if devices_online >= device_limit > 0:
+        warning = "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_device_limit")
     if remaining <= 500 * 1024**2:
-        warning = "\n\n❗️ " + i18n_get_text(language, "traffic.warning_critical")
+        warning += "\n\n❗️ " + i18n_get_text(language, "traffic.warning_critical")
     elif remaining <= 3 * 1024**3:
-        warning = "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
+        warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
     # Subscription URL comes directly from Remnawave API response
     sub_url = traffic.get("subscriptionUrl", "")
@@ -156,17 +170,24 @@ async def callback_traffic_info(callback: CallbackQuery):
         sub_url=sub_url,
     ) + warning
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.buy_traffic_btn"),
             callback_data="buy_traffic",
         )],
-        [InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
-        )],
-    ])
+    ]
+    # Show "reset subscription" when at device limit
+    if devices_online >= device_limit > 0:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.reset_devices_btn"),
+            callback_data="traffic_reset_devices",
+        )])
+    buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="menu_main",
+    )])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
 
 
@@ -531,3 +552,104 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
     except Exception as e:
         logger.exception("TRAFFIC_SBP_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+# ── Device reset (double confirmation) ─────────────────────────────────
+
+@traffic_router.callback_query(F.data == "traffic_reset_devices")
+async def callback_reset_devices_step1(callback: CallbackQuery):
+    """First confirmation: warn that all devices will be disconnected."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    language = await resolve_user_language(callback.from_user.id)
+
+    text = i18n_get_text(language, "traffic.reset_devices_confirm")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.reset_devices_confirm_btn"),
+            callback_data="traffic_reset_devices_confirm2",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.reset_devices_cancel_btn"),
+            callback_data="traffic_info",
+        )],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
+
+
+@traffic_router.callback_query(F.data == "traffic_reset_devices_confirm2")
+async def callback_reset_devices_step2(callback: CallbackQuery):
+    """Second confirmation: final warning before reset."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    language = await resolve_user_language(callback.from_user.id)
+
+    text = i18n_get_text(language, "traffic.reset_devices_confirm2")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.reset_devices_confirm_btn"),
+            callback_data="traffic_reset_devices_execute",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.reset_devices_cancel_btn"),
+            callback_data="traffic_info",
+        )],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
+
+
+@traffic_router.callback_query(F.data == "traffic_reset_devices_execute")
+async def callback_reset_devices_execute(callback: CallbackQuery):
+    """Execute device reset: disable user then re-enable to disconnect all clients."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+    if not rmn_uuid:
+        await safe_edit_text(
+            callback.message,
+            i18n_get_text(language, "traffic.reset_devices_error"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="traffic_info")],
+            ]),
+            bot=callback.bot,
+        )
+        return
+
+    try:
+        # Disable user — disconnects all active clients
+        result = await remnawave_api.update_user(rmn_uuid, status="DISABLED")
+        if result is None:
+            raise Exception("Failed to disable user")
+
+        # Re-enable user — allows reconnection
+        result = await remnawave_api.update_user(rmn_uuid, status="ACTIVE")
+        if result is None:
+            raise Exception("Failed to re-enable user")
+
+        logger.info("DEVICE_RESET: tg=%s uuid=%s — all devices disconnected", telegram_id, rmn_uuid[:8])
+
+        text = i18n_get_text(language, "traffic.reset_devices_success")
+    except Exception as e:
+        logger.error("DEVICE_RESET_ERROR: tg=%s %s", telegram_id, e)
+        text = i18n_get_text(language, "traffic.reset_devices_error")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.back_to_traffic"),
+            callback_data="traffic_info",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main",
+        )],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot, parse_mode="HTML")
