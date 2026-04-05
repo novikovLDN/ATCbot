@@ -181,6 +181,9 @@ from database.traffic import (  # noqa: F401
     reset_traffic_notification_flags,
     record_traffic_purchase,
     get_active_remnawave_users,
+    get_user_traffic_discount,
+    create_user_traffic_discount,
+    delete_user_traffic_discount,
 )
 
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
