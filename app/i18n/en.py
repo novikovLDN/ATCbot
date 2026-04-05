@@ -637,7 +637,7 @@ LANG = {
     'connect.instruction_screen': "📖 <b>Connection Instructions</b>\n\nTap «Connect» or\n«🌐 Open Mini App» below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇",
     'connect.autosetup_btn': "📲 Connect",
     'connect.open_miniapp_btn': "🌐 Open Mini App",
-    'connect.autosetup_screen': "📱 <b>Auto Setup</b>\n\n⚡️ Tap the button for the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.\n\n⸻\n\n⚡️ <b>Auto Setup</b> — regular servers\n🇷🇺 <b>Auto Setup Bypass</b> — servers for bypassing whitelists\n\n💡 You can install both keys at once.",
+    'connect.autosetup_screen': "📱 <b>Auto Setup</b>\n\nTap the button for the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.\n\n🌐 — regular servers with basic bypass\n🤍 — servers for bypassing RU whitelists\n\nYou can install both keys at once.",
 
     # Gift subscription
     'main.gift_subscription': "🎁 Gift Subscription",

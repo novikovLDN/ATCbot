@@ -670,7 +670,7 @@ LANG = {
     'connect.instruction_screen': "📖 <b>Verbindungsanleitung</b>\n\nTippen Sie auf «Verbinden» oder\n«🌐 Mini App öffnen» und folgen Sie allen Einrichtungsschritten.\n\nWenn etwas schief geht — kontaktieren Sie den Support.\n\n⸻\n\n👇",
     'connect.autosetup_btn': "📲 Verbinden",
     'connect.open_miniapp_btn': "🌐 Mini App öffnen",
-    'connect.autosetup_screen': "📱 <b>Auto-Einrichtung</b>\n\n⚡️ Tippen Sie auf die Schaltfläche der installierten App — der Schlüssel wird automatisch hinzugefügt.\n\nWenn die App nicht geöffnet wurde — verwenden Sie die ausführliche Anleitung.\n\n⸻\n\n⚡️ <b>Auto-Einrichtung</b> — normale Server\n🇷🇺 <b>Auto-Einrichtung Umgehung</b> — Server zur Umgehung von Whitelists\n\n💡 Sie können beide Schlüssel gleichzeitig installieren.",
+    'connect.autosetup_screen': "📱 <b>Auto-Einrichtung</b>\n\nTippen Sie auf die Schaltfläche der installierten App — der Schlüssel wird automatisch hinzugefügt.\n\nWenn die App nicht geöffnet wurde — verwenden Sie die ausführliche Anleitung.\n\n🌐 — normale Server mit Basis-Umgehung\n🤍 — Server zur Umgehung von RU-Whitelists\n\nSie können beide Schlüssel gleichzeitig installieren.",
     'farm.back': '🔙 Zurück',
     'farm.back_to_games': '🔙 Zu Spielen',
     'farm.balance': '\n💰 Guthaben: {balance:.2f} ₽',

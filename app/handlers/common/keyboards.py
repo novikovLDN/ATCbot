@@ -356,8 +356,23 @@ def get_payment_success_keyboard(
     subscription_type: str = "basic",
     is_renewal: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура после успешной оплаты: Подключиться (WebApp) + Профиль."""
-    return get_connect_keyboard()
+    """Клавиатура после успешной оплаты: Подключиться + Профиль + Трафик."""
+    buttons = [
+        [InlineKeyboardButton(
+            text="📲 Подключиться",
+            callback_data="connect_instruction",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.profile"),
+            callback_data="menu_profile",
+        )],
+    ]
+    if config.REMNAWAVE_ENABLED and subscription_type in ("basic", "plus"):
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.traffic_btn"),
+            callback_data="traffic_info",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 async def get_tariff_keyboard(language: str, telegram_id: int, promo_code: str = None, purchase_id: str = None):

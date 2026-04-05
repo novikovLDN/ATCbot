@@ -598,7 +598,7 @@ LANG = {
     'payment.success': "✅ Платёж успешно обработан!",
     'payment.success_first': "🎉 <b>Подписка успешно активирована</b>\n\n📅 <b>Срок действия:</b> до {date}\n\n🔗 <b>Ссылка подписки:</b>\n<code>{sub_url}</code>\n\nИспользуйте её в приложении VPN.",
     'payment.success_renewal': "🔄 <b>Подписка продлена</b>\n\n📅 <b>Новый срок действия:</b> до {date}\n\n🔗 <b>Ссылка подписки:</b>\n<code>{sub_url}</code>\n\nВы можете продолжить использовать текущую ссылку подключения.",
-    'payment.success_renewal_compact': "✅ Подписка продлена\n{tariff_icon} Тариф: {tariff}\n📅 До: {date}",
+    'payment.success_renewal_compact': "✅ <b>Подписка продлена!</b>\n\n{tariff_icon} Тариф: {tariff}\n📅 До: {date}\n\nVPN продолжает работать.\n\n🤍 Atlas Secure",
     'payment.test': "Служебный режим Недоступно",
     'profile.access_key_label': "Ключ подключения:",
     'profile.auto_renew_disabled': "🔁 Автопродление: выключено",
@@ -717,20 +717,15 @@ LANG = {
     'trial.reminder_3h_discount_btn': "🔥 Купить со скидкой 15%",
 
     # === TRIAL ACTIVATION ===
-    'trial.activated': "✅ <b>Пробный доступ активирован</b>\n\n📦 Тариф: Basic · 3 дня\n📅 До: {expires_date}\n\nЧтобы начать пользоваться — нажмите <b>📲 Настроить устройство</b> и следуйте простой пошаговой инструкции.",
+    'trial.activated': "✅ <b>Пробный доступ активирован</b>\n\n🏆 Тариф: Basic · 3 дня\n📅 До: {expires_date}\n\nНажмите «Подключиться» ниже, чтобы настроить VPN за минуту.\n\n🤍 Atlas Secure",
     'trial.activated_btn_connect': "🚀 Подключиться",
     'trial.activated_btn_profile': "👤 Мой профиль",
 
     # === PURCHASE CONFIRMATION ===
-    'purchase.success_first': "🎉 <b>Подписка успешно оформлена!</b>\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {period}\n📅 Действует до: {expires_date}\n\nВсё готово — осталось подключиться! Нажмите кнопку «Подключиться» ниже, чтобы перейти в приложение и настроить VPN. Это займёт буквально минуту.\n\n🛡 Ваш трафик теперь под надёжной защитой Atlas Secure.",
-    'purchase.success_first_btn_connect': "🚀 Подключиться и настроить",
-    'purchase.success_first_btn_instruction': "📖 Инструкция",
-    'purchase.success_first_btn_profile': "👤 Мой профиль",
+    'purchase.success_first': "🎉 <b>Подписка оформлена!</b>\n\n{tariff_name}\n⏳ Срок: {period}\n📅 До: {expires_date}\n\nОсталось подключиться — нажмите кнопку ниже.\n\n📲 <b>Подключиться</b> — настроить VPN за минуту\n👤 <b>Мой профиль</b> — баланс, срок, автопродление\n📊 <b>Мой трафик</b> — контроль обхода белых списков\n\n🤍 Ваш трафик под защитой Atlas Secure.",
 
     # === RENEWAL CONFIRMATION ===
-    'purchase.success_renewal': "✅ <b>Подписка успешно продлена!</b>\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {period}\n📅 Действует до: {expires_date}\n\nВаш доступ продлён — VPN продолжает работать без перерыва. Ничего настраивать не нужно.\n\n🛡 Спасибо, что остаётесь с Atlas Secure!",
-    'purchase.success_renewal_btn_profile': "👤 Мой профиль",
-    'purchase.success_renewal_btn_main': "🏠 Главное меню",
+    'purchase.success_renewal': "✅ <b>Подписка продлена!</b>\n\n{tariff_name}\n⏳ Срок: {period}\n📅 До: {expires_date}\n\nVPN продолжает работать — ничего настраивать не нужно.\n\n🤍 Спасибо, что остаётесь с Atlas Secure!",
 
     # === AUTO-RENEWAL NOTIFICATION ===
     'purchase.auto_renewal_success': "🔄 <b>Подписка автоматически продлена</b>\n\n📦 Тариф: {tariff_name}\n⏳ Срок: {days} дней\n📅 Действует до: {expires_date}\n💳 Списано с баланса: {amount:.2f} ₽\n\nВаш VPN продолжает работать без перерыва.\n\n🛡 Спасибо за доверие Atlas Secure!",
@@ -838,7 +833,7 @@ LANG = {
     'connect.instruction_screen': "📖 <b>Инструкция по подключению</b>\n\nНажмите «Подключиться» или\n«Открыть мини апп» ниже и пройдите все шаги настройки.\n\nЕсли что-то пойдёт не так — вы всегда можете обратиться в поддержку за помощью.\n\n👇",
     'connect.autosetup_btn': "📲 Подключиться",
     'connect.open_miniapp_btn': "🌐 Открыть мини апп",
-    'connect.autosetup_screen': "📱 <b>Авто настройка</b>\n\nНажмите кнопку с приложением, которое вы установили — ключ подставится автоматически.\n\nЕсли приложение не открылось — нажмите «Подробная инструкция».\n\n<b>VPN</b> — обычные сервера с базовым обходом\n<b>Обход</b> — сервера для обхода белых списков РФ\n\nВы можете поставить оба ключа сразу.",
+    'connect.autosetup_screen': "📱 <b>Авто настройка</b>\n\nНажмите кнопку с приложением, которое вы установили — ключ подставится автоматически.\n\nЕсли приложение не открылось — нажмите «Подробная инструкция».\n\n🌐 — обычные сервера с базовым обходом\n🤍 — сервера для обхода белых списков РФ\n\nВы можете поставить оба ключа сразу.",
 
     # Gift subscription
     'main.gift_subscription': "🎁 Подарить подписку",
