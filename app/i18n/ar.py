@@ -307,7 +307,7 @@ LANG = {
     'setup.done_button': "✅ تم",
     'setup.help_button': "❓ أحتاج مساعدة",
     'setup.qr_button': "📲 إضافة جهاز",
-    'setup.qr_instruction': "📷 <b>إضافة عبر رمز QR</b>\n\nافتح التطبيق المثبت وامسح رمز QR أدناه:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nعلى الشاشة الرئيسية اضغط أيقونة الكاميرا 📸\nوجّه الكاميرا نحو رمز QR\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nاضغط <b>+</b> في الزاوية العلوية اليمنى\nاختر «مسح رمز QR»\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nعلى الشاشة الرئيسية اضغط <b>+</b>\nاختر «مسح رمز QR»",
+    'setup.qr_instruction': "📲 <b>إضافة جهاز</b>\n\n<b>عبر رمز QR:</b>\nامسح الرمز أعلاه في التطبيق:\n├ <b>Happ</b> → 📸 أيقونة الكاميرا\n├ <b>V2RayTun</b> → <b>+</b> → «مسح QR»\n└ <b>Hiddify</b> → <b>+</b> → «مسح QR»\n\n<b>يدوياً:</b>\nاضغط على المفتاح أدناه — سيتم نسخه، ثم:\n├ <b>Happ</b> → أيقونة الحافظة في الأسفل\n├ <b>V2RayTun</b> → <b>+</b> → «استيراد من الحافظة»\n└ <b>Hiddify</b> → <b>+</b> → «من الحافظة»",
     'setup.download_happ': "📲 تحميل Happ",
     'setup.download_hiddify': "📲 تحميل Hiddify",
     'setup.download_v2rayn': "📲 تحميل v2rayN",

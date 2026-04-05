@@ -307,7 +307,7 @@ LANG = {
     'setup.done_button': "✅ Fertig",
     'setup.help_button': "❓ Hilfe benötigt",
     'setup.qr_button': "📲 Gerät hinzufügen",
-    'setup.qr_instruction': "📷 <b>Per QR-Code hinzufügen</b>\n\nÖffnen Sie die installierte App und scannen Sie den QR-Code unten:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nAuf dem Hauptbildschirm tippen Sie auf das Kamera-Symbol 📸\nRichten Sie die Kamera auf den QR-Code\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nTippen Sie oben rechts auf <b>+</b>\nWählen Sie «QR-Code scannen»\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nTippen Sie auf dem Hauptbildschirm auf <b>+</b>\nWählen Sie «QR-Code scannen»",
+    'setup.qr_instruction': "📲 <b>Gerät hinzufügen</b>\n\n<b>Per QR-Code:</b>\nScannen Sie den Code oben in der App:\n├ <b>Happ</b> → 📸 Kamera-Symbol\n├ <b>V2RayTun</b> → <b>+</b> → «QR scannen»\n└ <b>Hiddify</b> → <b>+</b> → «QR scannen»\n\n<b>Manuell:</b>\nTippen Sie auf den Schlüssel unten — er wird kopiert, dann:\n├ <b>Happ</b> → Zwischenablage-Symbol unten\n├ <b>V2RayTun</b> → <b>+</b> → «Aus Zwischenablage importieren»\n└ <b>Hiddify</b> → <b>+</b> → «Aus Zwischenablage»",
     'setup.download_happ': "📲 Happ herunterladen",
     'setup.download_hiddify': "📲 Hiddify herunterladen",
     'setup.download_v2rayn': "📲 v2rayN herunterladen",

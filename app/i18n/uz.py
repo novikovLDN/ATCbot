@@ -307,7 +307,7 @@ LANG = {
     'setup.done_button': "✅ Tayyor",
     'setup.help_button': "❓ Yordam kerak",
     'setup.qr_button': "📲 Qurilma qo'shish",
-    'setup.qr_instruction': "📷 <b>QR-kod orqali qo'shish</b>\n\nO'rnatilgan ilovani oching va pastdagi QR-kodni skanerlang:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nAsosiy ekranda kamera belgisini 📸 bosing\nKamerani QR-kodga yo'naltiring\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nYuqori o'ng burchakda <b>+</b> bosing\n«QR-kodni skanerlash» ni tanlang\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nAsosiy ekranda <b>+</b> bosing\n«QR-kodni skanerlash» ni tanlang",
+    'setup.qr_instruction': "📲 <b>Qurilma qo'shish</b>\n\n<b>QR-kod orqali:</b>\nIlovada yuqoridagi kodni skanerlang:\n├ <b>Happ</b> → 📸 kamera belgisi\n├ <b>V2RayTun</b> → <b>+</b> → «QR skanerlash»\n└ <b>Hiddify</b> → <b>+</b> → «QR skanerlash»\n\n<b>Qo'lda:</b>\nPastdagi kalitni bosing — u nusxalanadi, keyin:\n├ <b>Happ</b> → pastdagi bufer belgisi\n├ <b>V2RayTun</b> → <b>+</b> → «Buferdan import»\n└ <b>Hiddify</b> → <b>+</b> → «Buferdan»",
     'setup.download_happ': "📲 Happ yuklab olish",
     'setup.download_hiddify': "📲 Hiddify yuklab olish",
     'setup.download_v2rayn': "📲 v2rayN yuklab olish",
