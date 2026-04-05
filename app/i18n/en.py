@@ -306,7 +306,7 @@ LANG = {
     'setup.autosetup_android': "🤖 <b>Auto setup — Android</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.autosetup_macos': "🍎 <b>Auto setup — macOS</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.autosetup_windows': "🪟 <b>Auto setup — Windows</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
-    'setup.manual_button': "📖 Detailed instructions",
+    'setup.manual_button': "📖 Manual setup",
     'setup.copy_key_label': "👇 Tap the key to copy:",
     'setup.key_vpn_label': "🔑 <b>VPN key</b> (regular servers):",
     'setup.key_bypass_label': "🔑 <b>Bypass key</b> (RU whitelists):",

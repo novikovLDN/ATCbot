@@ -499,7 +499,7 @@ async def callback_connect_instruction(callback: CallbackQuery):
             callback_data="menu_main",
         )],
     ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 # ── Device setup flow ──────────────────────────────────────────────
@@ -553,7 +553,7 @@ async def callback_setup_device(callback: CallbackQuery):
         )],
     ])
 
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("setup_platform:"))
