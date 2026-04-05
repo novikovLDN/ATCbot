@@ -41,7 +41,7 @@ async def _request(
             resp = await client.request(method, url, headers=_headers(), **kwargs)
 
         if resp.status_code == 404:
-            logger.warning("REMNAWAVE_404: %s %s", method, path)
+            logger.warning("REMNAWAVE_404: %s %s body=%s", method, path, resp.text[:500])
             return None
 
         if resp.status_code >= 400:
@@ -100,8 +100,10 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
 
 
 async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
-    """PATCH /api/users/{uuid} — update user fields."""
-    return await _request("PATCH", f"/api/users/{uuid}", json=fields)
+    """PATCH /api/users/{uuid} — update user fields.
+    Include uuid in body as some Remnawave panel versions require it."""
+    body = {"uuid": uuid, **fields}
+    return await _request("PATCH", f"/api/users/{uuid}", json=body)
 
 
 async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
