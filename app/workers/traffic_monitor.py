@@ -32,16 +32,7 @@ def _format_bytes(b: int) -> str:
 async def _check_user_traffic(bot: Bot, telegram_id: int, rmn_uuid: str) -> None:
     """Check traffic thresholds and send one-shot notifications."""
     try:
-        from app.services.remnawave_service import _get_user_with_recovery
-        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
-        if user_data:
-            user_traffic_nested = user_data.get("userTraffic") or {}
-            traffic = {
-                "usedTrafficBytes": user_traffic_nested.get("usedTrafficBytes", user_data.get("usedTrafficBytes", 0)),
-                "trafficLimitBytes": user_data.get("trafficLimitBytes", 0),
-            }
-        else:
-            traffic = None
+        traffic = await remnawave_api.get_user_traffic(rmn_uuid)
         if not traffic:
             return
 
