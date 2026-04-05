@@ -3771,15 +3771,32 @@ async def create_pending_purchase(
         # Срок действия контекста покупки (30 минут)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
-        # Создаем запись о покупке
-        await conn.execute(
-            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-            purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country
-        )
+        # Соз��аем запись о по��упке
+        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"""
+        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country)
+        try:
+            await conn.execute(_insert_sql, *_insert_args)
+        except Exception as e:
+            if "purchase_type_check" in str(e) or "tariff_check" in str(e):
+                # Auto-fix CHECK constraints for traffic_pack support
+                logger.warning("create_pending_purchase: fixing CHECK constraints for traffic_pack")
+                await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_purchase_type_check")
+                await conn.execute(
+                    "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_purchase_type_check "
+                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'traffic_pack'))"
+                )
+                await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check")
+                await conn.execute(
+                    "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check "
+                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium') OR tariff LIKE 'traffic_%')"
+                )
+                await conn.execute(_insert_sql, *_insert_args)
+            else:
+                raise
 
         logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks, country={country}")
-        
+
         return purchase_id
 
 
