@@ -461,27 +461,27 @@ async def callback_connect_instruction(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    # Auto-provision Remnawave user for existing subscribers + ensure squad
+    # Auto-provision Remnawave user for existing subscribers + ensure squad (fire-and-forget)
     if config.REMNAWAVE_ENABLED:
         from app.services import remnawave_service
-        try:
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if not rmn_uuid:
-                subscription = await database.get_subscription(telegram_id)
-                if subscription:
-                    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-                    expires_at = subscription.get("expires_at")
-                    if expires_at:
-                        override = 5 * 1024**3 if sub_type == "trial" else 10 * 1024**3
-                        await remnawave_service.create_remnawave_user(
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if not rmn_uuid:
+            subscription = await database.get_subscription(telegram_id)
+            if subscription:
+                sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+                expires_at = subscription.get("expires_at")
+                if expires_at:
+                    override = 5 * 1024**3 if sub_type == "trial" else 10 * 1024**3
+                    remnawave_service._fire_and_forget(
+                        remnawave_service.create_remnawave_user(
                             telegram_id, sub_type, expires_at,
                             traffic_limit_override=override,
                         )
-            else:
-                # Already provisioned — ensure squad is assigned
-                await remnawave_service.ensure_squad(telegram_id)
-        except Exception as e:
-            logger.error("CONNECT_AUTO_PROVISION_ERROR: tg=%s %s", telegram_id, e)
+                    )
+        else:
+            remnawave_service._fire_and_forget(
+                remnawave_service.ensure_squad(telegram_id)
+            )
 
     text = i18n_get_text(language, "connect.instruction_screen")
 
