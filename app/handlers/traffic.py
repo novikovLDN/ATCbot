@@ -90,15 +90,24 @@ async def callback_traffic_info(callback: CallbackQuery):
 
     rmn_uuid = await database.get_remnawave_uuid(telegram_id)
     if not rmn_uuid:
-        text = i18n_get_text(language, "traffic.not_provisioned")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "common.back"),
-                callback_data="menu_main",
-            )],
-        ])
-        await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
-        return
+        # Auto-provision Remnawave user for existing subscribers
+        expires_at = subscription.get("expires_at")
+        if expires_at and config.REMNAWAVE_ENABLED:
+            try:
+                await remnawave_service.create_remnawave_user(telegram_id, sub_type, expires_at)
+                rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            except Exception as e:
+                logger.error("TRAFFIC_AUTO_PROVISION_ERROR: tg=%s %s", telegram_id, e)
+        if not rmn_uuid:
+            text = i18n_get_text(language, "traffic.not_provisioned")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=i18n_get_text(language, "common.back"),
+                    callback_data="menu_main",
+                )],
+            ])
+            await safe_edit_text(callback.message, text, reply_markup=kb, bot=callback.bot)
+            return
 
     # Fetch traffic from Remnawave
     traffic = await remnawave_api.get_user_traffic(rmn_uuid)
