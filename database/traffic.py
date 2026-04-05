@@ -219,13 +219,15 @@ async def create_user_traffic_discount(
     if pool is None:
         return False
     async with pool.acquire() as conn:
+        # Column is TIMESTAMP (naive) — strip tzinfo if present
+        naive_expires = expires_at.replace(tzinfo=None) if expires_at and expires_at.tzinfo else expires_at
         await conn.execute(
             """INSERT INTO user_traffic_discounts
                    (telegram_id, discount_percent, expires_at, created_by)
                VALUES ($1, $2, $3, $4)
                ON CONFLICT (telegram_id) DO UPDATE
                    SET discount_percent = $2, expires_at = $3, created_by = $4, created_at = NOW()""",
-            telegram_id, discount_percent, expires_at, created_by,
+            telegram_id, discount_percent, naive_expires, created_by,
         )
         return True
 
