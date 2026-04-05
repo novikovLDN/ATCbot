@@ -184,6 +184,9 @@ async def renew_remnawave_user(
         # Re-enable if disabled
         if user_data.get("status") != "ACTIVE":
             await remnawave_api.update_user(api_uuid, status="ACTIVE")
+        # Ensure squad assigned (idempotent)
+        if config.REMNAWAVE_SQUAD_UUID:
+            await remnawave_api.assign_user_to_squad(api_uuid, config.REMNAWAVE_SQUAD_UUID)
         await database.reset_traffic_notification_flags(telegram_id)
         logger.info(
             "REMNAWAVE_RENEWED: tg=%s uuid=%s old_limit=%d new_limit=%d",
