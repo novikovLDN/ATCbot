@@ -299,7 +299,7 @@ LANG = {
     'setup.autosetup_android': "🤖 <b>Avto sozlash — Android</b>\n\n⚡️ Quyida o'rnatgan ilovangiz tugmasini bosing — kalit avtomatik qo'shiladi.\n\nAgar ilova ochilmasa — batafsil ko'rsatmadan foydalaning.",
     'setup.autosetup_macos': "🍎 <b>Avto sozlash — macOS</b>\n\n⚡️ Quyida o'rnatgan ilovangiz tugmasini bosing — kalit avtomatik qo'shiladi.\n\nAgar ilova ochilmasa — batafsil ko'rsatmadan foydalaning.",
     'setup.autosetup_windows': "🪟 <b>Avto sozlash — Windows</b>\n\n⚡️ Quyida o'rnatgan ilovangiz tugmasini bosing — kalit avtomatik qo'shiladi.\n\nAgar ilova ochilmasa — batafsil ko'rsatmadan foydalaning.",
-    'setup.manual_button': "📖 Batafsil ko'rsatma",
+    'setup.manual_button': "📖 Qo'lda o'rnatish",
     'setup.copy_key_label': "👇 Kalitni nusxalash uchun bosing:",
     'setup.key_vpn_label': "🔑 <b>VPN kalit</b> (oddiy serverlar):",
     'setup.key_bypass_label': "🔑 <b>Chetlab o'tish kaliti</b> (RU oq ro'yxatlar):",

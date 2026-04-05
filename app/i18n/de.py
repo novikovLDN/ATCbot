@@ -299,7 +299,7 @@ LANG = {
     'setup.autosetup_android': "🤖 <b>Auto-Einrichtung — Android</b>\n\n⚡️ Tippen Sie auf die Schaltfläche mit der installierten App — der Schlüssel wird automatisch hinzugefügt.\n\nWenn die App nicht geöffnet wurde — nutzen Sie die ausführliche Anleitung.",
     'setup.autosetup_macos': "🍎 <b>Auto-Einrichtung — macOS</b>\n\n⚡️ Tippen Sie auf die Schaltfläche mit der installierten App — der Schlüssel wird automatisch hinzugefügt.\n\nWenn die App nicht geöffnet wurde — nutzen Sie die ausführliche Anleitung.",
     'setup.autosetup_windows': "🪟 <b>Auto-Einrichtung — Windows</b>\n\n⚡️ Tippen Sie auf die Schaltfläche mit der installierten App — der Schlüssel wird automatisch hinzugefügt.\n\nWenn die App nicht geöffnet wurde — nutzen Sie die ausführliche Anleitung.",
-    'setup.manual_button': "📖 Ausführliche Anleitung",
+    'setup.manual_button': "📖 Manuelle Einrichtung",
     'setup.copy_key_label': "👇 Tippen Sie zum Kopieren:",
     'setup.key_vpn_label': "🔑 <b>VPN-Schlüssel</b> (normale Server):",
     'setup.key_bypass_label': "🔑 <b>Bypass-Schlüssel</b> (RU Whitelists):",
