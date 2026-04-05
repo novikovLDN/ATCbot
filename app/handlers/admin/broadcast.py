@@ -202,34 +202,64 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
 
     try:
         discount = await database.get_broadcast_discount(broadcast_id)
-        if not discount:
-            # No discount found, just redirect to traffic purchase
-            language = await resolve_user_language(telegram_id)
-            from app.handlers.traffic import callback_buy_traffic
-            await callback_buy_traffic(callback)
+        discount_percent = discount.get("discount_percent", 0) if discount else 0
+
+        if discount_percent > 0:
+            # Apply 1-day traffic discount
+            from datetime import timedelta
+            expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+            await database.create_user_traffic_discount(
+                telegram_id=telegram_id,
+                discount_percent=discount_percent,
+                expires_at=expires_at,
+                created_by=config.ADMIN_TELEGRAM_ID,
+            )
+
+        # Build traffic packs message with discount applied
+        language = await resolve_user_language(telegram_id)
+
+        subscription = await database.get_subscription(telegram_id)
+        if not subscription:
+            await callback.message.answer(
+                i18n_get_text(language, "traffic.no_subscription"),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=i18n_get_text(language, "traffic.buy_subscription"),
+                        callback_data="menu_buy_vpn",
+                    )],
+                ]),
+            )
             return
 
-        discount_percent = discount.get("discount_percent", 0)
+        import math
+        buttons = []
+        for gb, pack in config.TRAFFIC_PACKS.items():
+            base_price = pack["price"]
+            if discount_percent > 0:
+                final_price = math.ceil(base_price * (1 - discount_percent / 100))
+                label = f"{gb} ГБ — {final_price} ₽  (−{discount_percent}%)"
+            else:
+                label = f"{gb} ГБ — {base_price} ₽"
+                if pack.get("discount"):
+                    label += f"  {pack['discount']}"
+            buttons.append([InlineKeyboardButton(
+                text=label,
+                callback_data=f"buy_traffic_pack:{gb}",
+            )])
 
-        # Apply 1-day traffic discount
-        from datetime import timedelta
-        expires_at = datetime.now(timezone.utc) + timedelta(days=1)
-        await database.create_user_traffic_discount(
-            telegram_id=telegram_id,
-            discount_percent=discount_percent,
-            expires_at=expires_at,
-            created_by=config.ADMIN_TELEGRAM_ID,
-        )
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="traffic_info",
+        )])
 
-        # Show traffic purchase screen
-        language = await resolve_user_language(telegram_id)
+        text = i18n_get_text(language, "traffic.buy_title")
+        if discount_percent > 0:
+            text = f"🎁 Скидка {discount_percent}% на трафик применена! Действует 24 часа.\n\n" + text
+
         await callback.message.answer(
-            f"🎁 Скидка {discount_percent}% на трафик применена! Действует 24 часа."
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         )
-
-        # Redirect to buy_traffic
-        from app.handlers.traffic import callback_buy_traffic
-        await callback_buy_traffic(callback)
 
     except Exception as e:
         logger.exception(f"Error applying broadcast traffic promo discount: {e}")
