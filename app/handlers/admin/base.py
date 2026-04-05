@@ -584,7 +584,7 @@ async def callback_admin_system(callback: CallbackQuery):
 
 @admin_base_router.callback_query(F.data == "admin:remnawave_mass_provision")
 async def callback_remnawave_mass_provision(callback: CallbackQuery):
-    """Mass-provision all active subscribers to Remnawave (batches of 100)."""
+    """Mass-provision all active subscribers to Remnawave (parallel, background)."""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
@@ -599,62 +599,78 @@ async def callback_remnawave_mass_provision(callback: CallbackQuery):
         return
 
     await callback.message.answer(
-        f"🌐 Запускаю массовый провижн: {total} пользователей без Remnawave.\n"
-        f"Пачками по 100, пауза 3 сек между пачками."
+        f"🌐 Массовый провижн: {total} пользователей.\n"
+        f"Параллельно по 20, пауза 2 сек. Работает в фоне."
     )
 
     import asyncio
     from app.services import remnawave_service
 
-    BATCH_SIZE = 100
-    BATCH_PAUSE = 3
-    success = 0
-    failed = 0
+    CONCURRENCY = 20
+    BATCH_PAUSE = 2
+    PROGRESS_EVERY = 100
+    bot = callback.bot
+    chat_id = callback.message.chat.id
 
-    for i in range(0, total, BATCH_SIZE):
-        batch = users[i:i + BATCH_SIZE]
-        for user in batch:
-            try:
-                tg_id = user["telegram_id"]
-                sub_type = (user.get("subscription_type") or "basic").strip().lower()
-                expires_at = user.get("expires_at")
-                if not expires_at:
+    async def _run_mass_provision():
+        success = 0
+        failed = 0
+        semaphore = asyncio.Semaphore(CONCURRENCY)
+
+        async def _provision_one(user):
+            nonlocal success, failed
+            async with semaphore:
+                try:
+                    tg_id = user["telegram_id"]
+                    sub_type = (user.get("subscription_type") or "basic").strip().lower()
+                    expires_at = user.get("expires_at")
+                    if not expires_at:
+                        failed += 1
+                        return
+                    await remnawave_service.create_remnawave_user(
+                        tg_id, sub_type, expires_at,
+                        traffic_limit_override=10 * 1024**3,
+                    )
+                    success += 1
+                except Exception as e:
+                    logging.error("MASS_PROVISION_ERROR: tg=%s %s", user.get("telegram_id"), e)
                     failed += 1
-                    continue
-                await remnawave_service.create_remnawave_user(
-                    tg_id, sub_type, expires_at,
-                    traffic_limit_override=10 * 1024**3,
-                )
-                success += 1
-            except Exception as e:
-                logging.error("MASS_PROVISION_ERROR: tg=%s %s", user.get("telegram_id"), e)
-                failed += 1
 
-        processed = min(i + BATCH_SIZE, total)
-        # Progress update every batch
+        for i in range(0, total, PROGRESS_EVERY):
+            batch = users[i:i + PROGRESS_EVERY]
+            await asyncio.gather(*[_provision_one(u) for u in batch])
+
+            processed = min(i + PROGRESS_EVERY, total)
+            try:
+                await bot.send_message(
+                    chat_id,
+                    f"⏳ Прогресс: {processed}/{total} (✅ {success} / ❌ {failed})"
+                )
+            except Exception:
+                pass
+
+            if processed < total:
+                await asyncio.sleep(BATCH_PAUSE)
+
         try:
-            await callback.message.answer(
-                f"⏳ Прогресс: {processed}/{total} (✅ {success} / ❌ {failed})"
+            await bot.send_message(
+                chat_id,
+                f"🏁 Массовый провижн завершён!\n\n"
+                f"Всего: {total}\n"
+                f"✅ Успешно: {success}\n"
+                f"❌ Ошибки: {failed}"
             )
         except Exception:
             pass
 
-        if processed < total:
-            await asyncio.sleep(BATCH_PAUSE)
+        await database._log_audit_event_atomic_standalone(
+            "admin_remnawave_mass_provision",
+            callback.from_user.id,
+            None,
+            f"Mass provision: total={total}, success={success}, failed={failed}",
+        )
 
-    await callback.message.answer(
-        f"🏁 Массовый провижн завершён!\n\n"
-        f"Всего: {total}\n"
-        f"✅ Успешно: {success}\n"
-        f"❌ Ошибки: {failed}"
-    )
-
-    await database._log_audit_event_atomic_standalone(
-        "admin_remnawave_mass_provision",
-        callback.from_user.id,
-        None,
-        f"Mass provision: total={total}, success={success}, failed={failed}",
-    )
+    asyncio.create_task(_run_mass_provision())
 
 
 @admin_base_router.callback_query(F.data == "admin:test_menu")
