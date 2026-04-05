@@ -166,6 +166,26 @@ async def get_active_remnawave_users() -> List[Dict[str, Any]]:
         return [dict(r) for r in rows]
 
 
+async def get_active_users_without_remnawave() -> List[Dict[str, Any]]:
+    """Users with active non-trial subscription but NO remnawave_uuid."""
+    if not _core.DB_READY:
+        return []
+    pool = await get_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT s.telegram_id, s.subscription_type, s.expires_at
+               FROM subscriptions s
+               WHERE s.status = 'active'
+                 AND s.subscription_type NOT IN ('trial')
+                 AND (s.remnawave_uuid IS NULL OR s.remnawave_uuid = '')
+                 AND s.expires_at > NOW()
+               ORDER BY s.telegram_id""",
+        )
+        return [dict(r) for r in rows]
+
+
 # ── Traffic discounts (promo from broadcasts) ─────────────────────────
 
 async def get_user_traffic_discount(telegram_id: int) -> Optional[Dict[str, Any]]:

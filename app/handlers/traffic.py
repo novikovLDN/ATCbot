@@ -234,7 +234,7 @@ async def callback_buy_traffic(callback: CallbackQuery):
     text = i18n_get_text(language, "traffic.buy_title")
     if discount_pct > 0:
         text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot)
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
 
 
 @traffic_router.callback_query(F.data.startswith("buy_traffic_pack:"))

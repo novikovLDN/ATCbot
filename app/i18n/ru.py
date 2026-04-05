@@ -882,7 +882,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Мой трафик",
-    'traffic.info': "📊 <b>Обход блокировок</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ До: {expires}\n\n🔗 <b>Подписка:</b>\n<code>{sub_url}</code>",
+    'traffic.info': "📊 <b>Обход блокировок</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ До: {expires}\n\n🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<code>{sub_url}</code>\n\n📲 <b>Куда вставить:</b>\n├ <b>Happ</b> → Главная → <b>+</b> → Вставить из буфера\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Нет активной подписки.",
     'traffic.trial_no_bypass': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Обход доступен на тарифах Basic и Plus.",
     'traffic.not_provisioned': "📊 Обход пока не настроен. Попробуйте позже.",
