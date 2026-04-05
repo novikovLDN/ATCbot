@@ -86,15 +86,52 @@ async def create_user(
         "expireAt": expire_at,
         "deviceLimit": device_limit,
     }
-    # Assign to "Clients" squad if configured
-    if config.REMNAWAVE_SQUAD_UUID:
-        body["activeInternalSquads"] = [config.REMNAWAVE_SQUAD_UUID]
     result = await _request("POST", "/api/users", json=body)
     if result:
-        logger.info("REMNAWAVE_CREATE: success for %s, response=%s", username, result)
+        logger.info("REMNAWAVE_CREATE: success for %s, response keys=%s", username, list(result.keys()))
+
+        # Assign squad after creation via dedicated endpoint
+        if config.REMNAWAVE_SQUAD_UUID:
+            user_uuid = result.get("uuid")
+            if user_uuid:
+                await assign_user_to_squad(user_uuid, config.REMNAWAVE_SQUAD_UUID)
     else:
         logger.warning("REMNAWAVE_CREATE: failed for %s", username)
     return result
+
+
+async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
+    """Try multiple approaches to assign user to a squad/inbound."""
+    # Approach 1: POST /api/squads/{squad_uuid}/users (add user to squad)
+    result = await _request(
+        "POST", f"/api/squads/{squad_uuid}/users",
+        quiet=True, json={"userUuid": user_uuid},
+    )
+    if result is not None:
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users userUuid=%s", user_uuid[:8])
+        return True
+
+    # Approach 2: PATCH /api/users with activeUserInbounds
+    result = await update_user(
+        user_uuid,
+        activeUserInbounds=[squad_uuid],
+    )
+    if result is not None:
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via update activeUserInbounds userUuid=%s", user_uuid[:8])
+        return True
+
+    # Approach 3: Update with activeInternalSquads field name
+    body = {"uuid": user_uuid, "activeInternalSquads": [squad_uuid]}
+    result = await _request("POST", "/api/users/update", quiet=True, json=body)
+    if result is not None:
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via activeInternalSquads userUuid=%s", user_uuid[:8])
+        return True
+
+    logger.warning(
+        "REMNAWAVE_SQUAD_ASSIGN_FAILED: could not assign user=%s to squad=%s, "
+        "tried all approaches", user_uuid[:8], squad_uuid[:8],
+    )
+    return False
 
 
 async def get_user(uuid: str) -> Optional[Dict[str, Any]]:

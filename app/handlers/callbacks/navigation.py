@@ -461,8 +461,9 @@ async def callback_connect_instruction(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    # Auto-provision Remnawave user for existing subscribers (fire-and-forget)
+    # Auto-provision Remnawave user for existing subscribers + ensure squad
     if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_service
         try:
             rmn_uuid = await database.get_remnawave_uuid(telegram_id)
             if not rmn_uuid:
@@ -471,11 +472,13 @@ async def callback_connect_instruction(callback: CallbackQuery):
                     sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
                     expires_at = subscription.get("expires_at")
                     if expires_at and sub_type not in ("trial",):
-                        from app.services import remnawave_service
                         await remnawave_service.create_remnawave_user(
                             telegram_id, sub_type, expires_at,
                             traffic_limit_override=5 * 1024**3,
                         )
+            else:
+                # Already provisioned — ensure squad is assigned
+                await remnawave_service.ensure_squad(telegram_id)
         except Exception as e:
             logger.error("CONNECT_AUTO_PROVISION_ERROR: tg=%s %s", telegram_id, e)
 
