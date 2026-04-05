@@ -92,6 +92,8 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_vip"), callback_data=f"admin:vip_revoke:{user_id}")])
         else:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_vip"), callback_data=f"admin:vip_grant:{user_id}")])
+        # Кнопка управления трафиком
+        buttons.append([InlineKeyboardButton(text="📊 Трафик обхода", callback_data=f"admin:traffic:{user_id}")])
         # Кнопка выдачи средств
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.credit_balance"), callback_data=f"admin:credit_balance:{user_id}")])
         # Кнопка удаления пользователя из БД
@@ -144,6 +146,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
     buttons = [
         ("🛒 Купить", "buy"),
         ("🎁 Купить со скидкой", "promo_buy"),
+        ("📊 Купить трафик промо", "promo_traffic"),
         ("📢 Наш канал", "channel"),
         ("💬 Поддержка", "support"),
         ("👥 Пригласить друга", "referral"),

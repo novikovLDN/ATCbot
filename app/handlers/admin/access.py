@@ -724,6 +724,15 @@ async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMCo
             )
         expires_date = expires_at.strftime("%d.%m.%Y")
         tariff_label = "Basic" if tariff == "basic" else "Plus"
+
+        # Fire-and-forget: create/renew Remnawave bypass
+        try:
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            if tariff in ("basic", "plus"):
+                renew_remnawave_user_bg(user_id, tariff, expires_at)
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_ADMIN_GRANT_FAIL: tg=%s %s", user_id, rmn_err)
+
         text_admin = (
             f"✅ Выдан {tariff_label} доступ\n"
             f"👤 Пользователь: {user_id}\n"
@@ -1691,7 +1700,15 @@ async def callback_admin_revoke_notify(callback: CallbackQuery, bot: Bot, state:
             telegram_id=user_id,
             admin_telegram_id=callback.from_user.id
         )
-        
+
+        # Fire-and-forget: disable Remnawave bypass
+        if revoked:
+            try:
+                from app.services.remnawave_service import disable_remnawave_user_bg
+                disable_remnawave_user_bg(user_id)
+            except Exception as rmn_err:
+                logger.warning("REMNAWAVE_ADMIN_REVOKE_FAIL: tg=%s %s", user_id, rmn_err)
+
         if not revoked:
             text = "❌ У пользователя нет активной подписки"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
@@ -1843,8 +1860,24 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
     
     # VIP-статус
     if overview.is_vip:
-        text += f"\n👑 VIP-статус: активен\n"
-    
+        text += f"\n👑 VIP-��татус: активен\n"
+
+    # Remnawave трафик (краткая сводка)
+    _rmn_uuid = await database.get_remnawave_uuid(user_id)
+    if _rmn_uuid:
+        try:
+            from app.services import remnawave_api
+            _traffic = await remnawave_api.get_user_traffic(_rmn_uuid)
+            if _traffic:
+                _used = _traffic.get("usedTrafficBytes", 0)
+                _limit = _traffic.get("trafficLimitBytes", 0)
+                _remaining = max(0, _limit - _used)
+                def _fmt(b):
+                    return f"{b / 1024**3:.1f} Г��" if b >= 1024**3 else f"{b / 1024**2:.0f} МБ"
+                text += f"\n📊 Трафик обхода: {_fmt(_used)} / {_fmt(_limit)} (ост. {_fmt(_remaining)})\n"
+        except Exception:
+            pass
+
     # Отображаем карточку
     sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
     if sub_type not in config.VALID_SUBSCRIPTION_TYPES:

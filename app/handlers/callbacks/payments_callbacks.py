@@ -634,9 +634,9 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             if config.is_biz_tariff(subscription_type):
                 tariff_label, tariff_icon = "Business", "🏢"
             elif subscription_type == "plus":
-                tariff_label, tariff_icon = "Plus", "⭐️"
+                tariff_label, tariff_icon = "Plus", "💎"
             else:
-                tariff_label, tariff_icon = "Basic", "📦"
+                tariff_label, tariff_icon = "Basic", "🏆"
             if is_renewal:
                 text = i18n_get_text(
                     language,
@@ -680,6 +680,14 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             f"amount={final_price_rubles:.2f} RUB, "
             f"scenario={'renewal' if is_renewal else 'first_purchase'}"
         )
+
+        # Fire-and-forget: create or renew Remnawave bypass user
+        try:
+            from app.services.remnawave_service import renew_remnawave_user_bg
+            if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS:
+                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at)
+        except Exception as rmn_err:
+            logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
         
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")

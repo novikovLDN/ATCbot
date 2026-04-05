@@ -220,17 +220,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         except NameError:
             pass
 
-        from app.handlers.common.keyboards import get_connect_keyboard, MINI_APP_URL
-        trial_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.device_button"),
-                callback_data="setup_device",
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "trial.activated_btn_profile"),
-                callback_data="menu_profile"
-            )],
-        ])
+        from app.handlers.common.keyboards import get_payment_success_keyboard
+        trial_keyboard = get_payment_success_keyboard(language, subscription_type="basic")
         await callback.message.answer(success_text, parse_mode="HTML", reply_markup=trial_keyboard)
 
         # Обновляем главное меню (кнопка trial должна исчезнуть)

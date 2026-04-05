@@ -171,6 +171,21 @@ from database.subscriptions import (  # noqa: F401
     finalize_purchase,
 )
 
+# Traffic: Remnawave integration, notifications, purchases
+from database.traffic import (  # noqa: F401
+    get_remnawave_uuid,
+    set_remnawave_uuid,
+    clear_remnawave_uuid,
+    get_traffic_notification_flags,
+    set_traffic_notification_flag,
+    reset_traffic_notification_flags,
+    record_traffic_purchase,
+    get_active_remnawave_users,
+    get_user_traffic_discount,
+    create_user_traffic_discount,
+    delete_user_traffic_discount,
+)
+
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
 from database.admin import (  # noqa: F401
     expire_old_pending_purchases,

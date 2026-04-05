@@ -286,6 +286,13 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
+                # Disable Remnawave bypass (fire-and-forget)
+                try:
+                    from app.services.remnawave_service import disable_remnawave_user_bg
+                    disable_remnawave_user_bg(telegram_id)
+                except Exception as rmn_err:
+                    logger.warning("REMNAWAVE_EXPIRY_HOOK_FAIL: tg=%s %s", telegram_id, rmn_err)
+
                 # Создаем спецпредложение -15% на 3 дня для пользователей с оплаченной подпиской
                 sub_source = subscription.get("source", "")
                 if sub_source == "payment":
@@ -3764,15 +3771,32 @@ async def create_pending_purchase(
         # Срок действия контекста покупки (30 минут)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
-        # Создаем запись о покупке
-        await conn.execute(
-            """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-            purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country
-        )
+        # Соз��аем запись о по��упке
+        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"""
+        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country)
+        try:
+            await conn.execute(_insert_sql, *_insert_args)
+        except Exception as e:
+            if "purchase_type_check" in str(e) or "tariff_check" in str(e):
+                # Auto-fix CHECK constraints for traffic_pack support
+                logger.warning("create_pending_purchase: fixing CHECK constraints for traffic_pack")
+                await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_purchase_type_check")
+                await conn.execute(
+                    "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_purchase_type_check "
+                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'traffic_pack'))"
+                )
+                await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check")
+                await conn.execute(
+                    "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check "
+                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium') OR tariff LIKE 'traffic_%')"
+                )
+                await conn.execute(_insert_sql, *_insert_args)
+            else:
+                raise
 
         logger.info(f"Pending purchase created: purchase_id={purchase_id}, telegram_id={telegram_id}, tariff={tariff}, period_days={period_days}, price={price_kopecks} kopecks, country={country}")
-        
+
         return purchase_id
 
 
@@ -4003,8 +4027,9 @@ async def finalize_purchase(
         price_kopecks = pending_purchase["price_kopecks"]
         purchase_country = pending_purchase.get("country")
         expected_amount_rubles = price_kopecks / 100.0
-        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0)
+        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift"))
         is_gift_purchase = (purchase_type == "gift")
+        is_traffic_pack = (purchase_type == "traffic_pack")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
         # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
         # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
@@ -4213,6 +4238,76 @@ async def finalize_purchase(
                         "gift_code": gift_code,
                         "gift_tariff": tariff_type,
                         "gift_period_days": period_days,
+                    }
+
+                # STEP 4.6: ОБРАБОТКА ПОКУПКИ ТРАФИКА (traffic_pack)
+                if is_traffic_pack:
+                    logger.info(
+                        f"finalize_purchase: TRAFFIC_PACK [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"tariff={tariff_type}, amount={amount_rubles:.2f} RUB]"
+                    )
+                    now_utc = datetime.now(timezone.utc)
+                    payment_id = await conn.fetchval(
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        telegram_id,
+                        tariff_type or "traffic_pack",
+                        round(amount_rubles * 100),
+                        purchase_id,
+                        _to_db_utc(now_utc),
+                    )
+                    if not payment_id:
+                        raise Exception(f"Failed to create payment record for traffic pack: purchase_id={purchase_id}")
+
+                    # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5)
+                    _gb = 0
+                    if tariff_type and tariff_type.startswith("traffic_") and tariff_type.endswith("gb"):
+                        try:
+                            _gb = int(tariff_type[len("traffic_"):-len("gb")])
+                        except ValueError:
+                            logger.error(
+                                "finalize_purchase: TRAFFIC_PACK_GB_PARSE_FAIL tariff=%s purchase_id=%s",
+                                tariff_type, purchase_id,
+                            )
+                    if _gb <= 0:
+                        logger.error(
+                            "finalize_purchase: TRAFFIC_PACK_INVALID_GB gb=%s tariff=%s purchase_id=%s",
+                            _gb, tariff_type, purchase_id,
+                        )
+
+                    # Record in traffic_purchases (payment_method column may not exist yet)
+                    _payment_method = payment_provider or "card"
+                    _has_pm_col = await conn.fetchval(
+                        """SELECT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'traffic_purchases' AND column_name = 'payment_method'
+                        )"""
+                    )
+                    if _has_pm_col:
+                        await conn.execute(
+                            """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method, created_at)
+                               VALUES ($1, $2, $3, $4, $5)""",
+                            telegram_id, _gb, round(amount_rubles), _payment_method, _to_db_utc(now_utc),
+                        )
+                    else:
+                        await conn.execute(
+                            """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, created_at)
+                               VALUES ($1, $2, $3, $4)""",
+                            telegram_id, _gb, round(amount_rubles), _to_db_utc(now_utc),
+                        )
+
+                    logger.info(
+                        f"finalize_purchase: TRAFFIC_PACK_DONE [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"payment_id={payment_id}, gb={_gb}, method={_payment_method}]"
+                    )
+                    return {
+                        "success": True,
+                        "payment_id": payment_id,
+                        "expires_at": None,
+                        "vpn_key": None,
+                        "is_renewal": False,
+                        "is_traffic_pack": True,
+                        "traffic_gb": _gb,
                     }
 
                 # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)

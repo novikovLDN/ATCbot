@@ -907,6 +907,18 @@ async def init_db() -> bool:
             )
         """)
         
+        # Таблица user_traffic_discounts (промо-скидки на трафик из рассылок)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_traffic_discounts (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                discount_percent INTEGER NOT NULL,
+                expires_at TIMESTAMP NULL,
+                created_by BIGINT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Таблица vip_users (VIP-статус)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS vip_users (
