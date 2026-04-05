@@ -307,11 +307,17 @@ def get_profile_keyboard(
     row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
     buttons.append(row2)
 
-    # Row 3: Мои подарки
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
-        callback_data="my_gifts:0"
-    )])
+    # Row 3: Мини апп + Мои подарки
+    buttons.append([
+        InlineKeyboardButton(
+            text="👨‍💻 Мини апп",
+            web_app=WebAppInfo(url=MINI_APP_URL),
+        ),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
+            callback_data="my_gifts:0",
+        ),
+    ])
 
     # Row 4: Назад
     buttons.append([InlineKeyboardButton(
