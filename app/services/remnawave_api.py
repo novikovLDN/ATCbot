@@ -7,7 +7,7 @@ Errors are logged but never raised — callers must check for None.
 Verified endpoints on this panel instance:
 - POST   /api/users                       — create user (201)
 - GET    /api/users/{uuid}                — get by full UUID (400 if invalid)
-- PATCH  /api/users/{uuid}               — update user fields
+- POST   /api/users/update                — update user fields (uuid in body)
 - DELETE /api/users/{uuid}                — delete user
 - POST   /api/users/{uuid}/reset-traffic  — reset traffic counter
 """
@@ -100,10 +100,9 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
 
 
 async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
-    """PATCH /api/users/{uuid} — update user fields.
-    Include uuid in body as some Remnawave panel versions require it."""
+    """POST /api/users/update — update user fields (uuid in body)."""
     body = {"uuid": uuid, **fields}
-    return await _request("PATCH", f"/api/users/{uuid}", json=body)
+    return await _request("POST", "/api/users/update", json=body)
 
 
 async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
