@@ -102,6 +102,12 @@ async def callback_traffic_info(callback: CallbackQuery):
                 rmn_uuid = await database.get_remnawave_uuid(telegram_id)
             except Exception as e:
                 logger.error("TRAFFIC_AUTO_PROVISION_ERROR: tg=%s %s", telegram_id, e)
+    else:
+        # Ensure squad is assigned for existing users
+        try:
+            await remnawave_service.ensure_squad(telegram_id)
+        except Exception:
+            pass
         if not rmn_uuid:
             text = i18n_get_text(language, "traffic.not_provisioned")
             kb = InlineKeyboardMarkup(inline_keyboard=[

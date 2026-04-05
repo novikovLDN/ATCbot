@@ -125,6 +125,20 @@ def create_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: da
     _fire_and_forget(create_remnawave_user(telegram_id, tariff, subscription_end))
 
 
+async def ensure_squad(telegram_id: int) -> None:
+    """Ensure existing Remnawave user is assigned to the configured squad.
+    Safe to call multiple times — Remnawave will ignore if already assigned."""
+    if not config.REMNAWAVE_ENABLED or not config.REMNAWAVE_SQUAD_UUID:
+        return
+    try:
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if not rmn_uuid:
+            return
+        await remnawave_api.assign_user_to_squad(rmn_uuid, config.REMNAWAVE_SQUAD_UUID)
+    except Exception as e:
+        logger.error("REMNAWAVE_ENSURE_SQUAD_ERROR: tg=%s %s", telegram_id, e)
+
+
 # ── Renew (extend traffic) ─────────────────────────────────────────────
 
 async def renew_remnawave_user(
@@ -170,6 +184,9 @@ async def renew_remnawave_user(
         # Re-enable if disabled
         if user_data.get("status") != "ACTIVE":
             await remnawave_api.update_user(api_uuid, status="ACTIVE")
+        # Ensure squad assigned (idempotent)
+        if config.REMNAWAVE_SQUAD_UUID:
+            await remnawave_api.assign_user_to_squad(api_uuid, config.REMNAWAVE_SQUAD_UUID)
         await database.reset_traffic_notification_flags(telegram_id)
         logger.info(
             "REMNAWAVE_RENEWED: tg=%s uuid=%s old_limit=%d new_limit=%d",
