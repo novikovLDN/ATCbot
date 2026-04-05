@@ -471,10 +471,11 @@ async def callback_connect_instruction(callback: CallbackQuery):
                 if subscription:
                     sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
                     expires_at = subscription.get("expires_at")
-                    if expires_at and sub_type not in ("trial",):
+                    if expires_at:
+                        override = 5 * 1024**3 if sub_type == "trial" else 10 * 1024**3
                         await remnawave_service.create_remnawave_user(
                             telegram_id, sub_type, expires_at,
-                            traffic_limit_override=5 * 1024**3,
+                            traffic_limit_override=override,
                         )
             else:
                 # Already provisioned — ensure squad is assigned
