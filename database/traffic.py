@@ -124,22 +124,24 @@ async def record_traffic_purchase(
     if pool is None:
         return None
     async with pool.acquire() as conn:
-        try:
+        _has_pm_col = await conn.fetchval(
+            """SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'traffic_purchases' AND column_name = 'payment_method'
+            )"""
+        )
+        if _has_pm_col:
             return await conn.fetchval(
                 """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub, payment_method)
                    VALUES ($1, $2, $3, $4) RETURNING id""",
                 telegram_id, gb_amount, price_rub, payment_method,
             )
-        except Exception as e:
-            if "payment_method" in str(e):
-                # Fallback: column not yet added by migration
-                logger.warning("record_traffic_purchase: payment_method column missing, inserting without it")
-                return await conn.fetchval(
-                    """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub)
-                       VALUES ($1, $2, $3) RETURNING id""",
-                    telegram_id, gb_amount, price_rub,
-                )
-            raise
+        else:
+            return await conn.fetchval(
+                """INSERT INTO traffic_purchases (telegram_id, gb_amount, price_rub)
+                   VALUES ($1, $2, $3) RETURNING id""",
+                telegram_id, gb_amount, price_rub,
+            )
 
 
 # ── Queries for traffic monitor worker ─────────────────────────────────
