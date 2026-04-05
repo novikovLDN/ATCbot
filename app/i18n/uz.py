@@ -408,7 +408,7 @@ LANG = {
     'games.bomber_self_destruct': "🧨 BOOM! Siz o'z bombingizda portladingiz!\n\nO'yin tugadi. Qayta urinib ko'ring!",
     'games.bomber_mine_exploded': "💥 BOOM! Siz bot minasida portladingiz!\n\nO'yin tugadi. Qayta urinib ko'ring!",
     'games.bomber_safe_exit': "😮‍💨 Siz o'yindan xavfsiz chiqdingiz!\n\nOmon qolgan bombalar: {count}",
-    'main.profile': '👤 Mening profilim',
+    'main.profile': '👤 Shaxsiy kabinet',
     'main.profile_active': "👤 Kirish profili\n\nKirish holati: Faol\nKirish {date} gacha to'langan\n\nSiz ulangansiz. Kirish barqaror ishlaydi.\n\nShaxsiy kirish kaliti\nVPN ilovasida ulanish uchun ishlatiladi.\nUlanish kirish faol bo'lguncha saqlanadi.\n\n{sub_url}\n\nUzaytirishda tanlangan muddat\njoriy kirishga avtomatik qo'shiladi.\n\nMuddat tugaguncha siz\nsozlashlar va to'lovga qaytishingiz shart emas.",
     'main.profile_auto_renew_disabled': "🔁 Avtomatik uzaytirish: o'chirilgan",
     'main.profile_auto_renew_enabled': '🔁 Avtomatik uzaytirish: {next_billing_date}',

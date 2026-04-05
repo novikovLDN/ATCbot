@@ -417,7 +417,7 @@ LANG = {
     'games.bomber_self_destruct': "🧨 BOOM! You blew up on your own bomb!\n\nGame over. Try again!",
     'games.bomber_mine_exploded': "💥 BOOM! You blew up on a bot mine!\n\nGame over. Try again!",
     'games.bomber_safe_exit': "😮‍💨 You exited the game safely!\n\nBombs survived: {count}",
-    'main.profile': "👤 My Profile",
+    'main.profile': "👤 Dashboard",
     'main.profile_active': "👤 Access Profile\n\nAccess status: Active\nAccess paid until {date}\n\nYou are connected. Access works stably.\n\nPersonal access key\nUsed for connection in VPN app.\nConnection persists while access is active.\n\n{sub_url}\n\nWhen renewing, the selected period\nis automatically added to current access.\n\nUntil the period ends, you can\nnot return to settings and payment.",
     'main.profile_auto_renew_disabled': "🔁 Auto-renewal: disabled",
     'main.profile_auto_renew_enabled': "🔁 Auto-renewal: {next_billing_date}",

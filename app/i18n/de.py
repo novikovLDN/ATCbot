@@ -408,7 +408,7 @@ LANG = {
     'games.bomber_self_destruct': "🧨 BOOM! Sie sind auf Ihrer eigenen Bombe explodiert!\n\nSpiel beendet. Versuchen Sie es erneut!",
     'games.bomber_mine_exploded': "💥 BOOM! Sie sind auf einer Bot-Mine explodiert!\n\nSpiel beendet. Versuchen Sie es erneut!",
     'games.bomber_safe_exit': "😮‍💨 Sie haben das Spiel sicher verlassen!\n\nÜberlebte Bomben: {count}",
-    'main.profile': '👤 Mein Profil',
+    'main.profile': '👤 Mein Konto',
     'main.profile_active': '👤 Zugangsprofil\n\nZugangsstatus: Aktiv\nZugang bezahlt bis {date}\n\nSie sind verbunden. Der Zugang arbeitet stabil.\n\nPersönlicher Zugangsschlüssel\nFür Verbindung in der VPN-App.\nVerbindung bleibt bestehen, solange der Zugang aktiv ist.\n\n{sub_url}\n\nBei Verlängerung wird die gewählte Laufzeit\nautomatisch zum aktuellen Zugang addiert.\n\nBis zum Ende der Laufzeit können Sie\nnicht zu Einstellungen und Zahlung zurückkehren.',
     'main.profile_auto_renew_disabled': '🔁 Autoverlängerung: deaktiviert',
     'main.profile_auto_renew_enabled': '🔁 Autoverlängerung: {next_billing_date}',

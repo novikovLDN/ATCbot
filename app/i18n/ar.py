@@ -408,7 +408,7 @@ LANG = {
     'games.bomber_self_destruct': "🧨 بوم! انفجرت على قنبلتك!\n\nانتهت اللعبة. جرّب مرة أخرى!",
     'games.bomber_mine_exploded': "💥 بوم! انفجرت على لغم البوت!\n\nانتهت اللعبة. جرّب مرة أخرى!",
     'games.bomber_safe_exit': "😮‍💨 خرجت من اللعبة سالمًا!\n\nالقنابل الناجية: {count}",
-    'main.profile': '👤 ملفي الشخصي',
+    'main.profile': '👤 لوحة التحكم',
     'main.profile_active': '👤 ملف الوصول\n\nحالة الوصول: نشط\nمدفوع حتى {date}\n\nأنت متصل. الوصول يعمل بثبات.\n\nمفتاح الوصول الشخصي\nيُستخدم للاتصال في تطبيق VPN.\nالاتصال مستمر طالما الوصول نشط.\n\n{sub_url}\n\nعند التجديد، تُضاف المدة المختارة\nتلقائياً للوصول الحالي.\n\nحتى نهاية المدة، لا يمكنك\nالعودة للإعدادات والدفع.',
     'main.profile_auto_renew_disabled': '🔁 Auto-renewal: disabled',
     'main.profile_auto_renew_enabled': '🔁 Auto-renewal: {next_billing_date}',
