@@ -36,7 +36,7 @@ async def cmd_connect(message: Message):
             callback_data="menu_main",
         )],
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @user_router.message(Command("white"))
