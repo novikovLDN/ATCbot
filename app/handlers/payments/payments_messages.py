@@ -956,9 +956,9 @@ async def process_successful_payment(message: Message, state: FSMContext):
         if config.is_biz_tariff(subscription_type):
             tariff_label, tariff_emoji = "Business", "🏢"
         elif subscription_type == "plus":
-            tariff_label, tariff_emoji = "Plus", "⭐️"
+            tariff_label, tariff_emoji = "Plus", "💎"
         else:
-            tariff_label, tariff_emoji = "Basic", "📦"
+            tariff_label, tariff_emoji = "Basic", "🏆"
 
         # Build period string
         period_str = ""
@@ -981,35 +981,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
                              tariff_name=f"{tariff_emoji} {tariff_label}",
                              period=period_str,
                              expires_date=expires_str)
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_renewal_btn_profile"),
-                    callback_data="menu_profile"
-                )],
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_renewal_btn_main"),
-                    callback_data="menu_main"
-                )],
-            ])
         else:
             text = _i18n_get(language, "purchase.success_first",
                              tariff_name=f"{tariff_emoji} {tariff_label}",
                              period=period_str,
                              expires_date=expires_str)
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_first_btn_connect"),
-                    web_app=WebAppInfo(url=MINI_APP_URL),
-                )],
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_first_btn_instruction"),
-                    callback_data="menu_instruction"
-                )],
-                [InlineKeyboardButton(
-                    text=_i18n_get(language, "purchase.success_first_btn_profile"),
-                    callback_data="menu_profile"
-                )],
-            ])
+        keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
         # ИДЕМПОТЕНТНОСТЬ: Помечаем ПЕРЕД отправкой (mark-before-send pattern)
         # При краше между mark и send — уведомление потеряно, но не дублировано
         try:

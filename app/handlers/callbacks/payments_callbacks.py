@@ -634,9 +634,9 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             if config.is_biz_tariff(subscription_type):
                 tariff_label, tariff_icon = "Business", "🏢"
             elif subscription_type == "plus":
-                tariff_label, tariff_icon = "Plus", "⭐️"
+                tariff_label, tariff_icon = "Plus", "💎"
             else:
-                tariff_label, tariff_icon = "Basic", "📦"
+                tariff_label, tariff_icon = "Basic", "🏆"
             if is_renewal:
                 text = i18n_get_text(
                     language,
