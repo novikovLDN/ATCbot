@@ -712,9 +712,9 @@ async def callback_setup_manual(callback: CallbackQuery):
     # Build keys section
     keys_section = ""
     if sub_url:
-        keys_section += i18n_get_text(language, "setup.key_vpn_label") + "\n<code>" + sub_url + "</code>"
+        keys_section += i18n_get_text(language, "setup.key_vpn_label") + "\n<blockquote><code>" + sub_url + "</code></blockquote>"
     if bypass_url:
-        keys_section += "\n\n" + i18n_get_text(language, "setup.key_bypass_label") + "\n<code>" + bypass_url + "</code>"
+        keys_section += "\n" + i18n_get_text(language, "setup.key_bypass_label") + "\n<blockquote><code>" + bypass_url + "</code></blockquote>"
 
     if keys_section:
         text = f"{connect_text}\n\n{keys_section}"
@@ -733,7 +733,7 @@ async def callback_setup_manual(callback: CallbackQuery):
     ]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "setup_done")
