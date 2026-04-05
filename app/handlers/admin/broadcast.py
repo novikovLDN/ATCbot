@@ -259,6 +259,7 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
         await callback.message.answer(
             text,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML",
         )
 
     except Exception as e:

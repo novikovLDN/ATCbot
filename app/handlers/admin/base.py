@@ -562,6 +562,7 @@ async def callback_admin_system(callback: CallbackQuery):
         language = await resolve_user_language(callback.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:system")],
+            [InlineKeyboardButton(text="🌐 Добавить всех в Remnawave", callback_data="admin:remnawave_mass_provision")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_menu"), callback_data="admin:test_menu")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
@@ -579,6 +580,81 @@ async def callback_admin_system(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_system: {e}")
         await callback.answer("Ошибка при получении системной информации", show_alert=True)
+
+
+@admin_base_router.callback_query(F.data == "admin:remnawave_mass_provision")
+async def callback_remnawave_mass_provision(callback: CallbackQuery):
+    """Mass-provision all active subscribers to Remnawave (batches of 100)."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    await callback.answer()
+
+    users = await database.get_active_users_without_remnawave()
+    total = len(users)
+
+    if total == 0:
+        await callback.message.answer("✅ Все пользователи с подпиской уже в Remnawave.")
+        return
+
+    await callback.message.answer(
+        f"🌐 Запускаю массовый провижн: {total} пользователей без Remnawave.\n"
+        f"Пачками по 100, пауза 3 сек между пачками."
+    )
+
+    import asyncio
+    from app.services import remnawave_service
+
+    BATCH_SIZE = 100
+    BATCH_PAUSE = 3
+    success = 0
+    failed = 0
+
+    for i in range(0, total, BATCH_SIZE):
+        batch = users[i:i + BATCH_SIZE]
+        for user in batch:
+            try:
+                tg_id = user["telegram_id"]
+                sub_type = (user.get("subscription_type") or "basic").strip().lower()
+                expires_at = user.get("expires_at")
+                if not expires_at:
+                    failed += 1
+                    continue
+                await remnawave_service.create_remnawave_user(
+                    tg_id, sub_type, expires_at,
+                    traffic_limit_override=5 * 1024**3,
+                )
+                success += 1
+            except Exception as e:
+                logging.error("MASS_PROVISION_ERROR: tg=%s %s", user.get("telegram_id"), e)
+                failed += 1
+
+        processed = min(i + BATCH_SIZE, total)
+        # Progress update every batch
+        try:
+            await callback.message.answer(
+                f"⏳ Прогресс: {processed}/{total} (✅ {success} / ❌ {failed})"
+            )
+        except Exception:
+            pass
+
+        if processed < total:
+            await asyncio.sleep(BATCH_PAUSE)
+
+    await callback.message.answer(
+        f"🏁 Массовый провижн завершён!\n\n"
+        f"Всего: {total}\n"
+        f"✅ Успешно: {success}\n"
+        f"❌ Ошибки: {failed}"
+    )
+
+    await database._log_audit_event_atomic_standalone(
+        "admin_remnawave_mass_provision",
+        callback.from_user.id,
+        None,
+        f"Mass provision: total={total}, success={success}, failed={failed}",
+    )
 
 
 @admin_base_router.callback_query(F.data == "admin:test_menu")
