@@ -234,12 +234,16 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
             return
 
         import math
+
+        def _strikethrough(text: str) -> str:
+            return "".join(ch + "\u0336" for ch in str(text))
+
         buttons = []
         for gb, pack in config.TRAFFIC_PACKS.items():
             base_price = pack["price"]
             if discount_percent > 0:
                 final_price = math.ceil(base_price * (1 - discount_percent / 100))
-                label = f"{gb} ГБ — {final_price} ₽  (−{discount_percent}%)"
+                label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_percent}%)"
             else:
                 label = f"{gb} ГБ — {base_price} ₽"
                 if pack.get("discount"):
@@ -772,8 +776,8 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             is_ab_test=is_ab_test, message_a=message_a, message_b=message_b
         )
 
-        # Save broadcast discount if set
-        if broadcast_discount and "promo_buy" in broadcast_buttons:
+        # Save broadcast discount if set (for promo_buy or promo_traffic)
+        if broadcast_discount and ("promo_buy" in broadcast_buttons or "promo_traffic" in broadcast_buttons):
             await database.save_broadcast_discount(broadcast_id, broadcast_discount)
 
         if is_ab_test:
