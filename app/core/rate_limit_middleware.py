@@ -16,9 +16,9 @@ from aiogram.types import Message, CallbackQuery
 
 logger = logging.getLogger(__name__)
 
-# Лимит: 12 запросов за 60 секунд (для всех команд и callback)
+# Лимит: 30 запросов за 60 секунд
 RATE_LIMIT_WINDOW = 60
-RATE_LIMIT_MAX = 12
+RATE_LIMIT_MAX = 30
 
 # Агрессивный флуд: если 60+ запросов за 60 сек → бан на 5 минут
 FLOOD_BAN_THRESHOLD = 60
