@@ -37,12 +37,12 @@ def _format_bytes(b: int) -> str:
     return f"{b / 1024:.0f} КБ"
 
 
-def _progress_bar(used: int, limit: int, length: int = 20) -> str:
+def _progress_bar(used: int, limit: int, length: int = 10) -> str:
     if limit <= 0:
-        return "░" * length
+        return "🤍" * length
     ratio = min(used / limit, 1.0)
     filled = int(ratio * length)
-    return "█" * filled + "░" * (length - filled)
+    return "🤍" * filled + "🩶" * (length - filled)
 
 
 @traffic_router.callback_query(F.data.in_({"traffic_info", "traffic_refresh"}))
