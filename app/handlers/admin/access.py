@@ -1860,8 +1860,24 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
     
     # VIP-статус
     if overview.is_vip:
-        text += f"\n👑 VIP-статус: активен\n"
-    
+        text += f"\n👑 VIP-��татус: активен\n"
+
+    # Remnawave трафик (краткая сводка)
+    _rmn_uuid = await database.get_remnawave_uuid(user_id)
+    if _rmn_uuid:
+        try:
+            from app.services import remnawave_api
+            _traffic = await remnawave_api.get_user_traffic(_rmn_uuid)
+            if _traffic:
+                _used = _traffic.get("usedTrafficBytes", 0)
+                _limit = _traffic.get("trafficLimitBytes", 0)
+                _remaining = max(0, _limit - _used)
+                def _fmt(b):
+                    return f"{b / 1024**3:.1f} Г��" if b >= 1024**3 else f"{b / 1024**2:.0f} МБ"
+                text += f"\n📊 Трафик обхода: {_fmt(_used)} / {_fmt(_limit)} (ост. {_fmt(_remaining)})\n"
+        except Exception:
+            pass
+
     # Отображаем карточку
     sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
     if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
