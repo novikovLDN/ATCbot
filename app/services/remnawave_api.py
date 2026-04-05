@@ -86,50 +86,91 @@ async def create_user(
         "expireAt": expire_at,
         "deviceLimit": device_limit,
     }
+    # Include squad in creation body
+    if config.REMNAWAVE_SQUAD_UUID:
+        body["activeInternalSquads"] = [config.REMNAWAVE_SQUAD_UUID]
+
     result = await _request("POST", "/api/users", json=body)
     if result:
-        logger.info("REMNAWAVE_CREATE: success for %s, response keys=%s", username, list(result.keys()))
+        logger.info(
+            "REMNAWAVE_CREATE: success for %s, response keys=%s squad_in_response=%s",
+            username, list(result.keys()),
+            result.get("activeInternalSquads"),
+        )
 
-        # Assign squad after creation via dedicated endpoint
+        # Also try dedicated squad endpoint (belt-and-suspenders)
         if config.REMNAWAVE_SQUAD_UUID:
             user_uuid = result.get("uuid")
             if user_uuid:
-                await assign_user_to_squad(user_uuid, config.REMNAWAVE_SQUAD_UUID)
+                squad_result = result.get("activeInternalSquads") or []
+                if not squad_result:
+                    logger.warning(
+                        "REMNAWAVE_SQUAD_NOT_IN_RESPONSE: user=%s, trying assign_user_to_squad",
+                        user_uuid[:8],
+                    )
+                    await assign_user_to_squad(user_uuid, config.REMNAWAVE_SQUAD_UUID)
+        else:
+            logger.warning("REMNAWAVE_SQUAD_UUID not set — skipping squad assignment")
     else:
         logger.warning("REMNAWAVE_CREATE: failed for %s", username)
     return result
 
 
 async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
-    """Try multiple approaches to assign user to a squad/inbound."""
-    # Approach 1: POST /api/squads/{squad_uuid}/users (add user to squad)
+    """Try multiple approaches to assign user to a squad."""
+    logger.info(
+        "REMNAWAVE_SQUAD_ASSIGN_START: user=%s squad=%s",
+        user_uuid[:8], squad_uuid[:8],
+    )
+
+    # Approach 1: POST /api/squads/add-users-to-squad (Remnawave standard)
+    result = await _request(
+        "POST", "/api/squads/add-users-to-squad",
+        quiet=True,
+        json={"squadUuid": squad_uuid, "userUuids": [user_uuid]},
+    )
+    if result is not None:
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/add-users-to-squad user=%s", user_uuid[:8])
+        return True
+
+    # Approach 2: POST /api/squads/{squad_uuid}/users
     result = await _request(
         "POST", f"/api/squads/{squad_uuid}/users",
-        quiet=True, json={"userUuid": user_uuid},
+        quiet=True,
+        json={"userUuid": user_uuid},
     )
     if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users userUuid=%s", user_uuid[:8])
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users user=%s", user_uuid[:8])
         return True
 
-    # Approach 2: PATCH /api/users with activeUserInbounds
-    result = await update_user(
-        user_uuid,
-        activeUserInbounds=[squad_uuid],
+    # Approach 3: POST /api/squads/{squad_uuid}/users with array body
+    result = await _request(
+        "POST", f"/api/squads/{squad_uuid}/users",
+        quiet=True,
+        json={"userUuids": [user_uuid]},
     )
     if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via update activeUserInbounds userUuid=%s", user_uuid[:8])
+        logger.info("REMNAWAVE_SQUAD_ASSIGN: via /api/squads/.../users array user=%s", user_uuid[:8])
         return True
 
-    # Approach 3: Update with activeInternalSquads field name
+    # Approach 4: PUT user update with activeInternalSquads
     body = {"uuid": user_uuid, "activeInternalSquads": [squad_uuid]}
-    result = await _request("POST", "/api/users/update", quiet=True, json=body)
-    if result is not None:
-        logger.info("REMNAWAVE_SQUAD_ASSIGN: via activeInternalSquads userUuid=%s", user_uuid[:8])
-        return True
+    for method in ("PATCH", "POST", "PUT"):
+        for path in ("/api/users", "/api/users/update"):
+            r = await _request(method, path, quiet=True, json=body)
+            if r is not None:
+                # Verify squad was actually set
+                check = await get_user(user_uuid)
+                if check and check.get("activeInternalSquads"):
+                    logger.info(
+                        "REMNAWAVE_SQUAD_ASSIGN: via %s %s user=%s",
+                        method, path, user_uuid[:8],
+                    )
+                    return True
 
-    logger.warning(
-        "REMNAWAVE_SQUAD_ASSIGN_FAILED: could not assign user=%s to squad=%s, "
-        "tried all approaches", user_uuid[:8], squad_uuid[:8],
+    logger.error(
+        "REMNAWAVE_SQUAD_ASSIGN_FAILED: all approaches failed user=%s squad=%s",
+        user_uuid[:8], squad_uuid[:8],
     )
     return False
 
