@@ -32,6 +32,7 @@ def _headers() -> dict:
 async def _request(
     method: str,
     path: str,
+    quiet: bool = False,
     **kwargs,
 ) -> Optional[Dict[str, Any]]:
     """Send request to Remnawave API and unwrap {response: ...} envelope."""
@@ -41,14 +42,16 @@ async def _request(
             resp = await client.request(method, url, headers=_headers(), **kwargs)
 
         if resp.status_code == 404:
-            logger.warning("REMNAWAVE_404: %s %s body=%s", method, path, resp.text[:500])
+            if not quiet:
+                logger.warning("REMNAWAVE_404: %s %s body=%s", method, path, resp.text[:500])
             return None
 
         if resp.status_code >= 400:
-            logger.error(
-                "REMNAWAVE_HTTP_%s: %s %s body=%s",
-                resp.status_code, method, path, resp.text[:500],
-            )
+            if not quiet:
+                logger.error(
+                    "REMNAWAVE_HTTP_%s: %s %s body=%s",
+                    resp.status_code, method, path, resp.text[:500],
+                )
             return None
 
         data = resp.json()
@@ -99,10 +102,41 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     return await _request("GET", f"/api/users/{uuid}")
 
 
+_update_method: Optional[tuple] = None  # cached working (method, path_template)
+
 async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
-    """POST /api/users/update — update user fields (uuid in body)."""
+    """Update user fields. Auto-discovers the correct endpoint on first call."""
+    global _update_method
     body = {"uuid": uuid, **fields}
-    return await _request("POST", "/api/users/update", json=body)
+
+    # Use cached method if already discovered
+    if _update_method:
+        method, path_tpl = _update_method
+        path = path_tpl.format(uuid=uuid)
+        return await _request(method, path, json=body)
+
+    # Probe all known Remnawave panel endpoint variants
+    _variants = [
+        ("PUT", "/api/users/{uuid}"),
+        ("POST", "/api/users/{uuid}"),
+        ("PATCH", "/api/users"),
+        ("POST", "/api/users/update"),
+        ("PUT", "/api/users"),
+    ]
+    for method, path_tpl in _variants:
+        path = path_tpl.format(uuid=uuid)
+        result = await _request(method, path, quiet=True, json=body)
+        if result is not None:
+            _update_method = (method, path_tpl)
+            logger.info("REMNAWAVE_UPDATE_DISCOVERED: %s %s works, caching", method, path_tpl)
+            return result
+
+    logger.error(
+        "REMNAWAVE_UPDATE_FAIL: no endpoint worked for uuid=%s fields=%s. "
+        "Tried: %s", uuid[:8], list(fields.keys()),
+        [(m, p) for m, p in _variants],
+    )
+    return None
 
 
 async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
