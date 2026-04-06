@@ -319,6 +319,16 @@ async def set_combo_flag(telegram_id: int, is_combo: bool = True):
         )
 
 
+async def set_bypass_only_flag(telegram_id: int, is_bypass_only: bool = True):
+    """Set is_bypass_only flag on subscription after bypass-only purchase."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET is_bypass_only = $1 WHERE telegram_id = $2",
+            is_bypass_only, telegram_id,
+        )
+
+
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить активную подписку пользователя
     

@@ -282,25 +282,35 @@ async def show_profile(message_or_query, language: str):
 
         is_trial = sub_type == "trial"
         is_combo = subscription.get("is_combo", False) if subscription else False
+        is_bypass_only = subscription.get("is_bypass_only", False) if subscription else False
 
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
-            text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
-            if config.is_biz_tariff(sub_type):
-                tariff_label = "Business"
-            elif sub_type == "plus":
-                tariff_label = "Комбо Plus" if is_combo else "Plus"
-            elif is_trial:
-                tariff_label = "Trial"
+
+            if is_bypass_only:
+                # Bypass-only: показываем подписку обхода + триал если есть
+                text += "🌐 Подписка: <b>Обход белых списков</b>\n"
+                if is_trial:
+                    text += f"⚡️ Пробный период основной подписки до <b>{date_str}</b>\n"
             else:
-                tariff_label = "Комбо Basic" if is_combo else "Basic"
-            text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
-            if auto_renew and expires_at:
-                renewal_window = timedelta(hours=6)
-                next_renewal = expires_at - renewal_window
-                text += i18n_get_text(language, "profile.auto_renew_on", date=format_date_ru(next_renewal))
-            else:
-                text += i18n_get_text(language, "profile.auto_renew_off")
+                text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
+                if config.is_biz_tariff(sub_type):
+                    tariff_label = "Business"
+                elif sub_type == "plus":
+                    tariff_label = "Комбо Plus" if is_combo else "Plus"
+                elif is_trial:
+                    tariff_label = "Trial"
+                else:
+                    tariff_label = "Комбо Basic" if is_combo else "Basic"
+                text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
+
+            if not is_bypass_only:
+                if auto_renew and expires_at:
+                    renewal_window = timedelta(hours=6)
+                    next_renewal = expires_at - renewal_window
+                    text += i18n_get_text(language, "profile.auto_renew_on", date=format_date_ru(next_renewal))
+                else:
+                    text += i18n_get_text(language, "profile.auto_renew_off")
         else:
             text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
             text += i18n_get_text(language, "profile.tariff_none") + "\n"

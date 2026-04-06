@@ -254,6 +254,9 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"Failed to activate trial for bypass buyer {telegram_id}: {e}")
 
+    # Mark as bypass-only user
+    await database.set_bypass_only_flag(telegram_id, True)
+
     text = i18n_get_text(language, "bypass.purchase_success", gb=gb)
     if trial_activated:
         text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")

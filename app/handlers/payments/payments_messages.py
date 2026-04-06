@@ -676,6 +676,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
 
                 if _tariff_tag.startswith("bypass_"):
+                    await database.set_bypass_only_flag(telegram_id, True)
                     text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
                     if _trial_activated:
                         text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
