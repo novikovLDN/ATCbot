@@ -3776,6 +3776,7 @@ async def create_pending_purchase(
     promo_code: Optional[str] = None,
     country: Optional[str] = None,
     purchase_type: str = "subscription",
+    is_combo: bool = False,
 ) -> str:
     """
     Создать pending покупку с уникальным purchase_id
@@ -3806,9 +3807,9 @@ async def create_pending_purchase(
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         # Соз��аем запись о по��упке
-        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"""
-        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country)
+        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country, is_combo)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"""
+        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country, is_combo)
         try:
             await conn.execute(_insert_sql, *_insert_args)
         except Exception as e:
@@ -4060,6 +4061,7 @@ async def finalize_purchase(
         purchase_type = pending_purchase.get("purchase_type", "subscription")
         price_kopecks = pending_purchase["price_kopecks"]
         purchase_country = pending_purchase.get("country")
+        is_combo_purchase = pending_purchase.get("is_combo", False)
         expected_amount_rubles = price_kopecks / 100.0
         is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift"))
         is_gift_purchase = (purchase_type == "gift")
@@ -4535,6 +4537,7 @@ async def finalize_purchase(
                         "subscription_type": subscription_type_ret,
                         "referral_reward": referral_reward_result,
                         "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
+                        "is_combo": is_combo_purchase,
                     }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
@@ -4577,6 +4580,13 @@ async def finalize_purchase(
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         if ret_val is not None:
+            # Set combo flag reliably from pending_purchase data (not FSM)
+            if is_combo_purchase:
+                try:
+                    await set_combo_flag(telegram_id, True)
+                    logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id}")
+                except Exception as cf_err:
+                    logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
             return ret_val
 
 

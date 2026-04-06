@@ -1135,6 +1135,7 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
             tariff=base_tariff,
             period_days=period_days,
             price_kopecks=price_kopecks,
+            is_combo=True,
         )
     except Exception as e:
         logger.error(f"Combo purchase creation failed: {e}")
@@ -1174,7 +1175,7 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     months = period_days // 30
     text = (
         f"✅ <b>Комбо-подписка активирована!</b>\n\n"
-        f"📦 Тариф: <b>{base_tariff.capitalize()}</b> · {months} мес.\n"
+        f"📦 Тариф: <b>Комбо {base_tariff.capitalize()}</b> · {months} мес.\n"
         f"🌐 Обход: <b>{gb} ГБ</b> начислено\n\n"
         f"Нажмите «Подключиться» чтобы настроить устройство."
     )

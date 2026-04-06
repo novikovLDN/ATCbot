@@ -106,7 +106,8 @@ async def create_subscription_purchase(
     period_days: int,
     price_kopecks: int,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    is_combo: bool = False,
 ) -> str:
     """
     Create a pending subscription purchase record.
@@ -152,7 +153,8 @@ async def create_subscription_purchase(
             period_days=period_days,
             price_kopecks=price_kopecks,
             promo_code=promo_code,
-            country=country
+            country=country,
+            is_combo=is_combo,
         )
 
         logger.info(

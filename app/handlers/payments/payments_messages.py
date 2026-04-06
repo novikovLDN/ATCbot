@@ -973,13 +973,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
         except Exception as e:
             logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
     else:
-        # Determine if this is a combo purchase from FSM data
-        _is_combo_purchase = False
-        try:
-            _fsm = await state.get_data()
-            _is_combo_purchase = _fsm.get("combo_bypass_gb", 0) > 0
-        except Exception:
-            pass
+        # Determine if this is a combo purchase from finalize result (reliable)
+        _is_combo_purchase = getattr(result, "is_combo", False)
 
         if config.is_biz_tariff(subscription_type):
             tariff_label, tariff_emoji = "Business", "🏢"
