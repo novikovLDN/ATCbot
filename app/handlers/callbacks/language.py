@@ -16,7 +16,7 @@ from app.handlers.common.keyboards import get_language_keyboard, get_main_menu_k
 language_router = Router()
 logger = logging.getLogger(__name__)
 
-MAIN_PHOTO_FILE_ID = "AgACAgQAAxkBAAIdb2nTSHdR3Nb0qtBvdSXPO60hsAH8AAKrDGsbZbqgUoydQVuMzuNKAQADAgADeQADOwQ"
+MAIN_PHOTO_FILE_ID = "AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA"
 
 
 @language_router.callback_query(F.data == "change_language")

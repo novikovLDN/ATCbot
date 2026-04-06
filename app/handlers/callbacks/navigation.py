@@ -60,7 +60,7 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     if not sub:
         await callback.bot.send_photo(
             chat_id=callback.message.chat.id,
-            photo="AgACAgQAAxkBAAIdb2nTSHdR3Nb0qtBvdSXPO60hsAH8AAKrDGsbZbqgUoydQVuMzuNKAQADAgADeQADOwQ",
+            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,
@@ -92,7 +92,7 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
             pass
         await callback.bot.send_photo(
             chat_id=callback.message.chat.id,
-            photo="AgACAgQAAxkBAAIdb2nTSHdR3Nb0qtBvdSXPO60hsAH8AAKrDGsbZbqgUoydQVuMzuNKAQADAgADeQADOwQ",
+            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,
