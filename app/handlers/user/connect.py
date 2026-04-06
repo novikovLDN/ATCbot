@@ -118,7 +118,7 @@ async def cmd_main(message: Message):
     sub = await database.get_subscription(telegram_id)
     if not sub:
         await message.answer_photo(
-            photo="AgACAgQAAxkBAAIdb2nTSHdR3Nb0qtBvdSXPO60hsAH8AAKrDGsbZbqgUoydQVuMzuNKAQADAgADeQADOwQ",
+            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,
