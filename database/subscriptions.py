@@ -309,6 +309,16 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
             return rows > 0
 
 
+async def set_combo_flag(telegram_id: int, is_combo: bool = True):
+    """Set is_combo flag on subscription after combo purchase."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET is_combo = $1 WHERE telegram_id = $2",
+            is_combo, telegram_id,
+        )
+
+
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить активную подписку пользователя
     

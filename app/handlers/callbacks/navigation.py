@@ -1167,8 +1167,9 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     if rmn_uuid:
         await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
 
-    # 5. Record traffic purchase
+    # 5. Record traffic purchase + mark as combo
     await database.record_traffic_purchase(telegram_id, gb, 0)
+    await database.set_combo_flag(telegram_id, True)
 
     months = period_days // 30
     text = (

@@ -1143,6 +1143,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
             await database.record_traffic_purchase(telegram_id, gb, 0)
             logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
 
+            # Mark subscription as combo
+            if combo_bypass_gb > 0:
+                await database.set_combo_flag(telegram_id, True)
+
             # Bypass-only: activate 3-day trial if eligible
             if bypass_only_gb > 0:
                 from app.services import trial_service

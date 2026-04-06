@@ -281,6 +281,7 @@ async def show_profile(message_or_query, language: str):
         text += f"{i18n_get_text(language, 'profile.balance', amount=balance_str)}\n"
 
         is_trial = sub_type == "trial"
+        is_combo = subscription.get("is_combo", False) if subscription else False
 
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
@@ -288,11 +289,11 @@ async def show_profile(message_or_query, language: str):
             if config.is_biz_tariff(sub_type):
                 tariff_label = "Business"
             elif sub_type == "plus":
-                tariff_label = "Plus"
+                tariff_label = "Комбо Plus" if is_combo else "Plus"
             elif is_trial:
                 tariff_label = "Trial"
             else:
-                tariff_label = "Basic"
+                tariff_label = "Комбо Basic" if is_combo else "Basic"
             text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
             if auto_renew and expires_at:
                 renewal_window = timedelta(hours=6)
@@ -359,6 +360,7 @@ async def show_profile(message_or_query, language: str):
             language, has_active_subscription, auto_renew,
             subscription_type=sub_type, show_traffic=show_traffic,
             is_trial=is_trial,
+            is_combo=is_combo,
         )
 
         await send_func(text, reply_markup=keyboard, parse_mode="HTML")
