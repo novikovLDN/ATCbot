@@ -173,12 +173,30 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
     meta = _TARIFF_META[new_tariff]
     is_combo = new_tariff.startswith("combo_")
 
-    text = (
-        f"{meta['icon']} <b>Переход на {meta['name']}</b>\n\n"
-        f"{i18n_get_text(language, meta['desc_key'])}\n\n"
-        f"Новый тариф начнёт действовать после окончания текущей подписки.\n"
-        f"Выберите период:"
-    )
+    desc_text = i18n_get_text(language, meta['desc_key'])
+
+    if is_combo:
+        # Для комбо — показываем преимущества комбо подписки
+        combo_benefits = (
+            "\n\n💡 <b>Преимущества комбо:</b>\n"
+            "✅ Трафик обхода уже включён в стоимость\n"
+            "✅ Не нужно покупать ГБ отдельно\n"
+            "✅ Экономия до 30% по сравнению с раздельной покупкой"
+        )
+        text = (
+            f"{meta['icon']} <b>Переход на {meta['name']}</b>\n\n"
+            f"{desc_text}"
+            f"{combo_benefits}\n\n"
+            f"Новый тариф начнёт действовать после окончания текущей подписки.\n"
+            f"Выберите период:"
+        )
+    else:
+        text = (
+            f"{meta['icon']} <b>Переход на {meta['name']}</b>\n\n"
+            f"{desc_text}\n\n"
+            f"Новый тариф начнёт действовать после окончания текущей подписки.\n"
+            f"Выберите период:"
+        )
 
     buttons = []
 
