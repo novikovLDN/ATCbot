@@ -815,12 +815,13 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
-            country=country
+            country=country,
+            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
-        
+
         # КРИТИЧНО: Сохраняем purchase_id в FSM state
         await state.update_data(purchase_id=purchase_id)
-        
+
         logger.info(
             f"Purchase created for card payment: user={telegram_id}, purchase_id={purchase_id}, "
             f"tariff={tariff_type}, period_days={period_days}, "
@@ -945,7 +946,8 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=stars_price_kopecks,
             promo_code=promo_code,
-            country=country
+            country=country,
+            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
 
         await state.update_data(purchase_id=purchase_id, payment_method="stars")
@@ -1070,7 +1072,8 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=sbp_price_kopecks,
             promo_code=promo_code,
-            country=country
+            country=country,
+            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
 
         await state.update_data(purchase_id=purchase_id)
@@ -1194,7 +1197,8 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
             period_days=period_days,
             price_kopecks=final_price_kopecks,
             promo_code=promo_code,
-            country=country
+            country=country,
+            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
         )
 
         await state.update_data(purchase_id=purchase_id, payment_method="crypto")
