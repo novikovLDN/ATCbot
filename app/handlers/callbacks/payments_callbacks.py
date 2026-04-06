@@ -707,8 +707,13 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 await database.record_traffic_purchase(telegram_id, gb, 0)
                 logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED_BALANCE user={telegram_id} gb={gb}")
 
-                # Bypass-only: activate trial if eligible
+                # Mark subscription as combo
+                if combo_bypass_gb > 0:
+                    await database.set_combo_flag(telegram_id, True)
+
+                # Bypass-only: mark flag + activate trial if eligible
                 if bypass_only_gb > 0:
+                    await database.set_bypass_only_flag(telegram_id, True)
                     from app.services import trial_service
                     if await trial_service.is_trial_available(telegram_id):
                         try:

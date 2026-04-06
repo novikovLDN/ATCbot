@@ -296,20 +296,32 @@ def get_profile_keyboard(
     vpn_key_plus: Optional[str] = None,
     show_traffic: bool = False,
     is_trial: bool = False,
+    is_combo: bool = False,
 ):
     """Личный кабинет: Купить ГБ + Продлить | Автопродление + Пополнить | Подарки | Назад."""
     buttons = []
 
-    # Row 1: Купить ГБ + Продлить/Купить подписку
-    row1 = []
-    if show_traffic and not is_trial:
-        row1.append(InlineKeyboardButton(
-            text="🌐 Купить ГБ",
+    if is_combo and has_active_subscription:
+        # Комбо-подписка: две отдельные кнопки — трафик и продление основной
+        buttons.append([InlineKeyboardButton(
+            text="🌐 Купить ГБ трафика",
             callback_data="buy_traffic",
-        ))
-    buy_text = i18n_get_text(language, "main.buy_renew") if has_active_subscription else i18n_get_text(language, "main.buy_new")
-    row1.append(InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"))
-    buttons.append(row1)
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="⚡️ Продлить основную подписку",
+            callback_data="menu_buy_vpn",
+        )])
+    else:
+        # Row 1: Купить ГБ + Продлить/Купить подписку
+        row1 = []
+        if show_traffic and not is_trial:
+            row1.append(InlineKeyboardButton(
+                text="🌐 Купить ГБ",
+                callback_data="buy_traffic",
+            ))
+        buy_text = i18n_get_text(language, "main.buy_renew") if has_active_subscription else i18n_get_text(language, "main.buy_new")
+        row1.append(InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"))
+        buttons.append(row1)
 
     # Row 2: Автопродление + Пополнить
     row2 = []

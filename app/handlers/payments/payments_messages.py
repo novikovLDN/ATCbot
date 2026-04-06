@@ -676,6 +676,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
 
                 if _tariff_tag.startswith("bypass_"):
+                    await database.set_bypass_only_flag(telegram_id, True)
                     text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
                     if _trial_activated:
                         text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
@@ -1142,6 +1143,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
             await database.record_traffic_purchase(telegram_id, gb, 0)
             logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
+
+            # Mark subscription as combo
+            if combo_bypass_gb > 0:
+                await database.set_combo_flag(telegram_id, True)
 
             # Bypass-only: activate 3-day trial if eligible
             if bypass_only_gb > 0:
