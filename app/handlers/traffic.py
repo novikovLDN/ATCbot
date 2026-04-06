@@ -28,6 +28,223 @@ traffic_router = Router()
 logger = logging.getLogger(__name__)
 
 
+@traffic_router.callback_query(F.data == "buy_bypass_only")
+async def callback_buy_bypass_only(callback: CallbackQuery):
+    """Экран покупки только обхода белых списков (ГБ пакеты)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    # Check for active traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+
+    # Build pack buttons (same packs as regular traffic)
+    buttons = []
+    for gb, pack in config.TRAFFIC_PACKS.items():
+        base_price = pack["price"]
+        if discount_pct > 0:
+            final_price = math.ceil(base_price * (1 - discount_pct / 100))
+            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
+        else:
+            label = f"{gb} ГБ — {base_price} ₽"
+            if pack["discount"]:
+                label += f"  {pack['discount']}"
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"buy_bypass_pack:{gb}",
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text="🌐 Расширенный пакет",
+        callback_data="buy_bypass_extended",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="menu_main",
+    )])
+
+    text = i18n_get_text(language, "bypass.buy_title")
+    # Add trial bonus text if trial is available
+    from app.services import trial_service
+    trial_available = await trial_service.is_trial_available(telegram_id)
+    if trial_available:
+        text += i18n_get_text(language, "bypass.buy_title_trial")
+    if discount_pct > 0:
+        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+
+
+@traffic_router.callback_query(F.data == "buy_bypass_extended")
+async def callback_buy_bypass_extended(callback: CallbackQuery):
+    """Расширенные пакеты обхода (300+ ГБ)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+
+    buttons = []
+    for gb, pack in config.TRAFFIC_PACKS_EXTENDED.items():
+        base_price = pack["price"]
+        if discount_pct > 0:
+            final_price = math.ceil(base_price * (1 - discount_pct / 100))
+            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
+        else:
+            label = f"{gb} ГБ — {base_price} ₽"
+            if pack["discount"]:
+                label += f"  {pack['discount']}"
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"buy_bypass_pack:{gb}",
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="buy_bypass_only",
+    )])
+
+    text = i18n_get_text(language, "traffic.buy_title_extended")
+    if discount_pct > 0:
+        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+
+
+@traffic_router.callback_query(F.data.startswith("buy_bypass_pack:"))
+async def callback_buy_bypass_pack(callback: CallbackQuery):
+    """Подтверждение покупки bypass-only пакета."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
+    if not pack:
+        return
+
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+
+    balance = await database.get_user_balance(telegram_id)
+    base_price = pack["price"]
+    if discount_pct > 0:
+        final_price = math.ceil(base_price * (1 - discount_pct / 100))
+    else:
+        final_price = base_price
+
+    text = i18n_get_text(language, "traffic.confirm_purchase", gb=gb, price=final_price, balance=balance)
+
+    buttons = []
+    if balance >= final_price:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_balance", price=final_price),
+            callback_data=f"bypass_pay_balance:{gb}",
+        )])
+
+    # Card / SBP / Stars payment buttons
+    if hasattr(config, 'YOOKASSA_ENABLED') and config.YOOKASSA_ENABLED:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_card", price=final_price),
+            callback_data=f"bypass_pay_card:{gb}",
+        )])
+    if hasattr(config, 'PLATEGA_ENABLED') and config.PLATEGA_ENABLED:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_sbp", price=final_price),
+            callback_data=f"bypass_pay_sbp:{gb}",
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="buy_bypass_only",
+    )])
+
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+
+
+@traffic_router.callback_query(F.data.startswith("bypass_pay_balance:"))
+async def callback_bypass_pay_balance(callback: CallbackQuery):
+    """Оплата bypass-only пакета с баланса. Выдаёт только обход + триал основных серверов."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
+    if not pack:
+        return
+
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+
+    base_price = pack["price"]
+    final_price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
+
+    balance = await database.get_user_balance(telegram_id)
+    if balance < final_price:
+        text = i18n_get_text(language, "traffic.insufficient_balance")
+        buttons = [[InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="buy_bypass_only",
+        )]]
+        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+        return
+
+    # Deduct balance
+    await database.update_balance(telegram_id, -final_price, description=f"Bypass traffic {gb} GB")
+
+    # Add traffic to Remnawave
+    traffic_bytes = gb * 1024**3
+    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+    if rmn_uuid:
+        await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+    else:
+        # Auto-provision Remnawave user
+        rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, "basic")
+        if rmn_uuid:
+            await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+
+    # Record traffic purchase
+    await database.record_traffic_purchase(telegram_id, gb, final_price)
+
+    # Activate 3-day trial of basic servers if eligible
+    from app.services import trial_service
+    trial_available = await trial_service.is_trial_available(telegram_id)
+    if trial_available:
+        try:
+            await trial_service.activate_trial(telegram_id)
+            logger.info(f"Auto-activated trial for bypass-only buyer {telegram_id}")
+        except Exception as e:
+            logger.warning(f"Failed to activate trial for bypass buyer {telegram_id}: {e}")
+
+    text = i18n_get_text(language, "traffic.purchase_success", gb=gb)
+    buttons = [[InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="menu_main",
+    )]]
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+
+
 def _strikethrough(text: str) -> str:
     """Apply Unicode strikethrough to text (works in Telegram button labels)."""
     return "".join(ch + "\u0336" for ch in str(text))

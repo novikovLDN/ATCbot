@@ -119,28 +119,35 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 text=i18n_get_text(language, "trial.button"),
                 callback_data="activate_trial"
             )])
-        else:
-            # Проверяем спецпредложение для истекших подписок
-            offer_shown = False
-            try:
-                special_offer = await database.get_special_offer_info(telegram_id)
-                if special_offer:
-                    # Состояние 3: Спецпредложение -15% с таймером
-                    remaining = special_offer["remaining_text"]
-                    buttons.append([InlineKeyboardButton(
-                        text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
-                        callback_data="special_offer_buy"
-                    )])
-                    offer_shown = True
-            except Exception as e:
-                logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
 
-            if not offer_shown:
-                # Предложение истекло или отсутствует — кнопка «Купить подписку»
+        # Кнопки покупки для пользователей без подписки
+        # Проверяем спецпредложение для истекших подписок
+        offer_shown = False
+        try:
+            special_offer = await database.get_special_offer_info(telegram_id)
+            if special_offer:
+                remaining = special_offer["remaining_text"]
                 buttons.append([InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.buy_new"),
-                    callback_data="menu_buy_vpn"
+                    text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
+                    callback_data="special_offer_buy"
                 )])
+                offer_shown = True
+        except Exception as e:
+            logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
+
+        if not offer_shown:
+            buttons.append([InlineKeyboardButton(
+                text="🌐 Купить обход белых списков",
+                callback_data="buy_bypass_only"
+            )])
+            buttons.append([InlineKeyboardButton(
+                text="⚡️ Купить подписку (основные сервера)",
+                callback_data="menu_buy_vpn"
+            )])
+            buttons.append([InlineKeyboardButton(
+                text="🚀 Комбо-подписка (всё включено)",
+                callback_data="buy_combo"
+            )])
 
     # Traffic button removed — traffic info is now in profile screen
 
@@ -148,20 +155,18 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=i18n_get_text(language, "main.profile"),
         callback_data="menu_profile"
     )])
-    # Динамическая кнопка покупки + подарить подписку в одном ряду
-    if subscription and subscription.get("subscription_type"):
-        buy_text = i18n_get_text(language, "main.buy_renew")
-    elif telegram_id and database.DB_READY and not subscription:
-        buy_text = i18n_get_text(language, "main.buy_new")
-    else:
-        buy_text = i18n_get_text(language, "main.buy_new")
-    buttons.append([
-        InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"),
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
-            callback_data="gift_subscription"
-        ),
-    ])
+    # Динамическая кнопка покупки + подарить подписку — только если есть подписка
+    if has_active_sub:
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.buy_renew"),
+                callback_data="menu_buy_vpn",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
+                callback_data="gift_subscription"
+            ),
+        ])
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.instruction"),
