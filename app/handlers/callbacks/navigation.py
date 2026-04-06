@@ -54,7 +54,19 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
 
     text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
-    await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
+
+    # Для пользователей без подписки — отправляем фото с текстом
+    sub = await database.get_subscription(telegram_id)
+    if not sub:
+        await callback.bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo="AgACAgQAAxkBAAIdb2nTSHdR3Nb0qtBvdSXPO60hsAH8AAKrDGsbZbqgUoydQVuMzuNKAQADAgADeQADOwQ",
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "back_to_main")
@@ -71,7 +83,22 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
 
     text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+    sub = await database.get_subscription(telegram_id)
+    if not sub:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo="AgACAgQAAxkBAAIdb2nTSHdR3Nb0qtBvdSXPO60hsAH8AAKrDGsbZbqgUoydQVuMzuNKAQADAgADeQADOwQ",
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
 
 
 async def _get_main_text(telegram_id: int, language: str) -> str:
