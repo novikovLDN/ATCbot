@@ -276,12 +276,12 @@ async def show_profile(message_or_query, language: str):
                 await send_func(text, reply_markup=keyboard)
             return
 
-        # Карточка профиля: единый формат
-        text = (
-            f"{i18n_get_text(language, 'profile.welcome')}\n\n"
-            f"👤 {display_name}\n\n"
-            f"{i18n_get_text(language, 'profile.balance', amount=balance_str)}\n"
-        )
+        # Карточка профиля: единый формат (профиль + трафик)
+        text = f"👤 {display_name}\n\n"
+        text += f"{i18n_get_text(language, 'profile.balance', amount=balance_str)}\n"
+
+        is_trial = sub_type == "trial"
+
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
             text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
@@ -289,6 +289,8 @@ async def show_profile(message_or_query, language: str):
                 tariff_label = "Business"
             elif sub_type == "plus":
                 tariff_label = "Plus"
+            elif is_trial:
+                tariff_label = "Trial"
             else:
                 tariff_label = "Basic"
             text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
@@ -302,12 +304,61 @@ async def show_profile(message_or_query, language: str):
             text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
             text += i18n_get_text(language, "profile.auto_renew_none")
-        text += "\n\n" + i18n_get_text(language, "profile.renewal_hint")
-        vpn_key = subscription.get("vpn_key") if subscription else None
-        vpn_key_plus = subscription.get("vpn_key_plus") if subscription else None
+
+        # --- Traffic section (for active Basic/Plus/Trial with Remnawave) ---
+        show_traffic = has_active_subscription and config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus", "trial")
+        if show_traffic:
+            from app.services import remnawave_api, remnawave_service
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                remnawave_service._fire_and_forget(
+                    remnawave_service.ensure_squad(telegram_id)
+                )
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    used = traffic["usedTrafficBytes"]
+                    limit_bytes = traffic["trafficLimitBytes"]
+                    pct = int(used / limit_bytes * 100) if limit_bytes > 0 else 0
+
+                    def _fmt(b):
+                        if b >= 1024**3:
+                            return f"{b / 1024**3:.1f} ГБ"
+                        if b >= 1024**2:
+                            return f"{b / 1024**2:.0f} МБ"
+                        return f"{b / 1024:.0f} КБ"
+
+                    def _bar(u, l, length=10):
+                        if l <= 0:
+                            return "🤍" * length
+                        ratio = min(u / l, 1.0)
+                        filled = int(ratio * length)
+                        return "🤍" * filled + "🩶" * (length - filled)
+
+                    sub_url = traffic.get("subscriptionUrl", "")
+
+                    text += f"\n\n📊 <b>Обход блокировок</b> 🇷🇺\n\n"
+                    text += f"📥 {_fmt(used)} / {_fmt(limit_bytes)}\n"
+                    text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
+                    if sub_url:
+                        text += f"🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
+
+                    if is_trial:
+                        text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
+            elif expires_at:
+                # Auto-provision (fire-and-forget)
+                override = 5 * 1024**3 if is_trial else 10 * 1024**3
+                remnawave_service._fire_and_forget(
+                    remnawave_service.create_remnawave_user(
+                        telegram_id, sub_type, expires_at,
+                        traffic_limit_override=override,
+                    )
+                )
+                text += "\n\n📊 <b>Обход блокировок</b> 🇷🇺\n\n⏳ Настраиваем... Зайдите через несколько секунд."
+
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
-            subscription_type=sub_type, vpn_key=vpn_key, vpn_key_plus=vpn_key_plus
+            subscription_type=sub_type, show_traffic=show_traffic,
+            is_trial=is_trial,
         )
 
         await send_func(text, reply_markup=keyboard, parse_mode="HTML")
@@ -358,9 +409,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     await state.set_state(PurchaseState.choose_tariff)
     
     text = (
-        f"💎 Тарифы Atlas Secure\n\n"
+        f"💎 <b>Тарифы Atlas Secure</b>\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
-        f"{i18n_get_text(language, 'buy.tariff_plus')}"
+        f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
+        f"{i18n_get_text(language, 'buy.tariff_business')}"
     )
     
     # Получаем текущую подписку для динамических кнопок

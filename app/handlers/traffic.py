@@ -349,11 +349,55 @@ async def callback_buy_traffic(callback: CallbackQuery):
         )])
 
     buttons.append([InlineKeyboardButton(
+        text="🌐 Расширенный пакет",
+        callback_data="buy_traffic_extended",
+    )])
+    buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="traffic_info",
     )])
 
     text = i18n_get_text(language, "traffic.buy_title")
+    if discount_pct > 0:
+        text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+
+
+@traffic_router.callback_query(F.data == "buy_traffic_extended")
+async def callback_buy_traffic_extended(callback: CallbackQuery):
+    """Show extended traffic packs (300+GB)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    # Check for active traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+
+    buttons = []
+    for gb, pack in config.TRAFFIC_PACKS_EXTENDED.items():
+        base_price = pack["price"]
+        if discount_pct > 0:
+            final_price = math.ceil(base_price * (1 - discount_pct / 100))
+            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
+        else:
+            label = f"{gb} ГБ — {base_price} ₽"
+            if pack["discount"]:
+                label += f"  {pack['discount']}"
+        buttons.append([InlineKeyboardButton(
+            text=label,
+            callback_data=f"buy_traffic_pack:{gb}",
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="buy_traffic",
+    )])
+
+    text = i18n_get_text(language, "traffic.buy_title_extended")
     if discount_pct > 0:
         text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
     await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
@@ -374,7 +418,7 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
     except (ValueError, IndexError):
         return
 
-    pack = config.TRAFFIC_PACKS.get(gb)
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
     if not pack:
         return
 
@@ -445,7 +489,7 @@ async def callback_traffic_pay_balance(callback: CallbackQuery):
     except (ValueError, IndexError):
         return
 
-    pack = config.TRAFFIC_PACKS.get(gb)
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
     if not pack:
         return
 
@@ -546,7 +590,7 @@ async def callback_traffic_pay_card(callback: CallbackQuery):
     except (ValueError, IndexError):
         return
 
-    pack = config.TRAFFIC_PACKS.get(gb)
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
     if not pack:
         return
 
@@ -618,7 +662,7 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
     except (ValueError, IndexError):
         return
 
-    pack = config.TRAFFIC_PACKS.get(gb)
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
     if not pack:
         return
 

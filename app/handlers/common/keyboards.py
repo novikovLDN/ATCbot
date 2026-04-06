@@ -142,14 +142,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                     callback_data="menu_buy_vpn"
                 )])
 
-    # Traffic buttons (only for active Basic/Plus with Remnawave enabled)
-    if has_active_sub and config.REMNAWAVE_ENABLED:
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else ""
-        if sub_type in ("basic", "plus"):
-            buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "main.traffic_btn"),
-                callback_data="traffic_info",
-            )])
+    # Traffic button removed — traffic info is now in profile screen
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "main.profile"),
@@ -172,7 +165,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.instruction"),
-            web_app=WebAppInfo(url=f"{MINI_APP_URL}?startapp=guide"),
+            callback_data="connect_instruction",
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
@@ -288,31 +281,45 @@ def get_profile_keyboard(
     subscription_type: str = "basic",
     vpn_key: Optional[str] = None,
     vpn_key_plus: Optional[str] = None,
+    show_traffic: bool = False,
+    is_trial: bool = False,
 ):
-    """Карточка профиля: безопасная раскладка для малых экранов (без двух длинных кнопок в одном ряду)."""
+    """Личный кабинет: Купить ГБ + Продлить | Автопродление + Пополнить | Подарки | Назад."""
     buttons = []
 
-    if has_active_subscription:
-        btn_text = i18n_get_text(language, "main.buy_renew")
-    else:
-        btn_text = i18n_get_text(language, "main.buy_new")
-    buttons.append([InlineKeyboardButton(text=btn_text, callback_data="menu_buy_vpn")])
+    # Row 1: Купить ГБ + Продлить/Купить подписку
+    row1 = []
+    if show_traffic and not is_trial:
+        row1.append(InlineKeyboardButton(
+            text="🌐 Купить ГБ",
+            callback_data="buy_traffic",
+        ))
+    buy_text = i18n_get_text(language, "main.buy_renew") if has_active_subscription else i18n_get_text(language, "main.buy_new")
+    row1.append(InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"))
+    buttons.append(row1)
 
+    # Row 2: Автопродление + Пополнить
+    row2 = []
+    if has_active_subscription:
+        ar_text = "🔄 Автопродление ✅" if auto_renew else "🔄 Автопродление"
+        ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
+        row2.append(InlineKeyboardButton(text=ar_text, callback_data=ar_data))
+    row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
+    buttons.append(row2)
+
+    # Row 3: Мини апп + Мои подарки
     buttons.append([
-        InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"),
+        InlineKeyboardButton(
+            text="👨‍💻 Мини апп",
+            web_app=WebAppInfo(url=MINI_APP_URL),
+        ),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
+            callback_data="my_gifts:0",
+        ),
     ])
 
-    if has_active_subscription:
-        buttons.append([InlineKeyboardButton(
-            text="🔄 Автопродление: вкл ✅" if auto_renew else "🔄 Автопродление: выкл",
-            callback_data="toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
-        )])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
-        callback_data="my_gifts:0"
-    )])
-
+    # Row 4: Назад
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back", "← Назад"),
         callback_data="menu_main"
@@ -336,7 +343,7 @@ def get_profile_keyboard_old(language: str):
             ),
             InlineKeyboardButton(
                 text=i18n_get_text(language, "main.instruction"),
-                callback_data="menu_instruction"
+                callback_data="connect_instruction"
             ),
         ],
         [InlineKeyboardButton(

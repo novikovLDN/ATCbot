@@ -641,7 +641,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 traffic_gb = traffic_result.get("traffic_gb", 0)
                 # Add traffic via Remnawave
                 rmn_success = False
-                pack = config.TRAFFIC_PACKS.get(traffic_gb)
+                pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
                 if pack:
                     try:
                         from app.services.remnawave_service import add_traffic

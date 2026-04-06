@@ -513,6 +513,7 @@ async def main():
             BotCommand(command="support", description="Поддержка"),
             BotCommand(command="help", description="Помощь"),
             BotCommand(command="instruction", description="Инструкция"),
+            BotCommand(command="hwadd", description="📲 Добавить устройство"),
             BotCommand(command="language", description="Изменить язык"),
         ])
         logger.info("Bot commands registered")
