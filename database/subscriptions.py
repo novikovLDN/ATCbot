@@ -4259,11 +4259,12 @@ async def finalize_purchase(
                     if not payment_id:
                         raise Exception(f"Failed to create payment record for traffic pack: purchase_id={purchase_id}")
 
-                    # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5)
+                    # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5, "bypass_10gb" → 10)
                     _gb = 0
-                    if tariff_type and tariff_type.startswith("traffic_") and tariff_type.endswith("gb"):
+                    if tariff_type and tariff_type.endswith("gb") and ("traffic_" in tariff_type or "bypass_" in tariff_type):
+                        _prefix = "bypass_" if tariff_type.startswith("bypass_") else "traffic_"
                         try:
-                            _gb = int(tariff_type[len("traffic_"):-len("gb")])
+                            _gb = int(tariff_type[len(_prefix):-len("gb")])
                         except ValueError:
                             logger.error(
                                 "finalize_purchase: TRAFFIC_PACK_GB_PARSE_FAIL tariff=%s purchase_id=%s",

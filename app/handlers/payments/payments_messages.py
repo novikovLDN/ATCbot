@@ -662,7 +662,25 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         telegram_id, traffic_gb, purchase_id,
                     )
 
-                text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+                # Bypass-only: activate 3-day trial if eligible
+                _tariff_tag = pending_purchase.get("tariff", "")
+                _trial_activated = False
+                if _tariff_tag.startswith("bypass_"):
+                    try:
+                        from app.services import trial_service
+                        if await trial_service.is_trial_available(telegram_id):
+                            await trial_service.activate_trial(telegram_id)
+                            _trial_activated = True
+                            logger.info("BYPASS_TRIAL_ACTIVATED user=%s", telegram_id)
+                    except Exception as trial_err:
+                        logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
+
+                if _tariff_tag.startswith("bypass_"):
+                    text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
+                    if _trial_activated:
+                        text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
+                else:
+                    text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
                 if not rmn_success:
                     text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
                     logger.error(
@@ -671,11 +689,12 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
-                        text=i18n_get_text(language, "traffic.back_to_traffic"),
-                        callback_data="traffic_info",
+                        text=i18n_get_text(language, "common.back"),
+                        callback_data="menu_main",
                     )],
                 ])
                 await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
                 logger.info(
                     "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s",
                     purchase_id, telegram_id, traffic_gb,
@@ -1105,9 +1124,40 @@ async def process_successful_payment(message: Message, state: FSMContext):
     except Exception as rmn_err:
         logger.warning("REMNAWAVE_HOOK_FAIL: stars tg=%s %s", telegram_id, rmn_err)
 
+    # Combo/Bypass: начисляем трафик обхода если покупка была через комбо или bypass-only
+    try:
+        fsm_data = await state.get_data()
+        combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
+        bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
+
+        if combo_bypass_gb > 0 or bypass_only_gb > 0:
+            from app.services import remnawave_api, remnawave_service
+            gb = combo_bypass_gb or bypass_only_gb
+            traffic_bytes = gb * 1024**3
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if not rmn_uuid:
+                _sub_t = (tariff_type or "basic").strip().lower()
+                rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, _sub_t)
+            if rmn_uuid:
+                await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+            await database.record_traffic_purchase(telegram_id, gb, 0)
+            logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
+
+            # Bypass-only: activate 3-day trial if eligible
+            if bypass_only_gb > 0:
+                from app.services import trial_service
+                if await trial_service.is_trial_available(telegram_id):
+                    try:
+                        await trial_service.activate_trial(telegram_id)
+                        logger.info(f"BYPASS_TRIAL_ACTIVATED user={telegram_id}")
+                    except Exception:
+                        pass
+    except Exception as combo_err:
+        logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL user={telegram_id}: {combo_err}")
+
     # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
     await clear_promo_session(state)
-    
+
     # КРИТИЧНО: Очищаем FSM state после успешной активации подписки
     try:
         current_state = await state.get_state()

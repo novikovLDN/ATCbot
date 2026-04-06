@@ -1052,8 +1052,8 @@ async def callback_combo_tariff(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("combo_period:"))
-async def callback_combo_period(callback: CallbackQuery):
-    """Подтверждение и оплата комбо-тарифа."""
+async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение и оплата комбо-тарифа — используем стандартный экран оплаты."""
     try:
         await callback.answer()
     except Exception:
@@ -1072,48 +1072,22 @@ async def callback_combo_period(callback: CallbackQuery):
         return
 
     info = tariff[period_days]
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-    balance = await database.get_user_balance(telegram_id)
-
-    price = info["price"]
-    gb = info["gb"]
     base_tariff = info["base_tariff"]
-    months = period_days // 30
+    price_kopecks = info["price"] * 100
+    gb = info["gb"]
 
-    text = (
-        f"🚀 <b>Комбо-подписка</b>\n\n"
-        f"📦 Тариф: <b>{base_tariff.capitalize()}</b> · {months} мес.\n"
-        f"🌐 Обход: <b>{gb} ГБ</b>\n"
-        f"💰 Стоимость: <b>{price} ₽</b>\n\n"
-        f"💳 Ваш баланс: {balance} ₽"
+    # Сохраняем данные в FSM для стандартного платёжного потока
+    await state.update_data(
+        tariff_type=base_tariff,
+        period_days=period_days,
+        final_price_kopecks=price_kopecks,
+        combo_bypass_gb=gb,
     )
+    from app.handlers.common.states import PurchaseState
+    await state.set_state(PurchaseState.choose_payment_method)
 
-    buttons = []
-    if balance >= price:
-        buttons.append([InlineKeyboardButton(
-            text=f"💰 Оплатить с баланса ({price} ₽)",
-            callback_data=f"combo_pay_balance:{combo_type}:{period_days}",
-        )])
-
-    if hasattr(config, 'YOOKASSA_ENABLED') and config.YOOKASSA_ENABLED:
-        buttons.append([InlineKeyboardButton(
-            text=f"💳 Картой ({price} ₽)",
-            callback_data=f"combo_pay_card:{combo_type}:{period_days}",
-        )])
-    if hasattr(config, 'PLATEGA_ENABLED') and config.PLATEGA_ENABLED:
-        buttons.append([InlineKeyboardButton(
-            text=f"🏦 СБП ({price} ₽)",
-            callback_data=f"combo_pay_sbp:{combo_type}:{period_days}",
-        )])
-
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data=f"combo_tariff:{combo_type}",
-    )])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    from handlers import show_payment_method_selection
+    await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
 
 
 @router.callback_query(F.data.startswith("combo_pay_balance:"))

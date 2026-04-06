@@ -688,7 +688,36 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                 renew_remnawave_user_bg(telegram_id, subscription_type, expires_at)
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
-        
+
+        # Combo/Bypass: начисляем трафик обхода если покупка через комбо или bypass-only
+        try:
+            fsm_data = await state.get_data()
+            combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
+            bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
+
+            if combo_bypass_gb > 0 or bypass_only_gb > 0:
+                from app.services import remnawave_api, remnawave_service
+                gb = combo_bypass_gb or bypass_only_gb
+                traffic_bytes = gb * 1024**3
+                rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+                if not rmn_uuid:
+                    rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, subscription_type)
+                if rmn_uuid:
+                    await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+                await database.record_traffic_purchase(telegram_id, gb, 0)
+                logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED_BALANCE user={telegram_id} gb={gb}")
+
+                # Bypass-only: activate trial if eligible
+                if bypass_only_gb > 0:
+                    from app.services import trial_service
+                    if await trial_service.is_trial_available(telegram_id):
+                        try:
+                            await trial_service.activate_trial(telegram_id)
+                        except Exception:
+                            pass
+        except Exception as combo_err:
+            logger.warning(f"COMBO_BYPASS_BALANCE_FAIL user={telegram_id}: {combo_err}")
+
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
         error_text = i18n_get_text(language, "errors.payment_processing")
