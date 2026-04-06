@@ -667,7 +667,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 _trial_activated = False
                 if _tariff_tag.startswith("bypass_"):
                     try:
-                        from app.services import trial_service
+                        from app.services.trials import service as trial_service
                         if await trial_service.is_trial_available(telegram_id):
                             await trial_service.activate_trial(telegram_id)
                             _trial_activated = True
@@ -1150,7 +1150,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
 
             # Bypass-only: activate 3-day trial if eligible
             if bypass_only_gb > 0:
-                from app.services import trial_service
+                from app.services.trials import service as trial_service
                 if await trial_service.is_trial_available(telegram_id):
                     try:
                         await trial_service.activate_trial(telegram_id)

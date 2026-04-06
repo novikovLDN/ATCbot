@@ -69,7 +69,7 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
 
     text = i18n_get_text(language, "bypass.buy_title")
     # Add trial bonus text if trial is available
-    from app.services import trial_service
+    from app.services.trials import service as trial_service
     trial_available = await trial_service.is_trial_available(telegram_id)
     if trial_available:
         text += i18n_get_text(language, "bypass.buy_title_trial")
@@ -244,7 +244,7 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
 
     # Activate 3-day trial of basic servers if eligible
     trial_activated = False
-    from app.services import trial_service
+    from app.services.trials import service as trial_service
     trial_available = await trial_service.is_trial_available(telegram_id)
     if trial_available:
         try:
