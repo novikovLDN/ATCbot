@@ -44,10 +44,26 @@ async def callback_language(callback: CallbackQuery):
     await database.update_user_language(telegram_id, language)
 
     # Подтверждение смены языка на выбранном языке
-    text = i18n_get_text(language, "main.welcome")
-    text = await format_text_with_incident(text, language)
+    from app.handlers.callbacks.navigation import _get_main_text
+    text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+    sub = await database.get_subscription(telegram_id)
+    if not sub:
+        # Без подписки — удаляем старое и отправляем фото
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo="AgACAgQAAxkBAAIdb2nTSHdR3Nb0qtBvdSXPO60hsAH8AAKrDGsbZbqgUoydQVuMzuNKAQADAgADeQADOwQ",
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer(
         i18n_get_text(language, "lang.changed_toast"),
         show_alert=False
