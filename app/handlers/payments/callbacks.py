@@ -67,7 +67,8 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
 
         text = (
             f"📦 <b>Управление подпиской</b>\n\n"
-            f"Ваш текущий тариф: {current_icon} <b>{current_name}</b>\n\n"
+            f"Ваш текущий тариф:\n\n"
+            f"{i18n_get_text(language, f'buy.tariff_{sub_type}_desc')}\n\n"
             f"Выберите действие:"
         )
 
