@@ -662,7 +662,25 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         telegram_id, traffic_gb, purchase_id,
                     )
 
-                text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
+                # Bypass-only: activate 3-day trial if eligible
+                _tariff_tag = pending_purchase.get("tariff", "")
+                _trial_activated = False
+                if _tariff_tag.startswith("bypass_"):
+                    try:
+                        from app.services import trial_service
+                        if await trial_service.is_trial_available(telegram_id):
+                            await trial_service.activate_trial(telegram_id)
+                            _trial_activated = True
+                            logger.info("BYPASS_TRIAL_ACTIVATED user=%s", telegram_id)
+                    except Exception as trial_err:
+                        logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
+
+                if _tariff_tag.startswith("bypass_"):
+                    text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
+                    if _trial_activated:
+                        text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
+                else:
+                    text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
                 if not rmn_success:
                     text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
                     logger.error(
@@ -671,22 +689,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
-                        text=i18n_get_text(language, "traffic.back_to_traffic"),
-                        callback_data="traffic_info",
+                        text=i18n_get_text(language, "common.back"),
+                        callback_data="menu_main",
                     )],
                 ])
                 await message.answer(text, reply_markup=kb, parse_mode="HTML")
-
-                # Bypass-only: activate 3-day trial if eligible
-                _tariff_tag = pending_purchase.get("tariff", "")
-                if _tariff_tag.startswith("bypass_"):
-                    try:
-                        from app.services import trial_service
-                        if await trial_service.is_trial_available(telegram_id):
-                            await trial_service.activate_trial(telegram_id)
-                            logger.info("BYPASS_TRIAL_ACTIVATED user=%s", telegram_id)
-                    except Exception as trial_err:
-                        logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
 
                 logger.info(
                     "TRAFFIC_PACK_PAYMENT_FINALIZED purchase_id=%s user=%s gb=%s",

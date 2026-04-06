@@ -243,16 +243,20 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
     await database.record_traffic_purchase(telegram_id, gb, final_price)
 
     # Activate 3-day trial of basic servers if eligible
+    trial_activated = False
     from app.services import trial_service
     trial_available = await trial_service.is_trial_available(telegram_id)
     if trial_available:
         try:
             await trial_service.activate_trial(telegram_id)
+            trial_activated = True
             logger.info(f"Auto-activated trial for bypass-only buyer {telegram_id}")
         except Exception as e:
             logger.warning(f"Failed to activate trial for bypass buyer {telegram_id}: {e}")
 
-    text = i18n_get_text(language, "traffic.purchase_success", gb=gb)
+    text = i18n_get_text(language, "bypass.purchase_success", gb=gb)
+    if trial_activated:
+        text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
     buttons = [[InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_main",
