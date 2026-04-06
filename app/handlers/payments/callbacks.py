@@ -38,10 +38,176 @@ logger = logging.getLogger(__name__)
 
 @payments_callbacks_router.callback_query(F.data == "menu_buy_vpn")
 async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
-    """Купить VPN - выбор типа тарифа (Basic/Plus). Entry from inline button."""
+    """Купить VPN - для пользователей с подпиской показываем выбор: продлить / сменить тариф."""
     if not await ensure_db_ready_callback(callback):
         return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    sub = await database.get_subscription(telegram_id)
+    sub_type = (sub.get("subscription_type") or "").strip().lower() if sub else None
+
+    # Для пользователей с активной basic/plus подпиской — промежуточный экран
+    if sub and sub_type in ("basic", "plus"):
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+
+        current_name = "Basic" if sub_type == "basic" else "Plus"
+        other_type = "plus" if sub_type == "basic" else "basic"
+        other_name = "Plus" if sub_type == "basic" else "Basic"
+        current_icon = "⚡️" if sub_type == "basic" else "👑"
+        other_icon = "👑" if sub_type == "basic" else "⚡️"
+
+        if sub_type == "basic":
+            upgrade_hint = "Больше скорости, приоритетные сервера и расширенный обход"
+        else:
+            upgrade_hint = "Базовая защита по выгодной цене"
+
+        text = (
+            f"📦 <b>Управление подпиской</b>\n\n"
+            f"Ваш текущий тариф: {current_icon} <b>{current_name}</b>\n\n"
+            f"Выберите действие:"
+        )
+
+        buttons = [
+            [InlineKeyboardButton(
+                text=f"🔄 Продлить {current_name}",
+                callback_data=f"tariff:{sub_type}",
+            )],
+            [InlineKeyboardButton(
+                text=f"{other_icon} Сменить на {other_name}",
+                callback_data=f"switch_tariff:{other_type}",
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="menu_profile",
+            )],
+        ]
+
+        await state.update_data(purchase_id=None, tariff_type=None, period_days=None)
+        await state.set_state(PurchaseState.choose_tariff)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+        return
+
+    # Без подписки или trial — стандартный экран тарифов
     await _open_buy_screen(callback, callback.bot, state)
+
+
+@payments_callbacks_router.callback_query(
+    F.data.startswith("switch_tariff:"),
+    StateFilter(PurchaseState.choose_tariff, PurchaseState.choose_period, default_state),
+)
+async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
+    """Экран подтверждения смены тарифа с описанием нового тарифа."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    new_tariff = callback.data.split(":")[1]
+    if new_tariff not in ("basic", "plus"):
+        return
+
+    sub = await database.get_subscription(telegram_id)
+    current_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
+    current_name = "Basic" if current_type == "basic" else "Plus"
+    new_name = "Basic" if new_tariff == "basic" else "Plus"
+    new_icon = "⚡️" if new_tariff == "basic" else "👑"
+
+    if new_tariff == "plus":
+        # Basic → Plus (upgrade)
+        text = (
+            f"{new_icon} <b>Переход на {new_name}</b>\n\n"
+            f"Ваш тариф: <b>{current_name}</b> → <b>{new_name}</b>\n\n"
+            f"<blockquote>"
+            f"✅ Скорость до 75 Гбит/с\n"
+            f"✅ Приоритетные сервера\n"
+            f"✅ Расширенный протокол обхода\n"
+            f"✅ +25 ГБ обхода белых списков"
+            f"</blockquote>\n\n"
+            f"Новая подписка начнётся после окончания текущей.\n"
+            f"Выберите период:"
+        )
+    else:
+        # Plus → Basic (downgrade)
+        text = (
+            f"{new_icon} <b>Переход на {new_name}</b>\n\n"
+            f"Ваш тариф: <b>{current_name}</b> → <b>{new_name}</b>\n\n"
+            f"<blockquote>"
+            f"✅ Скорость до 25 Гбит/с\n"
+            f"✅ Основные сервера\n"
+            f"✅ Протокол обхода белых списков\n"
+            f"✅ +15 ГБ обхода белых списков"
+            f"</blockquote>\n\n"
+            f"Новая подписка начнётся после окончания текущей.\n"
+            f"Выберите период:"
+        )
+
+    # Показываем периоды нового тарифа
+    await state.update_data(tariff_type=new_tariff, purchase_id=None, period_days=None)
+    await state.set_state(PurchaseState.choose_period)
+
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+
+    buttons = []
+    periods = config.TARIFFS.get(new_tariff, {})
+    for period_days, period_data in periods.items():
+        try:
+            price_info = await subscription_service.calculate_price(
+                telegram_id=telegram_id,
+                tariff=new_tariff,
+                period_days=period_days,
+                promo_code=promo_code
+            )
+        except Exception:
+            continue
+
+        base_price_rubles = price_info["base_price_kopecks"] / 100.0
+        final_price_rubles = price_info["final_price_kopecks"] / 100.0
+        has_discount = price_info["discount_percent"] > 0
+
+        if period_days == 730:
+            period_text = i18n_get_text(language, "buy.period_24_months")
+        else:
+            months = period_days // 30
+            if months == 1:
+                period_text = i18n_get_text(language, "buy.period_1")
+            elif months in [2, 3, 4]:
+                period_text = i18n_get_text(language, "buy.period_2_4", months=months)
+            else:
+                period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
+
+        if has_discount:
+            button_text = i18n_get_text(
+                language, "buy.button_price_discount",
+                base=int(base_price_rubles), final=int(final_price_rubles), period=period_text
+            )
+        else:
+            button_text = i18n_get_text(
+                language, "buy.button_price",
+                price=int(final_price_rubles), period=period_text
+            )
+
+        buttons.append([InlineKeyboardButton(
+            text=button_text,
+            callback_data=f"period:{new_tariff}:{period_days}"
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="menu_buy_vpn"
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 @payments_callbacks_router.callback_query(
