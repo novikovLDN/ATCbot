@@ -4417,7 +4417,8 @@ async def finalize_purchase(
                         "expires_at": expires_at,
                         "vpn_key": None,
                         "activation_status": "pending",
-                        "is_renewal": False
+                        "is_renewal": False,
+                        "is_combo": is_combo_purchase,
                     }
                 else:
                     # Получаем VPN ключ для нормальной активации
