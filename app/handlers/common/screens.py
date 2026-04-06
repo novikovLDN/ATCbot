@@ -456,7 +456,15 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         )],
     ])
     
-    await safe_edit_text(msg, text, reply_markup=keyboard, bot=bot)
+    # If message is a photo (e.g. no-sub main screen), delete and send new
+    if msg.photo:
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await bot.send_message(msg.chat.id, text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await safe_edit_text(msg, text, reply_markup=keyboard, bot=bot)
 
 
 async def show_tariffs_main_screen(event: Union[Message, CallbackQuery], state: FSMContext):
