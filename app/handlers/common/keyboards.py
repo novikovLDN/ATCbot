@@ -145,7 +145,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 callback_data="menu_buy_vpn"
             )])
             buttons.append([InlineKeyboardButton(
-                text="🚀 Комбо-подписка (всё включено)",
+                text="🚀 Комбо-подписка (выгодно)",
                 callback_data="buy_combo"
             )])
 

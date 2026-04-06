@@ -1003,7 +1003,12 @@ async def callback_buy_combo(callback: CallbackQuery):
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    # Main screen may be a photo — delete and send new message
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(callback.from_user.id, text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("combo_tariff:"))
@@ -1147,20 +1152,39 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
         await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
         return
 
-    # 1. Deduct balance
+    # 1. Create pending purchase with base tariff
+    from app.services.subscriptions import service as subscription_service
+    price_kopecks = price * 100
+    try:
+        purchase_id = await subscription_service.create_subscription_purchase(
+            telegram_id=telegram_id,
+            tariff=base_tariff,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+        )
+    except Exception as e:
+        logger.error(f"Combo purchase creation failed: {e}")
+        text = "❌ Ошибка создания покупки. Попробуйте позже."
+        buttons = [[InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_combo")]]
+        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+        return
+
+    # 2. Deduct balance
     await database.update_balance(telegram_id, -price, description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
 
-    # 2. Activate/extend subscription
-    from app.services.subscriptions import service as subscription_service
-    await subscription_service.activate_subscription(
-        telegram_id=telegram_id,
-        tariff=base_tariff,
-        period_days=period_days,
-        price=price,
-        payment_method="balance",
-    )
+    # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
+    try:
+        result = await subscription_service.finalize_purchase(
+            purchase_id=purchase_id,
+            payment_provider="balance",
+            amount_rubles=float(price),
+        )
+        if not result.get("success"):
+            logger.error(f"Combo finalize failed: {result}")
+    except Exception as e:
+        logger.error(f"Combo finalize error: {e}")
 
-    # 3. Add bypass traffic
+    # 4. Add bypass traffic
     from app.services import remnawave_api, remnawave_service
     traffic_bytes = gb * 1024**3
     rmn_uuid = await database.get_remnawave_uuid(telegram_id)
@@ -1169,7 +1193,7 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     if rmn_uuid:
         await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
 
-    # 4. Record traffic purchase
+    # 5. Record traffic purchase
     await database.record_traffic_purchase(telegram_id, gb, 0)
 
     months = period_days // 30

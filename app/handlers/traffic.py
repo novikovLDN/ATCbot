@@ -75,7 +75,14 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
         text += i18n_get_text(language, "bypass.buy_title_trial")
     if discount_pct > 0:
         text += f"\n\n🎁 Промо-скидка {discount_pct}% активна!"
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    # Main screen may be a photo — delete and send new message
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(telegram_id, text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @traffic_router.callback_query(F.data == "buy_bypass_extended")
