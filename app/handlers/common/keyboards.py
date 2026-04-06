@@ -151,12 +151,12 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
 
     # Traffic button removed — traffic info is now in profile screen
 
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.profile"),
-        callback_data="menu_profile"
-    )])
-    # Динамическая кнопка покупки + подарить подписку — только если есть подписка
     if has_active_sub:
+        # === Кнопки для пользователей С подпиской ===
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.profile"),
+            callback_data="menu_profile"
+        )])
         buttons.append([
             InlineKeyboardButton(
                 text=i18n_get_text(language, "main.buy_renew"),
@@ -167,34 +167,42 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 callback_data="gift_subscription"
             ),
         ])
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.instruction"),
-            callback_data="connect_instruction",
-        ),
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
-            callback_data="games_menu"
-        ),
-    ])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.referral"),
-        callback_data="menu_referral"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "premium.main_button"),
-        callback_data="premium_buy"
-    )])
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.help"),
-            url="https://t.me/Atlas_SupportSecurity"
-        ),
-    ])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.settings", "main.settings"),
-        callback_data="menu_settings"
-    )])
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.instruction"),
+                callback_data="connect_instruction",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
+                callback_data="games_menu"
+            ),
+        ])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.referral"),
+            callback_data="menu_referral"
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "premium.main_button"),
+            callback_data="premium_buy"
+        )])
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.help"),
+                url="https://t.me/Atlas_SupportSecurity"
+            ),
+        ])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.settings", "main.settings"),
+            callback_data="menu_settings"
+        )])
+    else:
+        # === Кнопки для пользователей БЕЗ подписки ===
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.help"),
+                url="https://t.me/Atlas_SupportSecurity"
+            ),
+        ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
