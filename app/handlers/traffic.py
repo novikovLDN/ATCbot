@@ -162,16 +162,24 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             callback_data=f"bypass_pay_balance:{gb}",
         )])
 
-    # Card / SBP / Stars payment buttons
-    if hasattr(config, 'YOOKASSA_ENABLED') and config.YOOKASSA_ENABLED:
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.card"),
+        callback_data=f"bypass_pay_card:{gb}",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.sbp"),
+        callback_data=f"bypass_pay_sbp:{gb}",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "payment.stars"),
+        callback_data=f"bypass_pay_stars:{gb}",
+    )])
+
+    import cryptobot_service
+    if cryptobot_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_card", price=final_price),
-            callback_data=f"bypass_pay_card:{gb}",
-        )])
-    if hasattr(config, 'PLATEGA_ENABLED') and config.PLATEGA_ENABLED:
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_sbp", price=final_price),
-            callback_data=f"bypass_pay_sbp:{gb}",
+            text=i18n_get_text(language, "payment.crypto"),
+            callback_data=f"bypass_pay_crypto:{gb}",
         )])
 
     buttons.append([InlineKeyboardButton(
@@ -955,4 +963,252 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception("TRAFFIC_SBP_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+# ── Bypass-only payment handlers ─────────────────────────────────────
+
+def _get_bypass_pack(gb: int):
+    """Get bypass pack from TRAFFIC_PACKS or TRAFFIC_PACKS_EXTENDED."""
+    return config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
+
+
+async def _bypass_price(telegram_id: int, gb: int):
+    """Calculate bypass pack price with discount."""
+    pack = _get_bypass_pack(gb)
+    if not pack:
+        return None, None
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+    base_price = pack["price"]
+    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
+    return price, pack
+
+
+@traffic_router.callback_query(F.data.startswith("bypass_pay_card:"))
+async def callback_bypass_pay_card(callback: CallbackQuery):
+    """Pay for bypass-only pack via card (Telegram Payments)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    price, pack = await _bypass_price(telegram_id, gb)
+    if not price:
+        return
+
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
+        return
+
+    price_kopecks = price * 100
+    MIN_PAYMENT_AMOUNT_KOPECKS = 6400
+    if price_kopecks < MIN_PAYMENT_AMOUNT_KOPECKS:
+        await callback.answer(i18n_get_text(language, "errors.payment_min_amount"), show_alert=True)
+        return
+
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"bypass_{gb}gb",
+            period_days=0,
+            price_kopecks=price_kopecks,
+            purchase_type="traffic_pack",
+        )
+
+        payload = f"purchase:{purchase_id}"
+        prices = [LabeledPrice(label=f"Bypass {gb} GB", amount=price_kopecks)]
+
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title=f"Atlas Secure — Bypass {gb} GB",
+            description=f"Bypass whitelist traffic — {gb} GB",
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=prices,
+        )
+        logger.info("BYPASS_CARD_INVOICE_SENT user=%s purchase_id=%s gb=%s price=%s", telegram_id, purchase_id, gb, price)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("BYPASS_CARD_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@traffic_router.callback_query(F.data.startswith("bypass_pay_sbp:"))
+async def callback_bypass_pay_sbp(callback: CallbackQuery):
+    """Pay for bypass-only pack via SBP (Platega, +11%)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    price, pack = await _bypass_price(telegram_id, gb)
+    if not price:
+        return
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.sbp_unavailable"), show_alert=True)
+        return
+
+    price_kopecks = price * 100
+
+    try:
+        sbp_price_kopecks = platega_service.apply_sbp_markup(price_kopecks)
+
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"bypass_{gb}gb",
+            period_days=0,
+            price_kopecks=sbp_price_kopecks,
+            purchase_type="traffic_pack",
+        )
+
+        sbp_price_rubles = sbp_price_kopecks / 100.0
+
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=sbp_price_rubles,
+            description=f"Atlas Secure — Bypass {gb} GB",
+            purchase_id=purchase_id,
+        )
+
+        transaction_id = tx_data["transaction_id"]
+        redirect_url = tx_data["redirect_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+        except Exception as e:
+            logger.error("Failed to save SBP tx_id: purchase_id=%s error=%s", purchase_id, e)
+
+        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp_pay_button"), url=redirect_url)],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("BYPASS_SBP_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@traffic_router.callback_query(F.data.startswith("bypass_pay_stars:"))
+async def callback_bypass_pay_stars(callback: CallbackQuery):
+    """Pay for bypass-only pack via Telegram Stars."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    price, pack = await _bypass_price(telegram_id, gb)
+    if not price:
+        return
+
+    # Convert RUB to Stars (+70% markup, ~1.85 RUB per star)
+    price_stars = math.ceil(price * 1.7 / 1.85)
+    if price_stars < 1:
+        price_stars = 1
+
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"bypass_{gb}gb",
+            period_days=0,
+            price_kopecks=price_stars,
+            purchase_type="traffic_pack",
+        )
+
+        payload = f"purchase:{purchase_id}"
+        prices = [LabeledPrice(label=f"Bypass {gb} GB", amount=price_stars)]
+
+        await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title=f"Atlas Secure — Bypass {gb} GB",
+            description=f"Bypass whitelist traffic — {gb} GB",
+            payload=payload,
+            provider_token="",
+            currency="XTR",
+            prices=prices,
+        )
+        logger.info("BYPASS_STARS_INVOICE_SENT user=%s purchase_id=%s gb=%s stars=%s", telegram_id, purchase_id, gb, price_stars)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("BYPASS_STARS_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@traffic_router.callback_query(F.data.startswith("bypass_pay_crypto:"))
+async def callback_bypass_pay_crypto(callback: CallbackQuery):
+    """Pay for bypass-only pack via CryptoBot."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    price, pack = await _bypass_price(telegram_id, gb)
+    if not price:
+        return
+
+    import cryptobot_service
+    if not cryptobot_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.crypto_unavailable"), show_alert=True)
+        return
+
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"bypass_{gb}gb",
+            period_days=0,
+            price_kopecks=price * 100,
+            purchase_type="traffic_pack",
+        )
+
+        invoice = await cryptobot_service.create_invoice(
+            amount_rubles=float(price),
+            description=f"Atlas Secure — Bypass {gb} GB",
+            purchase_id=purchase_id,
+        )
+
+        pay_url = invoice.get("pay_url") or invoice.get("bot_invoice_url")
+        if not pay_url:
+            raise ValueError("No pay_url in CryptoBot response")
+
+        text = i18n_get_text(language, "payment.crypto_waiting", amount=float(price))
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto_pay_button"), url=pay_url)],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("BYPASS_CRYPTO_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
