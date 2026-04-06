@@ -779,7 +779,62 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("setup_qr:"))
 async def callback_setup_qr(callback: CallbackQuery):
-    """Генерация QR-кода подписки и отправка в чат."""
+    """Экран выбора: QR обычных серверов или обхода белых списков."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    subscription = await database.get_subscription(telegram_id)
+    if not subscription:
+        text = i18n_get_text(language, "get_key.no_subscription")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_platform:{platform}",
+        )]])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+        return
+
+    # Check if bypass is available
+    has_bypass = False
+    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+    if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic and traffic.get("subscriptionUrl"):
+                has_bypass = True
+
+    text = i18n_get_text(language, "setup.qr_choose_type")
+
+    buttons = [
+        [InlineKeyboardButton(
+            text="🌐 " + i18n_get_text(language, "setup.qr_standard_btn"),
+            callback_data=f"setup_qr_standard:{platform}",
+        )],
+    ]
+    if has_bypass:
+        buttons.append([InlineKeyboardButton(
+            text="🤍 " + i18n_get_text(language, "setup.qr_bypass_btn"),
+            callback_data=f"setup_qr_bypass:{platform}",
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"setup_platform:{platform}",
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("setup_qr_standard:"))
+async def callback_setup_qr_standard(callback: CallbackQuery):
+    """QR-код обычных серверов."""
     try:
         await callback.answer()
     except Exception:
@@ -800,26 +855,57 @@ async def callback_setup_qr(callback: CallbackQuery):
         text = i18n_get_text(language, "get_key.no_subscription")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_platform:{platform}",
+            callback_data=f"setup_qr:{platform}",
         )]])
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         return
 
-    # Bypass URL
-    bypass_url = None
-    sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-    if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or None
+    await _send_qr_screen(callback, platform, sub_url, language, label_key="setup.key_vpn_label")
 
-    # Generate QR code
+
+@router.callback_query(F.data.startswith("setup_qr_bypass:"))
+async def callback_setup_qr_bypass(callback: CallbackQuery):
+    """QR-код обхода белых списков."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    subscription = await database.get_subscription(telegram_id)
+    bypass_url = None
+    if subscription:
+        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
+            from app.services import remnawave_api
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    bypass_url = traffic.get("subscriptionUrl", "") or None
+
+    if not bypass_url:
+        text = i18n_get_text(language, "setup.qr_bypass_unavailable")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_qr:{platform}",
+        )]])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+        return
+
+    await _send_qr_screen(callback, platform, bypass_url, language, label_key="setup.key_bypass_label")
+
+
+async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, language: str, label_key: str):
+    """Генерация QR-кода и отправка экрана с инструкцией."""
+    telegram_id = callback.from_user.id
+
     import qrcode
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
-    qr.add_data(sub_url)
+    qr.add_data(url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
 
@@ -828,14 +914,7 @@ async def callback_setup_qr(callback: CallbackQuery):
     buf.seek(0)
 
     qr_text = i18n_get_text(language, "setup.qr_instruction")
-
-    # Append keys
-    keys_section = ""
-    if sub_url:
-        keys_section += "\n\n" + i18n_get_text(language, "setup.key_vpn_label") + "\n<blockquote><code>" + sub_url + "</code></blockquote>"
-    if bypass_url:
-        keys_section += "\n" + i18n_get_text(language, "setup.key_bypass_label") + "\n<blockquote><code>" + bypass_url + "</code></blockquote>"
-    qr_text += keys_section
+    qr_text += "\n\n" + i18n_get_text(language, label_key) + "\n<blockquote><code>" + url + "</code></blockquote>"
 
     buttons = [
         [InlineKeyboardButton(
@@ -844,12 +923,11 @@ async def callback_setup_qr(callback: CallbackQuery):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_platform:{platform}",
+            callback_data=f"setup_qr:{platform}",
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    # Delete current message and send photo with QR
     try:
         await callback.message.delete()
     except Exception:
