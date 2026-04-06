@@ -631,10 +631,22 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             except Exception as e:
                 logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
         else:
+            # Check if this is a combo purchase from FSM
+            _is_combo = False
+            try:
+                _fsm = await state.get_data()
+                _is_combo = _fsm.get("combo_bypass_gb", 0) > 0
+            except Exception:
+                pass
+
             if config.is_biz_tariff(subscription_type):
                 tariff_label, tariff_icon = "Business", "🏢"
+            elif subscription_type == "plus" and _is_combo:
+                tariff_label, tariff_icon = "Комбо Plus", "🚀"
             elif subscription_type == "plus":
                 tariff_label, tariff_icon = "Plus", "💎"
+            elif _is_combo:
+                tariff_label, tariff_icon = "Комбо Basic", "🚀"
             else:
                 tariff_label, tariff_icon = "Basic", "🏆"
             if is_renewal:

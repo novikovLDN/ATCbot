@@ -46,7 +46,7 @@ async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Me
 
 def _tariff_display_name(tariff: str) -> str:
     """Человекочитаемое название тарифа."""
-    names = {"basic": "Basic", "plus": "Plus"}
+    names = {"basic": "Basic", "plus": "Plus", "combo_basic": "Комбо Basic", "combo_plus": "Комбо Plus"}
     return names.get(tariff, tariff.capitalize())
 
 
