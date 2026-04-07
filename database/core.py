@@ -1003,6 +1003,13 @@ async def init_db() -> bool:
         except Exception:
             pass
 
+        # Миграция 038: traffic_notified_8gb и traffic_notified_5gb
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS traffic_notified_8gb BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS traffic_notified_5gb BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+
         # Таблица gift_subscriptions — подарочные подписки
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS gift_subscriptions (
