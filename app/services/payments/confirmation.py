@@ -309,13 +309,25 @@ async def _handle_traffic_pack_confirmation(
     if _is_bypass:
         await database.ensure_bypass_only_subscription(telegram_id)
 
-    # Add traffic via Remnawave (create user if needed)
+    # Add traffic via Remnawave (create user if stale/missing)
     rmn_success = False
     pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
     if pack:
         traffic_bytes = pack["bytes"]
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if not rmn_uuid:
+        if rmn_uuid:
+            try:
+                from app.services.remnawave_service import add_traffic
+                rmn_success = await add_traffic(telegram_id, traffic_bytes)
+            except Exception as rmn_err:
+                logger.error(
+                    "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
+                    provider, telegram_id, traffic_gb, rmn_err,
+                )
+        if not rmn_success:
+            # No UUID or stale (404) — clear and create fresh
+            if rmn_uuid:
+                await database.clear_remnawave_uuid(telegram_id)
             try:
                 from app.services import remnawave_service
                 from datetime import datetime, timezone, timedelta
@@ -329,20 +341,6 @@ async def _handle_traffic_pack_confirmation(
             except Exception as rmn_err:
                 logger.error(
                     "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: provider=%s tg=%s gb=%s error=%s",
-                    provider, telegram_id, traffic_gb, rmn_err,
-                )
-        else:
-            try:
-                from app.services.remnawave_service import add_traffic
-                rmn_success = await add_traffic(telegram_id, traffic_bytes)
-                if not rmn_success:
-                    logger.error(
-                        "TRAFFIC_PACK_REMNAWAVE_FAIL: provider=%s tg=%s gb=%s purchase=%s",
-                        provider, telegram_id, traffic_gb, purchase_id,
-                    )
-            except Exception as rmn_err:
-                logger.error(
-                    "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
                     provider, telegram_id, traffic_gb, rmn_err,
                 )
     else:
