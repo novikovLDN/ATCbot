@@ -436,7 +436,18 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     
     # Получаем текущую подписку для динамических кнопок
     subscription = await database.get_subscription(telegram_id)
-    current_tariff = subscription.get("subscription_type") if subscription else None
+    is_bypass_only_sub = bool(subscription and subscription.get("is_bypass_only"))
+    current_tariff = subscription.get("subscription_type") if subscription and not is_bypass_only_sub else None
+
+    if is_bypass_only_sub:
+        # Bypass-only: show special header
+        text = (
+            f"🌐 <b>У вас активен обход блокировок</b>\n\n"
+            f"Для полного VPN выберите тариф:\n\n"
+            f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
+            f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
+            f"{i18n_get_text(language, 'buy.tariff_business')}"
+        )
 
     if current_tariff == "basic":
         basic_btn_key = "buy.select_basic_renew"
