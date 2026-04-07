@@ -288,12 +288,9 @@ async def show_profile(message_or_query, language: str):
             date_str = format_date_ru(expires_at)
 
             if is_bypass_only:
-                # Bypass-only: отображаем как полноценную подписку
-                text += i18n_get_text(language, "profile.subscription_active", date="∞") + "\n"
-                text += i18n_get_text(language, "profile.tariff", tariff="Обход блокировок") + "\n"
-                if is_trial:
-                    text += f"\n⚡️ <b>Бонус:</b> Пробный период VPN до <b>{date_str}</b>\n"
-                text += "\n💡 <i>Трафик не сгорает. Для полного VPN — приобретите основную подписку.</i>\n"
+                # Bypass-only: подписки нет, показываем только обход
+                text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
+                text += i18n_get_text(language, "profile.tariff_none") + "\n"
             else:
                 text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
                 if config.is_biz_tariff(sub_type):

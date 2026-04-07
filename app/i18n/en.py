@@ -494,7 +494,7 @@ LANG = {
     'main.vip_status_active': "👑 Your VIP status is active",
     'main.vip_status_badge': "👑 VIP status active",
     'main.welcome': "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
-    'main.welcome_bypass': "🌐 <b>Bypass</b> — active\n\nYour bypass traffic is working. Connect using the key in the app.\n\n💡 Traffic doesn't expire — it accumulates between purchases.\n\n🚀 Want full VPN? Get a main subscription — your bypass GB will be preserved.",
+    'main.welcome_bypass': "💎 <b>Atlas Secure</b> — your digital shield\n\n🌐 Bypass — active\n\n⚡️ Lightning-fast connection\n🛡 Traffic protected 24/7\n🌍 The internet as it should be",
     'main.welcome_discount_label': "🎁 Welcome Discount",
     'main.yes': "YES",
     'payment.already_processed': "✅ This payment has already been processed.",

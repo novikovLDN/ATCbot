@@ -355,7 +355,7 @@ def get_profile_keyboard(
 
     # Row 2: Автопродление + Пополнить
     row2 = []
-    if has_active_subscription:
+    if has_active_subscription and not is_bypass_only:
         ar_text = "🔄 Автопродление ✅" if auto_renew else "🔄 Автопродление"
         ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
         row2.append(InlineKeyboardButton(text=ar_text, callback_data=ar_data))
