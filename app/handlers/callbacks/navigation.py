@@ -1166,13 +1166,14 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
         logger.error(f"Combo finalize error: {e}")
 
     # 4. Add bypass traffic
-    from app.services import remnawave_api, remnawave_service
+    from app.services import remnawave_service
     traffic_bytes = gb * 1024**3
-    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    if not rmn_uuid:
-        rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, base_tariff)
-    if rmn_uuid:
-        await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+    try:
+        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+        if not rmn_success:
+            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
+    except Exception as traffic_err:
+        logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
 
     # 5. Record traffic purchase + mark as combo
     await database.record_traffic_purchase(telegram_id, gb, 0)

@@ -706,37 +706,40 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
 
         # Combo/Bypass: начисляем трафик обхода если покупка через комбо или bypass-only
-        try:
-            combo_bypass_gb = _combo_gb_from_fsm
-            bypass_only_gb = _bypass_gb_from_fsm
+        combo_bypass_gb = _combo_gb_from_fsm
+        bypass_only_gb = _bypass_gb_from_fsm
 
-            if combo_bypass_gb > 0 or bypass_only_gb > 0:
-                from app.services import remnawave_api, remnawave_service
-                gb = combo_bypass_gb or bypass_only_gb
-                traffic_bytes = gb * 1024**3
-                rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-                if not rmn_uuid:
-                    rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, subscription_type)
-                if rmn_uuid:
-                    await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+        if combo_bypass_gb > 0 or bypass_only_gb > 0:
+            from app.services import remnawave_service
+            gb = combo_bypass_gb or bypass_only_gb
+            traffic_bytes = gb * 1024**3
+
+            try:
+                rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+                if not rmn_success:
+                    logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL_BALANCE user={telegram_id} gb={gb}")
                 await database.record_traffic_purchase(telegram_id, gb, 0)
                 logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED_BALANCE user={telegram_id} gb={gb}")
+            except Exception as traffic_err:
+                logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR_BALANCE user={telegram_id}: {traffic_err}")
 
-                # Mark subscription as combo
-                if combo_bypass_gb > 0:
+            # Mark subscription as combo (OUTSIDE traffic try block)
+            if combo_bypass_gb > 0:
+                try:
                     await database.set_combo_flag(telegram_id, True)
+                    logger.info(f"COMBO_FLAG_SET_BALANCE user={telegram_id}")
+                except Exception as flag_err:
+                    logger.warning(f"COMBO_FLAG_FAIL_BALANCE user={telegram_id}: {flag_err}")
 
-                # Bypass-only: mark flag + activate trial if eligible
-                if bypass_only_gb > 0:
+            # Bypass-only: mark flag + activate trial if eligible
+            if bypass_only_gb > 0:
+                try:
                     await database.set_bypass_only_flag(telegram_id, True)
                     from app.services.trials import service as trial_service
                     if await trial_service.is_trial_available(telegram_id):
-                        try:
-                            await trial_service.activate_trial(telegram_id)
-                        except Exception:
-                            pass
-        except Exception as combo_err:
-            logger.warning(f"COMBO_BYPASS_BALANCE_FAIL user={telegram_id}: {combo_err}")
+                        await trial_service.activate_trial(telegram_id)
+                except Exception:
+                    pass
 
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")

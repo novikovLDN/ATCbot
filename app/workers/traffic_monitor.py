@@ -74,8 +74,12 @@ async def _send_traffic_notification(
             text = i18n_get_text(language, "traffic.notify_500mb", remaining=_format_bytes(remaining_bytes))
         elif flag_key == "traffic_notified_1gb":
             text = i18n_get_text(language, "traffic.notify_1gb")
-        else:
+        elif flag_key == "traffic_notified_3gb":
             text = i18n_get_text(language, "traffic.notify_3gb", remaining=_format_bytes(remaining_bytes))
+        elif flag_key == "traffic_notified_5gb":
+            text = i18n_get_text(language, "traffic.notify_5gb", remaining=_format_bytes(remaining_bytes))
+        else:
+            text = i18n_get_text(language, "traffic.notify_8gb", remaining=_format_bytes(remaining_bytes))
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(

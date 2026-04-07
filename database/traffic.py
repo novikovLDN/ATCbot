@@ -67,7 +67,8 @@ async def get_traffic_notification_flags(telegram_id: int) -> Dict[str, bool]:
         return {}
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT traffic_notified_3gb, traffic_notified_1gb,
+            """SELECT traffic_notified_8gb, traffic_notified_5gb,
+                      traffic_notified_3gb, traffic_notified_1gb,
                       traffic_notified_500mb, traffic_notified_0
                FROM users WHERE telegram_id = $1""",
             telegram_id,
@@ -81,7 +82,7 @@ async def set_traffic_notification_flag(telegram_id: int, flag_key: str) -> None
     if not _core.DB_READY:
         return
     # Whitelist valid flag columns to prevent injection
-    valid = {"traffic_notified_3gb", "traffic_notified_1gb", "traffic_notified_500mb", "traffic_notified_0"}
+    valid = {"traffic_notified_8gb", "traffic_notified_5gb", "traffic_notified_3gb", "traffic_notified_1gb", "traffic_notified_500mb", "traffic_notified_0"}
     if flag_key not in valid:
         return
     pool = await get_pool()
@@ -103,6 +104,8 @@ async def reset_traffic_notification_flags(telegram_id: int) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             """UPDATE users SET
+                traffic_notified_8gb = FALSE,
+                traffic_notified_5gb = FALSE,
                 traffic_notified_3gb = FALSE,
                 traffic_notified_1gb = FALSE,
                 traffic_notified_500mb = FALSE,

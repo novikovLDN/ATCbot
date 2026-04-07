@@ -440,6 +440,8 @@ TRAFFIC_PACKS_EXTENDED = {
 
 # Thresholds for traffic notifications (bytes remaining, flag key)
 TRAFFIC_NOTIFY_THRESHOLDS = [
+    (8 * 1024**3,       "traffic_notified_8gb"),
+    (5 * 1024**3,       "traffic_notified_5gb"),
     (3 * 1024**3,       "traffic_notified_3gb"),
     (1 * 1024**3,       "traffic_notified_1gb"),
     (500 * 1024**2,     "traffic_notified_500mb"),
