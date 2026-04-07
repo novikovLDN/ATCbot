@@ -807,6 +807,7 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
         chat_id=telegram_id,
         text=text,
         reply_markup=keyboard,
+        parse_mode="HTML",
     )
 
 
