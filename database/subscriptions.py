@@ -273,6 +273,35 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
         return False
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Check if user has Remnawave bypass traffic — if so, transition to bypass-only
+            # instead of fully expiring (bypass GB work independently of main subscription)
+            has_remnawave = await conn.fetchval(
+                "SELECT remnawave_uuid FROM subscriptions WHERE id = $1 AND remnawave_uuid IS NOT NULL",
+                subscription_id,
+            )
+
+            if has_remnawave:
+                # Transition to bypass-only: remove Xray but keep Remnawave active
+                far_future = now + timedelta(days=3650)
+                result = await conn.execute(
+                    """UPDATE subscriptions
+                       SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                           is_bypass_only = TRUE,
+                           expires_at = $5,
+                           source = 'bypass_only'
+                       WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
+                         AND expires_at <= $4""",
+                    subscription_id, telegram_id, uuid_to_remove, now_db,
+                    _to_db_utc(far_future),
+                )
+                rows = int(result.split()[-1]) if result else 0
+                if rows > 0:
+                    logger.info(
+                        "EXPIRY_TRANSITION_TO_BYPASS_ONLY user=%s — Remnawave stays active",
+                        telegram_id,
+                    )
+                return rows > 0
+
             result = await conn.execute(
                 """UPDATE subscriptions
                    SET status = 'expired', uuid = NULL, vpn_key = NULL
@@ -286,7 +315,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
-                # Disable Remnawave bypass (fire-and-forget)
+                # Disable Remnawave bypass (fire-and-forget) — no remnawave_uuid means safe to disable
                 try:
                     from app.services.remnawave_service import disable_remnawave_user_bg
                     disable_remnawave_user_bg(telegram_id)
@@ -1517,7 +1546,8 @@ async def grant_access(
                                reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE,
                                reminder_6h_sent = FALSE,
-                               activation_status = 'active'
+                               activation_status = 'active',
+                               is_bypass_only = FALSE
                            WHERE telegram_id = $3""",
                         _to_db_utc(subscription_end), source, telegram_id, uuid, incoming_tariff
                     )
@@ -1731,7 +1761,8 @@ async def grant_access(
                            uuid = NULL,
                            vpn_key = NULL,
                            country = COALESCE($6, subscriptions.country),
-                           subscription_type = COALESCE($7, subscriptions.subscription_type)""",
+                           subscription_type = COALESCE($7, subscriptions.subscription_type),
+                           is_bypass_only = FALSE""",
                     telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type
                 )
                 
@@ -2024,7 +2055,8 @@ async def grant_access(
                        activation_attempts = 0,
                        last_activation_error = NULL,
                        subscription_type = COALESCE($10, subscriptions.subscription_type),
-                       country = COALESCE($11, subscriptions.country)""",
+                       country = COALESCE($11, subscriptions.country),
+                       is_bypass_only = FALSE""",
                 *args
             )
             

@@ -280,14 +280,42 @@ async def fast_expiry_cleanup_task(bot=None):
                                                             f"expires_at={check_expires_at.isoformat()}] - subscription was renewed"
                                                         )
                                                     else:
-                                                        update_result = await conn.execute(
-                                                            """UPDATE subscriptions 
-                                                               SET status = 'expired', uuid = NULL, vpn_key = NULL 
-                                                               WHERE telegram_id = $1 
-                                                               AND uuid = $2 
-                                                               AND status = 'active'""",
-                                                            telegram_id, uuid
+                                                        # Check if user has Remnawave bypass traffic
+                                                        # If yes: transition to bypass-only (keep Remnawave active)
+                                                        has_remnawave = await conn.fetchval(
+                                                            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND remnawave_uuid IS NOT NULL",
+                                                            telegram_id,
                                                         )
+
+                                                        if has_remnawave:
+                                                            # Bypass GB must keep working — transition to bypass-only
+                                                            from datetime import timedelta
+                                                            far_future = database._to_db_utc(now_utc + timedelta(days=3650))
+                                                            update_result = await conn.execute(
+                                                                """UPDATE subscriptions
+                                                                   SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                                                                       is_bypass_only = TRUE,
+                                                                       expires_at = $3,
+                                                                       source = 'bypass_only'
+                                                                   WHERE telegram_id = $1
+                                                                   AND uuid = $2
+                                                                   AND status = 'active'""",
+                                                                telegram_id, uuid, far_future,
+                                                            )
+                                                            if update_result == "UPDATE 1":
+                                                                logger.info(
+                                                                    f"cleanup: TRANSITION_TO_BYPASS_ONLY [user={telegram_id}, uuid={uuid_preview}] "
+                                                                    f"— Remnawave stays active, Xray removed"
+                                                                )
+                                                        else:
+                                                            update_result = await conn.execute(
+                                                                """UPDATE subscriptions
+                                                                   SET status = 'expired', uuid = NULL, vpn_key = NULL
+                                                                   WHERE telegram_id = $1
+                                                                   AND uuid = $2
+                                                                   AND status = 'active'""",
+                                                                telegram_id, uuid
+                                                            )
                                                         if update_result == "UPDATE 1":
                                                             logger.info(
                                                                 f"cleanup: SUBSCRIPTION_EXPIRED [user={telegram_id}, uuid={uuid_preview}, "
