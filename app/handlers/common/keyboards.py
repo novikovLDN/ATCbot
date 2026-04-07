@@ -82,6 +82,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     """
     # Проверяем бизнес-подписку для специального меню
     is_biz_user = False
+    is_bypass_only = False
     subscription = None
     has_active_sub = False
     if telegram_id and database.DB_READY:
@@ -90,6 +91,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             has_active_sub = subscription is not None
             sub_type = (subscription.get("subscription_type") or "basic").strip().lower() if subscription else "basic"
             is_biz_user = config.is_biz_tariff(sub_type)
+            is_bypass_only = bool(subscription and subscription.get("is_bypass_only"))
         except Exception as e:
             logger.warning(f"Error checking subscription for main menu: {e}")
 
@@ -157,16 +159,33 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             text=i18n_get_text(language, "main.profile"),
             callback_data="menu_profile"
         )])
-        buttons.append([
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.buy_renew"),
-                callback_data="menu_buy_vpn",
-            ),
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
-                callback_data="gift_subscription"
-            ),
-        ])
+        if is_bypass_only:
+            # Bypass-only: показываем кнопки докупить трафик и купить подписку
+            buttons.append([InlineKeyboardButton(
+                text="🌐 Купить ГБ трафика",
+                callback_data="buy_traffic",
+            )])
+            buttons.append([
+                InlineKeyboardButton(
+                    text="⚡️ Купить подписку VPN",
+                    callback_data="menu_buy_vpn",
+                ),
+                InlineKeyboardButton(
+                    text="🚀 Комбо",
+                    callback_data="buy_combo",
+                ),
+            ])
+        else:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.buy_renew"),
+                    callback_data="menu_buy_vpn",
+                ),
+                InlineKeyboardButton(
+                    text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
+                    callback_data="gift_subscription"
+                ),
+            ])
         buttons.append([
             InlineKeyboardButton(
                 text=i18n_get_text(language, "main.instruction"),
@@ -297,11 +316,22 @@ def get_profile_keyboard(
     show_traffic: bool = False,
     is_trial: bool = False,
     is_combo: bool = False,
+    is_bypass_only: bool = False,
 ):
     """Личный кабинет: Купить ГБ + Продлить | Автопродление + Пополнить | Подарки | Назад."""
     buttons = []
 
-    if is_combo and has_active_subscription:
+    if is_bypass_only and has_active_subscription:
+        # Bypass-only: кнопка купить ГБ + купить подписку (не продлить)
+        buttons.append([InlineKeyboardButton(
+            text="🌐 Купить ГБ трафика",
+            callback_data="buy_traffic",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="⚡️ Купить подписку VPN",
+            callback_data="menu_buy_vpn",
+        )])
+    elif is_combo and has_active_subscription:
         # Комбо-подписка: две отдельные кнопки — трафик и продление основной
         buttons.append([InlineKeyboardButton(
             text="🌐 Купить ГБ трафика",

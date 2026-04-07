@@ -171,6 +171,7 @@ from database.subscriptions import (  # noqa: F401
     finalize_purchase,
     set_combo_flag,
     set_bypass_only_flag,
+    ensure_bypass_only_subscription,
 )
 
 # Traffic: Remnawave integration, notifications, purchases

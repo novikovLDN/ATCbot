@@ -228,9 +228,22 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
     # Deduct balance
     await database.decrease_balance(telegram_id, final_price, source="bypass_traffic", description=f"Bypass traffic {gb} GB")
 
-    # Add traffic to Remnawave
+    # Ensure subscription row exists for bypass-only user
+    await database.ensure_bypass_only_subscription(telegram_id)
+
+    # Ensure Remnawave user exists (creates if needed)
     traffic_bytes = gb * 1024**3
-    rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+    if not rmn_uuid:
+        from datetime import datetime, timezone, timedelta
+        far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+        await remnawave_service.create_remnawave_user(
+            telegram_id, "basic", far_future, traffic_limit_override=traffic_bytes
+        )
+        rmn_success = True
+        logger.info(f"BYPASS_REMNAWAVE_USER_CREATED user={telegram_id} gb={gb}")
+    else:
+        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
     if not rmn_success:
         logger.warning(f"TRAFFIC_PURCHASE_REMNAWAVE_FAIL user={telegram_id} gb={gb}")
 
@@ -248,9 +261,6 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
             logger.info(f"Auto-activated trial for bypass-only buyer {telegram_id}")
         except Exception as e:
             logger.warning(f"Failed to activate trial for bypass buyer {telegram_id}: {e}")
-
-    # Mark as bypass-only user
-    await database.set_bypass_only_flag(telegram_id, True)
 
     text = i18n_get_text(language, "bypass.purchase_success", gb=gb)
     if trial_activated:
