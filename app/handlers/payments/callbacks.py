@@ -65,8 +65,9 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
     sub = await database.get_subscription(telegram_id)
     current_key = _current_tariff_key(sub)
 
-    # Пользователи без подписки или trial — стандартный экран тарифов
-    if not sub or current_key not in _TARIFF_META:
+    # Пользователи без подписки, trial или bypass-only — стандартный экран тарифов
+    is_bypass_only = bool(sub and sub.get("is_bypass_only"))
+    if not sub or is_bypass_only or current_key not in _TARIFF_META:
         await _open_buy_screen(callback, callback.bot, state)
         return
 
