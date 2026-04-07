@@ -124,4 +124,4 @@ async def cmd_main(message: Message):
             reply_markup=keyboard,
         )
     else:
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
