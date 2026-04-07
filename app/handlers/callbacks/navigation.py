@@ -1063,7 +1063,10 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
     if len(parts) != 3:
         return
     combo_type = parts[1]
-    period_days = int(parts[2])
+    try:
+        period_days = int(parts[2])
+    except (ValueError, IndexError):
+        return
 
     if combo_type not in config.COMBO_TARIFFS:
         return
@@ -1102,7 +1105,10 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     if len(parts) != 3:
         return
     combo_type = parts[1]
-    period_days = int(parts[2])
+    try:
+        period_days = int(parts[2])
+    except (ValueError, IndexError):
+        return
 
     if combo_type not in config.COMBO_TARIFFS:
         return
