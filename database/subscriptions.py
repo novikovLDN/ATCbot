@@ -343,6 +343,42 @@ async def set_bypass_only_flag(telegram_id: int, is_bypass_only: bool = True):
         logger.info(f"set_bypass_only_flag: user={telegram_id} is_bypass_only={is_bypass_only} result={result}")
 
 
+async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
+    """Create a subscription row for bypass-only user if none exists.
+
+    Sets status='active', is_bypass_only=True, expires_at far in the future (10 years).
+    If subscription already exists, just sets is_bypass_only=True.
+    Returns True on success.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_bypass_only BOOLEAN DEFAULT FALSE"
+            )
+        except Exception:
+            pass
+        existing = await conn.fetchrow(
+            "SELECT telegram_id FROM subscriptions WHERE telegram_id = $1", telegram_id
+        )
+        if existing:
+            await conn.execute(
+                "UPDATE subscriptions SET is_bypass_only = TRUE, status = 'active' WHERE telegram_id = $1",
+                telegram_id,
+            )
+        else:
+            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+            await conn.execute(
+                """INSERT INTO subscriptions (telegram_id, status, subscription_type, is_bypass_only, expires_at, source)
+                   VALUES ($1, 'active', 'basic', TRUE, $2, 'bypass_only')""",
+                telegram_id, _to_db_utc(far_future),
+            )
+        logger.info(f"ensure_bypass_only_subscription: user={telegram_id} created/updated")
+        return True
+
+
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить активную подписку пользователя
     
@@ -1435,7 +1471,12 @@ async def grant_access(
             else:
                 # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
                 old_expires_at = expires_at
-                subscription_end = max(expires_at, now) + duration
+                # Bypass-only: фиктивный expires_at (10 лет), считаем от now
+                _is_bypass = subscription.get("is_bypass_only", False)
+                if _is_bypass:
+                    subscription_end = now + duration
+                else:
+                    subscription_end = max(expires_at, now) + duration
                 # subscription_start сохраняется (activated_at не меняется при продлении)
                 _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                 subscription_start = _ensure_utc(_start_raw) if _start_raw else now
@@ -4589,6 +4630,11 @@ async def finalize_purchase(
                 logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id} is_combo={is_combo_purchase}")
             except Exception as cf_err:
                 logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
+            # Clear bypass-only flag — user now has a real subscription
+            try:
+                await set_bypass_only_flag(telegram_id, False)
+            except Exception:
+                pass
             return ret_val
 
 

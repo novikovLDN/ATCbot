@@ -288,10 +288,12 @@ async def show_profile(message_or_query, language: str):
             date_str = format_date_ru(expires_at)
 
             if is_bypass_only:
-                # Bypass-only: показываем подписку обхода + триал если есть
-                text += "🌐 Подписка: <b>Обход белых списков</b>\n"
+                # Bypass-only: показываем подписку обхода + подсказку о покупке основной
+                text += "🌐 <b>Обход блокировок</b> — активен\n"
                 if is_trial:
-                    text += f"⚡️ Пробный период основной подписки до <b>{date_str}</b>\n"
+                    text += f"⚡️ Пробный период VPN до <b>{date_str}</b>\n"
+                else:
+                    text += "\n💡 <i>У вас куплены ГБ трафика обхода. Основной VPN-подписки пока нет — вы можете её приобрести.</i>\n"
             else:
                 text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
                 if config.is_biz_tariff(sub_type):
@@ -316,8 +318,8 @@ async def show_profile(message_or_query, language: str):
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
             text += i18n_get_text(language, "profile.auto_renew_none")
 
-        # --- Traffic section (for active Basic/Plus/Trial with Remnawave) ---
-        show_traffic = has_active_subscription and config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus", "trial")
+        # --- Traffic section (for active Basic/Plus/Trial/Bypass-only with Remnawave) ---
+        show_traffic = has_active_subscription and config.REMNAWAVE_ENABLED and (sub_type in ("basic", "plus", "trial") or is_bypass_only)
         if show_traffic:
             from app.services import remnawave_api, remnawave_service
             rmn_uuid = await database.get_remnawave_uuid(telegram_id)
@@ -371,6 +373,7 @@ async def show_profile(message_or_query, language: str):
             subscription_type=sub_type, show_traffic=show_traffic,
             is_trial=is_trial,
             is_combo=is_combo,
+            is_bypass_only=is_bypass_only,
         )
 
         await send_func(text, reply_markup=keyboard, parse_mode="HTML")
