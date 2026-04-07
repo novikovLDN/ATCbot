@@ -1402,7 +1402,7 @@ async def grant_access(
         # 4. uuid IS NOT NULL (UUID существует)
         if subscription and status == "active" and uuid and expires_at and expires_at > now:
             current_sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-            incoming_tariff = (tariff or "basic").strip().lower()
+            incoming_tariff = (tariff.strip().lower() if tariff else None) or current_sub_type
 
             # Basic→Plus upgrade: same UUID, call upgrade_vless_user, update vpn_key, vpn_key_plus, subscription_type, extend dates
             if source == "payment" and incoming_tariff == "plus" and current_sub_type == "basic":
@@ -1665,7 +1665,8 @@ async def grant_access(
                     await vpn_utils.ensure_user_in_xray(
                         telegram_id=telegram_id,
                         uuid=uuid,
-                        subscription_end=subscription_end
+                        subscription_end=subscription_end,
+                        tariff=incoming_tariff,
                     )
                 except Exception as e:
                     logger.critical(
