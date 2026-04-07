@@ -732,7 +732,7 @@ LANG = {
     'trial.activated_btn_profile': "👤 Мой профиль",
 
     # === PURCHASE CONFIRMATION ===
-    'purchase.success_first': "🎉 <b>Подписка оформлена!</b>\n\n{tariff_name}\n⏳ Срок: {period}\n📅 До: {expires_date}\n\nОсталось подключиться — нажмите кнопку ниже.\n\n📲 <b>Подключиться</b> — настроить VPN за минуту\n👤 <b>Мой профиль</b> — баланс, срок, автопродление\n📊 <b>Мой трафик</b> — контроль обхода белых списков\n\n🤍 Ваш трафик под защитой Atlas Secure.",
+    'purchase.success_first': "🎉 <b>Подписка оформлена!</b>\n\n{tariff_name}\n⏳ Срок: {period}\n📅 До: {expires_date}\n\nОсталось подключиться — нажмите кнопку ниже.\n\n📲 <b>Подключиться</b> — настроить VPN за минуту\n👤 <b>Личный кабинет</b> — баланс, срок, автопродление\n📊 <b>Мой трафик</b> — контроль обхода белых списков\n\n🤍 Ваш трафик под защитой Atlas Secure.",
 
     # === RENEWAL CONFIRMATION ===
     'purchase.success_renewal': "✅ <b>Подписка продлена!</b>\n\n{tariff_name}\n⏳ Срок: {period}\n📅 До: {expires_date}\n\nVPN продолжает работать — ничего настраивать не нужно.\n\n🤍 Спасибо, что остаётесь с Atlas Secure!",
