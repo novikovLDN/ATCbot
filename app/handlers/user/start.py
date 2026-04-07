@@ -57,7 +57,7 @@ async def cmd_start(message: Message, state: FSMContext):
         if config.IS_PROD:
             text += "\n\n" + i18n_get_text(language, "main.service_unavailable")
         keyboard = await get_main_menu_keyboard(language, message.from_user.id)
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         return
     # Обработчик команды /start
     telegram_id = message.from_user.id
