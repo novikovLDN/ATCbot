@@ -169,6 +169,8 @@ from database.subscriptions import (  # noqa: F401
     update_pending_purchase_invoice_id,
     mark_pending_purchase_paid,
     finalize_purchase,
+    set_combo_flag,
+    set_bypass_only_flag,
 )
 
 # Traffic: Remnawave integration, notifications, purchases
