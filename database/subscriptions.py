@@ -1517,7 +1517,8 @@ async def grant_access(
                                reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE,
                                reminder_6h_sent = FALSE,
-                               activation_status = 'active'
+                               activation_status = 'active',
+                               is_bypass_only = FALSE
                            WHERE telegram_id = $3""",
                         _to_db_utc(subscription_end), source, telegram_id, uuid, incoming_tariff
                     )
@@ -1731,7 +1732,8 @@ async def grant_access(
                            uuid = NULL,
                            vpn_key = NULL,
                            country = COALESCE($6, subscriptions.country),
-                           subscription_type = COALESCE($7, subscriptions.subscription_type)""",
+                           subscription_type = COALESCE($7, subscriptions.subscription_type),
+                           is_bypass_only = FALSE""",
                     telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type
                 )
                 
@@ -2024,7 +2026,8 @@ async def grant_access(
                        activation_attempts = 0,
                        last_activation_error = NULL,
                        subscription_type = COALESCE($10, subscriptions.subscription_type),
-                       country = COALESCE($11, subscriptions.country)""",
+                       country = COALESCE($11, subscriptions.country),
+                       is_bypass_only = FALSE""",
                 *args
             )
             
