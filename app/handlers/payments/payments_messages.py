@@ -639,23 +639,50 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )
             if traffic_result and traffic_result.get("is_traffic_pack"):
                 traffic_gb = traffic_result.get("traffic_gb", 0)
-                # Add traffic via Remnawave
+                _tariff_tag = pending_purchase.get("tariff", "")
+                _is_bypass = _tariff_tag.startswith("bypass_")
+
+                # Bypass-only: ensure subscription row + Remnawave user exist
+                if _is_bypass:
+                    await database.ensure_bypass_only_subscription(telegram_id)
+
+                # Add traffic via Remnawave (create user if needed)
                 rmn_success = False
                 pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
                 if pack:
-                    try:
-                        from app.services.remnawave_service import add_traffic
-                        rmn_success = await add_traffic(telegram_id, pack["bytes"])
-                        if not rmn_success:
-                            logger.error(
-                                "TRAFFIC_PACK_REMNAWAVE_FAIL: user=%s gb=%s purchase=%s",
-                                telegram_id, traffic_gb, purchase_id,
+                    traffic_bytes = pack["bytes"]
+                    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+                    if not rmn_uuid:
+                        # No Remnawave user yet — create one with bypass traffic
+                        try:
+                            from app.services import remnawave_service
+                            from datetime import datetime, timezone, timedelta
+                            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+                            await remnawave_service.create_remnawave_user(
+                                telegram_id, "basic", far_future,
+                                traffic_limit_override=traffic_bytes,
                             )
-                    except Exception as rmn_err:
-                        logger.error(
-                            "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
-                            telegram_id, traffic_gb, rmn_err,
-                        )
+                            rmn_success = True
+                            logger.info("BYPASS_REMNAWAVE_USER_CREATED user=%s gb=%s", telegram_id, traffic_gb)
+                        except Exception as rmn_err:
+                            logger.error(
+                                "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: user=%s gb=%s error=%s",
+                                telegram_id, traffic_gb, rmn_err,
+                            )
+                    else:
+                        try:
+                            from app.services.remnawave_service import add_traffic
+                            rmn_success = await add_traffic(telegram_id, traffic_bytes)
+                            if not rmn_success:
+                                logger.error(
+                                    "TRAFFIC_PACK_REMNAWAVE_FAIL: user=%s gb=%s purchase=%s",
+                                    telegram_id, traffic_gb, purchase_id,
+                                )
+                        except Exception as rmn_err:
+                            logger.error(
+                                "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
+                                telegram_id, traffic_gb, rmn_err,
+                            )
                 else:
                     logger.error(
                         "TRAFFIC_PACK_INVALID_GB: user=%s gb=%s purchase=%s",
@@ -663,9 +690,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     )
 
                 # Bypass-only: activate 3-day trial if eligible
-                _tariff_tag = pending_purchase.get("tariff", "")
                 _trial_activated = False
-                if _tariff_tag.startswith("bypass_"):
+                if _is_bypass:
                     try:
                         from app.services.trials import service as trial_service
                         if await trial_service.is_trial_available(telegram_id):
@@ -675,8 +701,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     except Exception as trial_err:
                         logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
 
-                if _tariff_tag.startswith("bypass_"):
-                    await database.set_bypass_only_flag(telegram_id, True)
+                if _is_bypass:
                     text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
                     if _trial_activated:
                         text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
@@ -688,12 +713,19 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         "TRAFFIC_PACK_NOT_APPLIED: user=%s gb=%s purchase=%s — needs manual resolution",
                         telegram_id, traffic_gb, purchase_id,
                     )
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text=i18n_get_text(language, "common.back"),
-                        callback_data="menu_main",
-                    )],
-                ])
+                if _is_bypass:
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
+                        [InlineKeyboardButton(text="🌐 Купить ещё ГБ", callback_data="buy_traffic")],
+                        [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
+                    ])
+                else:
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text=i18n_get_text(language, "common.back"),
+                            callback_data="menu_main",
+                        )],
+                    ])
                 await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
                 logger.info(

@@ -262,14 +262,30 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"Failed to activate trial for bypass buyer {telegram_id}: {e}")
 
-    text = i18n_get_text(language, "bypass.purchase_success", gb=gb)
+    text = "✅ <b>Обход блокировок активирован!</b>\n\n"
+    text += f"📦 +{gb} ГБ трафика начислено\n"
     if trial_activated:
-        text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
-    buttons = [[InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back"),
-        callback_data="menu_main",
-    )]]
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+        text += "\n🎁 <b>Бонус:</b> Пробный период VPN (3 дня) активирован!\n"
+    text += "\n💡 <i>Трафик не сгорает — накапливается между покупками.</i>\n"
+    text += "\nОткройте <b>Личный кабинет</b> чтобы получить ключ подключения."
+
+    buttons = [
+        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
+        [InlineKeyboardButton(text="🌐 Купить ещё ГБ", callback_data="buy_traffic")],
+        [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
+    ]
+
+    # Главный экран без подписки — это фото, его нельзя edit в текст. Удаляем и шлём новое.
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(
+        chat_id=callback.message.chat.id,
+        text=text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML",
+    )
 
 
 def _strikethrough(text: str) -> str:

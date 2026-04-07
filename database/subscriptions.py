@@ -4386,6 +4386,7 @@ async def finalize_purchase(
                         "is_renewal": False,
                         "is_traffic_pack": True,
                         "traffic_gb": _gb,
+                        "tariff_type": tariff_type,
                     }
 
                 # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)
