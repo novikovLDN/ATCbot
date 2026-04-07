@@ -66,7 +66,7 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
             reply_markup=keyboard,
         )
     else:
-        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
+        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.callback_query(F.data == "back_to_main")
