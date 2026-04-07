@@ -815,6 +815,7 @@ LANG = {
     'traffic.fetch_error': "⚠️ Failed to load traffic data. Try again later.",
     'traffic.warning_low': "{remaining} of bypass traffic remaining",
     'traffic.warning_critical': "Bypass traffic is almost depleted!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Your main subscription has expired</b>\n\nBypass continues to work — your GB are intact.\n\nDon't forget to buy more traffic if it's running low 👇",
     'traffic.buy_subscription': "📈 Buy Subscription",
     'traffic.buy_traffic_btn': "💳 Buy Traffic",
     'traffic.back_to_traffic': "📊 Back to Traffic",

@@ -794,6 +794,7 @@ LANG = {
     'traffic.fetch_error': "⚠️ Маълумоти трафикро бор кардан нашуд. Баъдтар кӯшиш кунед.",
     'traffic.warning_low': "Трафики гузариш {remaining} монд",
     'traffic.warning_critical': "Трафики гузариш қариб тамом шуд!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Обунаи асосии шумо ба охир расид</b>\n\nГузариш аз блокҳо кор мекунад — ГБ-и шумо дар ҷои худ аст.\n\nАгар трафик кам мешавад, харид кунед 👇",
     'traffic.buy_subscription': "📈 Харидани обуна",
     'traffic.buy_traffic_btn': "💳 Харидани трафик",
     'traffic.back_to_traffic': "📊 Ба трафик",

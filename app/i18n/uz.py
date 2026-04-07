@@ -794,6 +794,7 @@ LANG = {
     'traffic.fetch_error': "⚠️ Trafik ma'lumotlarini yuklab bo'lmadi. Keyinroq urinib ko'ring.",
     'traffic.warning_low': "Chetlab o'tish trafigi {remaining} qoldi",
     'traffic.warning_critical': "Chetlab o'tish trafigi tugab bormoqda!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Asosiy obunangiz tugadi</b>\n\nChetlab o'tish ishlashda davom etmoqda — GB'laringiz joyida.\n\nTrafik tugayotgan bo'lsa, sotib olishni unutmang 👇",
     'traffic.buy_subscription': "📈 Obuna sotib olish",
     'traffic.buy_traffic_btn': "💳 Trafik sotib olish",
     'traffic.back_to_traffic': "📊 Trafikka qaytish",
