@@ -596,6 +596,16 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             return
         
         # API is source of truth — vpn_key from API, no local validation
+        # КРИТИЧНО: Читаем combo данные из FSM ДО очистки
+        _combo_gb_from_fsm = 0
+        _bypass_gb_from_fsm = 0
+        try:
+            _pre_clear_fsm = await state.get_data()
+            _combo_gb_from_fsm = _pre_clear_fsm.get("combo_bypass_gb", 0)
+            _bypass_gb_from_fsm = _pre_clear_fsm.get("bypass_only_gb", 0)
+        except Exception:
+            pass
+
         # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
         await clear_promo_session(state)
         
@@ -631,13 +641,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             except Exception as e:
                 logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
         else:
-            # Check if this is a combo purchase from FSM
-            _is_combo = False
-            try:
-                _fsm = await state.get_data()
-                _is_combo = _fsm.get("combo_bypass_gb", 0) > 0
-            except Exception:
-                pass
+            _is_combo = _combo_gb_from_fsm > 0
 
             if config.is_biz_tariff(subscription_type):
                 tariff_label, tariff_icon = "Business", "🏢"
@@ -703,9 +707,8 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
 
         # Combo/Bypass: начисляем трафик обхода если покупка через комбо или bypass-only
         try:
-            fsm_data = await state.get_data()
-            combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
-            bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
+            combo_bypass_gb = _combo_gb_from_fsm
+            bypass_only_gb = _bypass_gb_from_fsm
 
             if combo_bypass_gb > 0 or bypass_only_gb > 0:
                 from app.services import remnawave_api, remnawave_service
