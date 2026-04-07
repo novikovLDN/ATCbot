@@ -4419,6 +4419,7 @@ async def finalize_purchase(
                         "activation_status": "pending",
                         "is_renewal": False,
                         "is_combo": is_combo_purchase,
+                        "period_days": period_days,
                     }
                 else:
                     # Получаем VPN ключ для нормальной активации
@@ -4539,6 +4540,7 @@ async def finalize_purchase(
                         "referral_reward": referral_reward_result,
                         "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                         "is_combo": is_combo_purchase,
+                        "period_days": period_days,
                     }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray

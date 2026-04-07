@@ -729,7 +729,7 @@ async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMCo
         try:
             from app.services.remnawave_service import renew_remnawave_user_bg
             if tariff in ("basic", "plus"):
-                renew_remnawave_user_bg(user_id, tariff, expires_at)
+                renew_remnawave_user_bg(user_id, tariff, expires_at, period_days=days_int)
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_ADMIN_GRANT_FAIL: tg=%s %s", user_id, rmn_err)
 

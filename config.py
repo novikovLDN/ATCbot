@@ -394,8 +394,24 @@ else:
 
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
-    "basic": 15 * 1024**3,   # 15 GB
-    "plus":  25 * 1024**3,   # 25 GB
+    "basic": {
+        30:  15 * 1024**3,    # 1 мес — 15 GB
+        90:  50 * 1024**3,    # 3 мес — 50 GB
+        180: 100 * 1024**3,   # 6 мес — 100 GB
+        365: 180 * 1024**3,   # 12 мес — 180 GB
+    },
+    "plus": {
+        30:  25 * 1024**3,    # 1 мес — 25 GB
+        90:  80 * 1024**3,    # 3 мес — 80 GB
+        180: 160 * 1024**3,   # 6 мес — 160 GB
+        365: 300 * 1024**3,   # 12 мес — 300 GB
+    },
+}
+
+# Shortcut: human-readable GB for button labels
+TRAFFIC_LIMITS_GB = {
+    "basic": {30: 15, 90: 50, 180: 100, 365: 180},
+    "plus":  {30: 25, 90: 80, 180: 160, 365: 300},
 }
 
 # Device limits per tariff

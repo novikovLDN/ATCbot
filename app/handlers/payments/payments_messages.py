@@ -1128,7 +1128,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         from app.services.remnawave_service import renew_remnawave_user_bg
         _sub_type = (tariff_type or "basic").strip().lower()
         if expires_at and _sub_type not in ("trial",) + config.BIZ_TARIFFS:
-            renew_remnawave_user_bg(telegram_id, _sub_type, expires_at)
+            renew_remnawave_user_bg(telegram_id, _sub_type, expires_at, period_days=period_days)
     except Exception as rmn_err:
         logger.warning("REMNAWAVE_HOOK_FAIL: stars tg=%s %s", telegram_id, rmn_err)
 

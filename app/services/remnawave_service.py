@@ -46,9 +46,23 @@ def _is_valid_full_uuid(s: str) -> bool:
         return len(s) == 36 and s.count("-") == 4
 
 
-def _traffic_limit_for_tariff(tariff: str) -> int:
-    """Return traffic limit bytes for tariff. 0 for trial/unknown."""
-    return config.TRAFFIC_LIMITS.get(tariff, 0)
+def _traffic_limit_for_tariff(tariff: str, period_days: int = 30) -> int:
+    """Return traffic limit bytes for tariff+period. 0 for trial/unknown."""
+    tariff_limits = config.TRAFFIC_LIMITS.get(tariff)
+    if tariff_limits is None:
+        return 0
+    if isinstance(tariff_limits, dict):
+        # Find closest matching period (fallback to 30-day)
+        if period_days in tariff_limits:
+            return tariff_limits[period_days]
+        # Fallback: closest available period
+        available = sorted(tariff_limits.keys())
+        for p in available:
+            if p >= period_days:
+                return tariff_limits[p]
+        return tariff_limits[available[-1]] if available else 0
+    # Backward compat: flat int value
+    return tariff_limits
 
 
 def _device_limit_for_tariff(tariff: str) -> int:
@@ -78,19 +92,21 @@ async def create_remnawave_user(
     tariff: str,
     subscription_end: datetime,
     traffic_limit_override: Optional[int] = None,
+    period_days: int = 30,
 ) -> None:
     """Create a Remnawave user for the given subscriber.
 
     Args:
         traffic_limit_override: if set, use this instead of tariff-based limit.
             Used for auto-provisioning existing users with a smaller starter pack.
+        period_days: subscription period for traffic calculation.
     """
     if not config.REMNAWAVE_ENABLED:
         return
     if tariff == "trial" and not traffic_limit_override:
         return  # Trial without explicit override gets no bypass
 
-    traffic_limit = traffic_limit_override or _traffic_limit_for_tariff(tariff)
+    traffic_limit = traffic_limit_override or _traffic_limit_for_tariff(tariff, period_days)
     if traffic_limit <= 0:
         return
 
@@ -121,8 +137,8 @@ async def create_remnawave_user(
         logger.error("REMNAWAVE_CREATE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
 
-def create_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: datetime) -> None:
-    _fire_and_forget(create_remnawave_user(telegram_id, tariff, subscription_end))
+def create_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: datetime, period_days: int = 30) -> None:
+    _fire_and_forget(create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days))
 
 
 async def ensure_squad(telegram_id: int) -> None:
@@ -152,6 +168,7 @@ async def renew_remnawave_user(
     telegram_id: int,
     tariff: str,
     subscription_end: datetime,
+    period_days: int = 30,
 ) -> None:
     """Renew: add tariff traffic to current limit, update expiry."""
     if not config.REMNAWAVE_ENABLED:
@@ -159,7 +176,7 @@ async def renew_remnawave_user(
     if tariff == "trial":
         return
 
-    traffic_add = _traffic_limit_for_tariff(tariff)
+    traffic_add = _traffic_limit_for_tariff(tariff, period_days)
     if traffic_add <= 0:
         return
 
@@ -167,14 +184,14 @@ async def renew_remnawave_user(
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             # User has no Remnawave account yet — create one
-            await create_remnawave_user(telegram_id, tariff, subscription_end)
+            await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days)
             return
 
         # Get current limit and add tariff traffic
         user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
         if not user_data:
             # User might have been deleted from Remnawave — recreate
-            await create_remnawave_user(telegram_id, tariff, subscription_end)
+            await create_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days)
             return
 
         api_uuid = user_data.get("uuid") or rmn_uuid
@@ -205,8 +222,8 @@ async def renew_remnawave_user(
         logger.error("REMNAWAVE_RENEW_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
 
 
-def renew_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: datetime) -> None:
-    _fire_and_forget(renew_remnawave_user(telegram_id, tariff, subscription_end))
+def renew_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: datetime, period_days: int = 30) -> None:
+    _fire_and_forget(renew_remnawave_user(telegram_id, tariff, subscription_end, period_days=period_days))
 
 
 # ── Disable (subscription expired) ─────────────────────────────────────
@@ -294,7 +311,7 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
 
 # ── Tariff change (Basic → Plus) ───────────────────────────────────────
 
-async def update_tariff(telegram_id: int, new_tariff: str) -> None:
+async def update_tariff(telegram_id: int, new_tariff: str, period_days: int = 30) -> None:
     """Update device limit and traffic limit for tariff change."""
     if not config.REMNAWAVE_ENABLED:
         return
@@ -302,7 +319,7 @@ async def update_tariff(telegram_id: int, new_tariff: str) -> None:
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
             return
-        new_limit = _traffic_limit_for_tariff(new_tariff)
+        new_limit = _traffic_limit_for_tariff(new_tariff, period_days)
         new_devices = _device_limit_for_tariff(new_tariff)
         if new_limit <= 0:
             return
