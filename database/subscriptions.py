@@ -1471,7 +1471,12 @@ async def grant_access(
             else:
                 # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
                 old_expires_at = expires_at
-                subscription_end = max(expires_at, now) + duration
+                # Bypass-only: фиктивный expires_at (10 лет), считаем от now
+                _is_bypass = subscription.get("is_bypass_only", False)
+                if _is_bypass:
+                    subscription_end = now + duration
+                else:
+                    subscription_end = max(expires_at, now) + duration
                 # subscription_start сохраняется (activated_at не меняется при продлении)
                 _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                 subscription_start = _ensure_utc(_start_raw) if _start_raw else now
