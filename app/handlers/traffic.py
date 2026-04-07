@@ -226,7 +226,7 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
         return
 
     # Deduct balance
-    await database.update_balance(telegram_id, -final_price, description=f"Bypass traffic {gb} GB")
+    await database.decrease_balance(telegram_id, final_price, source="bypass_traffic", description=f"Bypass traffic {gb} GB")
 
     # Add traffic to Remnawave
     traffic_bytes = gb * 1024**3
