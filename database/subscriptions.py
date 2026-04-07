@@ -4581,13 +4581,12 @@ async def finalize_purchase(
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         if ret_val is not None:
-            # Set combo flag reliably from pending_purchase data (not FSM)
-            if is_combo_purchase:
-                try:
-                    await set_combo_flag(telegram_id, True)
-                    logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id}")
-                except Exception as cf_err:
-                    logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
+            # Set or clear combo flag reliably from pending_purchase data (not FSM)
+            try:
+                await set_combo_flag(telegram_id, is_combo_purchase)
+                logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id} is_combo={is_combo_purchase}")
+            except Exception as cf_err:
+                logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
             return ret_val
 
 
