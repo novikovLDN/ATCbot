@@ -511,11 +511,30 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                 except Exception as e:
                     logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
 
-            await conn.execute("""
-                UPDATE subscriptions 
-                SET status = 'expired', uuid = NULL, vpn_key = NULL
-                WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
-            """, telegram_id)
+            # Check if user has Remnawave bypass traffic — keep it active
+            has_remnawave = await conn.fetchval(
+                "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND remnawave_uuid IS NOT NULL",
+                telegram_id,
+            )
+            if has_remnawave:
+                # Transition to bypass-only: remove Xray but keep Remnawave and active status
+                from datetime import timedelta
+                far_future = database._to_db_utc(now + timedelta(days=3650))
+                await conn.execute("""
+                    UPDATE subscriptions
+                    SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                        is_bypass_only = TRUE,
+                        expires_at = $2,
+                        source = 'bypass_only'
+                    WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
+                """, telegram_id, far_future)
+                logger.info(f"trial_expired: TRANSITION_TO_BYPASS_ONLY user={telegram_id} — Remnawave stays active")
+            else:
+                await conn.execute("""
+                    UPDATE subscriptions
+                    SET status = 'expired', uuid = NULL, vpn_key = NULL
+                    WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
+                """, telegram_id)
 
             should_send, send_reason = await trial_service.should_send_completion_notification(
                 telegram_id=telegram_id,

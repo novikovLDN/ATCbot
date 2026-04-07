@@ -273,6 +273,35 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
         return False
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Check if user has Remnawave bypass traffic — if so, transition to bypass-only
+            # instead of fully expiring (bypass GB work independently of main subscription)
+            has_remnawave = await conn.fetchval(
+                "SELECT remnawave_uuid FROM subscriptions WHERE id = $1 AND remnawave_uuid IS NOT NULL",
+                subscription_id,
+            )
+
+            if has_remnawave:
+                # Transition to bypass-only: remove Xray but keep Remnawave active
+                far_future = now + timedelta(days=3650)
+                result = await conn.execute(
+                    """UPDATE subscriptions
+                       SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                           is_bypass_only = TRUE,
+                           expires_at = $5,
+                           source = 'bypass_only'
+                       WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
+                         AND expires_at <= $4""",
+                    subscription_id, telegram_id, uuid_to_remove, now_db,
+                    _to_db_utc(far_future),
+                )
+                rows = int(result.split()[-1]) if result else 0
+                if rows > 0:
+                    logger.info(
+                        "EXPIRY_TRANSITION_TO_BYPASS_ONLY user=%s — Remnawave stays active",
+                        telegram_id,
+                    )
+                return rows > 0
+
             result = await conn.execute(
                 """UPDATE subscriptions
                    SET status = 'expired', uuid = NULL, vpn_key = NULL
@@ -286,7 +315,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
-                # Disable Remnawave bypass (fire-and-forget)
+                # Disable Remnawave bypass (fire-and-forget) — no remnawave_uuid means safe to disable
                 try:
                     from app.services.remnawave_service import disable_remnawave_user_bg
                     disable_remnawave_user_bg(telegram_id)
