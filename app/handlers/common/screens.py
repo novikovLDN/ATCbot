@@ -443,7 +443,7 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         # Bypass-only: show special header
         text = (
             f"🌐 <b>У вас активен обход блокировок</b>\n\n"
-            f"Для полного VPN выберите тариф:\n\n"
+            f"Для основной подписки выберите тариф:\n\n"
             f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
             f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
             f"{i18n_get_text(language, 'buy.tariff_business')}"
