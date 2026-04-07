@@ -177,14 +177,7 @@ async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
 
 async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     """GET /api/users/{uuid} — get user by full UUID."""
-    result = await _request("GET", f"/api/users/{uuid}")
-    if result:
-        # DEBUG: find happ crypto link field — will remove after discovery
-        happ_fields = {k: v for k, v in result.items() if isinstance(v, str) and "happ" in v.lower()}
-        all_urls = {k: v for k, v in result.items() if isinstance(v, str) and ("://" in v or "url" in k.lower() or "link" in k.lower())}
-        logger.info("REMNAWAVE_HAPP_SEARCH: uuid=%s happ_fields=%s url_fields=%s all_keys=%s",
-                     uuid[:8], happ_fields, all_urls, list(result.keys()))
-    return result
+    return await _request("GET", f"/api/users/{uuid}")
 
 
 _update_method: Optional[tuple] = None  # cached working (method, path_template)
@@ -237,17 +230,19 @@ async def delete_user(uuid: str) -> Optional[Dict[str, Any]]:
 # ── Convenience ───────────────────────────────────────────────────────
 
 async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
-    """Return traffic info including subscriptionUrl, or None."""
+    """Return traffic info including subscriptionUrl and happ_url, or None."""
     user = await get_user(uuid)
     if not user:
         return None
     # Traffic data may be nested in userTraffic or at top level
     user_traffic = user.get("userTraffic") or {}
+    sub_url = user.get("subscriptionUrl", "")
     return {
         "usedTrafficBytes": user_traffic.get("usedTrafficBytes", user.get("usedTrafficBytes", 0)),
         "trafficLimitBytes": user.get("trafficLimitBytes", 0),
         "deviceLimit": user.get("deviceLimit", 0),
         "onlineDevices": user.get("onlineDevices", 0),
         "status": user.get("status", "UNKNOWN"),
-        "subscriptionUrl": user.get("subscriptionUrl", ""),
+        "subscriptionUrl": sub_url,
+        "happ_url": f"happ://add/{sub_url}" if sub_url else "",
     }

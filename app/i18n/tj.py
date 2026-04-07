@@ -787,7 +787,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Трафики ман",
-    'traffic.info': "📊 <b>Гузариш аз блокҳо</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ То: {expires}\n\n🔗 <b>Калиди гузариш</b> <i>(пахш кунед — нусха мешавад)</i>\n<code>{sub_url}</code>\n\n📲 <b>Куҷо гузоштан:</b>\n├ <b>Happ</b> → Саҳифаи асосӣ → <b>+</b> → Аз буфер гузоштан\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.info': "📊 <b>Гузариш аз блокҳо</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ То: {expires}\n\n🔗 <b>Калиди гузариш</b> <i>(пахш кунед — нусха мешавад)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Калиди иловагӣ барои Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Куҷо гузоштан:</b>\n├ <b>Happ</b> → Саҳифаи асосӣ → <b>+</b> → Аз буфер гузоштан\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Гузариш аз блокҳо</b> 🇷🇺\n\n🔒 Обунаи фаъол нест.",
     'traffic.trial_no_bypass': "📊 <b>Гузариш аз блокҳо</b> 🇷🇺\n\n🔒 Гузариш дар тарифҳои Basic ва Plus дастрас аст.",
     'traffic.not_provisioned': "📊 Гузариш ҳанӯз танзим нашудааст. Баъдтар кӯшиш кунед.",

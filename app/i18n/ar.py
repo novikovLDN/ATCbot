@@ -799,7 +799,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 حركة المرور الخاصة بي",
-    'traffic.info': "📊 <b>تجاوز الحظر</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ حتى: {expires}\n\n🔗 <b>مفتاح التجاوز</b> <i>(اضغط للنسخ)</i>\n<code>{sub_url}</code>\n\n📲 <b>أين تلصق:</b>\n├ <b>Happ</b> → الرئيسية → <b>+</b> → لصق من الحافظة\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.info': "📊 <b>تجاوز الحظر</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ حتى: {expires}\n\n🔗 <b>مفتاح التجاوز</b> <i>(اضغط للنسخ)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>مفتاح بديل لـ Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>أين تلصق:</b>\n├ <b>Happ</b> → الرئيسية → <b>+</b> → لصق من الحافظة\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>تجاوز الحظر</b> 🇷🇺\n\n🔒 لا يوجد اشتراك نشط.",
     'traffic.trial_no_bypass': "📊 <b>تجاوز الحظر</b> 🇷🇺\n\n🔒 التجاوز متاح في خطط Basic و Plus.",
     'traffic.not_provisioned': "📊 لم يتم إعداد التجاوز بعد. حاول لاحقاً.",
