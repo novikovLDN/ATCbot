@@ -1151,7 +1151,7 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
         return
 
     # 2. Deduct balance
-    await database.update_balance(telegram_id, -price, description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
+    await database.decrease_balance(telegram_id, price, source="combo_purchase", description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
 
     # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
     try:
