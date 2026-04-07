@@ -392,13 +392,19 @@ async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
         existing = await conn.fetchrow(
             "SELECT telegram_id FROM subscriptions WHERE telegram_id = $1", telegram_id
         )
+        far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         if existing:
+            # Update existing: set bypass-only, ensure active status and far-future expiry
+            # (old expired subscription may have expires_at in the past)
             await conn.execute(
-                "UPDATE subscriptions SET is_bypass_only = TRUE, status = 'active' WHERE telegram_id = $1",
-                telegram_id,
+                """UPDATE subscriptions
+                   SET is_bypass_only = TRUE, status = 'active',
+                       expires_at = GREATEST(expires_at, $2),
+                       source = CASE WHEN status = 'expired' OR expires_at < NOW() THEN 'bypass_only' ELSE source END
+                   WHERE telegram_id = $1""",
+                telegram_id, _to_db_utc(far_future),
             )
         else:
-            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
             await conn.execute(
                 """INSERT INTO subscriptions (telegram_id, status, subscription_type, is_bypass_only, expires_at, source)
                    VALUES ($1, 'active', 'basic', TRUE, $2, 'bypass_only')""",

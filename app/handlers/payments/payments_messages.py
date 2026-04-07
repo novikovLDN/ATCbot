@@ -646,14 +646,25 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 if _is_bypass:
                     await database.ensure_bypass_only_subscription(telegram_id)
 
-                # Add traffic via Remnawave (create user if needed)
+                # Add traffic via Remnawave (create user if stale/missing)
                 rmn_success = False
                 pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
                 if pack:
                     traffic_bytes = pack["bytes"]
                     rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-                    if not rmn_uuid:
-                        # No Remnawave user yet — create one with bypass traffic
+                    if rmn_uuid:
+                        try:
+                            from app.services.remnawave_service import add_traffic
+                            rmn_success = await add_traffic(telegram_id, traffic_bytes)
+                        except Exception as rmn_err:
+                            logger.error(
+                                "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
+                                telegram_id, traffic_gb, rmn_err,
+                            )
+                    if not rmn_success:
+                        # No UUID or stale (404) — clear and create fresh
+                        if rmn_uuid:
+                            await database.clear_remnawave_uuid(telegram_id)
                         try:
                             from app.services import remnawave_service
                             from datetime import datetime, timezone, timedelta
@@ -667,20 +678,6 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         except Exception as rmn_err:
                             logger.error(
                                 "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: user=%s gb=%s error=%s",
-                                telegram_id, traffic_gb, rmn_err,
-                            )
-                    else:
-                        try:
-                            from app.services.remnawave_service import add_traffic
-                            rmn_success = await add_traffic(telegram_id, traffic_bytes)
-                            if not rmn_success:
-                                logger.error(
-                                    "TRAFFIC_PACK_REMNAWAVE_FAIL: user=%s gb=%s purchase=%s",
-                                    telegram_id, traffic_gb, purchase_id,
-                                )
-                        except Exception as rmn_err:
-                            logger.error(
-                                "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
                                 telegram_id, traffic_gb, rmn_err,
                             )
                 else:

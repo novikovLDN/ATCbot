@@ -233,17 +233,24 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
 
     # Ensure Remnawave user exists (creates if needed)
     traffic_bytes = gb * 1024**3
+    rmn_success = False
     rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-    if not rmn_uuid:
+    if rmn_uuid:
+        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+    if not rmn_success:
+        # No UUID or stale UUID (404) — clear and create fresh Remnawave user
+        if rmn_uuid:
+            await database.clear_remnawave_uuid(telegram_id)
         from datetime import datetime, timezone, timedelta
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
-        await remnawave_service.create_remnawave_user(
-            telegram_id, "basic", far_future, traffic_limit_override=traffic_bytes
-        )
-        rmn_success = True
-        logger.info(f"BYPASS_REMNAWAVE_USER_CREATED user={telegram_id} gb={gb}")
-    else:
-        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+        try:
+            await remnawave_service.create_remnawave_user(
+                telegram_id, "basic", far_future, traffic_limit_override=traffic_bytes
+            )
+            rmn_success = True
+            logger.info(f"BYPASS_REMNAWAVE_USER_CREATED user={telegram_id} gb={gb}")
+        except Exception as e:
+            logger.error(f"BYPASS_REMNAWAVE_CREATE_FAIL user={telegram_id} gb={gb}: {e}")
     if not rmn_success:
         logger.warning(f"TRAFFIC_PURCHASE_REMNAWAVE_FAIL user={telegram_id} gb={gb}")
 
