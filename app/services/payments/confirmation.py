@@ -282,7 +282,8 @@ async def _send_confirmation(
         try:
             from app.services.remnawave_service import renew_remnawave_user_bg
             if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS:
-                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at)
+                _pd = result.get("period_days", 30) or 30
+                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=_pd)
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
 

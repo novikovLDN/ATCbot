@@ -245,15 +245,17 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
                 else:
                     period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
 
+            traffic_gb = config.TRAFFIC_LIMITS_GB.get(new_tariff, {}).get(period_days, 0)
+
             if has_discount:
                 button_text = i18n_get_text(
                     language, "buy.button_price_discount",
-                    base=int(base_price_rubles), final=int(final_price_rubles), period=period_text
+                    base=int(base_price_rubles), final=int(final_price_rubles), period=period_text, gb=traffic_gb
                 )
             else:
                 button_text = i18n_get_text(
                     language, "buy.button_price",
-                    price=int(final_price_rubles), period=period_text
+                    price=int(final_price_rubles), period=period_text, gb=traffic_gb
                 )
 
             buttons.append([InlineKeyboardButton(
@@ -441,18 +443,21 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
             else:
                 period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
         
+        # Traffic GB for this period
+        traffic_gb = config.TRAFFIC_LIMITS_GB.get(tariff_type, {}).get(period_days, 0)
+
         # Формируем текст кнопки с зачеркнутой ценой (если есть скидка)
         if has_discount:
             button_text = i18n_get_text(
                 language, "buy.button_price_discount",
-                base=int(base_price_rubles), final=int(final_price_rubles), period=period_text
+                base=int(base_price_rubles), final=int(final_price_rubles), period=period_text, gb=traffic_gb
             )
         else:
             button_text = i18n_get_text(
                 language, "buy.button_price",
-                price=int(final_price_rubles), period=period_text
+                price=int(final_price_rubles), period=period_text, gb=traffic_gb
             )
-        
+
         # КРИТИЧНО: callback_data БЕЗ purchase_id - только tariff и period
         buttons.append([InlineKeyboardButton(
             text=button_text,
