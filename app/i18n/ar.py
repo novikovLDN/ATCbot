@@ -806,6 +806,7 @@ LANG = {
     'traffic.fetch_error': "⚠️ فشل تحميل بيانات حركة المرور. حاول لاحقاً.",
     'traffic.warning_low': "متبقي {remaining} من حركة المرور",
     'traffic.warning_critical': "حركة مرور التجاوز على وشك النفاد!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>انتهى اشتراكك الأساسي</b>\n\nيستمر تجاوز الحظر في العمل — الجيجابايت الخاصة بك سليمة.\n\nلا تنسَ شراء المزيد من حركة المرور إذا كانت على وشك النفاد 👇",
     'traffic.buy_subscription': "📈 شراء اشتراك",
     'traffic.buy_traffic_btn': "💳 شراء حركة المرور",
     'traffic.back_to_traffic': "📊 العودة",

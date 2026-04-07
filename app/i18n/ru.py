@@ -901,6 +901,7 @@ LANG = {
     'traffic.fetch_error': "⚠️ Не удалось загрузить данные о трафике. Попробуйте позже.",
     'traffic.warning_low': "Осталось {remaining} трафика обхода",
     'traffic.warning_critical': "Трафик обхода почти закончился!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Ваша основная подписка закончилась</b>\n\nОбход блокировок продолжает работать — ваши ГБ на месте.\n\nНе забудьте докупить трафик, если он заканчивается 👇",
     'traffic.buy_subscription': "📈 Купить подписку",
     'traffic.buy_traffic_btn': "💳 Купить трафик",
     'traffic.back_to_traffic': "📊 К трафику",

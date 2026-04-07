@@ -529,6 +529,23 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                     WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
                 """, telegram_id, far_future)
                 logger.info(f"trial_expired: TRANSITION_TO_BYPASS_ONLY user={telegram_id} — Remnawave stays active")
+                # Notify user that main subscription expired but bypass keeps working
+                try:
+                    language = await resolve_user_language(telegram_id)
+                    bypass_text = i18n.get_text(language, "traffic.subscription_expired_bypass_active")
+                    bypass_kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text=i18n.get_text(language, "traffic.buy_traffic_btn"),
+                            callback_data="buy_traffic",
+                        )],
+                        [InlineKeyboardButton(
+                            text=i18n.get_text(language, "traffic.buy_subscription"),
+                            callback_data="menu_buy_vpn",
+                        )],
+                    ])
+                    await safe_send_message(bot, telegram_id, bypass_text, parse_mode="HTML", reply_markup=bypass_kb)
+                except Exception as notif_err:
+                    logger.warning(f"trial_expired: failed to send bypass-only notification to {telegram_id}: {notif_err}")
             else:
                 await conn.execute("""
                     UPDATE subscriptions

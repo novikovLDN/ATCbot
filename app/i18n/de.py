@@ -794,6 +794,7 @@ LANG = {
     'traffic.fetch_error': "⚠️ Traffic-Daten konnten nicht geladen werden. Versuchen Sie es später.",
     'traffic.warning_low': "Noch {remaining} Bypass-Traffic übrig",
     'traffic.warning_critical': "Bypass-Traffic fast aufgebraucht!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Ihr Hauptabonnement ist abgelaufen</b>\n\nDie Umgehung funktioniert weiterhin — Ihre GB sind intakt.\n\nVergessen Sie nicht, mehr Traffic zu kaufen, wenn er knapp wird 👇",
     'traffic.buy_subscription': "📈 Abo kaufen",
     'traffic.buy_traffic_btn': "💳 Traffic kaufen",
     'traffic.back_to_traffic': "📊 Zum Traffic",

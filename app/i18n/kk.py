@@ -794,6 +794,7 @@ LANG = {
     'traffic.fetch_error': "⚠️ Трафик деректерін жүктеу мүмкін болмады. Кейінірек қайталаңыз.",
     'traffic.warning_low': "Айналып өту трафигі {remaining} қалды",
     'traffic.warning_critical': "Айналып өту трафигі таусылуға жақын!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Негізгі жазылымыңыз аяқталды</b>\n\nАйналып өту жұмыс істей береді — ГБ сақталған.\n\nТрафик аяқталып жатса, сатып алуды ұмытпаңыз 👇",
     'traffic.buy_subscription': "📈 Жазылым сатып алу",
     'traffic.buy_traffic_btn': "💳 Трафик сатып алу",
     'traffic.back_to_traffic': "📊 Трафикке оралу",

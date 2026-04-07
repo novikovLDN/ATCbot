@@ -27,6 +27,9 @@ from app.utils.logging_helpers import (
 )
 from app.core.cooperative_yield import cooperative_yield
 from app.core.pool_monitor import acquire_connection
+from app.utils.telegram_safe import safe_send_message
+from app.services.language_service import resolve_user_language
+from app import i18n
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +310,19 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                     f"cleanup: TRANSITION_TO_BYPASS_ONLY [user={telegram_id}, uuid={uuid_preview}] "
                                                                     f"— Remnawave stays active, Xray removed"
                                                                 )
+                                                                # Notify user
+                                                                if bot:
+                                                                    try:
+                                                                        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                                                                        lang = await resolve_user_language(telegram_id)
+                                                                        bypass_text = i18n.get_text(lang, "traffic.subscription_expired_bypass_active")
+                                                                        bypass_kb = InlineKeyboardMarkup(inline_keyboard=[
+                                                                            [InlineKeyboardButton(text=i18n.get_text(lang, "traffic.buy_traffic_btn"), callback_data="buy_traffic")],
+                                                                            [InlineKeyboardButton(text=i18n.get_text(lang, "traffic.buy_subscription"), callback_data="menu_buy_vpn")],
+                                                                        ])
+                                                                        await safe_send_message(bot, telegram_id, bypass_text, parse_mode="HTML", reply_markup=bypass_kb)
+                                                                    except Exception as notif_err:
+                                                                        logger.warning(f"cleanup: failed to send bypass-only notification to {telegram_id}: {notif_err}")
                                                         else:
                                                             update_result = await conn.execute(
                                                                 """UPDATE subscriptions
