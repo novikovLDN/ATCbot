@@ -119,77 +119,90 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 text=i18n_get_text(language, "trial.button"),
                 callback_data="activate_trial"
             )])
-        else:
-            # Проверяем спецпредложение для истекших подписок
-            offer_shown = False
-            try:
-                special_offer = await database.get_special_offer_info(telegram_id)
-                if special_offer:
-                    # Состояние 3: Спецпредложение -15% с таймером
-                    remaining = special_offer["remaining_text"]
-                    buttons.append([InlineKeyboardButton(
-                        text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
-                        callback_data="special_offer_buy"
-                    )])
-                    offer_shown = True
-            except Exception as e:
-                logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
 
-            if not offer_shown:
-                # Предложение истекло или отсутствует — кнопка «Купить подписку»
+        # Кнопки покупки для пользователей без подписки
+        # Проверяем спецпредложение для истекших подписок
+        offer_shown = False
+        try:
+            special_offer = await database.get_special_offer_info(telegram_id)
+            if special_offer:
+                remaining = special_offer["remaining_text"]
                 buttons.append([InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.buy_new"),
-                    callback_data="menu_buy_vpn"
+                    text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
+                    callback_data="special_offer_buy"
                 )])
+                offer_shown = True
+        except Exception as e:
+            logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
+
+        if not offer_shown:
+            buttons.append([InlineKeyboardButton(
+                text="🌐 Купить обход блокировок",
+                callback_data="buy_bypass_only"
+            )])
+            buttons.append([InlineKeyboardButton(
+                text="⚡️ Купить подписку VPN",
+                callback_data="menu_buy_vpn"
+            )])
+            buttons.append([InlineKeyboardButton(
+                text="🚀 Выгодное комбо",
+                callback_data="buy_combo"
+            )])
 
     # Traffic button removed — traffic info is now in profile screen
 
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.profile"),
-        callback_data="menu_profile"
-    )])
-    # Динамическая кнопка покупки + подарить подписку в одном ряду
-    if subscription and subscription.get("subscription_type"):
-        buy_text = i18n_get_text(language, "main.buy_renew")
-    elif telegram_id and database.DB_READY and not subscription:
-        buy_text = i18n_get_text(language, "main.buy_new")
+    if has_active_sub:
+        # === Кнопки для пользователей С подпиской ===
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.profile"),
+            callback_data="menu_profile"
+        )])
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.buy_renew"),
+                callback_data="menu_buy_vpn",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
+                callback_data="gift_subscription"
+            ),
+        ])
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.instruction"),
+                callback_data="connect_instruction",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
+                callback_data="games_menu"
+            ),
+        ])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.referral"),
+            callback_data="menu_referral"
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "premium.main_button"),
+            callback_data="premium_buy"
+        )])
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.help"),
+                url="https://t.me/Atlas_SupportSecurity"
+            ),
+        ])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "main.settings", "main.settings"),
+            callback_data="menu_settings"
+        )])
     else:
-        buy_text = i18n_get_text(language, "main.buy_new")
-    buttons.append([
-        InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"),
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
-            callback_data="gift_subscription"
-        ),
-    ])
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.instruction"),
-            callback_data="connect_instruction",
-        ),
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
-            callback_data="games_menu"
-        ),
-    ])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.referral"),
-        callback_data="menu_referral"
-    )])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "premium.main_button"),
-        callback_data="premium_buy"
-    )])
-    buttons.append([
-        InlineKeyboardButton(
-            text=i18n_get_text(language, "main.help"),
-            url="https://t.me/Atlas_SupportSecurity"
-        ),
-    ])
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "main.settings", "main.settings"),
-        callback_data="menu_settings"
-    )])
+        # === Кнопки для пользователей БЕЗ подписки ===
+        buttons.append([
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "main.help"),
+                url="https://t.me/Atlas_SupportSecurity"
+            ),
+        ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -283,20 +296,32 @@ def get_profile_keyboard(
     vpn_key_plus: Optional[str] = None,
     show_traffic: bool = False,
     is_trial: bool = False,
+    is_combo: bool = False,
 ):
     """Личный кабинет: Купить ГБ + Продлить | Автопродление + Пополнить | Подарки | Назад."""
     buttons = []
 
-    # Row 1: Купить ГБ + Продлить/Купить подписку
-    row1 = []
-    if show_traffic and not is_trial:
-        row1.append(InlineKeyboardButton(
-            text="🌐 Купить ГБ",
+    if is_combo and has_active_subscription:
+        # Комбо-подписка: две отдельные кнопки — трафик и продление основной
+        buttons.append([InlineKeyboardButton(
+            text="🌐 Купить ГБ трафика",
             callback_data="buy_traffic",
-        ))
-    buy_text = i18n_get_text(language, "main.buy_renew") if has_active_subscription else i18n_get_text(language, "main.buy_new")
-    row1.append(InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"))
-    buttons.append(row1)
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="⚡️ Продлить основную подписку",
+            callback_data="menu_buy_vpn",
+        )])
+    else:
+        # Row 1: Купить ГБ + Продлить/Купить подписку
+        row1 = []
+        if show_traffic and not is_trial:
+            row1.append(InlineKeyboardButton(
+                text="🌐 Купить ГБ",
+                callback_data="buy_traffic",
+            ))
+        buy_text = i18n_get_text(language, "main.buy_renew") if has_active_subscription else i18n_get_text(language, "main.buy_new")
+        row1.append(InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"))
+        buttons.append(row1)
 
     # Row 2: Автопродление + Пополнить
     row2 = []

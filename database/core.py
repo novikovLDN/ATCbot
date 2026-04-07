@@ -987,6 +987,22 @@ async def init_db() -> bool:
         except Exception:
             pass
 
+        # Миграция 036: is_combo и is_bypass_only для комбо/bypass подписок
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_combo BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_bypass_only BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+
+        # Миграция 037: is_combo для pending_purchases
+        try:
+            await conn.execute("ALTER TABLE pending_purchases ADD COLUMN IF NOT EXISTS is_combo BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+
         # Таблица gift_subscriptions — подарочные подписки
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS gift_subscriptions (

@@ -114,4 +114,14 @@ async def cmd_main(message: Message):
     from app.handlers.callbacks.navigation import _get_main_text
     text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
-    await message.answer(text, reply_markup=keyboard)
+
+    sub = await database.get_subscription(telegram_id)
+    if not sub:
+        await message.answer_photo(
+            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        await message.answer(text, reply_markup=keyboard)

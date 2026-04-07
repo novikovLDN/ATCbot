@@ -401,8 +401,16 @@ async def process_auto_renewals(bot: Bot):
                     logger.warning("REMNAWAVE_AUTORENEW_FAIL: tg=%s %s", item["telegram_id"], rmn_err)
 
                 try:
-                    tariff_label = "Plus" if item.get("tariff_type") == "plus" else "Basic"
-                    tariff_emoji = "⭐️" if item.get("tariff_type") == "plus" else "📦"
+                    _ar_is_combo = item.get("is_combo", False)
+                    _ar_type = item.get("tariff_type", "basic")
+                    if _ar_is_combo and _ar_type == "plus":
+                        tariff_label, tariff_emoji = "Комбо Plus", "🚀"
+                    elif _ar_is_combo:
+                        tariff_label, tariff_emoji = "Комбо Basic", "🚀"
+                    elif _ar_type == "plus":
+                        tariff_label, tariff_emoji = "Plus", "⭐️"
+                    else:
+                        tariff_label, tariff_emoji = "Basic", "📦"
                     user_lang = await resolve_user_language(item["telegram_id"])
                     amount_val = item.get("amount", 0)
                     # amount may be in kopecks (>1000) or rubles

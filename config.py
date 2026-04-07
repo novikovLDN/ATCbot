@@ -405,6 +405,22 @@ DEVICE_LIMITS = {
 }
 
 # Traffic packs for purchase (gb -> {price, bytes, discount})
+# Комбо-тарифы: подписка + ГБ обхода в одном пакете
+COMBO_TARIFFS = {
+    "combo_basic": {
+        30:  {"price": 307,  "gb": 25,  "base_tariff": "basic"},
+        90:  {"price": 804,  "gb": 75,  "base_tariff": "basic"},
+        180: {"price": 1462, "gb": 150, "base_tariff": "basic"},
+        365: {"price": 2689, "gb": 300, "base_tariff": "basic"},
+    },
+    "combo_plus": {
+        30:  {"price": 434,  "gb": 25,  "base_tariff": "plus"},
+        90:  {"price": 1059, "gb": 75,  "base_tariff": "plus"},
+        180: {"price": 1844, "gb": 150, "base_tariff": "plus"},
+        365: {"price": 3454, "gb": 300, "base_tariff": "plus"},
+    },
+}
+
 TRAFFIC_PACKS = {
     5:  {"price": 44,  "bytes": 5  * 1024**3, "discount": ""},
     15: {"price": 115, "bytes": 15 * 1024**3, "discount": "🔥 -13%"},

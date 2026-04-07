@@ -44,6 +44,7 @@ class PaymentResult:
     subscription_type: Optional[str]  # "basic" or "plus" for message formatting
     referral_reward: Optional[Dict[str, Any]]
     is_basic_to_plus_upgrade: bool = False  # True when renewal was basic→plus upgrade
+    is_combo: bool = False  # True when purchase is combo tariff
 
 
 @dataclass
@@ -574,6 +575,7 @@ async def finalize_subscription_payment(
             subscription_type=(result.get("subscription_type") or "basic").strip().lower(),
             referral_reward=referral_reward,
             is_basic_to_plus_upgrade=result.get("is_basic_to_plus_upgrade", False),
+            is_combo=result.get("is_combo", False),
         )
         
     except subscription_service.PaymentFinalizationError as e:

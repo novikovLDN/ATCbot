@@ -54,7 +54,19 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
 
     text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
-    await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
+
+    # Для пользователей без подписки — отправляем фото с текстом
+    sub = await database.get_subscription(telegram_id)
+    if not sub:
+        await callback.bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data == "back_to_main")
@@ -71,16 +83,34 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
 
     text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+    sub = await database.get_subscription(telegram_id)
+    if not sub:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_photo(
+            chat_id=callback.message.chat.id,
+            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
 
 
 async def _get_main_text(telegram_id: int, language: str) -> str:
-    """Определяет текст главного экрана: обычный или бизнес."""
+    """Определяет текст главного экрана: обычный, бизнес или без подписки."""
     try:
         sub = await database.get_subscription(telegram_id)
-        sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
-        if config.is_biz_tariff(sub_type):
+        sub_type = (sub.get("subscription_type") or "basic").strip().lower() if sub else None
+        if sub and sub_type and config.is_biz_tariff(sub_type):
             return i18n_get_text(language, "biz.main_screen")
+        if not sub:
+            text = i18n_get_text(language, "main.welcome_no_sub")
+            return await format_text_with_incident(text, language)
     except Exception:
         pass
     text = i18n_get_text(language, "main.welcome")
@@ -940,3 +970,223 @@ async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, lang
         parse_mode="HTML",
         reply_markup=keyboard,
     )
+
+
+# ===================== COMBO SUBSCRIPTION =====================
+
+@router.callback_query(F.data == "buy_combo")
+async def callback_buy_combo(callback: CallbackQuery):
+    """Экран выбора комбо-тарифа (Basic/Plus)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(callback.from_user.id)
+
+    text = i18n_get_text(language, "combo.screen_title")
+    text += "\n\n" + i18n_get_text(language, "combo.tariff_basic")
+    text += "\n\n" + i18n_get_text(language, "combo.tariff_plus")
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "combo.select_basic"),
+            callback_data="combo_tariff:combo_basic",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "combo.select_plus"),
+            callback_data="combo_tariff:combo_plus",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data="menu_main",
+        )],
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    # Main screen may be a photo — delete and send new message
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(callback.from_user.id, text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("combo_tariff:"))
+async def callback_combo_tariff(callback: CallbackQuery):
+    """Выбор периода комбо-тарифа."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    combo_type = callback.data.split(":")[1]  # combo_basic or combo_plus
+    if combo_type not in config.COMBO_TARIFFS:
+        return
+
+    language = await resolve_user_language(callback.from_user.id)
+    tariff = config.COMBO_TARIFFS[combo_type]
+
+    if combo_type == "combo_basic":
+        text = i18n_get_text(language, "combo.tariff_basic")
+    else:
+        text = i18n_get_text(language, "combo.tariff_plus")
+
+    text += "\n\nВыберите период:"
+
+    buttons = []
+    period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12"}
+    for period_days, info in tariff.items():
+        btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=info["price"])
+        buttons.append([InlineKeyboardButton(
+            text=btn_text,
+            callback_data=f"combo_period:{combo_type}:{period_days}",
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="buy_combo",
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("combo_period:"))
+async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение и оплата комбо-тарифа — используем стандартный экран оплаты."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        return
+    combo_type = parts[1]
+    try:
+        period_days = int(parts[2])
+    except (ValueError, IndexError):
+        return
+
+    if combo_type not in config.COMBO_TARIFFS:
+        return
+    tariff = config.COMBO_TARIFFS[combo_type]
+    if period_days not in tariff:
+        return
+
+    info = tariff[period_days]
+    base_tariff = info["base_tariff"]
+    price_kopecks = info["price"] * 100
+    gb = info["gb"]
+
+    # Сохраняем данные в FSM для стандартного платёжного потока
+    await state.update_data(
+        tariff_type=base_tariff,
+        period_days=period_days,
+        final_price_kopecks=price_kopecks,
+        combo_bypass_gb=gb,
+    )
+    from app.handlers.common.states import PurchaseState
+    await state.set_state(PurchaseState.choose_payment_method)
+
+    from handlers import show_payment_method_selection
+    await show_payment_method_selection(callback, base_tariff, period_days, price_kopecks)
+
+
+@router.callback_query(F.data.startswith("combo_pay_balance:"))
+async def callback_combo_pay_balance(callback: CallbackQuery):
+    """Оплата комбо с баланса: активация подписки + начисление трафика обхода."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        return
+    combo_type = parts[1]
+    try:
+        period_days = int(parts[2])
+    except (ValueError, IndexError):
+        return
+
+    if combo_type not in config.COMBO_TARIFFS:
+        return
+    info = config.COMBO_TARIFFS[combo_type].get(period_days)
+    if not info:
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+    price = info["price"]
+    gb = info["gb"]
+    base_tariff = info["base_tariff"]
+
+    balance = await database.get_user_balance(telegram_id)
+    if balance < price:
+        text = i18n_get_text(language, "traffic.insufficient_balance")
+        buttons = [[InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"combo_period:{combo_type}:{period_days}",
+        )]]
+        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+        return
+
+    # 1. Create pending purchase with base tariff
+    from app.services.subscriptions import service as subscription_service
+    price_kopecks = price * 100
+    try:
+        purchase_id = await subscription_service.create_subscription_purchase(
+            telegram_id=telegram_id,
+            tariff=base_tariff,
+            period_days=period_days,
+            price_kopecks=price_kopecks,
+            is_combo=True,
+        )
+    except Exception as e:
+        logger.error(f"Combo purchase creation failed: {e}")
+        text = "❌ Ошибка создания покупки. Попробуйте позже."
+        buttons = [[InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_combo")]]
+        await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+        return
+
+    # 2. Deduct balance
+    await database.update_balance(telegram_id, -price, description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
+
+    # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
+    try:
+        result = await subscription_service.finalize_purchase(
+            purchase_id=purchase_id,
+            payment_provider="balance",
+            amount_rubles=float(price),
+        )
+        if not result.get("success"):
+            logger.error(f"Combo finalize failed: {result}")
+    except Exception as e:
+        logger.error(f"Combo finalize error: {e}")
+
+    # 4. Add bypass traffic
+    from app.services import remnawave_api, remnawave_service
+    traffic_bytes = gb * 1024**3
+    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+    if not rmn_uuid:
+        rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, base_tariff)
+    if rmn_uuid:
+        await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+
+    # 5. Record traffic purchase + mark as combo
+    await database.record_traffic_purchase(telegram_id, gb, 0)
+    await database.set_combo_flag(telegram_id, True)
+
+    months = period_days // 30
+    text = (
+        f"✅ <b>Комбо-подписка активирована!</b>\n\n"
+        f"📦 Тариф: <b>Комбо {base_tariff.capitalize()}</b> · {months} мес.\n"
+        f"🌐 Обход: <b>{gb} ГБ</b> начислено\n\n"
+        f"Нажмите «Подключиться» чтобы настроить устройство."
+    )
+    buttons = [
+        [InlineKeyboardButton(text="📲 Подключиться", callback_data="connect_instruction")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+    ]
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")

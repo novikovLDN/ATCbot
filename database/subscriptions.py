@@ -309,6 +309,40 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
             return rows > 0
 
 
+async def set_combo_flag(telegram_id: int, is_combo: bool = True):
+    """Set is_combo flag on subscription after combo purchase."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_combo BOOLEAN DEFAULT FALSE"
+            )
+        except Exception:
+            pass
+        result = await conn.execute(
+            "UPDATE subscriptions SET is_combo = $1 WHERE telegram_id = $2",
+            is_combo, telegram_id,
+        )
+        logger.info(f"set_combo_flag: user={telegram_id} is_combo={is_combo} result={result}")
+
+
+async def set_bypass_only_flag(telegram_id: int, is_bypass_only: bool = True):
+    """Set is_bypass_only flag on subscription after bypass-only purchase."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_bypass_only BOOLEAN DEFAULT FALSE"
+            )
+        except Exception:
+            pass
+        result = await conn.execute(
+            "UPDATE subscriptions SET is_bypass_only = $1 WHERE telegram_id = $2",
+            is_bypass_only, telegram_id,
+        )
+        logger.info(f"set_bypass_only_flag: user={telegram_id} is_bypass_only={is_bypass_only} result={result}")
+
+
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
     """Получить активную подписку пользователя
     
@@ -3742,6 +3776,7 @@ async def create_pending_purchase(
     promo_code: Optional[str] = None,
     country: Optional[str] = None,
     purchase_type: str = "subscription",
+    is_combo: bool = False,
 ) -> str:
     """
     Создать pending покупку с уникальным purchase_id
@@ -3772,9 +3807,9 @@ async def create_pending_purchase(
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         # Соз��аем запись о по��упке
-        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"""
-        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country)
+        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country, is_combo)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"""
+        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country, is_combo)
         try:
             await conn.execute(_insert_sql, *_insert_args)
         except Exception as e:
@@ -4026,6 +4061,7 @@ async def finalize_purchase(
         purchase_type = pending_purchase.get("purchase_type", "subscription")
         price_kopecks = pending_purchase["price_kopecks"]
         purchase_country = pending_purchase.get("country")
+        is_combo_purchase = pending_purchase.get("is_combo", False)
         expected_amount_rubles = price_kopecks / 100.0
         is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift"))
         is_gift_purchase = (purchase_type == "gift")
@@ -4259,11 +4295,12 @@ async def finalize_purchase(
                     if not payment_id:
                         raise Exception(f"Failed to create payment record for traffic pack: purchase_id={purchase_id}")
 
-                    # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5)
+                    # Extract GB amount from tariff field (e.g., "traffic_5gb" → 5, "bypass_10gb" → 10)
                     _gb = 0
-                    if tariff_type and tariff_type.startswith("traffic_") and tariff_type.endswith("gb"):
+                    if tariff_type and tariff_type.endswith("gb") and ("traffic_" in tariff_type or "bypass_" in tariff_type):
+                        _prefix = "bypass_" if tariff_type.startswith("bypass_") else "traffic_"
                         try:
-                            _gb = int(tariff_type[len("traffic_"):-len("gb")])
+                            _gb = int(tariff_type[len(_prefix):-len("gb")])
                         except ValueError:
                             logger.error(
                                 "finalize_purchase: TRAFFIC_PACK_GB_PARSE_FAIL tariff=%s purchase_id=%s",
@@ -4380,7 +4417,8 @@ async def finalize_purchase(
                         "expires_at": expires_at,
                         "vpn_key": None,
                         "activation_status": "pending",
-                        "is_renewal": False
+                        "is_renewal": False,
+                        "is_combo": is_combo_purchase,
                     }
                 else:
                     # Получаем VPN ключ для нормальной активации
@@ -4500,6 +4538,7 @@ async def finalize_purchase(
                         "subscription_type": subscription_type_ret,
                         "referral_reward": referral_reward_result,
                         "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
+                        "is_combo": is_combo_purchase,
                     }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
@@ -4542,6 +4581,12 @@ async def finalize_purchase(
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         if ret_val is not None:
+            # Set or clear combo flag reliably from pending_purchase data (not FSM)
+            try:
+                await set_combo_flag(telegram_id, is_combo_purchase)
+                logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id} is_combo={is_combo_purchase}")
+            except Exception as cf_err:
+                logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
             return ret_val
 
 
