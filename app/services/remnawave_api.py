@@ -179,7 +179,7 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     """GET /api/users/{uuid} — get user by full UUID."""
     result = await _request("GET", f"/api/users/{uuid}")
     if result:
-        logger.debug("REMNAWAVE_USER_FIELDS: uuid=%s keys=%s", uuid[:8], list(result.keys()))
+        logger.info("REMNAWAVE_USER_FIELDS: uuid=%s keys=%s", uuid[:8], list(result.keys()))
     return result
 
 
