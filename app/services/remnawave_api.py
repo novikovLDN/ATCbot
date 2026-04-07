@@ -177,7 +177,10 @@ async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
 
 async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     """GET /api/users/{uuid} — get user by full UUID."""
-    return await _request("GET", f"/api/users/{uuid}")
+    result = await _request("GET", f"/api/users/{uuid}")
+    if result:
+        logger.debug("REMNAWAVE_USER_FIELDS: uuid=%s keys=%s", uuid[:8], list(result.keys()))
+    return result
 
 
 _update_method: Optional[tuple] = None  # cached working (method, path_template)
