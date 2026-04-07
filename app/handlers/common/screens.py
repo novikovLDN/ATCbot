@@ -352,12 +352,15 @@ async def show_profile(message_or_query, language: str):
                         return "🤍" * filled + "🩶" * (length - filled)
 
                     sub_url = traffic.get("subscriptionUrl", "")
+                    happ_url = traffic.get("happ_url", "")
 
                     text += f"\n\n📊 <b>Обход блокировок</b> 🇷🇺\n\n"
                     text += f"📥 {_fmt(used)} / {_fmt(limit_bytes)}\n"
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
                         text += f"🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
+                        if happ_url:
+                            text += f"\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")

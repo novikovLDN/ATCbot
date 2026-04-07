@@ -787,7 +787,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Mening trafigim",
-    'traffic.info': "📊 <b>Bloklarni chetlab o'tish</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Gacha: {expires}\n\n🔗 <b>Chetlab o'tish kaliti</b> <i>(bosing — nusxalanadi)</i>\n<code>{sub_url}</code>\n\n📲 <b>Qayerga qo'yish:</b>\n├ <b>Happ</b> → Bosh sahifa → <b>+</b> → Buferdan qo'yish\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.info': "📊 <b>Bloklarni chetlab o'tish</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Gacha: {expires}\n\n🔗 <b>Chetlab o'tish kaliti</b> <i>(bosing — nusxalanadi)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Happ uchun muqobil kalit</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Qayerga qo'yish:</b>\n├ <b>Happ</b> → Bosh sahifa → <b>+</b> → Buferdan qo'yish\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Bloklarni chetlab o'tish</b> 🇷🇺\n\n🔒 Faol obuna yo'q.",
     'traffic.trial_no_bypass': "📊 <b>Bloklarni chetlab o'tish</b> 🇷🇺\n\n🔒 Chetlab o'tish Basic va Plus tariflarida mavjud.",
     'traffic.not_provisioned': "📊 Chetlab o'tish hali sozlanmagan. Keyinroq urinib ko'ring.",

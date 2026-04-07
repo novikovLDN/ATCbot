@@ -787,7 +787,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Менің трафигім",
-    'traffic.info': "📊 <b>Бұғаттауды айналып өту</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Дейін: {expires}\n\n🔗 <b>Айналып өту кілті</b> <i>(басыңыз — көшіріледі)</i>\n<code>{sub_url}</code>\n\n📲 <b>Қайда қою керек:</b>\n├ <b>Happ</b> → Басты бет → <b>+</b> → Буферден қою\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.info': "📊 <b>Бұғаттауды айналып өту</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Дейін: {expires}\n\n🔗 <b>Айналып өту кілті</b> <i>(басыңыз — көшіріледі)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Happ үшін балама кілт</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Қайда қою керек:</b>\n├ <b>Happ</b> → Басты бет → <b>+</b> → Буферден қою\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Бұғаттауды айналып өту</b> 🇷🇺\n\n🔒 Белсенді жазылым жоқ.",
     'traffic.trial_no_bypass': "📊 <b>Бұғаттауды айналып өту</b> 🇷🇺\n\n🔒 Айналып өту Basic және Plus тарифтерінде қолжетімді.",
     'traffic.not_provisioned': "📊 Айналып өту әлі орнатылмаған. Кейінірек қайталап көріңіз.",

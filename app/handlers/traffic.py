@@ -417,6 +417,7 @@ async def callback_traffic_info(callback: CallbackQuery):
 
     # Subscription URL comes directly from Remnawave API response
     sub_url = traffic.get("subscriptionUrl", "")
+    happ_url = traffic.get("happ_url", "")
 
     text = i18n_get_text(
         language,
@@ -427,6 +428,7 @@ async def callback_traffic_info(callback: CallbackQuery):
         pct=pct,
         expires=expires_str,
         sub_url=sub_url,
+        happ_url=happ_url,
     ) + warning
 
     if is_trial:
@@ -538,10 +540,12 @@ async def show_traffic_info_message(message):
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
     sub_url = traffic.get("subscriptionUrl", "")
+    happ_url = traffic.get("happ_url", "")
     text = i18n_get_text(
         language, "traffic.info",
         used=_format_bytes(used), limit=_format_bytes(limit),
         bar=bar, pct=pct, expires=expires_str, sub_url=sub_url,
+        happ_url=happ_url,
     ) + warning
 
     if is_trial:
