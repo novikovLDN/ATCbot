@@ -177,7 +177,14 @@ async def assign_user_to_squad(user_uuid: str, squad_uuid: str) -> bool:
 
 async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     """GET /api/users/{uuid} — get user by full UUID."""
-    return await _request("GET", f"/api/users/{uuid}")
+    result = await _request("GET", f"/api/users/{uuid}")
+    if result:
+        # DEBUG: find happ crypto link field — will remove after discovery
+        happ_fields = {k: v for k, v in result.items() if isinstance(v, str) and "happ" in v.lower()}
+        all_urls = {k: v for k, v in result.items() if isinstance(v, str) and ("://" in v or "url" in k.lower() or "link" in k.lower())}
+        logger.info("REMNAWAVE_HAPP_SEARCH: uuid=%s happ_fields=%s url_fields=%s all_keys=%s",
+                     uuid[:8], happ_fields, all_urls, list(result.keys()))
+    return result
 
 
 _update_method: Optional[tuple] = None  # cached working (method, path_template)
