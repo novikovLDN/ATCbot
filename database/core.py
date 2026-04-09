@@ -864,15 +864,22 @@ async def init_db() -> bool:
                 telegram_id BIGINT NOT NULL,
                 status TEXT NOT NULL,
                 variant TEXT,
+                message_id BIGINT,
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # Добавляем колонку variant для миграции
         try:
             await conn.execute("ALTER TABLE broadcast_log ADD COLUMN IF NOT EXISTS variant TEXT")
         except Exception:
             # Колонка уже существует или таблицы нет
+            pass
+
+        # Добавляем колонку message_id для миграции
+        try:
+            await conn.execute("ALTER TABLE broadcast_log ADD COLUMN IF NOT EXISTS message_id BIGINT")
+        except Exception:
             pass
 
         # Таблица broadcast_discounts (скидки для кнопок уведомлений)
