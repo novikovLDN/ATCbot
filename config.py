@@ -356,7 +356,8 @@ CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
 # Lava (Card) Configuration
 # Оплата картой через Lava (api.lava.ru)
 LAVA_WALLET_TO = env("LAVA_WALLET_TO", default="")
-LAVA_JWT_TOKEN = env("LAVA_JWT_TOKEN", default="")  # Secret key for signing
+LAVA_JWT_TOKEN = env("LAVA_JWT_TOKEN", default="")  # Secret key (apikey in JWT payload)
+LAVA_SIGN_KEY = env("LAVA_SIGN_KEY", default="")  # Additional key for JWT HMAC signing
 LAVA_SHOP_ID = env("LAVA_SHOP_ID", default="")  # Project/shop ID
 LAVA_API_URL = env("LAVA_API_URL") or "https://api.lava.ru"
 
