@@ -33,6 +33,16 @@ gift_router = Router()
 logger = logging.getLogger(__name__)
 
 INVOICE_TIMEOUT = config.INVOICE_TIMEOUT_SECONDS
+LAVA_INVOICE_TIMEOUT = 15 * 60  # 15 minutes
+
+
+async def _auto_delete_lava_msg(bot, chat_id: int, msg):
+    """Delete Lava invoice message after timeout."""
+    try:
+        await asyncio.sleep(LAVA_INVOICE_TIMEOUT)
+        await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+    except Exception:
+        pass
 
 
 async def _schedule_invoice_deletion(bot: Bot, chat_id: int, invoice_message: Message, timeout: int = INVOICE_TIMEOUT):
@@ -616,7 +626,8 @@ async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg))
         await callback.answer()
         await state.set_state(None)
         await state.clear()

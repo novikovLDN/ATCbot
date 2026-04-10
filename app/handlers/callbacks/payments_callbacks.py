@@ -1400,7 +1400,8 @@ async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
         await callback.answer()
 
         # Очищаем FSM state
@@ -1569,7 +1570,8 @@ async def callback_topup_lava(callback: CallbackQuery):
             )]
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
         await callback.answer()
 
     except Exception as e:

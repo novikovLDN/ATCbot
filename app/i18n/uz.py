@@ -744,7 +744,7 @@ LANG = {
     'payment.crypto_success': "🎉 To'lov qabul qilindi!\n{tariff_icon} Tarif: {tariff}\n📅 Gacha: {date}",
     'payment.crypto_unavailable': "Kriptovalyuta to'lovi vaqtincha mavjud emas",
     'payment.lava': "💳 Karta (Lava)",
-    'payment.lava_waiting': "💳 Lava orqali karta to'lovi\n\nSumma: {amount:.2f} ₽\n\n⏳ To'lash uchun havolaga o'ting.\nTasdiqlashdan so'ng obuna avtomatik faollashtiriladi.",
+    'payment.lava_waiting': "💳 Karta bilan to'lov\n\nSumma: {amount:.2f} ₽\n\n⏳ 10 daqiqa ichida to'lang",
     'payment.lava_pay_button': "💳 Lava orqali to'lash",
     'payment.lava_unavailable': "Lava orqali karta to'lovi vaqtincha mavjud emas",
     'payment.crypto_waiting': "₿ Kriptovalyuta to'lovi\n\nSumma: {amount:.2f} ₽\n\n⏳ @CryptoBot orqali to'lash uchun havolaga o'ting.\nTasdiqlashdan so'ng obuna avtomatik faollashtiriladi.",

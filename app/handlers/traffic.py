@@ -10,6 +10,7 @@ Callbacks:
 - traffic_pay_card:N — pay for N GB pack via YooKassa (card)
 - traffic_pay_sbp:N  — pay for N GB pack via SBP (Platega)
 """
+import asyncio
 import logging
 import math
 
@@ -26,6 +27,17 @@ from app.handlers.common.utils import safe_edit_text
 
 traffic_router = Router()
 logger = logging.getLogger(__name__)
+
+LAVA_INVOICE_TIMEOUT = 15 * 60  # 15 minutes
+
+
+async def _auto_delete_lava_msg(bot, chat_id: int, msg):
+    """Delete Lava invoice message after timeout."""
+    try:
+        await asyncio.sleep(LAVA_INVOICE_TIMEOUT)
+        await bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+    except Exception:
+        pass
 
 
 @traffic_router.callback_query(F.data == "buy_bypass_only")
@@ -1095,7 +1107,8 @@ async def callback_traffic_pay_lava(callback: CallbackQuery):
             )],
         ])
 
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg))
         await callback.answer()
 
     except Exception as e:
@@ -1404,7 +1417,8 @@ async def callback_bypass_pay_lava(callback: CallbackQuery):
             [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
             [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
         ])
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_auto_delete_lava_msg(callback.bot, telegram_id, lava_msg))
         await callback.answer()
 
     except Exception as e:
