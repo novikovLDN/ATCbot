@@ -38,6 +38,16 @@ def is_enabled() -> bool:
     return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY and LAVA_SHOP_ID)
 
 
+# Startup debug: log loaded config (first chars only, no secrets)
+logger.info(
+    "LAVA_CONFIG: wallet_to=%s secret_key_len=%d shop_id=%s enabled=%s",
+    (LAVA_WALLET_TO[:12] + "...") if LAVA_WALLET_TO else "EMPTY",
+    len(LAVA_SECRET_KEY),
+    (LAVA_SHOP_ID[:12] + "...") if LAVA_SHOP_ID else "EMPTY",
+    is_enabled(),
+)
+
+
 def _b64url_encode(data: bytes) -> str:
     """Base64url encode without padding (JWT standard)."""
     return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
@@ -52,11 +62,8 @@ def _generate_jwt() -> str:
       Signed with secret_key using HMAC-SHA256.
     """
     header = {"alg": "HS256", "typ": "JWT"}
-    # apikey = project identifier (Lava looks up the signing secret by this ID)
-    # uid/tid = project/token IDs (per Lava JWT example)
-    # JWT is SIGNED with LAVA_SECRET_KEY, but the secret is NOT in the payload
     payload = {
-        "apikey": LAVA_SHOP_ID,
+        "apikey": LAVA_SECRET_KEY,
         "uid": LAVA_SHOP_ID,
         "tid": LAVA_SHOP_ID,
     }
@@ -74,9 +81,13 @@ def _generate_jwt() -> str:
 
 
 def _get_auth_headers() -> Dict[str, str]:
-    """Build headers with JWT Authorization (no Content-Type — httpx sets it)."""
+    """Build headers with JWT Authorization."""
+    jwt_token = _generate_jwt()
+    # Temp debug: log JWT parts count and payload (base64-encoded, safe to log)
+    parts = jwt_token.split('.')
+    logger.info("LAVA_JWT_DEBUG: parts=%d, payload_b64=%s", len(parts), parts[1] if len(parts) > 1 else "NONE")
     return {
-        "Authorization": _generate_jwt(),
+        "Authorization": jwt_token,
         "Accept": "application/json",
     }
 
