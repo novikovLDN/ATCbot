@@ -89,12 +89,24 @@ async def create_invoice(
         request_body["hook_url"] = hook_url
 
     async def _make_request():
+        headers = _get_headers(request_body)
+        logger.info(
+            "LAVA_DEBUG: url=%s, auth_header_len=%d, sig_header_len=%d, "
+            "wallet_to=%s, secret_key_prefix=%s, body_keys=%s",
+            f"{LAVA_API_URL}/invoice/create",
+            len(headers.get("Authorization", "")),
+            len(headers.get("Signature", "")),
+            LAVA_WALLET_TO[:10] if LAVA_WALLET_TO else "EMPTY",
+            LAVA_SECRET_KEY[:8] + "..." if LAVA_SECRET_KEY else "EMPTY",
+            list(request_body.keys()),
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/create",
-                headers=_get_headers(request_body),
+                headers=headers,
                 json=request_body,
             )
+            logger.info("LAVA_DEBUG_RESPONSE: status=%d, body=%s", response.status_code, response.text[:500])
             if 400 <= response.status_code < 500:
                 logger.error(
                     f"Lava API client error: status={response.status_code}, "
