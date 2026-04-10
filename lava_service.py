@@ -36,8 +36,14 @@ LAVA_API_URL = config.LAVA_API_URL
 
 
 def is_enabled() -> bool:
-    """Check if Lava is configured (wallet_to + secret_key + shop_id)."""
-    return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY and LAVA_SHOP_ID)
+    """Check if Lava is configured.
+
+    TEMPORARILY DISABLED: Lava API requires JWT token which is no longer
+    provided by Lava Business panel. Waiting for Lava support response.
+    Re-enable by removing 'return False' below.
+    """
+    return False
+    # return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY and LAVA_SHOP_ID)
 
 
 # Startup debug: log loaded config (first chars only, no secrets)
