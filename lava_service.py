@@ -46,10 +46,13 @@ def _generate_jwt() -> str:
 
     Lava expects: Authorization: <JWT>
     where JWT = base64url(header).base64url(payload).base64url(signature)
-    Payload fields uid/tid match the example from Lava docs.
+    Lava server extracts $apikey from JWT payload.
     """
     header = {"alg": "HS256", "typ": "JWT"}
-    payload = {"uid": LAVA_SHOP_ID, "tid": LAVA_SHOP_ID}
+    payload = {
+        "apikey": LAVA_SECRET_KEY,
+        "exp": int(time.time()) + 3600,
+    }
 
     h = _b64url_encode(json.dumps(header, separators=(',', ':')).encode())
     p = _b64url_encode(json.dumps(payload, separators=(',', ':')).encode())
