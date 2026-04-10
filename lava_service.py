@@ -27,10 +27,11 @@ from app.utils.retry import retry_async
 logger = logging.getLogger(__name__)
 
 # Configuration — single source: config.py
-LAVA_WALLET_TO = config.LAVA_WALLET_TO
-LAVA_SECRET_KEY = config.LAVA_JWT_TOKEN  # Secret key (goes into JWT payload as apikey)
-LAVA_SIGN_KEY = config.LAVA_SIGN_KEY  # Additional key (for HMAC signing of JWT)
-LAVA_SHOP_ID = config.LAVA_SHOP_ID  # Project/shop ID
+# .strip() protects against accidental whitespace/newlines from copy-paste
+LAVA_WALLET_TO = (config.LAVA_WALLET_TO or "").strip()
+LAVA_SECRET_KEY = (config.LAVA_JWT_TOKEN or "").strip()
+LAVA_SIGN_KEY = (config.LAVA_SIGN_KEY or "").strip()
+LAVA_SHOP_ID = (config.LAVA_SHOP_ID or "").strip()
 LAVA_API_URL = config.LAVA_API_URL
 
 
@@ -41,10 +42,13 @@ def is_enabled() -> bool:
 
 # Startup debug: log loaded config (first chars only, no secrets)
 logger.info(
-    "LAVA_CONFIG: wallet_to=%s secret_key_len=%d shop_id=%s enabled=%s",
-    (LAVA_WALLET_TO[:12] + "...") if LAVA_WALLET_TO else "EMPTY",
+    "LAVA_CONFIG: wallet_to='%s' secret_len=%d secret_last4='%s' "
+    "sign_len=%d shop_id='%s' enabled=%s",
+    LAVA_WALLET_TO or "EMPTY",
     len(LAVA_SECRET_KEY),
-    (LAVA_SHOP_ID[:12] + "...") if LAVA_SHOP_ID else "EMPTY",
+    LAVA_SECRET_KEY[-4:] if LAVA_SECRET_KEY else "NONE",
+    len(LAVA_SIGN_KEY),
+    LAVA_SHOP_ID or "EMPTY",
     is_enabled(),
 )
 
