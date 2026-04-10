@@ -751,6 +751,10 @@ LANG = {
     'payment.crypto_pay_button': '₿ الدفع عبر CryptoBot',
     'payment.crypto_success': '🎉 تم استلام الدفع!\n{tariff_icon} الخطة: {tariff}\n📅 حتى: {date}',
     'payment.crypto_unavailable': 'الدفع بالعملات المشفرة غير متاح مؤقتاً',
+    'payment.lava': '💳 بطاقة (Lava)',
+    'payment.lava_waiting': '💳 الدفع بالبطاقة عبر Lava\n\nالمبلغ: {amount:.2f} ₽\n\n⏳ اتبع الرابط للدفع.\nسيتم تفعيل اشتراكك تلقائياً بعد التأكيد.',
+    'payment.lava_pay_button': '💳 الدفع عبر Lava',
+    'payment.lava_unavailable': 'الدفع بالبطاقة عبر Lava غير متاح مؤقتاً',
     'payment.crypto_waiting': '₿ الدفع بالعملات المشفرة\n\nالمبلغ: {amount:.2f} ₽\n\n⏳ اتبع الرابط للدفع عبر @CryptoBot.\nسيتم تفعيل اشتراكك تلقائياً بعد التأكيد.',
 
     'profile.key_atlas': '🇩🇪 نسخ Atlas DE',
@@ -816,6 +820,7 @@ LANG = {
     'traffic.pay_balance': "💰 الدفع م�� الرصيد ({price} ₽)",
     'traffic.pay_card': "💳 الدفع بالبطاقة ({price} ₽)",
     'traffic.pay_sbp': "🏦 الدفع عبر SBP ({price} ₽)",
+    'traffic.pay_lava': "💳 الدفع عبر Lava ({price} ₽)",
     'traffic.insufficient_balance': "❌ رصيد غير كافٍ",
     'traffic.purchase_success': "✅ <b>تمت إضافة حركة المرور!</b>\n\n📦 +{gb} جيجابايت\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ خطأ في إضافة حركة المرور. تم إرجاع الأموال.",

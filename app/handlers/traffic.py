@@ -182,6 +182,13 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             callback_data=f"bypass_pay_crypto:{gb}",
         )])
 
+    import lava_service
+    if lava_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.lava"),
+            callback_data=f"bypass_pay_lava:{gb}",
+        )])
+
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_bypass_only",
@@ -737,6 +744,14 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
             callback_data=f"traffic_pay_sbp:{gb}",
         )])
 
+    # Lava (card) button
+    import lava_service
+    if lava_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "traffic.pay_lava", price=price),
+            callback_data=f"traffic_pay_lava:{gb}",
+        )])
+
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_traffic",
@@ -1005,6 +1020,89 @@ async def callback_traffic_pay_sbp(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
+@traffic_router.callback_query(F.data.startswith("traffic_pay_lava:"))
+async def callback_traffic_pay_lava(callback: CallbackQuery):
+    """Pay for traffic pack via Lava (card)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
+    if not pack:
+        return
+
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
+        return
+
+    # Apply traffic promo discount
+    traffic_discount = await database.get_user_traffic_discount(telegram_id)
+    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
+    base_price = pack["price"]
+    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
+    price_kopecks = price * 100
+
+    try:
+        # Create pending_purchase with purchase_type='traffic_pack'
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"traffic_{gb}gb",
+            period_days=0,
+            price_kopecks=price_kopecks,
+            purchase_type="traffic_pack",
+        )
+
+        price_rubles = price_kopecks / 100.0
+
+        # Create Lava invoice
+        invoice_data = await lava_service.create_invoice(
+            amount_rubles=price_rubles,
+            purchase_id=purchase_id,
+            comment=f"Atlas Secure — {gb} GB traffic",
+        )
+
+        invoice_id = invoice_data["invoice_id"]
+        payment_url = invoice_data["payment_url"]
+
+        # Save invoice_id
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error("Failed to save Lava invoice_id: purchase_id=%s error=%s", purchase_id, e)
+
+        logger.info(
+            "TRAFFIC_LAVA_INVOICE_SENT user=%s purchase_id=%s gb=%s price=%.2f invoice=%s",
+            telegram_id, purchase_id, gb, price_rubles, invoice_id,
+        )
+
+        text = i18n_get_text(language, "payment.lava_waiting", amount=price_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.lava_pay_button"),
+                url=payment_url,
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="buy_traffic",
+            )],
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("TRAFFIC_LAVA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
 # ── Bypass-only payment handlers ─────────────────────────────────────
 
 def _get_bypass_pack(gb: int):
@@ -1250,4 +1348,65 @@ async def callback_bypass_pay_crypto(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception("BYPASS_CRYPTO_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@traffic_router.callback_query(F.data.startswith("bypass_pay_lava:"))
+async def callback_bypass_pay_lava(callback: CallbackQuery):
+    """Pay for bypass-only pack via Lava (card)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        gb = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        return
+
+    price, pack = await _bypass_price(telegram_id, gb)
+    if not price:
+        return
+
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
+        return
+
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"bypass_{gb}gb",
+            period_days=0,
+            price_kopecks=price * 100,
+            purchase_type="traffic_pack",
+        )
+
+        price_rubles = float(price)
+
+        invoice_data = await lava_service.create_invoice(
+            amount_rubles=price_rubles,
+            purchase_id=purchase_id,
+            comment=f"Atlas Secure — Bypass {gb} GB",
+        )
+
+        invoice_id = invoice_data["invoice_id"]
+        payment_url = invoice_data["payment_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error("Failed to save Lava invoice_id: purchase_id=%s error=%s", purchase_id, e)
+
+        text = i18n_get_text(language, "payment.lava_waiting", amount=price_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception("BYPASS_LAVA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
