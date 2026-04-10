@@ -660,23 +660,21 @@ async def create_user(telegram_id: int, username: Optional[str] = None, language
     """Создать нового пользователя с автоматической генерацией referral_code"""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Генерируем referral_code если его нет
         referral_code = generate_referral_code(telegram_id)
-        
+
         await conn.execute(
-            """INSERT INTO users (telegram_id, username, language, referral_code) 
-               VALUES ($1, $2, $3, $4) 
+            """INSERT INTO users (telegram_id, username, language, referral_code)
+               VALUES ($1, $2, $3, $4)
                ON CONFLICT (telegram_id) DO NOTHING""",
             telegram_id, username, language, referral_code
         )
-        
-        # Если пользователь уже существовал, обновляем referral_code если его нет
-        user = await get_user(telegram_id)
-        if user and not user.get("referral_code"):
-            await conn.execute(
-                "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
-                referral_code, telegram_id
-            )
+
+        # If user already existed (ON CONFLICT DO NOTHING), ensure referral_code is set.
+        # Reuse the same connection — no extra pool.acquire().
+        await conn.execute(
+            "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
+            referral_code, telegram_id
+        )
 
 
 async def get_user_referral_code(telegram_id: int) -> Optional[str]:
