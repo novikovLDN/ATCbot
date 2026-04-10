@@ -51,6 +51,7 @@ def _generate_jwt() -> str:
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "apikey": LAVA_SECRET_KEY,
+        "tid": LAVA_SHOP_ID,
         "exp": int(time.time()) + 3600,
     }
 
