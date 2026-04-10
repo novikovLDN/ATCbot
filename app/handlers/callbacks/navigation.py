@@ -607,7 +607,7 @@ async def callback_setup_step1(callback: CallbackQuery):
         )])
         buttons.append([InlineKeyboardButton(
             text="📲 Скачать V2RayTun",
-            url=_DOWNLOAD_LINKS.get("windows", {}).get("v2rayn", "https://github.com/2dust/v2rayN/releases/latest"),
+            url="https://github.com/mdf45/v2raytun/releases/tag/v3.7.10",
         )])
 
     buttons.append([InlineKeyboardButton(
