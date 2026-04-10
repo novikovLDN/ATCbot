@@ -755,7 +755,6 @@ LANG = {
     'payment.lava_waiting': '💳 الدفع بالبطاقة عبر Lava\n\nالمبلغ: {amount:.2f} ₽\n\n⏳ اتبع الرابط للدفع.\nسيتم تفعيل اشتراكك تلقائياً بعد التأكيد.',
     'payment.lava_pay_button': '💳 الدفع عبر Lava',
     'payment.lava_unavailable': 'الدفع بالبطاقة عبر Lava غير متاح مؤقتاً',
-    'payment.card_maintenance': "🔧 الدفع بالبطاقة قيد الصيانة مؤقتاً.\n\nيرجى استخدام الدفع عبر SBP.",
     'payment.crypto_waiting': '₿ الدفع بالعملات المشفرة\n\nالمبلغ: {amount:.2f} ₽\n\n⏳ اتبع الرابط للدفع عبر @CryptoBot.\nسيتم تفعيل اشتراكك تلقائياً بعد التأكيد.',
 
     'profile.key_atlas': '🇩🇪 نسخ Atlas DE',

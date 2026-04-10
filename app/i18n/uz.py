@@ -747,7 +747,6 @@ LANG = {
     'payment.lava_waiting': "💳 Lava orqali karta to'lovi\n\nSumma: {amount:.2f} ₽\n\n⏳ To'lash uchun havolaga o'ting.\nTasdiqlashdan so'ng obuna avtomatik faollashtiriladi.",
     'payment.lava_pay_button': "💳 Lava orqali to'lash",
     'payment.lava_unavailable': "Lava orqali karta to'lovi vaqtincha mavjud emas",
-    'payment.card_maintenance': "🔧 Karta bilan to'lov vaqtincha texnik xizmatda.\n\nIltimos, SBP orqali to'lang.",
     'payment.crypto_waiting': "₿ Kriptovalyuta to'lovi\n\nSumma: {amount:.2f} ₽\n\n⏳ @CryptoBot orqali to'lash uchun havolaga o'ting.\nTasdiqlashdan so'ng obuna avtomatik faollashtiriladi.",
     'profile.key_atlas': '🇩🇪 Atlas DE nusxalash',
     'profile.key_whitelist': '⚪️ White List nusxalash',

@@ -608,7 +608,6 @@ LANG = {
     'payment.lava_waiting': "💳 Оплата картой через Lava\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты.\nПосле подтверждения подписка будет активирована автоматически.",
     'payment.lava_pay_button': "💳 Оплатить через Lava",
     'payment.lava_unavailable': "Оплата через Lava временно недоступна",
-    'payment.card_maintenance': "🔧 Оплата картой временно на тех. обслуживании.\n\nВоспользуйтесь оплатой по СБП.",
     'payment.crypto_success': "🎉 Оплата получена!\n{tariff_icon} Тариф: {tariff}\n📅 До: {date}",
     'payment.select_method': "Выберите способ оплаты:\n\nСумма: {price:.2f} ₽",
     'payment.success': "✅ Платёж успешно обработан!",

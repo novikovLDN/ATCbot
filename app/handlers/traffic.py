@@ -865,11 +865,6 @@ async def callback_traffic_pay_balance(callback: CallbackQuery):
 @traffic_router.callback_query(F.data.startswith("traffic_pay_card:"))
 async def callback_traffic_pay_card(callback: CallbackQuery):
     """Pay for traffic pack via card (Telegram Payments / YooKassa)."""
-    # MAINTENANCE STUB: card payments temporarily disabled
-    language = await resolve_user_language(callback.from_user.id)
-    await callback.answer(i18n_get_text(language, "payment.card_maintenance"), show_alert=True)
-    return
-
     if not await ensure_db_ready_callback(callback):
         return
 
@@ -1130,11 +1125,6 @@ async def _bypass_price(telegram_id: int, gb: int):
 @traffic_router.callback_query(F.data.startswith("bypass_pay_card:"))
 async def callback_bypass_pay_card(callback: CallbackQuery):
     """Pay for bypass-only pack via card (Telegram Payments)."""
-    # MAINTENANCE STUB: card payments (YooKassa) temporarily disabled
-    language = await resolve_user_language(callback.from_user.id)
-    await callback.answer(i18n_get_text(language, "payment.card_maintenance"), show_alert=True)
-    return
-
     if not await ensure_db_ready_callback(callback):
         return
 

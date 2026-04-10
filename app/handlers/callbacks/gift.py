@@ -322,11 +322,6 @@ async def callback_gift_pay_card(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка картой через Telegram Payments."""
     telegram_id = callback.from_user.id
 
-    # MAINTENANCE STUB: card payments temporarily disabled
-    language = await resolve_user_language(telegram_id)
-    await callback.answer(i18n_get_text(language, "payment.card_maintenance"), show_alert=True)
-    return
-
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
