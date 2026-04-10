@@ -767,6 +767,11 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     """
     telegram_id = callback.from_user.id
 
+    # MAINTENANCE STUB: card payments temporarily disabled
+    language = await resolve_user_language(telegram_id)
+    await callback.answer(i18n_get_text(language, "payment.card_maintenance"), show_alert=True)
+    return
+
     # Rate limiting
     is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
@@ -1580,6 +1585,11 @@ async def callback_topup_lava(callback: CallbackQuery):
 @payments_router.callback_query(F.data.startswith("topup_card:"))
 async def callback_topup_card(callback: CallbackQuery):
     """Оплата пополнения баланса картой"""
+    # MAINTENANCE STUB: card payments temporarily disabled
+    language = await resolve_user_language(callback.from_user.id)
+    await callback.answer(i18n_get_text(language, "payment.card_maintenance"), show_alert=True)
+    return
+
     if not await ensure_db_ready_callback(callback):
         return
     telegram_id = callback.from_user.id

@@ -525,6 +525,7 @@ LANG = {
     'payment.lava_waiting': "💳 Card Payment via Lava\n\nAmount: {amount:.2f} ₽\n\n⏳ Follow the link to pay.\nYour subscription will be activated automatically after confirmation.",
     'payment.lava_pay_button': "💳 Pay via Lava",
     'payment.lava_unavailable': "Card payment via Lava is temporarily unavailable",
+    'payment.card_maintenance': "🔧 Card payment is temporarily under maintenance.\n\nPlease use SBP payment instead.",
     'payment.crypto_success': "🎉 Payment received!\n{tariff_icon} Plan: {tariff}\n📅 Until: {date}",
     'payment.select_method': "Choose payment method:\n\nAmount: {price:.2f} ₽",
     'payment.success': "✅ Payment processed successfully!",

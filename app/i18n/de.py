@@ -747,6 +747,7 @@ LANG = {
     'payment.lava_waiting': '💳 Kartenzahlung über Lava\n\nBetrag: {amount:.2f} ₽\n\n⏳ Folgen Sie dem Link zur Zahlung.\nIhr Abo wird nach Bestätigung automatisch aktiviert.',
     'payment.lava_pay_button': '💳 Per Lava bezahlen',
     'payment.lava_unavailable': 'Kartenzahlung über Lava vorübergehend nicht verfügbar',
+    'payment.card_maintenance': "🔧 Kartenzahlung ist vorübergehend in Wartung.\n\nBitte verwenden Sie SBP-Zahlung.",
     'payment.crypto_waiting': '₿ Kryptozahlung\n\nBetrag: {amount:.2f} ₽\n\n⏳ Folgen Sie dem Link zur Zahlung über @CryptoBot.\nIhr Abo wird nach Bestätigung automatisch aktiviert.',
     'profile.key_atlas': '🇩🇪 Atlas DE kopieren',
     'profile.key_whitelist': '⚪️ White List kopieren',

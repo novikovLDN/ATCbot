@@ -747,6 +747,7 @@ LANG = {
     'payment.lava_waiting': '💳 Пардохт бо корт тавассути Lava\n\nМаблағ: {amount:.2f} ₽\n\n⏳ Барои пардохт ба истинод гузаред.\nПас аз тасдиқ обуна худкор фаол мешавад.',
     'payment.lava_pay_button': '💳 Тавассути Lava пардохт кунед',
     'payment.lava_unavailable': 'Пардохт бо корт тавассути Lava муваққатан дастрас нест',
+    'payment.card_maintenance': "🔧 Пардохт бо корт муваққатан дар хидматрасонии техникӣ.\n\nЛутфан аз СБП истифода баред.",
     'payment.crypto_waiting': '₿ Пардохт бо криптовалюта\n\nМаблағ: {amount:.2f} ₽\n\n⏳ Барои пардохт тавассути @CryptoBot ба истинод гузаред.\nПас аз тасдиқ обуна худкор фаол мешавад.',
     'profile.key_atlas': '🇩🇪 Atlas DE нусхабардорӣ',
     'profile.key_whitelist': '⚪️ White List нусхабардорӣ',

@@ -747,6 +747,7 @@ LANG = {
     'payment.lava_waiting': '💳 Lava арқылы карта төлемі\n\nСома: {amount:.2f} ₽\n\n⏳ Төлеу үшін сілтемеге өтіңіз.\nРастаудан кейін жазылым автоматты белсендіріледі.',
     'payment.lava_pay_button': '💳 Lava арқылы төлеу',
     'payment.lava_unavailable': 'Lava арқылы карта төлемі уақытша қол жетімсіз',
+    'payment.card_maintenance': "🔧 Картамен төлеу уақытша техникалық қызмет көрсетуде.\n\nСБП арқылы төлеңіз.",
     'payment.crypto_waiting': '₿ Криптовалюта төлемі\n\nСома: {amount:.2f} ₽\n\n⏳ @CryptoBot арқылы төлеу үшін сілтемеге өтіңіз.\nРастаудан кейін жазылым автоматты белсендіріледі.',
     'profile.key_atlas': '🇩🇪 Atlas DE көшіру',
     'profile.key_whitelist': '⚪️ White List көшіру',
