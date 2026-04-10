@@ -538,7 +538,19 @@ async def callback_connect_instruction(callback: CallbackQuery):
             callback_data="menu_main",
         )],
     ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+    # If coming back from a photo screen, delete and send new text message
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML",
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 # ── Step 1: Install App ──────────────────────────────────────────
@@ -793,7 +805,8 @@ async def callback_setup_device(callback: CallbackQuery):
     except Exception:
         pass
 
-    language = await resolve_user_language(callback.from_user.id)
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
     text = i18n_get_text(language, "setup.select_device")
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -811,7 +824,17 @@ async def callback_setup_device(callback: CallbackQuery):
         )],
     ])
 
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML",
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("setup_platform:"))
