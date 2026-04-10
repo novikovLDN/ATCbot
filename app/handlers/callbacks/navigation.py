@@ -705,12 +705,9 @@ async def callback_setup_step2(callback: CallbackQuery):
         text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
 
     # === Bottom buttons ===
-    from aiogram.types import WebAppInfo
-    from urllib.parse import urlparse as _urlparse
-    _done_base = config.PUBLIC_BASE_URL or f"{_urlparse(config.WEBHOOK_URL).scheme}://{_urlparse(config.WEBHOOK_URL).netloc}"
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
-        web_app=WebAppInfo(url=f"{_done_base}/webapp/done"),
+        callback_data="setup_done",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
@@ -1061,32 +1058,6 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
     keyboard = await get_main_menu_keyboard(language, telegram_id)
 
     await callback.bot.send_message(
-        chat_id=telegram_id,
-        text=text,
-        reply_markup=keyboard,
-        parse_mode="HTML",
-    )
-
-
-@router.message(F.web_app_data)
-async def on_web_app_closed(message):
-    """WebApp button closed — show main menu (same as setup_done)."""
-    telegram_id = message.from_user.id
-
-    # 🎉 celebration
-    msg = await message.bot.send_message(chat_id=telegram_id, text="🎉")
-    await asyncio.sleep(2)
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-
-    language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "main.welcome")
-    text = await format_text_with_incident(text, language)
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
-
-    await message.bot.send_message(
         chat_id=telegram_id,
         text=text,
         reply_markup=keyboard,
