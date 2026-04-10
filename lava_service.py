@@ -48,9 +48,13 @@ logger.info(
 )
 
 
-def _b64url_encode(data: bytes) -> str:
-    """Base64url encode without padding (JWT RFC 7519 standard)."""
-    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+def _b64_encode(data: bytes) -> str:
+    """Standard base64 encode WITH padding.
+
+    Lava's PHP backend uses raw base64_decode() (not a JWT library),
+    which requires standard base64 (+/ alphabet with = padding).
+    """
+    return base64.b64encode(data).decode('ascii')
 
 
 def _generate_jwt() -> str:
@@ -68,19 +72,13 @@ def _generate_jwt() -> str:
         "tid": LAVA_SHOP_ID,
     }
 
-    h = _b64url_encode(json.dumps(header, separators=(',', ':')).encode())
-    p = _b64url_encode(json.dumps(payload, separators=(',', ':')).encode())
+    h = _b64_encode(json.dumps(header, separators=(',', ':')).encode())
+    p = _b64_encode(json.dumps(payload, separators=(',', ':')).encode())
     signing_input = f"{h}.{p}".encode('utf-8')
 
-    # Secret key is a hex string — try raw bytes for HMAC signing.
-    # If hex decode fails, fall back to UTF-8 string.
-    try:
-        key_bytes = bytes.fromhex(LAVA_SECRET_KEY)
-    except ValueError:
-        key_bytes = LAVA_SECRET_KEY.encode('utf-8')
-
-    sig = hmac.new(key_bytes, signing_input, hashlib.sha256).digest()
-    s = _b64url_encode(sig)
+    # PHP hash_hmac uses the key as raw string (not hex-decoded)
+    sig = hmac.new(LAVA_SECRET_KEY.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    s = _b64_encode(sig)
     return f"{h}.{p}.{s}"
 
 
@@ -113,22 +111,22 @@ async def create_invoice(
     if config.PUBLIC_BASE_URL:
         hook_url = f"{config.PUBLIC_BASE_URL.rstrip('/')}/webhooks/lava"
 
-    form_data = {
+    request_body = {
         "wallet_to": LAVA_WALLET_TO,
-        "sum": str(round(amount_rubles, 2)),
+        "sum": round(amount_rubles, 2),
         "order_id": purchase_id,
-        "expire": str(expire),
+        "expire": expire,
         "comment": (comment[:500] if comment else "Atlas Secure VPN"),
     }
     if hook_url:
-        form_data["hook_url"] = hook_url
+        request_body["hook_url"] = hook_url
 
     async def _make_request():
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/create",
                 headers=_get_auth_headers(),
-                data=form_data,  # form-encoded, not JSON
+                json=request_body,
             )
             if response.status_code == 200:
                 resp_data = response.json()
@@ -194,7 +192,7 @@ async def check_invoice_status(invoice_id: str) -> Optional[Dict[str, Any]]:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/status",
                 headers=_get_auth_headers(),
-                data={"id": invoice_id},  # form-encoded
+                json={"id": invoice_id},
             )
             if response.status_code != 200:
                 logger.error("Lava status check failed: status=%d", response.status_code)
