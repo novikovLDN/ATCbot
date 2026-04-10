@@ -61,10 +61,11 @@ async def cmd_start(message: Message, state: FSMContext):
         return
     # Обработчик команды /start
     telegram_id = message.from_user.id
-    # Safe username resolution: username or first_name or localized fallback
+    # Single DB fetch — extract language directly (avoid duplicate get_user call)
     user = await database.get_user(telegram_id)
     is_new_user = user is None
-    start_language = await resolve_user_language(telegram_id)
+    start_language = (user.get("language") or "ru") if user else "ru"
+    # Safe username resolution: username or first_name or localized fallback
     username = safe_resolve_username(message.from_user, start_language, telegram_id)
     # Ограничиваем длину для БД
     if username and len(username) > 64:
@@ -74,17 +75,18 @@ async def cmd_start(message: Message, state: FSMContext):
     if not user:
         await database.create_user(telegram_id, username, start_language)
     else:
-        # Обновляем username если изменился (safe: username can be None)
-        if username is not None:
-            await database.update_username(telegram_id, username)
-        # Убеждаемся, что у пользователя есть referral_code
-        if not user.get("referral_code"):
-            # Генерируем код для существующего пользователя
-            referral_code = database.generate_referral_code(telegram_id)
-            pool = await database.get_pool()
-            async with pool.acquire() as conn:
+        # Update username + ensure referral_code in a single connection
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            if username is not None:
                 await conn.execute(
-                    "UPDATE users SET referral_code = $1 WHERE telegram_id = $2",
+                    "UPDATE users SET username = $1 WHERE telegram_id = $2",
+                    username, telegram_id
+                )
+            if not user.get("referral_code"):
+                referral_code = database.generate_referral_code(telegram_id)
+                await conn.execute(
+                    "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
                     referral_code, telegram_id
                 )
     

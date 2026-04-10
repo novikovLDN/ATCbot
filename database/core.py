@@ -232,12 +232,23 @@ DATABASE_URL = config.env("DATABASE_URL")
 # DB POOL CONFIG — Production-safe, ENV-overridable, single source of truth
 # ====================================================================================
 def _get_pool_config() -> dict:
-    """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation."""
+    """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation.
+
+    Sizing rationale (max_size=50):
+      - Telegram webhook handler concurrency: up to 30 simultaneous updates
+      - Background workers (reminders, trials, activation, xray_sync): ~6
+      - FastAPI payment webhooks: up to 10
+      - Headroom for burst traffic: ~4
+      Total: ~50 connections.  Railway Postgres supports up to 97 connections;
+      keeping max_size=50 leaves room for migrations, pg_dump, and manual queries.
+
+    acquire timeout raised to 15s so burst requests queue instead of failing.
+    """
     return {
-        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "2")),
-        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "25")),  # Increased from 15 to handle peak load (6 workers + 20 webhook handlers)
+        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "5")),
+        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "50")),
         "max_inactive_connection_lifetime": 300,
-        "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "10")),
+        "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "15")),
         "command_timeout": int(os.getenv("DB_POOL_COMMAND_TIMEOUT", "30")),
     }
 
