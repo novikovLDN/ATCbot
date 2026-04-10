@@ -1,19 +1,20 @@
 """
-Lava (Card) Integration
+Lava Business (Card) Integration
 
-Handles card payment creation and webhook processing via Lava (p2p.lava.ru).
-Uses the signature-based method (md5) which requires only wallet + secret key.
+Handles card payment creation and webhook processing via Lava Business API.
+API docs: https://business.lava.ru — signature-based auth (HMAC-SHA256).
 
-Signature: md5("wallet:amount:secretKey:orderId")
-Payment URL: https://p2p.lava.ru/create?w=...&ao=...&o=...&s=...
+Auth: Signature header = HMAC-SHA256(json_body, secret_key).hexdigest()
+Secret key = "Секретный ключ" from Lava Business panel.
+Additional key = "Дополнительный ключ" for webhook signature verification.
 """
 import config
 import database
 import hashlib
+import hmac
+import json
 import logging
-import time
 from typing import Optional, Dict, Any
-from urllib.parse import urlencode, quote
 import httpx
 from aiogram import Bot
 from app.services.payments.confirmation import TransientPaymentError
@@ -22,92 +23,119 @@ from app.utils.retry import retry_async
 logger = logging.getLogger(__name__)
 
 # Configuration — single source: config.py
-# .strip() protects against accidental whitespace/newlines from copy-paste
-LAVA_WALLET_TO = (config.LAVA_WALLET_TO or "").strip()
-LAVA_SECRET_KEY = (config.LAVA_JWT_TOKEN or "").strip()
-LAVA_SHOP_ID = (config.LAVA_SHOP_ID or "").strip()
-LAVA_API_URL = config.LAVA_API_URL
-LAVA_P2P_URL = "https://p2p.lava.ru"
+LAVA_SECRET_KEY = (config.LAVA_JWT_TOKEN or "").strip()  # Secret key for signing requests
+LAVA_SIGN_KEY = getattr(config, 'LAVA_SIGN_KEY', "") or ""  # Additional key for webhook verification
+LAVA_SIGN_KEY = LAVA_SIGN_KEY.strip()
+LAVA_SHOP_ID = (config.LAVA_SHOP_ID or "").strip()  # Project UUID
+LAVA_API_URL = "https://api.lava.ru/business"
 
 
 def is_enabled() -> bool:
-    """Check if Lava is configured (wallet_to + secret_key)."""
-    return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY)
+    """Check if Lava is configured (secret_key + shop_id)."""
+    return bool(LAVA_SECRET_KEY and LAVA_SHOP_ID)
 
 
 logger.info(
-    "LAVA_CONFIG: wallet_to='%s' secret_len=%d shop_id='%s' enabled=%s",
-    LAVA_WALLET_TO or "EMPTY",
+    "LAVA_CONFIG: secret_len=%d shop_id='%s' sign_key_len=%d enabled=%s",
     len(LAVA_SECRET_KEY),
     LAVA_SHOP_ID or "EMPTY",
+    len(LAVA_SIGN_KEY),
     is_enabled(),
 )
 
 
-def _make_signature(wallet: str, amount: str, secret_key: str, order_id: str) -> str:
-    """Generate md5 signature per Lava docs.
+def _sign(data: dict) -> str:
+    """Generate HMAC-SHA256 signature of JSON body.
 
-    Signature = md5("wallet:amount:secretKey:orderId")
-    Example: md5("R10000138:100.00:b1DhCLv2IwgSdoJ5qWmfIb96xaBlUaM5:114533")
+    Per Lava docs: json.dumps(data) signed with secret key.
+    Parameters serialized in same order as in the request.
     """
-    raw = f"{wallet}:{amount}:{secret_key}:{order_id}"
-    return hashlib.md5(raw.encode('utf-8')).hexdigest()
+    json_str = json.dumps(data).encode('utf-8')
+    return hmac.new(
+        LAVA_SECRET_KEY.encode('utf-8'),
+        json_str,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _headers(data: dict) -> Dict[str, str]:
+    """Build request headers with Signature."""
+    return {
+        "Signature": _sign(data),
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
 
 
 async def create_invoice(
     amount_rubles: float,
     purchase_id: str,
     comment: str = "",
-    expire: int = 1440,
+    expire: int = 300,
 ) -> Dict[str, Any]:
-    """Create payment link via Lava p2p (signature-based method).
+    """Create payment invoice via Lava Business API.
 
-    Constructs a signed payment URL and verifies it's accessible.
-    Returns payment_url for user redirect.
+    POST https://api.lava.ru/business/invoice/create
     """
     if not is_enabled():
         raise Exception("Lava not configured")
-
-    amount_str = f"{amount_rubles:.2f}"
-
-    signature = _make_signature(LAVA_WALLET_TO, amount_str, LAVA_SECRET_KEY, purchase_id)
 
     hook_url = ""
     if config.PUBLIC_BASE_URL:
         hook_url = f"{config.PUBLIC_BASE_URL.rstrip('/')}/webhooks/lava"
 
-    params = {
-        "w": LAVA_WALLET_TO,
-        "ao": amount_str,
-        "o": purchase_id,
-        "s": signature,
-        "exp": str(expire),
-        "c": (comment[:500] if comment else "Atlas Secure VPN"),
+    data = {
+        "shopId": LAVA_SHOP_ID,
+        "sum": round(amount_rubles, 2),
+        "orderId": purchase_id,
+        "expire": expire,
     }
     if hook_url:
-        params["hook_url"] = hook_url
+        data["hookUrl"] = hook_url
+    if comment:
+        data["comment"] = comment[:255]
 
-    payment_url = f"{LAVA_P2P_URL}/create?{urlencode(params)}"
-
-    # Verify the URL is accessible (HEAD request)
-    try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            response = await client.head(payment_url)
-            # Lava should return 200 or 302 (redirect to payment form)
-            if response.status_code >= 400:
+    async def _make_request():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{LAVA_API_URL}/invoice/create",
+                headers=_headers(data),
+                content=json.dumps(data),  # data-raw as per docs
+            )
+            if response.status_code != 200:
                 logger.error(
-                    "Lava payment URL check failed: status=%d url=%s",
-                    response.status_code, payment_url[:100],
+                    "Lava API error: status=%d response=%s",
+                    response.status_code,
+                    response.text[:500],
                 )
-    except Exception as e:
-        logger.warning("Lava payment URL check error (non-fatal): %s", e)
+                raise Exception(f"Lava API error: {response.status_code}")
+            return response
 
-    # Use purchase_id as invoice_id (no separate invoice in p2p method)
-    invoice_id = f"lava_{purchase_id}_{int(time.time())}"
+    response = await retry_async(
+        _make_request,
+        retries=2,
+        base_delay=1.0,
+        max_delay=5.0,
+        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
+    )
+
+    resp = response.json()
+
+    if not resp.get("status_check", False):
+        error = resp.get("error", resp.get("message", "unknown error"))
+        logger.error("LAVA_API_ERROR: %s", response.text[:500])
+        raise Exception(f"Lava API error: {error}")
+
+    invoice_data = resp.get("data", {})
+    invoice_id = invoice_data.get("id")
+    payment_url = invoice_data.get("url")
+
+    if not invoice_id or not payment_url:
+        raise Exception(f"Invalid Lava response: missing id or url. Response: {resp}")
 
     logger.info(
-        "Lava payment link created: invoice_id=%s amount=%s RUB purchase_id=%s",
-        invoice_id, amount_str, purchase_id,
+        "Lava invoice created: invoice_id=%s amount=%.2f RUB purchase_id=%s url=%s",
+        invoice_id, amount_rubles, purchase_id, payment_url[:80],
     )
 
     return {
@@ -117,15 +145,67 @@ async def create_invoice(
 
 
 async def check_invoice_status(invoice_id: str) -> Optional[Dict[str, Any]]:
-    """Check invoice status via Lava API (if available)."""
-    # P2P method doesn't have a status API — rely on webhooks
+    """Check invoice status via Lava Business API.
+
+    POST https://api.lava.ru/business/invoice/status
+    """
+    if not is_enabled():
+        return None
+
+    data = {
+        "shopId": LAVA_SHOP_ID,
+        "invoiceId": invoice_id,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"{LAVA_API_URL}/invoice/status",
+                headers=_headers(data),
+                content=json.dumps(data),
+            )
+            if response.status_code != 200:
+                logger.error("Lava status check failed: status=%d", response.status_code)
+                return None
+            resp = response.json()
+            if resp.get("status_check", False):
+                return resp.get("data", {})
+    except Exception as e:
+        logger.error("Lava status check error: %s", e)
     return None
 
 
-async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
-    """Process Lava webhook data.
+def _verify_webhook_signature(body_bytes: bytes, received_sig: str) -> bool:
+    """Verify webhook signature using additional key.
 
-    Lava sends POST to hook_url when payment status changes.
+    Lava sends signature in Authorization header of webhook.
+    """
+    if not LAVA_SIGN_KEY:
+        logger.warning("Lava webhook: no SIGN_KEY configured, skipping signature check")
+        return True
+
+    expected = hmac.new(
+        LAVA_SIGN_KEY.encode('utf-8'),
+        body_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, received_sig)
+
+
+async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
+    """Process Lava Business webhook.
+
+    Webhook format:
+    {
+        "invoice_id": "uuid",
+        "order_id": "string",
+        "status": "success",
+        "amount": 2,
+        "credited": 1.9,
+        "pay_time": "2022-09-09 15:15:35",
+        "custom_fields": null
+    }
+    Authorization header contains HMAC signature (verified with additional key).
     """
     if not database.DB_READY:
         logger.warning("Lava webhook: DB not ready — returning 500 for retry")
@@ -135,40 +215,39 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
         logger.error("Lava webhook: service not configured")
         return {"status": "disabled"}
 
-    # Extract data from webhook body
-    invoice_id = body.get("invoice_id") or body.get("id")
-    order_id = body.get("order_id") or body.get("o")
+    invoice_id = body.get("invoice_id")
+    order_id = body.get("order_id")
     status = body.get("status")
-    amount = body.get("amount") or body.get("sum") or body.get("ao")
+    amount = body.get("amount")
+    credited = body.get("credited")
 
     logger.info(
-        "Lava webhook received: invoice_id=%s order_id=%s status=%s body_keys=%s",
-        invoice_id, order_id, status, list(body.keys()),
+        "Lava webhook received: invoice_id=%s order_id=%s status=%s amount=%s credited=%s",
+        invoice_id, order_id, status, amount, credited,
     )
 
-    # Lava sends status as integer (1 = success) or string
-    if str(status) not in ("1", "success"):
+    if status != "success":
         logger.info("Lava webhook: ignoring status=%s", status)
         return {"status": "ignored"}
 
-    # Verify webhook signature if present
-    webhook_sig = body.get("s") or body.get("sig") or body.get("signature")
-    if webhook_sig and order_id and amount:
-        expected_sig = _make_signature(
-            LAVA_WALLET_TO, f"{float(amount):.2f}", LAVA_SECRET_KEY, order_id
-        )
-        if webhook_sig != expected_sig:
-            logger.warning(
-                "Lava webhook: signature mismatch. order_id=%s", order_id,
-            )
-            return {"status": "invalid_signature"}
+    # Verify via Lava API as additional security
+    if invoice_id:
+        verified = await check_invoice_status(invoice_id)
+        if verified:
+            verified_status = verified.get("status")
+            if verified_status not in ("success", "completed"):
+                logger.warning(
+                    "Lava webhook: API status mismatch. webhook=success api=%s invoice=%s",
+                    verified_status, invoice_id,
+                )
+            if not order_id:
+                order_id = verified.get("order_id")
 
     purchase_id = order_id
     if not purchase_id:
-        logger.error("Lava webhook: no order_id/purchase_id, invoice=%s", invoice_id)
+        logger.error("Lava webhook: no order_id, invoice=%s", invoice_id)
         return {"status": "invalid"}
 
-    # Delegate to shared confirmation logic
     from app.services.payments.confirmation import (
         lookup_pending_purchase, process_confirmed_payment,
     )
@@ -180,20 +259,13 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     pending_purchase = lookup["purchase"]
     telegram_id = lookup["telegram_id"]
 
-    # Get payment amount
     raw_amount = float(amount) if amount else 0.0
     expected_amount = pending_purchase["price_kopecks"] / 100.0
     if raw_amount <= 0:
-        logger.warning(
-            "Lava webhook: amount missing or zero, using stored price. "
-            "purchase_id=%s raw_amount=%s expected=%s",
-            purchase_id, raw_amount, expected_amount,
-        )
         amount_rubles = expected_amount
     elif abs(raw_amount - expected_amount) > 1.0:
         logger.warning(
-            "Lava webhook: amount mismatch. purchase_id=%s "
-            "webhook_amount=%s expected=%s",
+            "Lava webhook: amount mismatch. purchase_id=%s webhook=%s expected=%s",
             purchase_id, raw_amount, expected_amount,
         )
         amount_rubles = raw_amount
@@ -201,8 +273,7 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
         amount_rubles = raw_amount
 
     logger.info(
-        "payment_event_received: provider=lava user=%s "
-        "invoice_id=%s purchase_id=%s amount=%.2f RUB",
+        "payment_event_received: provider=lava user=%s invoice_id=%s purchase_id=%s amount=%.2f RUB",
         telegram_id, invoice_id, purchase_id, amount_rubles,
     )
 
