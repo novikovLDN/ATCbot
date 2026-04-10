@@ -6,6 +6,9 @@ Configuration: wallet_to/jwt_token/API URL resolved via config.py only.
 """
 import config
 import database
+import hashlib
+import hmac
+import json
 import logging
 from typing import Optional, Dict, Any
 import httpx
@@ -17,21 +20,31 @@ logger = logging.getLogger(__name__)
 
 # Configuration — single source: config.py
 LAVA_WALLET_TO = config.LAVA_WALLET_TO
-LAVA_JWT_TOKEN = config.LAVA_JWT_TOKEN
+LAVA_SECRET_KEY = config.LAVA_JWT_TOKEN  # Secret key for HMAC-SHA256 signing
 LAVA_API_URL = config.LAVA_API_URL
 
 
 def is_enabled() -> bool:
-    """Check if Lava is configured (wallet_to + jwt_token)."""
-    return bool(LAVA_WALLET_TO and LAVA_JWT_TOKEN)
+    """Check if Lava is configured (wallet_to + secret_key)."""
+    return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY)
 
 
-def _get_headers() -> Dict[str, str]:
-    """Get authentication headers for Lava API."""
+def _sign_request(body: dict) -> str:
+    """Generate HMAC-SHA256 signature of the JSON request body."""
+    body_json = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    return hmac.new(
+        LAVA_SECRET_KEY.encode('utf-8'),
+        body_json.encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _get_headers(body: dict) -> Dict[str, str]:
+    """Get authentication headers for Lava API with HMAC-SHA256 signature."""
     return {
-        "Authorization": LAVA_JWT_TOKEN,
-        "Content-Type": "application/json",
+        "Signature": _sign_request(body),
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
 
 
@@ -77,7 +90,7 @@ async def create_invoice(
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/create",
-                headers=_get_headers(),
+                headers=_get_headers(request_body),
                 json=request_body,
             )
             if 400 <= response.status_code < 500:
@@ -130,11 +143,12 @@ async def check_invoice_status(invoice_id: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
+        status_body = {"id": invoice_id}
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/status",
-                headers=_get_headers(),
-                json={"id": invoice_id},
+                headers=_get_headers(status_body),
+                json=status_body,
             )
             if response.status_code != 200:
                 logger.error(f"Lava status check failed: status={response.status_code}")
