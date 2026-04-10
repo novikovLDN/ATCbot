@@ -659,25 +659,64 @@ async def callback_setup_step2(callback: CallbackQuery):
 
     text = i18n_get_text(language, "setup.key_install_title")
 
+    buttons = []
+
+    # === Auto-setup deeplinks ===
+    if sub_url:
+        from urllib.parse import quote, urlparse
+        if config.PUBLIC_BASE_URL:
+            base_url = config.PUBLIC_BASE_URL
+        else:
+            parsed = urlparse(config.WEBHOOK_URL)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        text += f"\n\n{i18n_get_text(language, 'setup.auto_install_header')}"
+
+        # Happ auto-setup: VPN + Bypass
+        happ_row = [InlineKeyboardButton(
+            text="⚡️ Happ (VPN)",
+            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+        )]
+        if bypass_url:
+            happ_row.append(InlineKeyboardButton(
+                text="⚡️ Happ (Обход)",
+                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+            ))
+        buttons.append(happ_row)
+
+        # V2RayTun auto-setup: VPN + Bypass
+        v2_row = [InlineKeyboardButton(
+            text="⚡️ V2RayTun (VPN)",
+            url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
+        )]
+        if bypass_url:
+            v2_row.append(InlineKeyboardButton(
+                text="⚡️ V2RayTun (Обход)",
+                url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
+            ))
+        buttons.append(v2_row)
+
+    # === Manual keys ===
+    text += i18n_get_text(language, "setup.manual_install_header")
+
     if sub_url:
         text += f"\n\n{i18n_get_text(language, 'setup.key_vpn')}\n<blockquote><code>{sub_url}</code></blockquote>"
     if bypass_url:
         text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
 
-    buttons = [
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.btn_done"),
-            callback_data="setup_done",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.btn_need_help"),
-            url="https://t.me/Atlas_SupportSecurity",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_step1:{platform}",
-        )],
-    ]
+    # === Bottom buttons ===
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_done"),
+        callback_data="setup_done",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_need_help"),
+        url="https://t.me/Atlas_SupportSecurity",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"setup_step1:{platform}",
+    )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     # Send photo + text
