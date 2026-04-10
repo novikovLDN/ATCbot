@@ -279,7 +279,7 @@ async def cmd_notify_no_subscription(message: Message, state: FSMContext):
         return
     language = await resolve_user_language(message.from_user.id)
     await state.set_state(AdminBroadcastNoSubscription.waiting_for_text)
-    await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"))
+    await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"), parse_mode="HTML")
 
 
 @admin_broadcast_router.message(AdminBroadcastNoSubscription.waiting_for_text)
@@ -294,7 +294,7 @@ async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
         return
     if not message.text or not message.text.strip():
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"))
+        await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"), parse_mode="HTML")
         return
     text = message.text.strip()
     try:
@@ -454,12 +454,14 @@ async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContex
     if test_type == "ab":
         await state.set_state(BroadcastCreate.waiting_for_message_a)
         await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._enter_variant_a")
+            i18n_get_text(language, "broadcast._enter_variant_a"),
+            parse_mode="HTML",
         )
     else:
         await state.set_state(BroadcastCreate.waiting_for_message)
         await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._enter_message")
+            i18n_get_text(language, "broadcast._enter_message"),
+            parse_mode="HTML",
         )
 
 
@@ -473,7 +475,8 @@ async def process_broadcast_message_a(message: Message, state: FSMContext):
     await state.update_data(message_a=message.text)
     await state.set_state(BroadcastCreate.waiting_for_message_b)
     await message.answer(
-        i18n_get_text(language, "broadcast._enter_variant_b")
+        i18n_get_text(language, "broadcast._enter_variant_b"),
+        parse_mode="HTML",
     )
 
 

@@ -744,7 +744,7 @@ LANG = {
     'payment.crypto_success': '🎉 Пардохт қабул шуд!\n{tariff_icon} Тариф: {tariff}\n📅 То: {date}',
     'payment.crypto_unavailable': 'Пардохт бо криптовалюта муваққатан дастрас нест',
     'payment.lava': '💳 Корт (Lava)',
-    'payment.lava_waiting': '💳 Пардохт бо корт тавассути Lava\n\nМаблағ: {amount:.2f} ₽\n\n⏳ Барои пардохт ба истинод гузаред.\nПас аз тасдиқ обуна худкор фаол мешавад.',
+    'payment.lava_waiting': '💳 Пардохт бо корт\n\nМаблағ: {amount:.2f} ₽\n\n⏳ Дар давоми 10 дақиқа пардохт кунед',
     'payment.lava_pay_button': '💳 Тавассути Lava пардохт кунед',
     'payment.lava_unavailable': 'Пардохт бо корт тавассути Lava муваққатан дастрас нест',
     'payment.crypto_waiting': '₿ Пардохт бо криптовалюта\n\nМаблағ: {amount:.2f} ₽\n\n⏳ Барои пардохт тавассути @CryptoBot ба истинод гузаред.\nПас аз тасдиқ обуна худкор фаол мешавад.',

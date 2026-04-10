@@ -422,22 +422,17 @@ def get_payment_success_keyboard(
     subscription_type: str = "basic",
     is_renewal: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура после успешной оплаты: Подключиться + Профиль + Трафик."""
+    """Клавиатура после успешной оплаты/активации триала."""
     buttons = [
         [InlineKeyboardButton(
-            text="📲 Подключиться",
+            text=i18n_get_text(language, "trial.activated_btn_connect"),
             callback_data="connect_instruction",
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.profile"),
-            callback_data="menu_profile",
+            text=i18n_get_text(language, "trial.activated_btn_support"),
+            url="https://t.me/Atlas_SupportSecurity",
         )],
     ]
-    if config.REMNAWAVE_ENABLED and subscription_type in ("basic", "plus"):
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.traffic_btn"),
-            callback_data="traffic_info",
-        )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

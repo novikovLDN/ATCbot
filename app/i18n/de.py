@@ -744,7 +744,7 @@ LANG = {
     'payment.crypto_success': '🎉 Zahlung erhalten!\n{tariff_icon} Tarif: {tariff}\n📅 Bis: {date}',
     'payment.crypto_unavailable': 'Kryptozahlung vorübergehend nicht verfügbar',
     'payment.lava': '💳 Karte (Lava)',
-    'payment.lava_waiting': '💳 Kartenzahlung über Lava\n\nBetrag: {amount:.2f} ₽\n\n⏳ Folgen Sie dem Link zur Zahlung.\nIhr Abo wird nach Bestätigung automatisch aktiviert.',
+    'payment.lava_waiting': '💳 Kartenzahlung\n\nBetrag: {amount:.2f} ₽\n\n⏳ Zahlen Sie innerhalb von 10 Minuten',
     'payment.lava_pay_button': '💳 Per Lava bezahlen',
     'payment.lava_unavailable': 'Kartenzahlung über Lava vorübergehend nicht verfügbar',
     'payment.crypto_waiting': '₿ Kryptozahlung\n\nBetrag: {amount:.2f} ₽\n\n⏳ Folgen Sie dem Link zur Zahlung über @CryptoBot.\nIhr Abo wird nach Bestätigung automatisch aktiviert.',

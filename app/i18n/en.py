@@ -522,7 +522,7 @@ LANG = {
     'payment.crypto_pay_button': "₿ Pay via CryptoBot",
     'payment.crypto_unavailable': "Cryptocurrency payment is temporarily unavailable",
     'payment.lava': "💳 Card (Lava)",
-    'payment.lava_waiting': "💳 Card Payment via Lava\n\nAmount: {amount:.2f} ₽\n\n⏳ Follow the link to pay.\nYour subscription will be activated automatically after confirmation.",
+    'payment.lava_waiting': "💳 Card Payment\n\nAmount: {amount:.2f} ₽\n\n⏳ Pay within 10 minutes",
     'payment.lava_pay_button': "💳 Pay via Lava",
     'payment.lava_unavailable': "Card payment via Lava is temporarily unavailable",
     'payment.crypto_success': "🎉 Payment received!\n{tariff_icon} Plan: {tariff}\n📅 Until: {date}",
