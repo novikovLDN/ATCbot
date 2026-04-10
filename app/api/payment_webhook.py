@@ -4,6 +4,7 @@ Payment Webhook API (FastAPI)
 Webhook endpoints for payment providers:
 - POST /webhooks/platega — Platega (SBP) payment notifications
 - POST /webhooks/cryptobot — CryptoBot (Crypto Pay) payment notifications
+- POST /webhooks/lava — Lava (Card) payment notifications
 
 Security:
 - Signature/auth verification required per provider.
@@ -135,3 +136,50 @@ async def _handle_cryptobot_webhook(request: Request):
 @router.post("/webhooks/cryptobot")
 async def cryptobot_webhook(request: Request):
     return await _handle_cryptobot_webhook(request)
+
+
+async def _handle_lava_webhook(request: Request):
+    """Handle Lava (Card) webhook callback."""
+    if _bot is None:
+        logger.critical("Lava webhook received but bot is not initialized — setup() not called")
+        return JSONResponse({"status": "error"}, status_code=500)
+    try:
+        import lava_service
+        if not lava_service.is_enabled():
+            logger.warning("Lava webhook received but service is disabled")
+            return JSONResponse({"status": "disabled"})
+
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        try:
+            body = await request.json()
+        except Exception as e:
+            logger.error(f"Lava webhook: invalid JSON: {e}")
+            return JSONResponse({"status": "invalid"})
+
+        result = await asyncio.wait_for(
+            lava_service.process_webhook_data(headers, body, _bot),
+            timeout=_WEBHOOK_TIMEOUT,
+        )
+        return JSONResponse(result)
+
+    except ImportError:
+        logger.error("lava_service not available")
+        return JSONResponse({"status": "error"}, status_code=500)
+    except ValueError as e:
+        # Idempotency: already-processed payment — return 200 so provider stops retrying
+        logger.info(f"Lava webhook: already processed: {e}")
+        return JSONResponse({"status": "already_processed"})
+    except TransientPaymentError as e:
+        logger.error(f"Lava webhook transient error (returning 500 for retry): {e}")
+        return JSONResponse({"status": "transient_error"}, status_code=500)
+    except asyncio.TimeoutError:
+        logger.error("Lava webhook timeout (returning 500 for retry)")
+        return JSONResponse({"status": "timeout"}, status_code=500)
+    except Exception as e:
+        logger.exception(f"Lava webhook error: {e}")
+        return JSONResponse({"status": "error"}, status_code=500)
+
+
+@router.post("/webhooks/lava")
+async def lava_webhook(request: Request):
+    return await _handle_lava_webhook(request)

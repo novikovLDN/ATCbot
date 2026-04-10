@@ -1023,7 +1023,15 @@ async def show_payment_method_selection(
         text=i18n_get_text(language, "payment.card"),
         callback_data="pay:card"
     )])
-    
+
+    # Кнопка оплаты картой через Lava
+    import lava_service
+    if lava_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.lava"),
+            callback_data="pay:lava"
+        )])
+
     # Кнопка оплаты через СБП (Platega, +11%)
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.sbp"),

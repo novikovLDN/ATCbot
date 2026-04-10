@@ -353,6 +353,12 @@ SBP_MARKUP_PERCENT = 11
 CRYPTOBOT_API_TOKEN = env("CRYPTOBOT_API_TOKEN", default="")
 CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
 
+# Lava (Card) Configuration
+# Оплата картой через Lava (api.lava.ru)
+LAVA_WALLET_TO = env("LAVA_WALLET_TO", default="")
+LAVA_JWT_TOKEN = env("LAVA_JWT_TOKEN", default="")
+LAVA_API_URL = env("LAVA_API_URL") or "https://api.lava.ru"
+
 # Public base URL for webhooks (Railway + Cloudflare). Required for payment webhooks.
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
