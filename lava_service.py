@@ -1,19 +1,24 @@
 """
 Lava (Card) Integration
 
-Handles card payment creation and webhook processing via Lava (p2p.lava.ru).
-Uses the signature-based method (md5) which requires only wallet + secret key.
+Handles card payment creation and webhook processing via Lava API (api.lava.ru).
+Configuration resolved via config.py (env-prefixed variables).
 
-Signature: md5("wallet:amount:secretKey:orderId")
-Payment URL: https://p2p.lava.ru/create?w=...&ao=...&o=...&s=...
+Auth: Lava API requires HS256 JWT in Authorization header.
+JWT payload: {"apikey": <secret_key>, "tid": <shop_id>}
+signed with the secret key from Lava Business panel.
+
+Request format: form-encoded POST (per Lava PHP example using CURLOPT_POSTFIELDS).
 """
+import base64
 import config
 import database
 import hashlib
+import hmac
+import json
 import logging
 import time
 from typing import Optional, Dict, Any
-from urllib.parse import urlencode, quote
 import httpx
 from aiogram import Bot
 from app.services.payments.confirmation import TransientPaymentError
@@ -25,33 +30,69 @@ logger = logging.getLogger(__name__)
 # .strip() protects against accidental whitespace/newlines from copy-paste
 LAVA_WALLET_TO = (config.LAVA_WALLET_TO or "").strip()
 LAVA_SECRET_KEY = (config.LAVA_JWT_TOKEN or "").strip()
+LAVA_SIGN_KEY = (config.LAVA_SIGN_KEY or "").strip()
 LAVA_SHOP_ID = (config.LAVA_SHOP_ID or "").strip()
 LAVA_API_URL = config.LAVA_API_URL
-LAVA_P2P_URL = "https://p2p.lava.ru"
 
 
 def is_enabled() -> bool:
-    """Check if Lava is configured (wallet_to + secret_key)."""
-    return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY)
+    """Check if Lava is configured (wallet_to + secret_key + shop_id)."""
+    return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY and LAVA_SHOP_ID)
 
 
+# Startup debug: log loaded config (first chars only, no secrets)
 logger.info(
-    "LAVA_CONFIG: wallet_to='%s' secret_len=%d shop_id='%s' enabled=%s",
+    "LAVA_CONFIG: wallet_to='%s' secret_len=%d secret_last4='%s' "
+    "sign_len=%d shop_id='%s' enabled=%s",
     LAVA_WALLET_TO or "EMPTY",
     len(LAVA_SECRET_KEY),
+    LAVA_SECRET_KEY[-4:] if LAVA_SECRET_KEY else "NONE",
+    len(LAVA_SIGN_KEY),
     LAVA_SHOP_ID or "EMPTY",
     is_enabled(),
 )
 
 
-def _make_signature(wallet: str, amount: str, secret_key: str, order_id: str) -> str:
-    """Generate md5 signature per Lava docs.
+def _b64url_encode(data: bytes) -> str:
+    """Base64url encode without padding (JWT RFC 7519)."""
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
 
-    Signature = md5("wallet:amount:secretKey:orderId")
-    Example: md5("R10000138:100.00:b1DhCLv2IwgSdoJ5qWmfIb96xaBlUaM5:114533")
+
+def _generate_jwt() -> str:
+    """Generate HS256 JWT token for Lava API authorization.
+
+    JWT structure (matching Lava server expectations):
+      Header:  {"alg":"HS256","typ":"JWT"}
+      Payload: {"apikey": <secret_key>, "tid": <shop_id>}
+      Signed with secret_key using HMAC-SHA256.
     """
-    raw = f"{wallet}:{amount}:{secret_key}:{order_id}"
-    return hashlib.md5(raw.encode('utf-8')).hexdigest()
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {
+        "apikey": LAVA_SECRET_KEY,
+        "uid": LAVA_SHOP_ID,
+        "tid": LAVA_SHOP_ID,
+    }
+
+    h = _b64url_encode(json.dumps(header, separators=(',', ':')).encode())
+    p = _b64url_encode(json.dumps(payload, separators=(',', ':')).encode())
+    signing_input = f"{h}.{p}".encode('utf-8')
+
+    # Sign with secret key as UTF-8 (matching PHP hash_hmac behavior)
+    sig = hmac.new(LAVA_SECRET_KEY.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    s = _b64url_encode(sig)
+    return f"{h}.{p}.{s}"
+
+
+def _get_auth_headers() -> Dict[str, str]:
+    """Build headers with JWT Authorization."""
+    jwt_token = _generate_jwt()
+    # Temp debug: log JWT parts count and payload (base64-encoded, safe to log)
+    parts = jwt_token.split('.')
+    logger.info("LAVA_JWT_DEBUG: parts=%d, payload_b64=%s", len(parts), parts[1] if len(parts) > 1 else "NONE")
+    return {
+        "Authorization": jwt_token,
+        "Accept": "application/json",
+    }
 
 
 async def create_invoice(
@@ -60,54 +101,80 @@ async def create_invoice(
     comment: str = "",
     expire: int = 1440,
 ) -> Dict[str, Any]:
-    """Create payment link via Lava p2p (signature-based method).
+    """Create payment invoice via Lava API.
 
-    Constructs a signed payment URL and verifies it's accessible.
-    Returns payment_url for user redirect.
+    Sends form-encoded POST per Lava PHP example (CURLOPT_POSTFIELDS with array).
     """
     if not is_enabled():
         raise Exception("Lava not configured")
-
-    amount_str = f"{amount_rubles:.2f}"
-
-    signature = _make_signature(LAVA_WALLET_TO, amount_str, LAVA_SECRET_KEY, purchase_id)
 
     hook_url = ""
     if config.PUBLIC_BASE_URL:
         hook_url = f"{config.PUBLIC_BASE_URL.rstrip('/')}/webhooks/lava"
 
-    params = {
-        "w": LAVA_WALLET_TO,
-        "ao": amount_str,
-        "o": purchase_id,
-        "s": signature,
-        "exp": str(expire),
-        "c": (comment[:500] if comment else "Atlas Secure VPN"),
+    request_body = {
+        "wallet_to": LAVA_WALLET_TO,
+        "sum": round(amount_rubles, 2),
+        "order_id": purchase_id,
+        "expire": expire,
+        "comment": (comment[:500] if comment else "Atlas Secure VPN"),
     }
     if hook_url:
-        params["hook_url"] = hook_url
+        request_body["hook_url"] = hook_url
 
-    payment_url = f"{LAVA_P2P_URL}/create?{urlencode(params)}"
-
-    # Verify the URL is accessible (HEAD request)
-    try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
-            response = await client.head(payment_url)
-            # Lava should return 200 or 302 (redirect to payment form)
-            if response.status_code >= 400:
+    async def _make_request():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{LAVA_API_URL}/invoice/create",
+                headers=_get_auth_headers(),
+                json=request_body,
+            )
+            if response.status_code == 200:
+                resp_data = response.json()
+                if resp_data.get("status") != "success":
+                    logger.error(
+                        "LAVA_API_ERROR: status=%d body=%s",
+                        response.status_code,
+                        response.text[:500],
+                    )
+            if 400 <= response.status_code < 500:
                 logger.error(
-                    "Lava payment URL check failed: status=%d url=%s",
-                    response.status_code, payment_url[:100],
+                    "Lava API client error: status=%d response=%s",
+                    response.status_code,
+                    response.text[:300],
                 )
-    except Exception as e:
-        logger.warning("Lava payment URL check error (non-fatal): %s", e)
+                raise Exception(f"Lava API error: {response.status_code}")
+            if response.status_code != 200:
+                response.raise_for_status()
+            return response
 
-    # Use purchase_id as invoice_id (no separate invoice in p2p method)
-    invoice_id = f"lava_{purchase_id}_{int(time.time())}"
+    response = await retry_async(
+        _make_request,
+        retries=2,
+        base_delay=1.0,
+        max_delay=5.0,
+        retry_on=(httpx.HTTPError, httpx.TimeoutException, ConnectionError, OSError),
+    )
+
+    data = response.json()
+
+    if data.get("status") != "success":
+        raise Exception(
+            f"Lava API error: {data.get('message', 'unknown error')}, code={data.get('code')}"
+        )
+
+    # Lava docs response: {"status":"success","id":"...","url":"...","expire":...,"sum":"..."}
+    # Flat format — no nested "data" key.
+    invoice_data = data.get("data", data)
+    invoice_id = invoice_data.get("id")
+    payment_url = invoice_data.get("url")
+
+    if not invoice_id or not payment_url:
+        raise Exception(f"Invalid Lava response: missing id or url. Response: {data}")
 
     logger.info(
-        "Lava payment link created: invoice_id=%s amount=%s RUB purchase_id=%s",
-        invoice_id, amount_str, purchase_id,
+        "Lava invoice created: invoice_id=%s amount=%.2f RUB purchase_id=%s",
+        invoice_id, amount_rubles, purchase_id,
     )
 
     return {
@@ -117,8 +184,25 @@ async def create_invoice(
 
 
 async def check_invoice_status(invoice_id: str) -> Optional[Dict[str, Any]]:
-    """Check invoice status via Lava API (if available)."""
-    # P2P method doesn't have a status API — rely on webhooks
+    """Check invoice status via Lava API for payment verification."""
+    if not is_enabled():
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                f"{LAVA_API_URL}/invoice/status",
+                headers=_get_auth_headers(),
+                json={"id": invoice_id},
+            )
+            if response.status_code != 200:
+                logger.error("Lava status check failed: status=%d", response.status_code)
+                return None
+            data = response.json()
+            if data.get("status") == "success":
+                return data.get("data", data)
+    except Exception as e:
+        logger.error("Lava status check error: %s", e)
     return None
 
 
@@ -126,6 +210,7 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
     """Process Lava webhook data.
 
     Lava sends POST to hook_url when payment status changes.
+    We verify the payment by checking invoice status via Lava API.
     """
     if not database.DB_READY:
         logger.warning("Lava webhook: DB not ready — returning 500 for retry")
@@ -137,13 +222,13 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
 
     # Extract data from webhook body
     invoice_id = body.get("invoice_id") or body.get("id")
-    order_id = body.get("order_id") or body.get("o")
+    order_id = body.get("order_id")
     status = body.get("status")
-    amount = body.get("amount") or body.get("sum") or body.get("ao")
+    amount = body.get("amount") or body.get("sum")
 
     logger.info(
-        "Lava webhook received: invoice_id=%s order_id=%s status=%s body_keys=%s",
-        invoice_id, order_id, status, list(body.keys()),
+        "Lava webhook received: invoice_id=%s order_id=%s status=%s",
+        invoice_id, order_id, status,
     )
 
     # Lava sends status as integer (1 = success) or string
@@ -151,17 +236,17 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
         logger.info("Lava webhook: ignoring status=%s", status)
         return {"status": "ignored"}
 
-    # Verify webhook signature if present
-    webhook_sig = body.get("s") or body.get("sig") or body.get("signature")
-    if webhook_sig and order_id and amount:
-        expected_sig = _make_signature(
-            LAVA_WALLET_TO, f"{float(amount):.2f}", LAVA_SECRET_KEY, order_id
-        )
-        if webhook_sig != expected_sig:
-            logger.warning(
-                "Lava webhook: signature mismatch. order_id=%s", order_id,
-            )
-            return {"status": "invalid_signature"}
+    # SECURITY: Verify payment by checking invoice status via Lava API
+    if invoice_id:
+        verified = await check_invoice_status(invoice_id)
+        if not verified:
+            logger.warning("Lava webhook: could not verify invoice %s", invoice_id)
+            return {"status": "unverified"}
+        if not order_id:
+            order_id = verified.get("order_id")
+    else:
+        logger.error("Lava webhook: no invoice_id in webhook body")
+        return {"status": "invalid"}
 
     purchase_id = order_id
     if not purchase_id:
@@ -210,7 +295,7 @@ async def process_webhook_data(headers: dict, body: dict, bot: Bot) -> dict:
         provider="lava",
         purchase_id=purchase_id,
         amount_rubles=amount_rubles,
-        invoice_id=str(invoice_id or purchase_id),
+        invoice_id=str(invoice_id),
         telegram_id=telegram_id,
         bot=bot,
     )
