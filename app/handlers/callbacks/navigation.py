@@ -526,12 +526,12 @@ async def callback_connect_instruction(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_platform:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_platform:android"),
+            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_platform:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_platform:windows"),
+            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
@@ -541,11 +541,191 @@ async def callback_connect_instruction(callback: CallbackQuery):
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
-# ── Device setup flow ──────────────────────────────────────────────
+# ── Step 1: Install App ──────────────────────────────────────────
+
+def _get_photo_id(key: str) -> str:
+    """Get photo file_id based on environment."""
+    env_key = "prod" if config.IS_PROD else "stage"
+    return _SETUP_PHOTOS.get(key, {}).get(env_key, "")
+
+
+@router.callback_query(F.data.startswith("setup_step1:"))
+async def callback_setup_step1(callback: CallbackQuery):
+    """Step 1: Install Happ app — shows photo + download buttons."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    text = i18n_get_text(language, "setup.install_app")
+    if platform not in ("windows",):
+        text += i18n_get_text(language, "setup.install_app_v2ray_hint")
+
+    buttons = []
+
+    if platform in ("ios", "macos"):
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.install_happ_ru"),
+            url=_IOS_HAPP_LINKS["ru"],
+        )])
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.install_happ_global"),
+            url=_IOS_HAPP_LINKS["global"],
+        )])
+    elif platform == "android":
+        links = _DOWNLOAD_LINKS.get("android", {})
+        if "happ" in links:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.install_happ_android"),
+                url=links["happ"],
+            )])
+    else:
+        links = _DOWNLOAD_LINKS.get("windows", {})
+        for client, url in links.items():
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, f"setup.download_{client}"),
+                url=url,
+            )])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.next_step"),
+        callback_data=f"setup_step2:{platform}",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="connect_instruction",
+    )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    # Send photo + text (delete old message, send new with photo)
+    photo_id = _get_photo_id("install_app")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    if photo_id:
+        await callback.bot.send_photo(
+            chat_id=telegram_id,
+            photo=photo_id,
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    else:
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+
+
+# ── Step 2: Install Keys ────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("setup_step2:"))
+async def callback_setup_step2(callback: CallbackQuery):
+    """Step 2: Copy & import VPN keys into app."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    platform = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    # Get subscription keys
+    subscription = await database.get_subscription(telegram_id)
+    sub_url = ""
+    bypass_url = ""
+    if subscription:
+        from vpn_utils import build_sub_url
+        sub_url = build_sub_url(telegram_id)
+
+        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
+        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus", "trial"):
+            from app.services import remnawave_api
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    bypass_url = traffic.get("subscriptionUrl", "") or ""
+
+    text = i18n_get_text(language, "setup.key_install_title")
+
+    if sub_url:
+        text += f"\n\n{i18n_get_text(language, 'setup.key_vpn')}\n<blockquote><code>{sub_url}</code></blockquote>"
+    if bypass_url:
+        text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_done"),
+            callback_data="setup_done",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.btn_need_help"),
+            url="https://t.me/Atlas_SupportSecurity",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_step1:{platform}",
+        )],
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    # Send photo + text
+    photo_id = _get_photo_id("install_keys")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    if photo_id:
+        await callback.bot.send_photo(
+            chat_id=telegram_id,
+            photo=photo_id,
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    else:
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+
+
+# ── Device setup flow (legacy + auto-setup) ──────────────────────
+
+# Photo file IDs for setup screens
+_SETUP_PHOTOS = {
+    "install_app": {
+        "prod": "AgACAgQAAxkBAAEsTydp2K_IyYzWcQLdTzcx8R69LXkQPgAC6wxrG6gtyVKbKj2nQnrQggEAAwIAA3kAAzsE",
+        "stage": "AgACAgQAAxkBAAIelmnYsCB_mV2UUCsZQxtCAUv6HfJkAALrDGsbqC3JUsb1k8gTRdgCAQADAgADeQADOwQ",
+    },
+    "install_keys": {
+        "prod": "AgACAgQAAxkBAAEsTzVp2LGqLrhvY1TRSdQdmp_vmS_tEwAC7AxrG6gtyVLmvPzPSqNEwAEAAwIAA3cAAzsE",
+        "stage": "AgACAgQAAxkBAAIeumnZWPxaNMkJApJ3JerkNYLX_kJbAALsDGsbqC3JUlRy7JVisnaVAQADAgADdwADOwQ",
+    },
+}
+
+_IOS_HAPP_LINKS = {
+    "ru": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+    "global": "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215",
+}
 
 _DOWNLOAD_LINKS = {
     "ios": {
-        "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
+        "happ": _IOS_HAPP_LINKS["ru"],
         "v2raytun": "https://apps.apple.com/tr/app/v2raytun/id6476628951",
         "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
     },
@@ -579,12 +759,12 @@ async def callback_setup_device(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_platform:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_platform:android"),
+            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_platform:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_platform:windows"),
+            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
