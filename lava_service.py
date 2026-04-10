@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 # Configuration — single source: config.py
 LAVA_WALLET_TO = config.LAVA_WALLET_TO
-LAVA_SECRET_KEY = config.LAVA_JWT_TOKEN  # Secret key for HS256 JWT signing
+LAVA_SECRET_KEY = config.LAVA_JWT_TOKEN  # Secret key (goes into JWT payload as apikey)
+LAVA_SIGN_KEY = config.LAVA_SIGN_KEY  # Additional key (for HMAC signing of JWT)
 LAVA_SHOP_ID = config.LAVA_SHOP_ID  # Project/shop ID
 LAVA_API_URL = config.LAVA_API_URL
 
@@ -76,8 +77,9 @@ def _generate_jwt() -> str:
     p = _b64_encode(json.dumps(payload, separators=(',', ':')).encode())
     signing_input = f"{h}.{p}".encode('utf-8')
 
-    # PHP hash_hmac uses the key as raw string (not hex-decoded)
-    sig = hmac.new(LAVA_SECRET_KEY.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    # Use LAVA_SIGN_KEY (additional key) for HMAC signing, fall back to secret key
+    sign_key = LAVA_SIGN_KEY or LAVA_SECRET_KEY
+    sig = hmac.new(sign_key.encode('utf-8'), signing_input, hashlib.sha256).digest()
     s = _b64_encode(sig)
     return f"{h}.{p}.{s}"
 
