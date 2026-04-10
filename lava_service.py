@@ -21,12 +21,13 @@ logger = logging.getLogger(__name__)
 # Configuration — single source: config.py
 LAVA_WALLET_TO = config.LAVA_WALLET_TO
 LAVA_SECRET_KEY = config.LAVA_JWT_TOKEN  # Secret key for HMAC-SHA256 signing
+LAVA_SHOP_ID = config.LAVA_SHOP_ID  # Project/shop ID
 LAVA_API_URL = config.LAVA_API_URL
 
 
 def is_enabled() -> bool:
-    """Check if Lava is configured (wallet_to + secret_key)."""
-    return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY)
+    """Check if Lava is configured (wallet_to + secret_key + shop_id)."""
+    return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY and LAVA_SHOP_ID)
 
 
 def _sign_request(body: dict) -> str:
@@ -40,11 +41,10 @@ def _sign_request(body: dict) -> str:
 
 
 def _get_headers(body: dict) -> Dict[str, str]:
-    """Get authentication headers for Lava API with HMAC-SHA256 signature."""
+    """Build Lava API headers: Authorization = shopId:signature."""
     signature = _sign_request(body)
     return {
-        "Signature": signature,
-        "Authorization": signature,
+        "Authorization": f"{LAVA_SHOP_ID}:{signature}",
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
