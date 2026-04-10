@@ -49,13 +49,9 @@ logger.info(
 )
 
 
-def _b64_encode(data: bytes) -> str:
-    """Standard base64 encode WITH padding.
-
-    Lava's PHP backend uses raw base64_decode() (not a JWT library),
-    which requires standard base64 (+/ alphabet with = padding).
-    """
-    return base64.b64encode(data).decode('ascii')
+def _b64url_encode(data: bytes) -> str:
+    """Base64url encode without padding (JWT RFC 7519)."""
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
 
 
 def _generate_jwt() -> str:
@@ -73,14 +69,13 @@ def _generate_jwt() -> str:
         "tid": LAVA_SHOP_ID,
     }
 
-    h = _b64_encode(json.dumps(header, separators=(',', ':')).encode())
-    p = _b64_encode(json.dumps(payload, separators=(',', ':')).encode())
+    h = _b64url_encode(json.dumps(header, separators=(',', ':')).encode())
+    p = _b64url_encode(json.dumps(payload, separators=(',', ':')).encode())
     signing_input = f"{h}.{p}".encode('utf-8')
 
-    # Use LAVA_SIGN_KEY (additional key) for HMAC signing, fall back to secret key
-    sign_key = LAVA_SIGN_KEY or LAVA_SECRET_KEY
-    sig = hmac.new(sign_key.encode('utf-8'), signing_input, hashlib.sha256).digest()
-    s = _b64_encode(sig)
+    # Sign with secret key as UTF-8 (matching PHP hash_hmac behavior)
+    sig = hmac.new(LAVA_SECRET_KEY.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    s = _b64url_encode(sig)
     return f"{h}.{p}.{s}"
 
 
