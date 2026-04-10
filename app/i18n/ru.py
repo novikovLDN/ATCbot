@@ -915,6 +915,7 @@ LANG = {
     'traffic.pay_balance': "💰 Оплатить с баланса ({price} ₽)",
     'traffic.pay_card': "💳 Оплатить картой ({price} ₽)",
     'traffic.pay_sbp': "🏦 Оплатить через СБП ({price} ₽)",
+    'traffic.pay_lava': "💳 Оплатить через Lava ({price} ₽)",
     'traffic.insufficient_balance': "❌ Недостаточно средств на балансе",
     'traffic.purchase_success': "✅ <b>Трафик добавлен!</b>\n\n📦 +{gb} ГБ\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Ошибка при добавлении трафика. Средства возвращены на баланс.",

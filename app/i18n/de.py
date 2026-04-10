@@ -808,6 +808,7 @@ LANG = {
     'traffic.pay_balance': "💰 Vom Guthaben bezahlen ({price} ₽)",
     'traffic.pay_card': "💳 Mit Karte bezahlen ({price} ₽)",
     'traffic.pay_sbp': "🏦 Per SBP bezahlen ({price} ₽)",
+    'traffic.pay_lava': "💳 Per Lava bezahlen ({price} ₽)",
     'traffic.insufficient_balance': "❌ Guthaben reicht nicht aus",
     'traffic.purchase_success': "✅ <b>Traffic hinzugefügt!</b>\n\n📦 +{gb} GB\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Fehler beim Hinzufügen. Guthaben wurde zurückerstattet.",

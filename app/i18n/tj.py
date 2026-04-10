@@ -808,6 +808,7 @@ LANG = {
     'traffic.pay_balance': "💰 Аз баланс пардохтан ({price} ₽)",
     'traffic.pay_card': "💳 Бо корт пардохтан ({price} ₽)",
     'traffic.pay_sbp': "🏦 Тавассути SBP пардохтан ({price} ₽)",
+    'traffic.pay_lava': "💳 Тавассути Lava пардохтан ({price} ₽)",
     'traffic.insufficient_balance': "❌ Маблағ кофӣ ��ест",
     'traffic.purchase_success': "✅ <b>Трафик илова шуд!</b>\n\n📦 +{gb} ГБ\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Хатогӣ. Маблағ ба баланс баргардонида шуд.",

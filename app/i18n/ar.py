@@ -820,6 +820,7 @@ LANG = {
     'traffic.pay_balance': "💰 الدفع م�� الرصيد ({price} ₽)",
     'traffic.pay_card': "💳 الدفع بالبطاقة ({price} ₽)",
     'traffic.pay_sbp': "🏦 الدفع عبر SBP ({price} ₽)",
+    'traffic.pay_lava': "💳 الدفع عبر Lava ({price} ₽)",
     'traffic.insufficient_balance': "❌ رصيد غير كافٍ",
     'traffic.purchase_success': "✅ <b>تمت إضافة حركة المرور!</b>\n\n📦 +{gb} جيجابايت\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ خطأ في إضافة حركة المرور. تم إرجاع الأموال.",

@@ -124,7 +124,7 @@ async def callback_topup_amount(callback: CallbackQuery):
     # Показываем экран выбора способа оплаты
     text = i18n_get_text(language, "main.topup_select_payment_method", amount=amount)
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_with_card"),
             callback_data=f"topup_card:{amount}"
@@ -137,11 +137,18 @@ async def callback_topup_amount(callback: CallbackQuery):
             text=i18n_get_text(language, "payment.stars"),
             callback_data=f"topup_stars:{amount}"
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="topup_balance"
-        )],
-    ])
+    ]
+    import lava_service
+    if lava_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.lava"),
+            callback_data=f"topup_lava:{amount}"
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="topup_balance"
+    )])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
@@ -1486,6 +1493,87 @@ async def callback_topup_sbp(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception(f"Error creating Platega SBP transaction for balance top-up: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@payments_router.callback_query(F.data.startswith("topup_lava:"))
+async def callback_topup_lava(callback: CallbackQuery):
+    """Пополнение баланса через Lava (карта)"""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    amount_str = callback.data.split(":")[1]
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    if amount <= 0 or amount > 100000:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
+        return
+
+    try:
+        amount_kopecks = amount * 100
+        amount_rubles = float(amount)
+
+        purchase_id = await subscription_service.create_balance_topup_purchase(
+            telegram_id=telegram_id,
+            amount_kopecks=amount_kopecks,
+            currency="RUB"
+        )
+
+        invoice_data = await lava_service.create_invoice(
+            amount_rubles=amount_rubles,
+            purchase_id=purchase_id,
+            comment=f"Пополнение баланса на {amount} ₽",
+        )
+
+        invoice_id = invoice_data["invoice_id"]
+        payment_url = invoice_data["payment_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error(f"Failed to save lava invoice_id to DB: purchase_id={purchase_id}, error={e}")
+
+        logger.info(
+            f"balance_topup_invoice_created: provider=lava, user={telegram_id}, "
+            f"purchase_id={purchase_id}, amount={amount_rubles:.2f}"
+        )
+
+        text = i18n_get_text(language, "payment.lava_waiting", amount=amount_rubles)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.lava_pay_button"),
+                url=payment_url
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="topup_balance"
+            )]
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error creating Lava invoice for balance top-up: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 

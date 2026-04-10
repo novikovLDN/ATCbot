@@ -808,6 +808,7 @@ LANG = {
     'traffic.pay_balance': "💰 Balansdan to'lash ({price} ₽)",
     'traffic.pay_card': "💳 Karta bilan to'lash ({price} ₽)",
     'traffic.pay_sbp': "🏦 SBP orqali to'lash ({price} ₽)",
+    'traffic.pay_lava': "💳 Lava orqali to'lash ({price} ₽)",
     'traffic.insufficient_balance': "��� Balansda mablag' yetarli emas",
     'traffic.purchase_success': "✅ <b>Trafik qo'shildi!</b>\n\n📦 +{gb} GB\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Trafik qo'shishda xatolik. Mablag' balansga qaytarildi.",
