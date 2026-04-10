@@ -684,27 +684,29 @@ async def callback_setup_step2(callback: CallbackQuery):
 
         text += f"\n\n{i18n_get_text(language, 'setup.auto_install_header')}"
 
-        # Happ auto-setup
-        buttons.append([InlineKeyboardButton(
-            text="⚡️ Добавить VPN ключ в Happ",
+        # Happ auto-setup: VPN + Bypass in one row
+        happ_row = [InlineKeyboardButton(
+            text="⚡️ Happ (VPN)",
             url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )])
+        )]
         if bypass_url:
-            buttons.append([InlineKeyboardButton(
-                text="⚡️ Добавить Обход ключ в Happ",
+            happ_row.append(InlineKeyboardButton(
+                text="⚡️ Happ (Обход)",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            )])
+            ))
+        buttons.append(happ_row)
 
-        # V2RayTun auto-setup
-        buttons.append([InlineKeyboardButton(
-            text="⚡️ Добавить VPN ключ в V2RayTun",
+        # V2RayTun auto-setup: VPN + Bypass in one row
+        v2_row = [InlineKeyboardButton(
+            text="⚡️ V2RayTun (VPN)",
             url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
-        )])
+        )]
         if bypass_url:
-            buttons.append([InlineKeyboardButton(
-                text="⚡️ Добавить Обход ключ в V2RayTun",
+            v2_row.append(InlineKeyboardButton(
+                text="⚡️ V2RayTun (Обход)",
                 url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
-            )])
+            ))
+        buttons.append(v2_row)
 
     # === Manual keys ===
     text += i18n_get_text(language, "setup.manual_install_header")
