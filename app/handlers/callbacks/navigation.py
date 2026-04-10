@@ -706,10 +706,11 @@ async def callback_setup_step2(callback: CallbackQuery):
 
     # === Bottom buttons ===
     from aiogram.types import WebAppInfo
-    from app.handlers.common.keyboards import MINI_APP_URL
+    from urllib.parse import urlparse as _urlparse
+    _done_base = config.PUBLIC_BASE_URL or f"{_urlparse(config.WEBHOOK_URL).scheme}://{_urlparse(config.WEBHOOK_URL).netloc}"
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
-        web_app=WebAppInfo(url=MINI_APP_URL),
+        web_app=WebAppInfo(url=f"{_done_base}/webapp/done"),
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
