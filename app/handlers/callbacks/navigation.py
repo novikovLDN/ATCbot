@@ -592,16 +592,23 @@ async def callback_setup_step1(callback: CallbackQuery):
         links = _DOWNLOAD_LINKS.get("android", {})
         if "happ" in links:
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.install_happ_android"),
+                text="📲 Установить Happ",
                 url=links["happ"],
             )])
-    else:
-        links = _DOWNLOAD_LINKS.get("windows", {})
-        for client, url in links.items():
+        if "v2raytun" in links:
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, f"setup.download_{client}"),
-                url=url,
+                text="📲 Установить V2RayTun",
+                url=links["v2raytun"],
             )])
+    elif platform == "windows":
+        buttons.append([InlineKeyboardButton(
+            text="📲 Скачать Happ",
+            url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="📲 Скачать V2RayTun",
+            url=_DOWNLOAD_LINKS.get("windows", {}).get("v2rayn", "https://github.com/2dust/v2rayN/releases/latest"),
+        )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
@@ -614,8 +621,14 @@ async def callback_setup_step1(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    # Send photo + text (delete old message, send new with photo)
-    photo_id = _get_photo_id("install_app")
+    # Platform-specific photo (no photo for Windows)
+    photo_key = {
+        "ios": "install_app_ios",
+        "macos": "install_app_ios",
+        "android": "install_app_android",
+    }.get(platform)
+    photo_id = _get_photo_id(photo_key) if photo_key else ""
+
     try:
         await callback.message.delete()
     except Exception:
@@ -759,9 +772,13 @@ async def callback_setup_step2(callback: CallbackQuery):
 
 # Photo file IDs for setup screens
 _SETUP_PHOTOS = {
-    "install_app": {
+    "install_app_ios": {
         "prod": "AgACAgQAAxkBAAEsTydp2K_IyYzWcQLdTzcx8R69LXkQPgAC6wxrG6gtyVKbKj2nQnrQggEAAwIAA3kAAzsE",
         "stage": "AgACAgQAAxkBAAIelmnYsCB_mV2UUCsZQxtCAUv6HfJkAALrDGsbqC3JUsb1k8gTRdgCAQADAgADeQADOwQ",
+    },
+    "install_app_android": {
+        "prod": "AgACAgQAAxkBAAEsVZ9p2WKsEhB1jDTAYdA3TXJdqENHcAACzwxrG9Np0VKr7b7MS293SQEAAwIAA3cAAzsE",
+        "stage": "AgACAgQAAxkBAAIeyGnZYtm7bZWgWSbQzaPQK9jDFIjxAALPDGsb02nRUmA2_j7leNc1AQADAgADdwADOwQ",
     },
     "install_keys": {
         "prod": "AgACAgQAAxkBAAEsTzVp2LGqLrhvY1TRSdQdmp_vmS_tEwAC7AxrG6gtyVLmvPzPSqNEwAEAAwIAA3cAAzsE",
