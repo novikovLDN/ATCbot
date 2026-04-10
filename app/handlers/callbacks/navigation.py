@@ -1067,6 +1067,32 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
     )
 
 
+@router.message(F.web_app_data)
+async def on_web_app_closed(message):
+    """WebApp button closed — show main menu (same as setup_done)."""
+    telegram_id = message.from_user.id
+
+    # 🎉 celebration
+    msg = await message.bot.send_message(chat_id=telegram_id, text="🎉")
+    await asyncio.sleep(2)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(telegram_id)
+    text = i18n_get_text(language, "main.welcome")
+    text = await format_text_with_incident(text, language)
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
+
+    await message.bot.send_message(
+        chat_id=telegram_id,
+        text=text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
+
+
 @router.callback_query(F.data.startswith("setup_qr:"))
 async def callback_setup_qr(callback: CallbackQuery):
     """Экран выбора: QR обычных серверов или обхода белых списков."""
