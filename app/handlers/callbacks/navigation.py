@@ -705,9 +705,11 @@ async def callback_setup_step2(callback: CallbackQuery):
         text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
 
     # === Bottom buttons ===
+    from aiogram.types import WebAppInfo
+    from app.handlers.common.keyboards import MINI_APP_URL
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
-        callback_data="setup_done",
+        web_app=WebAppInfo(url=MINI_APP_URL),
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
