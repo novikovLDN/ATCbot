@@ -41,8 +41,10 @@ def _sign_request(body: dict) -> str:
 
 def _get_headers(body: dict) -> Dict[str, str]:
     """Get authentication headers for Lava API with HMAC-SHA256 signature."""
+    signature = _sign_request(body)
     return {
-        "Signature": _sign_request(body),
+        "Signature": signature,
+        "Authorization": signature,
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
