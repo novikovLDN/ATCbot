@@ -52,8 +52,11 @@ def _generate_jwt() -> str:
       Signed with secret_key using HMAC-SHA256.
     """
     header = {"alg": "HS256", "typ": "JWT"}
+    # apikey = project identifier (Lava looks up the signing secret by this ID)
+    # uid/tid = project/token IDs (per Lava JWT example)
+    # JWT is SIGNED with LAVA_SECRET_KEY, but the secret is NOT in the payload
     payload = {
-        "apikey": LAVA_SECRET_KEY,
+        "apikey": LAVA_SHOP_ID,
         "uid": LAVA_SHOP_ID,
         "tid": LAVA_SHOP_ID,
     }
