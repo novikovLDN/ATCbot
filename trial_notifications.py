@@ -511,11 +511,47 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                 except Exception as e:
                     logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
 
-            await conn.execute("""
-                UPDATE subscriptions 
-                SET status = 'expired', uuid = NULL, vpn_key = NULL
-                WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
-            """, telegram_id)
+            # Check if user has Remnawave bypass traffic — keep it active
+            has_remnawave = await conn.fetchval(
+                "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND remnawave_uuid IS NOT NULL",
+                telegram_id,
+            )
+            if has_remnawave:
+                # Transition to bypass-only: remove Xray but keep Remnawave and active status
+                from datetime import timedelta
+                far_future = database._to_db_utc(now + timedelta(days=3650))
+                await conn.execute("""
+                    UPDATE subscriptions
+                    SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                        is_bypass_only = TRUE,
+                        expires_at = $2,
+                        source = 'bypass_only'
+                    WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
+                """, telegram_id, far_future)
+                logger.info(f"trial_expired: TRANSITION_TO_BYPASS_ONLY user={telegram_id} — Remnawave stays active")
+                # Notify user that main subscription expired but bypass keeps working
+                try:
+                    language = await resolve_user_language(telegram_id)
+                    bypass_text = i18n.get_text(language, "traffic.subscription_expired_bypass_active")
+                    bypass_kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text=i18n.get_text(language, "traffic.buy_traffic_btn"),
+                            callback_data="buy_traffic",
+                        )],
+                        [InlineKeyboardButton(
+                            text=i18n.get_text(language, "traffic.buy_subscription"),
+                            callback_data="menu_buy_vpn",
+                        )],
+                    ])
+                    await safe_send_message(bot, telegram_id, bypass_text, parse_mode="HTML", reply_markup=bypass_kb)
+                except Exception as notif_err:
+                    logger.warning(f"trial_expired: failed to send bypass-only notification to {telegram_id}: {notif_err}")
+            else:
+                await conn.execute("""
+                    UPDATE subscriptions
+                    SET status = 'expired', uuid = NULL, vpn_key = NULL
+                    WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
+                """, telegram_id)
 
             should_send, send_reason = await trial_service.should_send_completion_notification(
                 telegram_id=telegram_id,

@@ -288,10 +288,9 @@ async def show_profile(message_or_query, language: str):
             date_str = format_date_ru(expires_at)
 
             if is_bypass_only:
-                # Bypass-only: показываем подписку обхода + триал если есть
-                text += "🌐 Подписка: <b>Обход белых списков</b>\n"
-                if is_trial:
-                    text += f"⚡️ Пробный период основной подписки до <b>{date_str}</b>\n"
+                # Bypass-only: подписки нет, показываем только обход
+                text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
+                text += i18n_get_text(language, "profile.tariff_none") + "\n"
             else:
                 text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
                 if config.is_biz_tariff(sub_type):
@@ -316,11 +315,18 @@ async def show_profile(message_or_query, language: str):
             text += i18n_get_text(language, "profile.tariff_none") + "\n"
             text += i18n_get_text(language, "profile.auto_renew_none")
 
-        # --- Traffic section (for active Basic/Plus/Trial with Remnawave) ---
-        show_traffic = has_active_subscription and config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus", "trial")
+        # --- Traffic section: show if Remnawave enabled and user has remnawave_uuid ---
+        # Traffic must be visible regardless of main subscription status (bypass GB always work)
+        show_traffic = False
+        if config.REMNAWAVE_ENABLED:
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                show_traffic = True
+            elif has_active_subscription and sub_type in ("basic", "plus", "trial"):
+                show_traffic = True  # will auto-provision below
+                rmn_uuid = None
         if show_traffic:
             from app.services import remnawave_api, remnawave_service
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
             if rmn_uuid:
                 remnawave_service._fire_and_forget(
                     remnawave_service.ensure_squad(telegram_id)
@@ -346,12 +352,15 @@ async def show_profile(message_or_query, language: str):
                         return "🤍" * filled + "🩶" * (length - filled)
 
                     sub_url = traffic.get("subscriptionUrl", "")
+                    happ_url = traffic.get("happ_url", "")
 
                     text += f"\n\n📊 <b>Обход блокировок</b> 🇷🇺\n\n"
                     text += f"📥 {_fmt(used)} / {_fmt(limit_bytes)}\n"
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
                         text += f"🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
+                        if happ_url:
+                            text += f"\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
@@ -371,6 +380,7 @@ async def show_profile(message_or_query, language: str):
             subscription_type=sub_type, show_traffic=show_traffic,
             is_trial=is_trial,
             is_combo=is_combo,
+            is_bypass_only=is_bypass_only,
         )
 
         await send_func(text, reply_markup=keyboard, parse_mode="HTML")
@@ -429,7 +439,18 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     
     # Получаем текущую подписку для динамических кнопок
     subscription = await database.get_subscription(telegram_id)
-    current_tariff = subscription.get("subscription_type") if subscription else None
+    is_bypass_only_sub = bool(subscription and subscription.get("is_bypass_only"))
+    current_tariff = subscription.get("subscription_type") if subscription and not is_bypass_only_sub else None
+
+    if is_bypass_only_sub:
+        # Bypass-only: show special header
+        text = (
+            f"🌐 <b>У вас активен обход блокировок</b>\n\n"
+            f"Для основной подписки выберите тариф:\n\n"
+            f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
+            f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
+            f"{i18n_get_text(language, 'buy.tariff_business')}"
+        )
 
     if current_tariff == "basic":
         basic_btn_key = "buy.select_basic_renew"

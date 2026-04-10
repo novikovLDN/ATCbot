@@ -639,23 +639,47 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )
             if traffic_result and traffic_result.get("is_traffic_pack"):
                 traffic_gb = traffic_result.get("traffic_gb", 0)
-                # Add traffic via Remnawave
+                _tariff_tag = pending_purchase.get("tariff", "")
+                _is_bypass = _tariff_tag.startswith("bypass_")
+
+                # Bypass-only: ensure subscription row + Remnawave user exist
+                if _is_bypass:
+                    await database.ensure_bypass_only_subscription(telegram_id)
+
+                # Add traffic via Remnawave (create user if stale/missing)
                 rmn_success = False
                 pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
                 if pack:
-                    try:
-                        from app.services.remnawave_service import add_traffic
-                        rmn_success = await add_traffic(telegram_id, pack["bytes"])
-                        if not rmn_success:
+                    traffic_bytes = pack["bytes"]
+                    rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+                    if rmn_uuid:
+                        try:
+                            from app.services.remnawave_service import add_traffic
+                            rmn_success = await add_traffic(telegram_id, traffic_bytes)
+                        except Exception as rmn_err:
                             logger.error(
-                                "TRAFFIC_PACK_REMNAWAVE_FAIL: user=%s gb=%s purchase=%s",
-                                telegram_id, traffic_gb, purchase_id,
+                                "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
+                                telegram_id, traffic_gb, rmn_err,
                             )
-                    except Exception as rmn_err:
-                        logger.error(
-                            "TRAFFIC_PACK_REMNAWAVE_ERROR: user=%s gb=%s error=%s",
-                            telegram_id, traffic_gb, rmn_err,
-                        )
+                    if not rmn_success:
+                        # No UUID or stale (404) — clear and create fresh
+                        if rmn_uuid:
+                            await database.clear_remnawave_uuid(telegram_id)
+                        try:
+                            from app.services import remnawave_service
+                            from datetime import datetime, timezone, timedelta
+                            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+                            await remnawave_service.create_remnawave_user(
+                                telegram_id, "basic", far_future,
+                                traffic_limit_override=traffic_bytes,
+                            )
+                            rmn_success = True
+                            logger.info("BYPASS_REMNAWAVE_USER_CREATED user=%s gb=%s", telegram_id, traffic_gb)
+                        except Exception as rmn_err:
+                            logger.error(
+                                "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: user=%s gb=%s error=%s",
+                                telegram_id, traffic_gb, rmn_err,
+                            )
                 else:
                     logger.error(
                         "TRAFFIC_PACK_INVALID_GB: user=%s gb=%s purchase=%s",
@@ -663,9 +687,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     )
 
                 # Bypass-only: activate 3-day trial if eligible
-                _tariff_tag = pending_purchase.get("tariff", "")
                 _trial_activated = False
-                if _tariff_tag.startswith("bypass_"):
+                if _is_bypass:
                     try:
                         from app.services.trials import service as trial_service
                         if await trial_service.is_trial_available(telegram_id):
@@ -675,8 +698,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     except Exception as trial_err:
                         logger.warning("BYPASS_TRIAL_FAIL user=%s: %s", telegram_id, trial_err)
 
-                if _tariff_tag.startswith("bypass_"):
-                    await database.set_bypass_only_flag(telegram_id, True)
+                if _is_bypass:
                     text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
                     if _trial_activated:
                         text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
@@ -688,12 +710,19 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         "TRAFFIC_PACK_NOT_APPLIED: user=%s gb=%s purchase=%s — needs manual resolution",
                         telegram_id, traffic_gb, purchase_id,
                     )
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(
-                        text=i18n_get_text(language, "common.back"),
-                        callback_data="menu_main",
-                    )],
-                ])
+                if _is_bypass:
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
+                        [InlineKeyboardButton(text="🌐 Купить ещё ГБ", callback_data="buy_traffic")],
+                        [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
+                    ])
+                else:
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(
+                            text=i18n_get_text(language, "common.back"),
+                            callback_data="menu_main",
+                        )],
+                    ])
                 await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
                 logger.info(
@@ -1128,44 +1157,46 @@ async def process_successful_payment(message: Message, state: FSMContext):
         from app.services.remnawave_service import renew_remnawave_user_bg
         _sub_type = (tariff_type or "basic").strip().lower()
         if expires_at and _sub_type not in ("trial",) + config.BIZ_TARIFFS:
-            renew_remnawave_user_bg(telegram_id, _sub_type, expires_at)
+            renew_remnawave_user_bg(telegram_id, _sub_type, expires_at, period_days=period_days)
     except Exception as rmn_err:
         logger.warning("REMNAWAVE_HOOK_FAIL: stars tg=%s %s", telegram_id, rmn_err)
 
     # Combo/Bypass: начисляем трафик обхода если покупка была через комбо или bypass-only
-    try:
-        fsm_data = await state.get_data()
-        combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
-        bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
+    fsm_data = await state.get_data()
+    combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
+    bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
 
-        if combo_bypass_gb > 0 or bypass_only_gb > 0:
-            from app.services import remnawave_api, remnawave_service
-            gb = combo_bypass_gb or bypass_only_gb
-            traffic_bytes = gb * 1024**3
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if not rmn_uuid:
-                _sub_t = (tariff_type or "basic").strip().lower()
-                rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, _sub_t)
-            if rmn_uuid:
-                await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+    if combo_bypass_gb > 0 or bypass_only_gb > 0:
+        from app.services import remnawave_service
+        gb = combo_bypass_gb or bypass_only_gb
+        traffic_bytes = gb * 1024**3
+
+        try:
+            rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+            if not rmn_success:
+                logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL user={telegram_id} gb={gb}")
             await database.record_traffic_purchase(telegram_id, gb, 0)
             logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
+        except Exception as traffic_err:
+            logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
 
-            # Mark subscription as combo
-            if combo_bypass_gb > 0:
+        # Mark subscription as combo (OUTSIDE traffic try block)
+        if combo_bypass_gb > 0:
+            try:
                 await database.set_combo_flag(telegram_id, True)
+                logger.info(f"COMBO_FLAG_SET user={telegram_id}")
+            except Exception as flag_err:
+                logger.warning(f"COMBO_FLAG_FAIL user={telegram_id}: {flag_err}")
 
-            # Bypass-only: activate 3-day trial if eligible
-            if bypass_only_gb > 0:
+        # Bypass-only: activate 3-day trial if eligible
+        if bypass_only_gb > 0:
+            try:
                 from app.services.trials import service as trial_service
                 if await trial_service.is_trial_available(telegram_id):
-                    try:
-                        await trial_service.activate_trial(telegram_id)
-                        logger.info(f"BYPASS_TRIAL_ACTIVATED user={telegram_id}")
-                    except Exception:
-                        pass
-    except Exception as combo_err:
-        logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL user={telegram_id}: {combo_err}")
+                    await trial_service.activate_trial(telegram_id)
+                    logger.info(f"BYPASS_TRIAL_ACTIVATED user={telegram_id}")
+            except Exception:
+                pass
 
     # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
     await clear_promo_session(state)

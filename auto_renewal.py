@@ -396,7 +396,7 @@ async def process_auto_renewals(bot: Bot):
                     _ar_tariff = item.get("tariff_type", "basic")
                     _ar_expires = item.get("expires_at")
                     if _ar_tariff in ("basic", "plus") and _ar_expires:
-                        renew_remnawave_user_bg(item["telegram_id"], _ar_tariff, _ar_expires)
+                        renew_remnawave_user_bg(item["telegram_id"], _ar_tariff, _ar_expires, period_days=item.get("period_days", 30))
                 except Exception as rmn_err:
                     logger.warning("REMNAWAVE_AUTORENEW_FAIL: tg=%s %s", item["telegram_id"], rmn_err)
 

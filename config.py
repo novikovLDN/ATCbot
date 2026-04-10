@@ -353,6 +353,14 @@ SBP_MARKUP_PERCENT = 11
 CRYPTOBOT_API_TOKEN = env("CRYPTOBOT_API_TOKEN", default="")
 CRYPTOBOT_API_URL = env("CRYPTOBOT_API_URL") or "https://pay.crypt.bot/api"
 
+# Lava (Card) Configuration
+# Оплата картой через Lava (api.lava.ru)
+LAVA_WALLET_TO = env("LAVA_WALLET_TO", default="")
+LAVA_JWT_TOKEN = env("LAVA_JWT_TOKEN", default="")  # Secret key (apikey in JWT payload)
+LAVA_SIGN_KEY = env("LAVA_SIGN_KEY", default="")  # Additional key for JWT HMAC signing
+LAVA_SHOP_ID = env("LAVA_SHOP_ID", default="")  # Project/shop ID
+LAVA_API_URL = env("LAVA_API_URL") or "https://api.lava.ru"
+
 # Public base URL for webhooks (Railway + Cloudflare). Required for payment webhooks.
 # Example: https://api.yourdomain.com
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="")
@@ -394,8 +402,24 @@ else:
 
 # Traffic limits per tariff (in bytes). Trial has NO bypass.
 TRAFFIC_LIMITS = {
-    "basic": 15 * 1024**3,   # 15 GB
-    "plus":  25 * 1024**3,   # 25 GB
+    "basic": {
+        30:  15 * 1024**3,    # 1 мес — 15 GB
+        90:  50 * 1024**3,    # 3 мес — 50 GB
+        180: 100 * 1024**3,   # 6 мес — 100 GB
+        365: 180 * 1024**3,   # 12 мес — 180 GB
+    },
+    "plus": {
+        30:  25 * 1024**3,    # 1 мес — 25 GB
+        90:  80 * 1024**3,    # 3 мес — 80 GB
+        180: 160 * 1024**3,   # 6 мес — 160 GB
+        365: 300 * 1024**3,   # 12 мес — 300 GB
+    },
+}
+
+# Shortcut: human-readable GB for button labels
+TRAFFIC_LIMITS_GB = {
+    "basic": {30: 15, 90: 50, 180: 100, 365: 180},
+    "plus":  {30: 25, 90: 80, 180: 160, 365: 300},
 }
 
 # Device limits per tariff
@@ -440,6 +464,8 @@ TRAFFIC_PACKS_EXTENDED = {
 
 # Thresholds for traffic notifications (bytes remaining, flag key)
 TRAFFIC_NOTIFY_THRESHOLDS = [
+    (8 * 1024**3,       "traffic_notified_8gb"),
+    (5 * 1024**3,       "traffic_notified_5gb"),
     (3 * 1024**3,       "traffic_notified_3gb"),
     (1 * 1024**3,       "traffic_notified_1gb"),
     (500 * 1024**2,     "traffic_notified_500mb"),

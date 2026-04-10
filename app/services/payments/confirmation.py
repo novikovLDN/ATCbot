@@ -76,6 +76,7 @@ async def process_confirmed_payment(
                     payment_id=payment_id,
                     purchase_id=purchase_id,
                     traffic_gb=result.get("traffic_gb", 0),
+                    tariff_type=result.get("tariff_type", ""),
                 )
             else:
                 await _send_confirmation(
@@ -282,7 +283,8 @@ async def _send_confirmation(
         try:
             from app.services.remnawave_service import renew_remnawave_user_bg
             if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS:
-                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at)
+                _pd = result.get("period_days", 30) or 30
+                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=_pd)
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
 
@@ -294,53 +296,102 @@ async def _handle_traffic_pack_confirmation(
     payment_id: int,
     purchase_id: str,
     traffic_gb: int,
+    tariff_type: str = "",
 ) -> None:
     """Send traffic pack purchase confirmation and add traffic via Remnawave."""
     from app.services.language_service import resolve_user_language
     from app.i18n import get_text as i18n_get_text
 
     language = await resolve_user_language(telegram_id)
+    _is_bypass = bool(tariff_type and tariff_type.startswith("bypass_"))
 
-    # Add traffic via Remnawave
+    # Bypass-only: ensure subscription row + Remnawave user exist
+    if _is_bypass:
+        await database.ensure_bypass_only_subscription(telegram_id)
+
+    # Add traffic via Remnawave (create user if stale/missing)
     rmn_success = False
     pack = config.TRAFFIC_PACKS.get(traffic_gb) or config.TRAFFIC_PACKS_EXTENDED.get(traffic_gb)
     if pack:
-        try:
-            from app.services.remnawave_service import add_traffic
-            rmn_success = await add_traffic(telegram_id, pack["bytes"])
-            if not rmn_success:
+        traffic_bytes = pack["bytes"]
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            try:
+                from app.services.remnawave_service import add_traffic
+                rmn_success = await add_traffic(telegram_id, traffic_bytes)
+            except Exception as rmn_err:
                 logger.error(
-                    "TRAFFIC_PACK_REMNAWAVE_FAIL: provider=%s tg=%s gb=%s purchase=%s",
-                    provider, telegram_id, traffic_gb, purchase_id,
+                    "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
+                    provider, telegram_id, traffic_gb, rmn_err,
                 )
-        except Exception as rmn_err:
-            logger.error(
-                "TRAFFIC_PACK_REMNAWAVE_ERROR: provider=%s tg=%s gb=%s error=%s",
-                provider, telegram_id, traffic_gb, rmn_err,
-            )
+        if not rmn_success:
+            # No UUID or stale (404) — clear and create fresh
+            if rmn_uuid:
+                await database.clear_remnawave_uuid(telegram_id)
+            try:
+                from app.services import remnawave_service
+                from datetime import datetime, timezone, timedelta
+                far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+                await remnawave_service.create_remnawave_user(
+                    telegram_id, "basic", far_future,
+                    traffic_limit_override=traffic_bytes,
+                )
+                rmn_success = True
+                logger.info("BYPASS_REMNAWAVE_USER_CREATED provider=%s user=%s gb=%s", provider, telegram_id, traffic_gb)
+            except Exception as rmn_err:
+                logger.error(
+                    "TRAFFIC_PACK_REMNAWAVE_CREATE_ERROR: provider=%s tg=%s gb=%s error=%s",
+                    provider, telegram_id, traffic_gb, rmn_err,
+                )
     else:
         logger.error(
             "TRAFFIC_PACK_INVALID_GB: provider=%s tg=%s gb=%s purchase=%s — pack not found in config",
             provider, telegram_id, traffic_gb, purchase_id,
         )
 
-    if rmn_success:
+    # Bypass-only: activate 3-day trial if eligible
+    _trial_activated = False
+    if _is_bypass:
+        try:
+            from app.services.trials import service as trial_service
+            if await trial_service.is_trial_available(telegram_id):
+                await trial_service.activate_trial(telegram_id)
+                _trial_activated = True
+                logger.info("BYPASS_TRIAL_ACTIVATED provider=%s user=%s", provider, telegram_id)
+        except Exception as trial_err:
+            logger.warning("BYPASS_TRIAL_FAIL provider=%s user=%s: %s", provider, telegram_id, trial_err)
+
+    if _is_bypass:
+        text = i18n_get_text(language, "bypass.purchase_success", gb=traffic_gb)
+        if _trial_activated:
+            text += "\n\n" + i18n_get_text(language, "bypass.trial_activated")
+    elif rmn_success:
         text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
     else:
-        # Payment was already processed — traffic will be added manually by support
         text = i18n_get_text(language, "traffic.purchase_success", gb=traffic_gb, price="")
-        text += "\n\n⚠️ Traffic activation delayed. Please contact support if not applied within 1 hour."
+        text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
         logger.error(
             "TRAFFIC_PACK_NOT_APPLIED: provider=%s tg=%s gb=%s purchase=%s — needs manual resolution",
             provider, telegram_id, traffic_gb, purchase_id,
         )
+
+    if not rmn_success and _is_bypass:
+        text += "\n\n⚠️ Активация трафика задерживается. Обратитесь в поддержку, если не применится в течение часа."
+
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.back_to_traffic"),
-            callback_data="traffic_info",
-        )],
-    ])
+    if _is_bypass:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
+            [InlineKeyboardButton(text="🌐 Купить ещё ГБ", callback_data="buy_traffic")],
+            [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
+        ])
+    else:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "traffic.back_to_traffic"),
+                callback_data="traffic_info",
+            )],
+        ])
     try:
         await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
     except Exception as send_err:

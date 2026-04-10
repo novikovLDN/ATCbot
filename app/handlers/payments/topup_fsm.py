@@ -93,7 +93,7 @@ async def process_topup_amount(message: Message, state: FSMContext):
     # Показываем экран выбора способа оплаты
     text = i18n_get_text(language, "main.topup_select_payment_method", amount=amount)
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_with_card"),
             callback_data=f"topup_card:{amount}"
@@ -102,10 +102,17 @@ async def process_topup_amount(message: Message, state: FSMContext):
             text=i18n_get_text(language, "payment.stars"),
             callback_data=f"topup_stars:{amount}"
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="topup_balance"
-        )],
-    ])
+    ]
+    import lava_service
+    if lava_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.lava"),
+            callback_data=f"topup_lava:{amount}"
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="topup_balance"
+    )])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await message.answer(text, reply_markup=keyboard)

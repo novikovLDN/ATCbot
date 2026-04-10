@@ -273,6 +273,35 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
         return False
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Check if user has Remnawave bypass traffic — if so, transition to bypass-only
+            # instead of fully expiring (bypass GB work independently of main subscription)
+            has_remnawave = await conn.fetchval(
+                "SELECT remnawave_uuid FROM subscriptions WHERE id = $1 AND remnawave_uuid IS NOT NULL",
+                subscription_id,
+            )
+
+            if has_remnawave:
+                # Transition to bypass-only: remove Xray but keep Remnawave active
+                far_future = now + timedelta(days=3650)
+                result = await conn.execute(
+                    """UPDATE subscriptions
+                       SET uuid = NULL, vpn_key = NULL, vpn_key_plus = NULL,
+                           is_bypass_only = TRUE,
+                           expires_at = $5,
+                           source = 'bypass_only'
+                       WHERE id = $1 AND telegram_id = $2 AND uuid = $3 AND status = 'active'
+                         AND expires_at <= $4""",
+                    subscription_id, telegram_id, uuid_to_remove, now_db,
+                    _to_db_utc(far_future),
+                )
+                rows = int(result.split()[-1]) if result else 0
+                if rows > 0:
+                    logger.info(
+                        "EXPIRY_TRANSITION_TO_BYPASS_ONLY user=%s — Remnawave stays active",
+                        telegram_id,
+                    )
+                return rows > 0
+
             result = await conn.execute(
                 """UPDATE subscriptions
                    SET status = 'expired', uuid = NULL, vpn_key = NULL
@@ -286,7 +315,7 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                     "EXPIRY_DB_UPDATE_SUCCESS",
                     extra={"telegram_id": telegram_id, "uuid": (uuid_to_remove[:8] + "...") if uuid_to_remove else "N/A"}
                 )
-                # Disable Remnawave bypass (fire-and-forget)
+                # Disable Remnawave bypass (fire-and-forget) — no remnawave_uuid means safe to disable
                 try:
                     from app.services.remnawave_service import disable_remnawave_user_bg
                     disable_remnawave_user_bg(telegram_id)
@@ -341,6 +370,48 @@ async def set_bypass_only_flag(telegram_id: int, is_bypass_only: bool = True):
             is_bypass_only, telegram_id,
         )
         logger.info(f"set_bypass_only_flag: user={telegram_id} is_bypass_only={is_bypass_only} result={result}")
+
+
+async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
+    """Create a subscription row for bypass-only user if none exists.
+
+    Sets status='active', is_bypass_only=True, expires_at far in the future (10 years).
+    If subscription already exists, just sets is_bypass_only=True.
+    Returns True on success.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_bypass_only BOOLEAN DEFAULT FALSE"
+            )
+        except Exception:
+            pass
+        existing = await conn.fetchrow(
+            "SELECT telegram_id FROM subscriptions WHERE telegram_id = $1", telegram_id
+        )
+        far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+        if existing:
+            # Update existing: set bypass-only, ensure active status and far-future expiry
+            # (old expired subscription may have expires_at in the past)
+            await conn.execute(
+                """UPDATE subscriptions
+                   SET is_bypass_only = TRUE, status = 'active',
+                       expires_at = GREATEST(expires_at, $2),
+                       source = CASE WHEN status = 'expired' OR expires_at < NOW() THEN 'bypass_only' ELSE source END
+                   WHERE telegram_id = $1""",
+                telegram_id, _to_db_utc(far_future),
+            )
+        else:
+            await conn.execute(
+                """INSERT INTO subscriptions (telegram_id, status, subscription_type, is_bypass_only, expires_at, source)
+                   VALUES ($1, 'active', 'basic', TRUE, $2, 'bypass_only')""",
+                telegram_id, _to_db_utc(far_future),
+            )
+        logger.info(f"ensure_bypass_only_subscription: user={telegram_id} created/updated")
+        return True
 
 
 async def get_subscription(telegram_id: int) -> Optional[Dict[str, Any]]:
@@ -1331,7 +1402,7 @@ async def grant_access(
         # 4. uuid IS NOT NULL (UUID существует)
         if subscription and status == "active" and uuid and expires_at and expires_at > now:
             current_sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-            incoming_tariff = (tariff or "basic").strip().lower()
+            incoming_tariff = (tariff.strip().lower() if tariff else None) or current_sub_type
 
             # Basic→Plus upgrade: same UUID, call upgrade_vless_user, update vpn_key, vpn_key_plus, subscription_type, extend dates
             if source == "payment" and incoming_tariff == "plus" and current_sub_type == "basic":
@@ -1435,7 +1506,12 @@ async def grant_access(
             else:
                 # UUID НЕ МЕНЯЕТСЯ - только продлеваем subscription_end
                 old_expires_at = expires_at
-                subscription_end = max(expires_at, now) + duration
+                # Bypass-only: фиктивный expires_at (10 лет), считаем от now
+                _is_bypass = subscription.get("is_bypass_only", False)
+                if _is_bypass:
+                    subscription_end = now + duration
+                else:
+                    subscription_end = max(expires_at, now) + duration
                 # subscription_start сохраняется (activated_at не меняется при продлении)
                 _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                 subscription_start = _ensure_utc(_start_raw) if _start_raw else now
@@ -1476,7 +1552,8 @@ async def grant_access(
                                reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE,
                                reminder_6h_sent = FALSE,
-                               activation_status = 'active'
+                               activation_status = 'active',
+                               is_bypass_only = FALSE
                            WHERE telegram_id = $3""",
                         _to_db_utc(subscription_end), source, telegram_id, uuid, incoming_tariff
                     )
@@ -1588,7 +1665,8 @@ async def grant_access(
                     await vpn_utils.ensure_user_in_xray(
                         telegram_id=telegram_id,
                         uuid=uuid,
-                        subscription_end=subscription_end
+                        subscription_end=subscription_end,
+                        tariff=incoming_tariff,
                     )
                 except Exception as e:
                     logger.critical(
@@ -1690,7 +1768,8 @@ async def grant_access(
                            uuid = NULL,
                            vpn_key = NULL,
                            country = COALESCE($6, subscriptions.country),
-                           subscription_type = COALESCE($7, subscriptions.subscription_type)""",
+                           subscription_type = COALESCE($7, subscriptions.subscription_type),
+                           is_bypass_only = FALSE""",
                     telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type
                 )
                 
@@ -1983,7 +2062,8 @@ async def grant_access(
                        activation_attempts = 0,
                        last_activation_error = NULL,
                        subscription_type = COALESCE($10, subscriptions.subscription_type),
-                       country = COALESCE($11, subscriptions.country)""",
+                       country = COALESCE($11, subscriptions.country),
+                       is_bypass_only = FALSE""",
                 *args
             )
             
@@ -4345,6 +4425,7 @@ async def finalize_purchase(
                         "is_renewal": False,
                         "is_traffic_pack": True,
                         "traffic_gb": _gb,
+                        "tariff_type": tariff_type,
                     }
 
                 # STEP 5: ОБРАБОТКА ПОДПИСКИ (subscription only)
@@ -4419,6 +4500,7 @@ async def finalize_purchase(
                         "activation_status": "pending",
                         "is_renewal": False,
                         "is_combo": is_combo_purchase,
+                        "period_days": period_days,
                     }
                 else:
                     # Получаем VPN ключ для нормальной активации
@@ -4539,6 +4621,7 @@ async def finalize_purchase(
                         "referral_reward": referral_reward_result,
                         "is_basic_to_plus_upgrade": grant_result.get("is_basic_to_plus_upgrade", False),
                         "is_combo": is_combo_purchase,
+                        "period_days": period_days,
                     }
         except Exception as tx_err:
             # TWO-PHASE: Phase 2 failed — remove orphan UUID from Xray
@@ -4587,6 +4670,11 @@ async def finalize_purchase(
                 logger.info(f"finalize_purchase: COMBO_FLAG_SET user={telegram_id} is_combo={is_combo_purchase}")
             except Exception as cf_err:
                 logger.warning(f"finalize_purchase: COMBO_FLAG_FAIL user={telegram_id}: {cf_err}")
+            # Clear bypass-only flag — user now has a real subscription
+            try:
+                await set_bypass_only_flag(telegram_id, False)
+            except Exception:
+                pass
             return ret_val
 
 

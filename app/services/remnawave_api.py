@@ -230,17 +230,19 @@ async def delete_user(uuid: str) -> Optional[Dict[str, Any]]:
 # ── Convenience ───────────────────────────────────────────────────────
 
 async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
-    """Return traffic info including subscriptionUrl, or None."""
+    """Return traffic info including subscriptionUrl and happ_url, or None."""
     user = await get_user(uuid)
     if not user:
         return None
     # Traffic data may be nested in userTraffic or at top level
     user_traffic = user.get("userTraffic") or {}
+    sub_url = user.get("subscriptionUrl", "")
     return {
         "usedTrafficBytes": user_traffic.get("usedTrafficBytes", user.get("usedTrafficBytes", 0)),
         "trafficLimitBytes": user.get("trafficLimitBytes", 0),
         "deviceLimit": user.get("deviceLimit", 0),
         "onlineDevices": user.get("onlineDevices", 0),
         "status": user.get("status", "UNKNOWN"),
-        "subscriptionUrl": user.get("subscriptionUrl", ""),
+        "subscriptionUrl": sub_url,
+        "happ_url": f"happ://add/{sub_url}" if sub_url else "",
     }

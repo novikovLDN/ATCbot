@@ -232,12 +232,23 @@ DATABASE_URL = config.env("DATABASE_URL")
 # DB POOL CONFIG — Production-safe, ENV-overridable, single source of truth
 # ====================================================================================
 def _get_pool_config() -> dict:
-    """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation."""
+    """Build asyncpg.create_pool kwargs. Single source of truth for all pool creation.
+
+    Sizing rationale (max_size=50):
+      - Telegram webhook handler concurrency: up to 30 simultaneous updates
+      - Background workers (reminders, trials, activation, xray_sync): ~6
+      - FastAPI payment webhooks: up to 10
+      - Headroom for burst traffic: ~4
+      Total: ~50 connections.  Railway Postgres supports up to 97 connections;
+      keeping max_size=50 leaves room for migrations, pg_dump, and manual queries.
+
+    acquire timeout raised to 15s so burst requests queue instead of failing.
+    """
     return {
-        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "2")),
-        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "25")),  # Increased from 15 to handle peak load (6 workers + 20 webhook handlers)
+        "min_size": int(os.getenv("DB_POOL_MIN_SIZE", "5")),
+        "max_size": int(os.getenv("DB_POOL_MAX_SIZE", "50")),
         "max_inactive_connection_lifetime": 300,
-        "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "10")),
+        "timeout": int(os.getenv("DB_POOL_ACQUIRE_TIMEOUT", "15")),
         "command_timeout": int(os.getenv("DB_POOL_COMMAND_TIMEOUT", "30")),
     }
 
@@ -864,15 +875,22 @@ async def init_db() -> bool:
                 telegram_id BIGINT NOT NULL,
                 status TEXT NOT NULL,
                 variant TEXT,
+                message_id BIGINT,
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # Добавляем колонку variant для миграции
         try:
             await conn.execute("ALTER TABLE broadcast_log ADD COLUMN IF NOT EXISTS variant TEXT")
         except Exception:
             # Колонка уже существует или таблицы нет
+            pass
+
+        # Добавляем колонку message_id для миграции
+        try:
+            await conn.execute("ALTER TABLE broadcast_log ADD COLUMN IF NOT EXISTS message_id BIGINT")
+        except Exception:
             pass
 
         # Таблица broadcast_discounts (скидки для кнопок уведомлений)
@@ -1000,6 +1018,13 @@ async def init_db() -> bool:
         # Миграция 037: is_combo для pending_purchases
         try:
             await conn.execute("ALTER TABLE pending_purchases ADD COLUMN IF NOT EXISTS is_combo BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+
+        # Миграция 038: traffic_notified_8gb и traffic_notified_5gb
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS traffic_notified_8gb BOOLEAN DEFAULT FALSE")
+            await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS traffic_notified_5gb BOOLEAN DEFAULT FALSE")
         except Exception:
             pass
 

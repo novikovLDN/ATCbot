@@ -124,7 +124,7 @@ async def callback_topup_amount(callback: CallbackQuery):
     # Показываем экран выбора способа оплаты
     text = i18n_get_text(language, "main.topup_select_payment_method", amount=amount)
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    buttons = [
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.pay_with_card"),
             callback_data=f"topup_card:{amount}"
@@ -137,11 +137,18 @@ async def callback_topup_amount(callback: CallbackQuery):
             text=i18n_get_text(language, "payment.stars"),
             callback_data=f"topup_stars:{amount}"
         )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="topup_balance"
-        )],
-    ])
+    ]
+    import lava_service
+    if lava_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.lava"),
+            callback_data=f"topup_lava:{amount}"
+        )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data="topup_balance"
+    )])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
@@ -596,6 +603,16 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             return
         
         # API is source of truth — vpn_key from API, no local validation
+        # КРИТИЧНО: Читаем combo данные из FSM ДО очистки
+        _combo_gb_from_fsm = 0
+        _bypass_gb_from_fsm = 0
+        try:
+            _pre_clear_fsm = await state.get_data()
+            _combo_gb_from_fsm = _pre_clear_fsm.get("combo_bypass_gb", 0)
+            _bypass_gb_from_fsm = _pre_clear_fsm.get("bypass_only_gb", 0)
+        except Exception:
+            pass
+
         # КРИТИЧНО: Удаляем промо-сессию после успешной оплаты
         await clear_promo_session(state)
         
@@ -631,13 +648,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             except Exception as e:
                 logger.error(f"Failed to send upgrade message: user={telegram_id}, error={e}")
         else:
-            # Check if this is a combo purchase from FSM
-            _is_combo = False
-            try:
-                _fsm = await state.get_data()
-                _is_combo = _fsm.get("combo_bypass_gb", 0) > 0
-            except Exception:
-                pass
+            _is_combo = _combo_gb_from_fsm > 0
 
             if config.is_biz_tariff(subscription_type):
                 tariff_label, tariff_icon = "Business", "🏢"
@@ -697,43 +708,45 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         try:
             from app.services.remnawave_service import renew_remnawave_user_bg
             if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS:
-                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at)
+                renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=period_days)
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: balance tg=%s %s", telegram_id, rmn_err)
 
         # Combo/Bypass: начисляем трафик обхода если покупка через комбо или bypass-only
-        try:
-            fsm_data = await state.get_data()
-            combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
-            bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
+        combo_bypass_gb = _combo_gb_from_fsm
+        bypass_only_gb = _bypass_gb_from_fsm
 
-            if combo_bypass_gb > 0 or bypass_only_gb > 0:
-                from app.services import remnawave_api, remnawave_service
-                gb = combo_bypass_gb or bypass_only_gb
-                traffic_bytes = gb * 1024**3
-                rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-                if not rmn_uuid:
-                    rmn_uuid = await remnawave_service.ensure_remnawave_user(telegram_id, subscription_type)
-                if rmn_uuid:
-                    await remnawave_api.add_traffic(rmn_uuid, traffic_bytes)
+        if combo_bypass_gb > 0 or bypass_only_gb > 0:
+            from app.services import remnawave_service
+            gb = combo_bypass_gb or bypass_only_gb
+            traffic_bytes = gb * 1024**3
+
+            try:
+                rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+                if not rmn_success:
+                    logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL_BALANCE user={telegram_id} gb={gb}")
                 await database.record_traffic_purchase(telegram_id, gb, 0)
                 logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED_BALANCE user={telegram_id} gb={gb}")
+            except Exception as traffic_err:
+                logger.warning(f"COMBO_BYPASS_TRAFFIC_ERROR_BALANCE user={telegram_id}: {traffic_err}")
 
-                # Mark subscription as combo
-                if combo_bypass_gb > 0:
+            # Mark subscription as combo (OUTSIDE traffic try block)
+            if combo_bypass_gb > 0:
+                try:
                     await database.set_combo_flag(telegram_id, True)
+                    logger.info(f"COMBO_FLAG_SET_BALANCE user={telegram_id}")
+                except Exception as flag_err:
+                    logger.warning(f"COMBO_FLAG_FAIL_BALANCE user={telegram_id}: {flag_err}")
 
-                # Bypass-only: mark flag + activate trial if eligible
-                if bypass_only_gb > 0:
+            # Bypass-only: mark flag + activate trial if eligible
+            if bypass_only_gb > 0:
+                try:
                     await database.set_bypass_only_flag(telegram_id, True)
                     from app.services.trials import service as trial_service
                     if await trial_service.is_trial_available(telegram_id):
-                        try:
-                            await trial_service.activate_trial(telegram_id)
-                        except Exception:
-                            pass
-        except Exception as combo_err:
-            logger.warning(f"COMBO_BYPASS_BALANCE_FAIL user={telegram_id}: {combo_err}")
+                        await trial_service.activate_trial(telegram_id)
+                except Exception:
+                    pass
 
     except Exception as e:
         logger.exception(f"CRITICAL: Unexpected error in callback_pay_balance: {e}")
@@ -1267,6 +1280,140 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
 
 
+@payments_router.callback_query(F.data == "pay:lava")
+async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
+    """Оплата картой через Lava (api.lava.ru)
+
+    КРИТИЧНО:
+    - Работает ТОЛЬКО в состоянии choose_payment_method
+    - Создает pending_purchase
+    - Создает invoice через Lava API
+    - Отправляет payment URL пользователю
+    """
+    telegram_id = callback.from_user.id
+
+    # Rate limiting
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    # КРИТИЧНО: Проверяем FSM state — должен быть choose_payment_method
+    current_state = await state.get_state()
+    if current_state != PurchaseState.choose_payment_method:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        logger.warning(f"Invalid FSM state for pay:lava: user={telegram_id}, state={current_state}")
+        await state.set_state(None)
+        return
+
+    # КРИТИЧНО: Получаем данные из FSM state
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type")
+    period_days = fsm_data.get("period_days")
+    final_price_kopecks = fsm_data.get("final_price_kopecks")
+    country = fsm_data.get("country")
+
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+
+    if not tariff_type or not period_days or not final_price_kopecks:
+        error_text = i18n_get_text(language, "errors.session_expired")
+        await callback.answer(error_text, show_alert=True)
+        logger.error(f"Missing purchase data in FSM for lava: user={telegram_id}")
+        await state.set_state(None)
+        return
+
+    # Проверяем доступность Lava
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
+        logger.error("Lava not configured")
+        return
+
+    try:
+        final_price_rubles = final_price_kopecks / 100.0
+
+        # Создаем pending_purchase
+        purchase_id = await subscription_service.create_subscription_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=final_price_kopecks,
+            promo_code=promo_code,
+            country=country,
+            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
+        )
+
+        await state.update_data(purchase_id=purchase_id, payment_method="lava")
+
+        logger.info(
+            f"Purchase created for lava payment: user={telegram_id}, purchase_id={purchase_id}, "
+            f"tariff={tariff_type}, period_days={period_days}, price={final_price_rubles}"
+        )
+
+        # Формируем описание
+        months = period_days // 30
+        if config.is_biz_tariff(tariff_type):
+            tariff_name = "Business"
+        elif tariff_type == "basic":
+            tariff_name = "Basic"
+        else:
+            tariff_name = "Plus"
+
+        comment = f"Atlas Secure VPN — {tariff_name} {months}m"
+
+        # Создаем invoice через Lava API
+        invoice_data = await lava_service.create_invoice(
+            amount_rubles=final_price_rubles,
+            purchase_id=purchase_id,
+            comment=comment,
+        )
+
+        invoice_id = invoice_data["invoice_id"]
+        payment_url = invoice_data["payment_url"]
+
+        # Сохраняем invoice_id в БД
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error(f"Failed to save lava invoice_id to DB: purchase_id={purchase_id}, error={e}")
+
+        logger.info(
+            f"invoice_created: provider=lava, user={telegram_id}, purchase_id={purchase_id}, "
+            f"invoice_id={invoice_id}, price={final_price_rubles:.2f}"
+        )
+
+        # Отправляем пользователю ссылку на оплату
+        text = i18n_get_text(language, "payment.lava_waiting", amount=final_price_rubles)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.lava_pay_button"),
+                url=payment_url
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="menu_buy_vpn"
+            )]
+        ])
+
+        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
+        await callback.answer()
+
+        # Очищаем FSM state
+        await state.set_state(None)
+        await state.clear()
+
+    except Exception as e:
+        logger.exception(f"Error creating Lava invoice: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.set_state(None)
+
+
 @payments_router.callback_query(F.data.startswith("topup_sbp:"))
 async def callback_topup_sbp(callback: CallbackQuery):
     """Пополнение баланса через СБП (Platega.io, +11%)"""
@@ -1347,6 +1494,88 @@ async def callback_topup_sbp(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception(f"Error creating Platega SBP transaction for balance top-up: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@payments_router.callback_query(F.data.startswith("topup_lava:"))
+async def callback_topup_lava(callback: CallbackQuery):
+    """Пополнение баланса через Lava (карта)"""
+    if not await ensure_db_ready_callback(callback):
+        return
+
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    amount_str = callback.data.split(":")[1]
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    if amount <= 0 or amount > 100000:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer(i18n_get_text(language, "payment.lava_unavailable"), show_alert=True)
+        return
+
+    try:
+        amount_kopecks = amount * 100
+        amount_rubles = float(amount)
+
+        purchase_id = await subscription_service.create_balance_topup_purchase(
+            telegram_id=telegram_id,
+            amount_kopecks=amount_kopecks,
+            currency="RUB"
+        )
+
+        invoice_data = await lava_service.create_invoice(
+            amount_rubles=amount_rubles,
+            purchase_id=purchase_id,
+            comment=f"Пополнение баланса на {amount} ₽",
+        )
+
+        invoice_id = invoice_data["invoice_id"]
+        payment_url = invoice_data["payment_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error(f"Failed to save lava invoice_id to DB: purchase_id={purchase_id}, error={e}")
+
+        logger.info(
+            f"balance_topup_invoice_created: provider=lava, user={telegram_id}, "
+            f"purchase_id={purchase_id}, amount={amount_rubles:.2f}"
+        )
+
+        text = i18n_get_text(language, "payment.lava_waiting", amount=amount_rubles)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.lava_pay_button"),
+                url=payment_url
+            )],
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data="topup_balance"
+            )]
+        ])
+
+        lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, lava_msg))
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error creating Lava invoice for balance top-up: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 

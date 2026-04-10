@@ -45,27 +45,26 @@ async def _safe_send(
     semaphore: asyncio.Semaphore,
     photo_file_id: str | None = None,
     caption: str | None = None,
-) -> bool:
-    """Send message or photo with concurrency limit and TelegramRetryAfter respect."""
+) -> int | None:
+    """Send message or photo. Returns message_id on success, None on failure."""
     async with semaphore:
         for attempt in range(BROADCAST_RETRY_LIMIT):
             try:
                 if photo_file_id:
-                    # Если есть фото — отправляем фото с подписью
-                    await bot.send_photo(
+                    result = await bot.send_photo(
                         user_id,
                         photo=photo_file_id,
                         caption=caption or text,
                         parse_mode="HTML",
                     )
                 else:
-                    await bot.send_message(user_id, text, parse_mode="HTML")
-                return True
+                    result = await bot.send_message(user_id, text, parse_mode="HTML")
+                return result.message_id
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)
             except Exception:
                 await asyncio.sleep(1)
-        return False
+        return None
 
 
 
@@ -77,13 +76,13 @@ async def _safe_send_with_buttons(
     reply_markup: InlineKeyboardMarkup | None = None,
     photo_file_id: str | None = None,
     caption: str | None = None,
-) -> bool:
-    """Send message with optional inline buttons."""
+) -> int | None:
+    """Send message with optional inline buttons. Returns message_id on success, None on failure."""
     async with semaphore:
         for attempt in range(BROADCAST_RETRY_LIMIT):
             try:
                 if photo_file_id:
-                    await bot.send_photo(
+                    result = await bot.send_photo(
                         user_id,
                         photo=photo_file_id,
                         caption=caption or text,
@@ -91,13 +90,13 @@ async def _safe_send_with_buttons(
                         parse_mode="HTML",
                     )
                 else:
-                    await bot.send_message(user_id, text, reply_markup=reply_markup, parse_mode="HTML")
-                return True
+                    result = await bot.send_message(user_id, text, reply_markup=reply_markup, parse_mode="HTML")
+                return result.message_id
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)
             except Exception:
                 await asyncio.sleep(1)
-        return False
+        return None
 
 
 def _build_broadcast_reply_markup(
@@ -280,7 +279,7 @@ async def cmd_notify_no_subscription(message: Message, state: FSMContext):
         return
     language = await resolve_user_language(message.from_user.id)
     await state.set_state(AdminBroadcastNoSubscription.waiting_for_text)
-    await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"))
+    await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"), parse_mode="HTML")
 
 
 @admin_broadcast_router.message(AdminBroadcastNoSubscription.waiting_for_text)
@@ -295,7 +294,7 @@ async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
         return
     if not message.text or not message.text.strip():
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"))
+        await message.answer(i18n_get_text(language, "broadcast._no_sub_enter_text"), parse_mode="HTML")
         return
     text = message.text.strip()
     try:
@@ -396,6 +395,7 @@ async def callback_admin_broadcast(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._create"), callback_data="broadcast:create")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._ab_stats"), callback_data="broadcast:ab_stats")],
+        [InlineKeyboardButton(text="🗑 Удалить уведомление", callback_data="broadcast:delete_list")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:notifications")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard)
@@ -454,12 +454,14 @@ async def callback_broadcast_test_type(callback: CallbackQuery, state: FSMContex
     if test_type == "ab":
         await state.set_state(BroadcastCreate.waiting_for_message_a)
         await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._enter_variant_a")
+            i18n_get_text(language, "broadcast._enter_variant_a"),
+            parse_mode="HTML",
         )
     else:
         await state.set_state(BroadcastCreate.waiting_for_message)
         await callback.message.edit_text(
-            i18n_get_text(language, "broadcast._enter_message")
+            i18n_get_text(language, "broadcast._enter_message"),
+            parse_mode="HTML",
         )
 
 
@@ -473,7 +475,8 @@ async def process_broadcast_message_a(message: Message, state: FSMContext):
     await state.update_data(message_a=message.text)
     await state.set_state(BroadcastCreate.waiting_for_message_b)
     await message.answer(
-        i18n_get_text(language, "broadcast._enter_variant_b")
+        i18n_get_text(language, "broadcast._enter_variant_b"),
+        parse_mode="HTML",
     )
 
 
@@ -830,12 +833,12 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                     p_file_id: str | None = None,
                     cap: str | None = None,
                 ):
-                    ok = await _safe_send_with_buttons(
+                    msg_id = await _safe_send_with_buttons(
                         bot, user_id, msg, semaphore,
                         reply_markup=reply_markup,
                         photo_file_id=p_file_id, caption=cap,
                     )
-                    return (user_id, variant, ok)
+                    return (user_id, variant, msg_id)
 
                 for i in range(0, total, BROADCAST_BATCH_SIZE):
                     batch = user_ids[i:i + BROADCAST_BATCH_SIZE]
@@ -862,9 +865,9 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                         if isinstance(r, Exception):
                             logger.warning(f"BROADCAST_TASK_ERROR broadcast_id={broadcast_id} error={r}")
                             continue
-                        uid, v, ok = r
-                        if ok:
-                            await database.log_broadcast_send(broadcast_id, uid, "sent", v)
+                        uid, v, msg_id = r
+                        if msg_id:
+                            await database.log_broadcast_send(broadcast_id, uid, "sent", v, message_id=msg_id)
                             sent_count += 1
                         else:
                             failed_list.append({"telegram_id": uid, "error": "Send failed"})
@@ -930,6 +933,138 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 
     finally:
         await state.clear()
+
+
+@admin_broadcast_router.callback_query(F.data == "broadcast:delete_list")
+async def callback_broadcast_delete_list(callback: CallbackQuery):
+    """Список броадкастов для удаления у пользователей."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await callback.answer()
+
+    broadcasts = await database.get_recent_broadcasts(limit=10)
+    if not broadcasts:
+        await safe_edit_text(
+            callback.message,
+            "📭 Нет броадкастов для удаления.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
+            ]),
+        )
+        return
+
+    lines = ["🗑 <b>Удалить уведомление у пользователей</b>\n"]
+    buttons = []
+    for b in broadcasts:
+        bid = b["id"]
+        title = (b["title"] or "—")[:30]
+        sent = b["sent_count"] or 0
+        has_ids = b["has_msg_ids"] or 0
+        date_str = b["created_at"].strftime("%d.%m %H:%M") if b["created_at"] else "—"
+        label = f"#{bid} {title} ({sent} отпр.)"
+        if has_ids == 0:
+            label += " ❌ нет ID"
+        lines.append(f"• <b>#{bid}</b> {title} — {sent} отпр., {has_ids} с ID — {date_str}")
+        if has_ids > 0:
+            buttons.append([InlineKeyboardButton(
+                text=f"🗑 #{bid} {title}",
+                callback_data=f"broadcast:delete_confirm:{bid}",
+            )])
+
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")])
+    text = "\n".join(lines)
+    if not any("delete_confirm" in str(b) for row in buttons for b in row):
+        text += "\n\n⚠️ Ни один броадкаст не имеет сохранённых message_id. Удаление доступно только для новых уведомлений."
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast:delete_confirm:"))
+async def callback_broadcast_delete_confirm(callback: CallbackQuery):
+    """Подтверждение удаления броадкаста."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await callback.answer()
+
+    broadcast_id = int(callback.data.split(":")[-1])
+    pairs = await database.get_broadcast_message_ids(broadcast_id)
+
+    if not pairs:
+        await safe_edit_text(
+            callback.message,
+            f"❌ Броадкаст #{broadcast_id} — нет сообщений с сохранёнными ID для удаления.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:delete_list")],
+            ]),
+        )
+        return
+
+    text = (
+        f"🗑 <b>Удалить броадкаст #{broadcast_id}?</b>\n\n"
+        f"Будет удалено <b>{len(pairs)}</b> сообщений из чатов пользователей.\n\n"
+        f"⚠️ Это действие необратимо."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ Удалить {len(pairs)} сообщений", callback_data=f"broadcast:delete_exec:{broadcast_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast:delete_list")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast:delete_exec:"))
+async def callback_broadcast_delete_exec(callback: CallbackQuery):
+    """Выполнение удаления броадкаста у пользователей."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await callback.answer()
+
+    broadcast_id = int(callback.data.split(":")[-1])
+    pairs = await database.get_broadcast_message_ids(broadcast_id)
+
+    if not pairs:
+        await safe_edit_text(
+            callback.message,
+            f"❌ Нет сообщений для удаления.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:delete_list")],
+            ]),
+        )
+        return
+
+    await safe_edit_text(
+        callback.message,
+        f"🗑 Удаляю {len(pairs)} сообщений броадкаста #{broadcast_id}...",
+    )
+
+    bot = callback.bot
+    deleted = 0
+    failed = 0
+    for telegram_id, message_id in pairs:
+        try:
+            await bot.delete_message(chat_id=telegram_id, message_id=message_id)
+            deleted += 1
+        except Exception:
+            failed += 1
+        if deleted % 30 == 0:
+            await asyncio.sleep(1)  # Rate limit
+
+    await database.mark_broadcast_messages_deleted(broadcast_id)
+
+    text = (
+        f"✅ <b>Броадкаст #{broadcast_id} удалён</b>\n\n"
+        f"🗑 Удалено: {deleted}\n"
+        f"❌ Не удалось: {failed}\n"
+        f"📊 Всего: {len(pairs)}"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 К списку", callback_data="broadcast:delete_list")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+
+    logger.info(f"BROADCAST_BULK_DELETE broadcast_id={broadcast_id} deleted={deleted} failed={failed} total={len(pairs)}")
 
 
 @admin_broadcast_router.callback_query(F.data == "broadcast:ab_stats")

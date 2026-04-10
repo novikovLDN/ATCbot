@@ -66,8 +66,21 @@ async def run_no_subscription_broadcast(
         ADMIN_BROADCAST_TYPE, total, 0, 0
     )
 
+    # Create broadcasts record for message_id tracking & bulk deletion
+    try:
+        broadcast_id = await database.create_broadcast(
+            title="no_sub_broadcast",
+            message=text[:500],
+            broadcast_type="promo",
+            segment="no_subscription",
+            sent_by=admin_telegram_id,
+        )
+    except Exception as e:
+        logger.warning(f"ADMIN_BROADCAST_CREATE_RECORD_FAILED: {e}")
+        broadcast_id = None
+
     logger.info(
-        f"ADMIN_BROADCAST_STARTED [correlation_id={correlation_id}, total_recipients={total}]"
+        f"ADMIN_BROADCAST_STARTED [correlation_id={correlation_id}, total_recipients={total}, broadcast_id={broadcast_id}]"
     )
 
     pool = None
@@ -108,6 +121,7 @@ async def run_no_subscription_broadcast(
             try:
                 sent = await safe_send_message(bot, telegram_id, text)
                 await asyncio.sleep(0.07)
+                msg_id = sent.message_id if sent else None
                 async with counters_lock:
                     if sent is not None:
                         counters["success"] += 1
@@ -115,6 +129,13 @@ async def run_no_subscription_broadcast(
                         counters["failed"] += 1
                     done = counters["success"] + counters["failed"] + counters["skipped"]
                     s, f, sk = counters["success"], counters["failed"], counters["skipped"]
+                # Log to broadcast_log for message_id tracking
+                if broadcast_id:
+                    try:
+                        status = "sent" if sent else "failed"
+                        await database.log_broadcast_send(broadcast_id, telegram_id, status, message_id=msg_id)
+                    except Exception:
+                        pass
                 if done % BATCH_SIZE == 0:
                     logger.info(
                         f"ADMIN_BROADCAST_PROGRESS [correlation_id={correlation_id}, "

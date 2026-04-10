@@ -477,7 +477,7 @@ async def remove_plus_inbound(uuid: str) -> bool:
         raise VPNAPIError(f"Failed to remove plus inbound: {e}") from e
 
 
-async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime) -> Optional[str]:
+async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscription_end: datetime, tariff: str = "basic") -> Optional[str]:
     """
     Sync user to Xray. DB is source of truth for UUID.
     1. If user has UUID: try update_user. If 404 → add_user with SAME uuid, return it.
@@ -507,9 +507,10 @@ async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscriptio
         await add_vless_user(
             telegram_id=telegram_id,
             subscription_end=subscription_end,
-            uuid=uuid_clean
+            uuid=uuid_clean,
+            tariff=tariff,
         )
-        logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={uuid_preview}")
+        logger.info(f"XRAY_UPDATE_FALLBACK_ADD uuid={uuid_preview} tariff={tariff}")
         return uuid_clean
     except Exception as add_e:
         logger.critical(f"XRAY_ADD_FAILED uuid={uuid_preview} error={add_e}", exc_info=True)
