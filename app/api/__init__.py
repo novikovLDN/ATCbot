@@ -4,7 +4,7 @@ API module — HTTP endpoints for webhooks and health.
 import logging
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import telegram_webhook
 from app.api import payment_webhook
@@ -38,6 +38,20 @@ app.add_middleware(RequestSizeLimitMiddleware, max_size=1 * 1024 * 1024)
 app.include_router(telegram_webhook.router)
 app.include_router(payment_webhook.router)
 app.include_router(deeplink_redirect.router)
+
+
+@app.get("/webapp/done")
+async def webapp_done():
+    """Instant-close WebApp page for green 'Done' button."""
+    return HTMLResponse("""<!DOCTYPE html>
+<html><head>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+Telegram.WebApp.ready();
+Telegram.WebApp.sendData("setup_done");
+Telegram.WebApp.close();
+</script>
+</head><body></body></html>""")
 
 
 @app.get("/health")

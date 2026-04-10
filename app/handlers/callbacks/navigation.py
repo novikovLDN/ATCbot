@@ -659,25 +659,67 @@ async def callback_setup_step2(callback: CallbackQuery):
 
     text = i18n_get_text(language, "setup.key_install_title")
 
+    buttons = []
+
+    # === Auto-setup deeplinks ===
+    if sub_url:
+        from urllib.parse import quote, urlparse
+        if config.PUBLIC_BASE_URL:
+            base_url = config.PUBLIC_BASE_URL
+        else:
+            parsed = urlparse(config.WEBHOOK_URL)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        text += f"\n\n{i18n_get_text(language, 'setup.auto_install_header')}"
+
+        # Happ auto-setup: VPN + Bypass
+        happ_row = [InlineKeyboardButton(
+            text="⚡️ Happ (VPN)",
+            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+        )]
+        if bypass_url:
+            happ_row.append(InlineKeyboardButton(
+                text="⚡️ Happ (Обход)",
+                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+            ))
+        buttons.append(happ_row)
+
+        # V2RayTun auto-setup: VPN + Bypass
+        v2_row = [InlineKeyboardButton(
+            text="⚡️ V2RayTun (VPN)",
+            url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
+        )]
+        if bypass_url:
+            v2_row.append(InlineKeyboardButton(
+                text="⚡️ V2RayTun (Обход)",
+                url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
+            ))
+        buttons.append(v2_row)
+
+    # === Manual keys ===
+    text += i18n_get_text(language, "setup.manual_install_header")
+
     if sub_url:
         text += f"\n\n{i18n_get_text(language, 'setup.key_vpn')}\n<blockquote><code>{sub_url}</code></blockquote>"
     if bypass_url:
         text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
 
-    buttons = [
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.btn_done"),
-            callback_data="setup_done",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.btn_need_help"),
-            url="https://t.me/Atlas_SupportSecurity",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_step1:{platform}",
-        )],
-    ]
+    # === Bottom buttons ===
+    from aiogram.types import WebAppInfo
+    from urllib.parse import urlparse as _urlparse
+    _done_base = config.PUBLIC_BASE_URL or f"{_urlparse(config.WEBHOOK_URL).scheme}://{_urlparse(config.WEBHOOK_URL).netloc}"
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_done"),
+        web_app=WebAppInfo(url=f"{_done_base}/webapp/done"),
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_need_help"),
+        url="https://t.me/Atlas_SupportSecurity",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"setup_step1:{platform}",
+    )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     # Send photo + text
@@ -1019,6 +1061,32 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
     keyboard = await get_main_menu_keyboard(language, telegram_id)
 
     await callback.bot.send_message(
+        chat_id=telegram_id,
+        text=text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
+
+
+@router.message(F.web_app_data)
+async def on_web_app_closed(message):
+    """WebApp button closed — show main menu (same as setup_done)."""
+    telegram_id = message.from_user.id
+
+    # 🎉 celebration
+    msg = await message.bot.send_message(chat_id=telegram_id, text="🎉")
+    await asyncio.sleep(2)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+    language = await resolve_user_language(telegram_id)
+    text = i18n_get_text(language, "main.welcome")
+    text = await format_text_with_incident(text, language)
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
+
+    await message.bot.send_message(
         chat_id=telegram_id,
         text=text,
         reply_markup=keyboard,
