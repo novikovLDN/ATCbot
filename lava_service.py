@@ -2,14 +2,20 @@
 Lava (Card) Integration
 
 Handles card payment creation and webhook processing via Lava API (api.lava.ru).
-Configuration: wallet_to/jwt_token/API URL resolved via config.py only.
+Configuration: wallet_to/secret_key/shop_id/API URL resolved via config.py only.
+
+Auth: Lava API requires a HS256-signed JWT in the Authorization header.
+The JWT payload contains {"uid": <shop_id>, "tid": <shop_id>} and is
+signed with the secret key from the Lava Business panel.
 """
+import base64
 import config
 import database
 import hashlib
 import hmac
 import json
 import logging
+import time
 from typing import Optional, Dict, Any
 import httpx
 from aiogram import Bot
@@ -20,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 # Configuration — single source: config.py
 LAVA_WALLET_TO = config.LAVA_WALLET_TO
-LAVA_SECRET_KEY = config.LAVA_JWT_TOKEN  # Secret key for HMAC-SHA256 signing
-LAVA_SHOP_ID = config.LAVA_SHOP_ID  # Project/shop ID
+LAVA_SECRET_KEY = config.LAVA_JWT_TOKEN  # Secret key for HS256 JWT signing
+LAVA_SHOP_ID = config.LAVA_SHOP_ID  # Project/shop ID (used in JWT payload)
 LAVA_API_URL = config.LAVA_API_URL
 
 
@@ -30,21 +36,33 @@ def is_enabled() -> bool:
     return bool(LAVA_WALLET_TO and LAVA_SECRET_KEY and LAVA_SHOP_ID)
 
 
-def _sign_request(body: dict) -> str:
-    """Generate HMAC-SHA256 signature of the JSON request body."""
-    body_json = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
-    return hmac.new(
-        LAVA_SECRET_KEY.encode('utf-8'),
-        body_json.encode('utf-8'),
-        hashlib.sha256,
-    ).hexdigest()
+def _b64url_encode(data: bytes) -> str:
+    """Base64url encode without padding (JWT standard)."""
+    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
 
 
-def _get_headers(body: dict) -> Dict[str, str]:
-    """Build Lava API headers: Authorization = shopId:signature."""
-    signature = _sign_request(body)
+def _generate_jwt() -> str:
+    """Generate HS256 JWT token for Lava API authorization.
+
+    Lava expects: Authorization: <JWT>
+    where JWT = base64url(header).base64url(payload).base64url(signature)
+    Payload fields uid/tid match the example from Lava docs.
+    """
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {"uid": LAVA_SHOP_ID, "tid": LAVA_SHOP_ID}
+
+    h = _b64url_encode(json.dumps(header, separators=(',', ':')).encode())
+    p = _b64url_encode(json.dumps(payload, separators=(',', ':')).encode())
+    signing_input = f"{h}.{p}".encode('utf-8')
+    sig = hmac.new(LAVA_SECRET_KEY.encode('utf-8'), signing_input, hashlib.sha256).digest()
+    s = _b64url_encode(sig)
+    return f"{h}.{p}.{s}"
+
+
+def _get_headers() -> Dict[str, str]:
+    """Build Lava API headers with JWT Authorization."""
     return {
-        "Authorization": f"{LAVA_SHOP_ID}:{signature}",
+        "Authorization": _generate_jwt(),
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
@@ -89,24 +107,16 @@ async def create_invoice(
         request_body["hook_url"] = hook_url
 
     async def _make_request():
-        headers = _get_headers(request_body)
-        logger.info(
-            "LAVA_DEBUG: url=%s, auth_header_len=%d, sig_header_len=%d, "
-            "wallet_to=%s, secret_key_prefix=%s, body_keys=%s",
-            f"{LAVA_API_URL}/invoice/create",
-            len(headers.get("Authorization", "")),
-            len(headers.get("Signature", "")),
-            LAVA_WALLET_TO[:10] if LAVA_WALLET_TO else "EMPTY",
-            LAVA_SECRET_KEY[:8] + "..." if LAVA_SECRET_KEY else "EMPTY",
-            list(request_body.keys()),
-        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/create",
-                headers=headers,
+                headers=_get_headers(),
                 json=request_body,
             )
-            logger.info("LAVA_DEBUG_RESPONSE: status=%d, body=%s", response.status_code, response.text[:500])
+            if response.status_code == 200:
+                resp_data = response.json()
+                if resp_data.get("status") != "success":
+                    logger.error("LAVA_API_ERROR: %s", response.text[:500])
             if 400 <= response.status_code < 500:
                 logger.error(
                     f"Lava API client error: status={response.status_code}, "
@@ -157,12 +167,11 @@ async def check_invoice_status(invoice_id: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        status_body = {"id": invoice_id}
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/status",
-                headers=_get_headers(status_body),
-                json=status_body,
+                headers=_get_headers(),
+                json={"id": invoice_id},
             )
             if response.status_code != 200:
                 logger.error(f"Lava status check failed: status={response.status_code}")
