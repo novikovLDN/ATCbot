@@ -28,6 +28,12 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+@router.callback_query(F.data == "noop")
+async def callback_noop(callback: CallbackQuery):
+    """Decorative button — no action."""
+    await callback.answer()
+
+
 @router.callback_query(F.data == "menu_main")
 async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     """Главное меню. Delete + answer to support navigation from photo message (loyalty screen)."""
@@ -623,7 +629,42 @@ async def callback_setup_platform(callback: CallbackQuery):
 
     buttons = []
 
-    # Auto-setup buttons (if user has subscription)
+    # === Download links FIRST ===
+    links = _DOWNLOAD_LINKS.get(platform, {})
+    if platform in ("ios", "android", "macos"):
+        # Happ — отдельная строка
+        if "happ" in links:
+            buttons.append([InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.download_happ"),
+                url=links["happ"],
+            )])
+        # Hiddify + V2RayTun — в одной строке
+        second_row = []
+        if "hiddify" in links:
+            second_row.append(InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.download_hiddify"),
+                url=links["hiddify"],
+            ))
+        if "v2raytun" in links:
+            second_row.append(InlineKeyboardButton(
+                text=i18n_get_text(language, "setup.download_v2raytun"),
+                url=links["v2raytun"],
+            ))
+        if second_row:
+            buttons.append(second_row)
+    else:
+        # Windows: download buttons in pairs
+        download_row = []
+        for client, url in links.items():
+            label = i18n_get_text(language, f"setup.download_{client}")
+            download_row.append(InlineKeyboardButton(text=label, url=url))
+            if len(download_row) == 2:
+                buttons.append(download_row)
+                download_row = []
+        if download_row:
+            buttons.append(download_row)
+
+    # === Auto-setup buttons (if user has subscription) ===
     if sub_url:
         from urllib.parse import quote, urlparse
         if config.PUBLIC_BASE_URL:
@@ -647,6 +688,12 @@ async def callback_setup_platform(callback: CallbackQuery):
             "hiddify": "Hiddify", "v2rayn": "v2rayN",
         }
 
+        # Decorative separator
+        buttons.append([InlineKeyboardButton(
+            text="Установка ключа в одно нажатие 👇",
+            callback_data="noop",
+        )])
+
         clients = _platform_clients.get(platform, [])
         for client in clients:
             dl = _client_deeplink[client]
@@ -661,18 +708,6 @@ async def callback_setup_platform(callback: CallbackQuery):
                     url=f"{base_url}/open/{dl}?url={quote(bypass_url, safe='')}",
                 ))
             buttons.append(row)
-
-    # Download links
-    links = _DOWNLOAD_LINKS.get(platform, {})
-    download_row = []
-    for client, url in links.items():
-        label = i18n_get_text(language, f"setup.download_{client}")
-        download_row.append(InlineKeyboardButton(text=label, url=url))
-        if len(download_row) == 2:
-            buttons.append(download_row)
-            download_row = []
-    if download_row:
-        buttons.append(download_row)
 
     # Manual setup + QR
     buttons.append([

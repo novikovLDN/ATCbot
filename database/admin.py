@@ -608,21 +608,22 @@ async def get_users_by_segment(segment: str) -> list:
             return []
 
 
-async def log_broadcast_send(broadcast_id: int, telegram_id: int, status: str, variant: str = None):
+async def log_broadcast_send(broadcast_id: int, telegram_id: int, status: str, variant: str = None, message_id: int = None):
     """Записать результат отправки уведомления
-    
+
     Args:
         broadcast_id: ID уведомления
         telegram_id: Telegram ID пользователя
         status: Статус отправки (sent | failed)
         variant: Вариант сообщения (A или B для A/B тестов)
+        message_id: Telegram message_id отправленного сообщения (для удаления)
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            """INSERT INTO broadcast_log (broadcast_id, telegram_id, status, variant)
-               VALUES ($1, $2, $3, $4)""",
-            broadcast_id, telegram_id, status, variant
+            """INSERT INTO broadcast_log (broadcast_id, telegram_id, status, variant, message_id)
+               VALUES ($1, $2, $3, $4, $5)""",
+            broadcast_id, telegram_id, status, variant, message_id
         )
 
 
@@ -646,6 +647,47 @@ async def get_broadcast_stats(broadcast_id: int) -> Dict[str, int]:
             broadcast_id
         )
         return {"sent": sent_count or 0, "failed": failed_count or 0}
+
+
+async def get_recent_broadcasts(limit: int = 10) -> list:
+    """Get recent broadcasts for admin deletion UI."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT b.id, b.title, b.segment, b.created_at,
+                      COUNT(bl.id) FILTER (WHERE bl.status = 'sent') AS sent_count,
+                      COUNT(bl.id) FILTER (WHERE bl.message_id IS NOT NULL) AS has_msg_ids
+               FROM broadcasts b
+               LEFT JOIN broadcast_log bl ON bl.broadcast_id = b.id
+               GROUP BY b.id
+               ORDER BY b.id DESC
+               LIMIT $1""",
+            limit,
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_broadcast_message_ids(broadcast_id: int) -> list:
+    """Get all (telegram_id, message_id) pairs for a broadcast for bulk deletion."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, message_id FROM broadcast_log
+               WHERE broadcast_id = $1 AND status = 'sent' AND message_id IS NOT NULL""",
+            broadcast_id,
+        )
+        return [(r["telegram_id"], r["message_id"]) for r in rows]
+
+
+async def mark_broadcast_messages_deleted(broadcast_id: int) -> None:
+    """Mark broadcast messages as deleted after bulk deletion."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE broadcast_log SET status = 'deleted'
+               WHERE broadcast_id = $1 AND status = 'sent' AND message_id IS NOT NULL""",
+            broadcast_id,
+        )
 
 
 async def get_ab_test_broadcasts() -> list:
