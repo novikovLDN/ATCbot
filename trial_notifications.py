@@ -207,11 +207,7 @@ async def _process_single_trial_notification(bot: Bot, pool, row: dict, now: dat
                 async with pool.acquire() as conn:
                     await conn.execute(flag_query, telegram_id)
                 logger.info(f"trial_reminder_3h_sent: user={telegram_id}, hours_until_expiry={hours_until_expiry:.1f}, discount=15%")
-            elif sent is None:
-                # Permanently failed
-                flag_query = _get_trial_flag_query("trial_notif_3h_sent")
-                async with pool.acquire() as conn:
-                    await conn.execute(flag_query, telegram_id)
+            # If sent is None (blocked/unreachable) — do NOT mark flag, retry next cycle
             return
 
     # === LEGACY TRIAL NOTIFICATION SCHEDULE (kept for backward compatibility) ===
@@ -510,6 +506,8 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                     logger.info(f"trial_expired: VPN access revoked: user={telegram_id}, uuid={uuid_val[:8]}...")
                 except Exception as e:
                     logger.warning(f"Failed to remove VPN UUID for expired trial: user={telegram_id}, error={e}")
+                    # Don't mark subscription as expired if VPN removal failed — retry next cycle
+                    return
 
             # Check if user has Remnawave bypass traffic — keep it active
             has_remnawave = await conn.fetchval(
