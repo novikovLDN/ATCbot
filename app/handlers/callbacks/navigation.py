@@ -1612,7 +1612,8 @@ async def callback_apple_confirm(callback: CallbackQuery):
                          region=region_label, nominal=nominal_str, price=price_rub)
 
     buttons = [
-        [InlineKeyboardButton(text="💳 Картой", callback_data=f"apple_pay_lava:{region}:{nominal}")],
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data=f"apple_pay_card:{region}:{nominal}")],
+        [InlineKeyboardButton(text="💳 Картой (Lava)", callback_data=f"apple_pay_lava:{region}:{nominal}")],
         [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}")],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
@@ -1770,3 +1771,121 @@ async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int
         await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb, parse_mode="HTML")
     except Exception as e:
         logger.error("APPLE_ADMIN_NOTIFY_FAILED error=%s", e)
+
+
+@router.callback_query(F.data.startswith("apple_pay_card:"))
+async def callback_apple_pay_card(callback: CallbackQuery):
+    """Apple ID — pay via YooKassa (Telegram Payments)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    region = parts[1]
+    nominal = int(parts[2])
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    rate = _APPLE_RATES.get(region, 93)
+    price_rub = round(nominal * rate, 2)
+    price_kopecks = round(price_rub * 100)
+    currency = _APPLE_CURRENCIES.get(region, "$")
+    region_label = _APPLE_REGIONS.get(region, region)
+
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer("Оплата картой временно недоступна", show_alert=True)
+        return
+
+    MIN_PAYMENT_KOPECKS = 6400
+    if price_kopecks < MIN_PAYMENT_KOPECKS:
+        await callback.answer("Сумма ниже минимальной для оплаты картой (64₽)", show_alert=True)
+        return
+
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff=f"apple_id_{region}_{nominal}",
+        period_days=0,
+        price_kopecks=price_kopecks,
+        purchase_type="apple_id",
+    )
+
+    import time as _time
+    from aiogram.types import LabeledPrice
+    payload = f"apple_id_{purchase_id}_{int(_time.time())}"
+
+    try:
+        invoice_msg = await callback.bot.send_invoice(
+            chat_id=telegram_id,
+            title=f"Apple ID {region_label} {nominal}{currency}",
+            description=f"Пополнение Apple ID {region_label} на {nominal}{currency}",
+            payload=payload,
+            provider_token=config.TG_PROVIDER_TOKEN,
+            currency="RUB",
+            prices=[LabeledPrice(label=f"Apple ID {nominal}{currency}", amount=price_kopecks)],
+        )
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=i18n_get_text(language, "payment.invoice_timeout"),
+        )
+
+        async def _del_invoice(bot, cid, msg):
+            try:
+                await asyncio.sleep(15 * 60)
+                await bot.delete_message(chat_id=cid, message_id=msg.message_id)
+            except Exception:
+                pass
+        asyncio.create_task(_del_invoice(callback.bot, telegram_id, invoice_msg))
+        await callback.answer()
+    except Exception as e:
+        logger.exception("APPLE_CARD_INVOICE_ERROR user=%s: %s", telegram_id, e)
+        await callback.answer("Ошибка создания платежа", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("apple_pay_sbp:"))
+async def callback_apple_pay_sbp(callback: CallbackQuery):
+    """Apple ID — pay via SBP (Platega)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    region = parts[1]
+    nominal = int(parts[2])
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    rate = _APPLE_RATES.get(region, 93)
+    price_rub = round(nominal * rate, 2)
+    currency = _APPLE_CURRENCIES.get(region, "$")
+    region_label = _APPLE_REGIONS.get(region, region)
+
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff=f"apple_id_{region}_{nominal}",
+        period_days=0,
+        price_kopecks=round(price_rub * 100),
+        purchase_type="apple_id",
+    )
+
+    try:
+        import platega_service
+        result = await platega_service.create_payment(
+            amount_rubles=price_rub,
+            purchase_id=purchase_id,
+            description=f"Apple ID {region_label} {nominal}{currency}",
+        )
+        payment_url = result.get("payment_url") or result.get("url")
+        if payment_url:
+            text = i18n_get_text(language, "payment.sbp_waiting", amount=price_rub)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Оплатить по СБП", url=payment_url)],
+                [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+            ])
+            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        else:
+            await callback.answer("Ошибка создания платежа СБП", show_alert=True)
+    except Exception as e:
+        logger.exception("APPLE_SBP_ERROR user=%s: %s", telegram_id, e)
+        await callback.answer("Ошибка создания платежа СБП", show_alert=True)
