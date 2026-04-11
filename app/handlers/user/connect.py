@@ -19,19 +19,19 @@ logger = logging.getLogger(__name__)
 
 @user_router.message(Command("connect"))
 async def cmd_connect(message: Message):
-    """Подключиться → сразу выбор устройства."""
+    """Подключиться → сразу выбор устройства (new step-by-step flow)."""
     if message.chat.type != "private":
         return
     language = await resolve_user_language(message.from_user.id)
     text = i18n_get_text(language, "setup.select_device")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_platform:ios"),
-            InlineKeyboardButton(text="🤖 Android", callback_data="setup_platform:android"),
+            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_platform:macos"),
-            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_platform:windows"),
+            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
