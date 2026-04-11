@@ -149,6 +149,10 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
                 url=share_url
             )],
             [InlineKeyboardButton(
+                text="🌐 Веб-клиент",
+                url="https://qodev.dev"
+            )],
+            [InlineKeyboardButton(
                 text=i18n_get_text(language, "referral.stats_button"),
                 callback_data="referral_stats"
             )],
@@ -167,7 +171,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
                     photo=file_id,
                     caption=text,
                     reply_markup=keyboard,
-                    parse_mode=None,
+                    parse_mode="HTML",
                 )
                 photo_sent = True
             except Exception as photo_err:
