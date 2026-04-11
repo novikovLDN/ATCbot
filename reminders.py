@@ -164,7 +164,7 @@ async def send_smart_reminders(bot: Bot):
                     audit_message = "Paid subscription reminder (7d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_3D:
-                    text = i18n.get_text(language, "reminder.paid_3d_new")
+                    text = i18n.get_text(language, "reminder.paid_3d")
                     keyboard = get_renewal_keyboard_3d(language)
                     audit_message = "Paid subscription reminder (3d before expiry)"
 
