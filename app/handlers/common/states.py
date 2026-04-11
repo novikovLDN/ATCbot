@@ -108,6 +108,11 @@ class AdminCreatePromocode(StatesGroup):
     confirm_creation = State()
 
 
+class AdminChat(StatesGroup):
+    waiting_for_user_id = State()
+    chatting = State()
+
+
 class PurchaseState(StatesGroup):
     choose_tariff = State()
     choose_biz_tier = State()

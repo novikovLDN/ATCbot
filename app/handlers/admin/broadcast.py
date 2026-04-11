@@ -136,6 +136,11 @@ def _build_broadcast_reply_markup(
                 text="📲 Скачать Happ для Android 🤖",
                 url="https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
             )])
+        elif btn == "web_client":
+            rows.append([InlineKeyboardButton(
+                text="🌐 Веб-клиент QoDev",
+                url="https://qodev.dev",
+            )])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
