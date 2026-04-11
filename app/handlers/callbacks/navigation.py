@@ -538,7 +538,19 @@ async def callback_connect_instruction(callback: CallbackQuery):
             callback_data="menu_main",
         )],
     ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+    # If coming back from a photo screen, delete and send new text message
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML",
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 # ── Step 1: Install App ──────────────────────────────────────────
@@ -580,16 +592,23 @@ async def callback_setup_step1(callback: CallbackQuery):
         links = _DOWNLOAD_LINKS.get("android", {})
         if "happ" in links:
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.install_happ_android"),
+                text="📲 Установить Happ",
                 url=links["happ"],
             )])
-    else:
-        links = _DOWNLOAD_LINKS.get("windows", {})
-        for client, url in links.items():
+        if "v2raytun" in links:
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, f"setup.download_{client}"),
-                url=url,
+                text="📲 Установить V2RayTun",
+                url=links["v2raytun"],
             )])
+    elif platform == "windows":
+        buttons.append([InlineKeyboardButton(
+            text="📲 Скачать Happ",
+            url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="📲 Скачать V2RayTun",
+            url="https://github.com/mdf45/v2raytun/releases/tag/v3.7.10",
+        )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.next_step"),
@@ -602,8 +621,14 @@ async def callback_setup_step1(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    # Send photo + text (delete old message, send new with photo)
-    photo_id = _get_photo_id("install_app")
+    # Platform-specific photo (no photo for Windows)
+    photo_key = {
+        "ios": "install_app_ios",
+        "macos": "install_app_ios",
+        "android": "install_app_android",
+    }.get(platform)
+    photo_id = _get_photo_id(photo_key) if photo_key else ""
+
     try:
         await callback.message.delete()
     except Exception:
@@ -659,25 +684,64 @@ async def callback_setup_step2(callback: CallbackQuery):
 
     text = i18n_get_text(language, "setup.key_install_title")
 
+    buttons = []
+
+    # === Auto-setup deeplinks ===
+    if sub_url:
+        from urllib.parse import quote, urlparse
+        if config.PUBLIC_BASE_URL:
+            base_url = config.PUBLIC_BASE_URL
+        else:
+            parsed = urlparse(config.WEBHOOK_URL)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        text += f"\n\n{i18n_get_text(language, 'setup.auto_install_header')}"
+
+        # Happ auto-setup: VPN + Bypass in one row
+        happ_row = [InlineKeyboardButton(
+            text="⚡️ Happ (VPN)",
+            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+        )]
+        if bypass_url:
+            happ_row.append(InlineKeyboardButton(
+                text="⚡️ Happ (Обход)",
+                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+            ))
+        buttons.append(happ_row)
+
+        # V2RayTun auto-setup: VPN + Bypass in one row
+        v2_row = [InlineKeyboardButton(
+            text="⚡️ V2RayTun (VPN)",
+            url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
+        )]
+        if bypass_url:
+            v2_row.append(InlineKeyboardButton(
+                text="⚡️ V2RayTun (Обход)",
+                url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
+            ))
+        buttons.append(v2_row)
+
+    # === Manual keys ===
+    text += i18n_get_text(language, "setup.manual_install_header")
+
     if sub_url:
         text += f"\n\n{i18n_get_text(language, 'setup.key_vpn')}\n<blockquote><code>{sub_url}</code></blockquote>"
     if bypass_url:
         text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
 
-    buttons = [
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.btn_done"),
-            callback_data="setup_done",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.btn_need_help"),
-            url="https://t.me/Atlas_SupportSecurity",
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_step1:{platform}",
-        )],
-    ]
+    # === Bottom buttons ===
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_done"),
+        callback_data="setup_done",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_need_help"),
+        url="https://t.me/Atlas_SupportSecurity",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"setup_step1:{platform}",
+    )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     # Send photo + text
@@ -708,9 +772,13 @@ async def callback_setup_step2(callback: CallbackQuery):
 
 # Photo file IDs for setup screens
 _SETUP_PHOTOS = {
-    "install_app": {
+    "install_app_ios": {
         "prod": "AgACAgQAAxkBAAEsTydp2K_IyYzWcQLdTzcx8R69LXkQPgAC6wxrG6gtyVKbKj2nQnrQggEAAwIAA3kAAzsE",
         "stage": "AgACAgQAAxkBAAIelmnYsCB_mV2UUCsZQxtCAUv6HfJkAALrDGsbqC3JUsb1k8gTRdgCAQADAgADeQADOwQ",
+    },
+    "install_app_android": {
+        "prod": "AgACAgQAAxkBAAEsVZ9p2WKsEhB1jDTAYdA3TXJdqENHcAACzwxrG9Np0VKr7b7MS293SQEAAwIAA3cAAzsE",
+        "stage": "AgACAgQAAxkBAAIeyGnZYtm7bZWgWSbQzaPQK9jDFIjxAALPDGsb02nRUmA2_j7leNc1AQADAgADdwADOwQ",
     },
     "install_keys": {
         "prod": "AgACAgQAAxkBAAEsTzVp2LGqLrhvY1TRSdQdmp_vmS_tEwAC7AxrG6gtyVLmvPzPSqNEwAEAAwIAA3cAAzsE",
@@ -754,7 +822,8 @@ async def callback_setup_device(callback: CallbackQuery):
     except Exception:
         pass
 
-    language = await resolve_user_language(callback.from_user.id)
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
     text = i18n_get_text(language, "setup.select_device")
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -772,7 +841,17 @@ async def callback_setup_device(callback: CallbackQuery):
         )],
     ])
 
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML",
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("setup_platform:"))
