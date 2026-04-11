@@ -709,6 +709,15 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
                 [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
             ])
             
+            # Site sync (fire-and-forget)
+            try:
+                from app.services.site_sync import sync_balance, is_enabled as _ss
+                if _ss():
+                    import asyncio
+                    asyncio.ensure_future(sync_balance(target_user_id))
+            except Exception:
+                pass
+
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             await state.clear()
             await callback.answer("✅ Средства начислены", show_alert=True)
@@ -864,6 +873,15 @@ async def callback_admin_debit_confirm(callback: CallbackQuery, state: FSMContex
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")]
             ])
+            # Site sync (fire-and-forget)
+            try:
+                from app.services.site_sync import sync_balance, is_enabled as _ss
+                if _ss():
+                    import asyncio
+                    asyncio.ensure_future(sync_balance(target_user_id))
+            except Exception:
+                pass
+
             await safe_edit_text(callback.message, text, reply_markup=keyboard)
             await state.clear()
             await callback.answer("✅ Средства сняты", show_alert=True)

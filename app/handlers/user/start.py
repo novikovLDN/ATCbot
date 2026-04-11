@@ -109,6 +109,10 @@ async def cmd_start(message: Message, state: FSMContext):
                         link_result = await link_telegram_account(payload, telegram_id)
                         if link_result:
                             logger.info("SITE_LINK_SUCCESS user=%s token=%s", telegram_id, payload[:16])
+                            await message.answer(
+                                "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
+                                parse_mode="HTML",
+                            )
                         else:
                             logger.warning("SITE_LINK_FAILED user=%s token=%s", telegram_id, payload[:16])
                 except Exception as e:
