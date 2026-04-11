@@ -1692,43 +1692,6 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
     asyncio.create_task(_del(callback.bot, telegram_id, lava_msg))
 
 
-@router.callback_query(F.data.startswith("apple_pay_sbp:"))
-async def callback_apple_pay_sbp(callback: CallbackQuery):
-    """Apple ID — pay via SBP."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    parts = callback.data.split(":")
-    region = parts[1]
-    nominal = int(parts[2])
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
-
-    purchase_id = await database.create_pending_purchase(
-        telegram_id=telegram_id,
-        tariff=f"apple_id_{region}_{nominal}",
-        period_days=0,
-        price_kopecks=round(price_rub * 100),
-        purchase_type="apple_id",
-    )
-
-    sbp_text = i18n_get_text(language, "main.sbp_payment_text", amount=price_rub)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.sbp_confirm_button", "✅ Я оплатил"),
-            callback_data=f"apple_sbp_confirm:{purchase_id}:{region}:{nominal}",
-        )],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
-    ])
-
-    await callback.message.answer(sbp_text, reply_markup=keyboard, parse_mode="HTML")
-
-
 async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int, price_rub: float):
     """Send user confirmation + admin notification for Apple ID purchase."""
     from datetime import datetime, timezone
