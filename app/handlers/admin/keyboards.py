@@ -42,6 +42,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export"),
             InlineKeyboardButton(text="🌐 QoDev", callback_data="admin:qodev"),
         ],
+        [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
     ])
     return keyboard
 

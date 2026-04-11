@@ -17,7 +17,7 @@ from app.services.language_service import resolve_user_language
 from app.utils.security import require_admin, admin_only
 from app.handlers.admin.keyboards import get_admin_dashboard_keyboard, get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
-from app.handlers.common.states import AdminCreatePromocode
+from app.handlers.common.states import AdminCreatePromocode, AdminChat
 from app.core.runtime_context import get_bot_start_time
 
 admin_base_router = Router()
@@ -845,3 +845,134 @@ async def callback_admin_qodev(callback: CallbackQuery):
             reply_markup=get_admin_back_keyboard(),
             bot=callback.bot,
         )
+
+
+# ── Admin Chat (send message to user) ───────────────────────────
+
+@admin_base_router.callback_query(F.data == "admin:chat")
+async def callback_admin_chat_start(callback: CallbackQuery, state: FSMContext):
+    """Start admin chat — ask for user ID."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await callback.answer()
+    await state.set_state(AdminChat.waiting_for_user_id)
+    await safe_edit_text(
+        callback.message,
+        "💬 <b>Написать пользователю</b>\n\n"
+        "Введите Telegram ID или @username пользователя:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:main")],
+        ]),
+        bot=callback.bot,
+    )
+
+
+@admin_base_router.message(AdminChat.waiting_for_user_id)
+async def process_admin_chat_user_id(message: Message, state: FSMContext):
+    """Process user ID input, enter chatting mode."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    if message.text and message.text.strip().lower() in ("/cancel", "отмена"):
+        await state.clear()
+        await message.answer("Отменено.")
+        return
+
+    user_input = message.text.strip() if message.text else ""
+
+    # Find user by ID or username
+    target_user_id = None
+    target_username = None
+    try:
+        target_user_id = int(user_input)
+    except ValueError:
+        # Try username
+        username = user_input.lstrip("@").lower()
+        if username:
+            pool = await database.get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT telegram_id, username FROM users WHERE LOWER(username) = $1",
+                    username,
+                )
+            if row:
+                target_user_id = row["telegram_id"]
+                target_username = row["username"]
+
+    if not target_user_id:
+        await message.answer("❌ Пользователь не найден. Введите корректный ID или @username:")
+        return
+
+    if not target_username:
+        user = await database.get_user(target_user_id)
+        target_username = user.get("username") if user else None
+
+    uname_display = f"@{target_username}" if target_username else str(target_user_id)
+
+    await state.update_data(chat_target_id=target_user_id, chat_target_name=uname_display)
+    await state.set_state(AdminChat.chatting)
+    await message.answer(
+        f"💬 <b>Чат с {uname_display}</b> (<code>{target_user_id}</code>)\n\n"
+        f"Отправляйте сообщения — бот перешлёт их пользователю.\n"
+        f"Поддерживается: текст, фото, документы, стикеры.\n\n"
+        f"Для завершения отправьте <code>/end</code>",
+        parse_mode="HTML",
+    )
+
+
+@admin_base_router.message(AdminChat.chatting)
+async def process_admin_chat_message(message: Message, state: FSMContext, bot: Bot):
+    """Forward admin message to target user."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+
+    # Exit command
+    if message.text and message.text.strip().lower() in ("/end", "/cancel", "/stop", "отмена"):
+        data = await state.get_data()
+        name = data.get("chat_target_name", "")
+        await state.clear()
+        await message.answer(
+            f"✅ Чат с {name} завершён.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="← Админ-панель", callback_data="admin:main")],
+            ]),
+        )
+        return
+
+    data = await state.get_data()
+    target_id = data.get("chat_target_id")
+    target_name = data.get("chat_target_name", "")
+
+    if not target_id:
+        await state.clear()
+        await message.answer("❌ Ошибка: ID пользователя потерян. Начните заново.")
+        return
+
+    try:
+        # Forward different content types
+        if message.photo:
+            await bot.send_photo(
+                chat_id=target_id,
+                photo=message.photo[-1].file_id,
+                caption=message.caption or None,
+                parse_mode="HTML" if message.caption else None,
+            )
+        elif message.document:
+            await bot.send_document(
+                chat_id=target_id,
+                document=message.document.file_id,
+                caption=message.caption or None,
+            )
+        elif message.sticker:
+            await bot.send_sticker(chat_id=target_id, sticker=message.sticker.file_id)
+        elif message.text:
+            await bot.send_message(chat_id=target_id, text=message.text, parse_mode="HTML")
+        else:
+            await message.answer("⚠️ Этот тип сообщения не поддерживается.")
+            return
+
+        await message.answer(f"✅ Доставлено → {target_name}")
+
+    except Exception as e:
+        logger.warning("ADMIN_CHAT_SEND_ERROR: target=%s error=%s", target_id, e)
+        await message.answer(f"❌ Не удалось отправить: {e}")
