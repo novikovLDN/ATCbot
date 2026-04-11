@@ -97,6 +97,18 @@ async def process_confirmed_payment(
                 f"error={type(notif_err).__name__}: {notif_err} — payment was successful"
             )
 
+        # Site sync (fire-and-forget — must not fail the payment)
+        try:
+            from app.services.site_sync import full_sync_after_payment, is_enabled as site_sync_enabled
+            if site_sync_enabled() and not is_balance_topup and not is_traffic_pack:
+                period_days = result.get("period_days", 30)
+                tariff_type = result.get("tariff_type", "basic")
+                asyncio.ensure_future(full_sync_after_payment(
+                    telegram_id, period_days, tariff_type, amount_rubles, purchase_id,
+                ))
+        except Exception as sync_err:
+            logger.warning("SITE_SYNC_FIRE_AND_FORGET_ERROR: %s", sync_err)
+
     except ValueError as e:
         logger.info(
             f"{provider} webhook: purchase already processed (ValueError): "

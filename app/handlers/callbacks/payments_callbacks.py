@@ -541,6 +541,17 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     }
                 )
         
+        # Site sync (fire-and-forget)
+        try:
+            from app.services.site_sync import full_sync_after_payment, is_enabled as _site_sync_on
+            if _site_sync_on():
+                asyncio.ensure_future(full_sync_after_payment(
+                    telegram_id, period_days, tariff_type, final_price_rubles,
+                    f"balance_{payment_id}",
+                ))
+        except Exception:
+            pass
+
         # ЗАЩИТА ОТ РЕГРЕССА: Валидируем VLESS ссылку перед отправкой
         # Для продлений vpn_key может быть пустым - получаем из подписки
         if is_renewal and not vpn_key:
