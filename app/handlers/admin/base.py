@@ -785,3 +785,64 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
 async def noop_handler(callback: CallbackQuery):
     """Обработчик disabled кнопки во время перевыпуска ключа"""
     await callback.answer("Операция уже выполняется...", show_alert=False)
+
+
+# ── QoDev (site-linked users) ────────────────────────────────────
+
+@admin_base_router.callback_query(F.data == "admin:qodev")
+async def callback_admin_qodev(callback: CallbackQuery):
+    """Показать пользователей, привязанных к сайту QoDev."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("⛔️", show_alert=True)
+        return
+    await callback.answer()
+
+    try:
+        # Get linked users from bot DB (site_linked = true)
+        pool = await database.get_pool()
+        async with pool.acquire() as conn:
+            # Ensure column exists
+            await conn.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS site_linked BOOLEAN DEFAULT FALSE
+            """)
+            rows = await conn.fetch("""
+                SELECT u.telegram_id, u.username, u.created_at,
+                       s.expires_at, s.subscription_type
+                FROM users u
+                LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id
+                WHERE u.site_linked = TRUE
+                ORDER BY u.created_at DESC
+                LIMIT 50
+            """)
+
+        if not rows:
+            text = "🌐 <b>QoDev</b>\n\nПривязанных пользователей не найдено."
+        else:
+            text = f"🌐 <b>QoDev — привязанные пользователи</b>\n\nВсего: {len(rows)}\n\n"
+            for row in rows[:20]:
+                uname = f"@{row['username']}" if row['username'] else "—"
+                plan = (row["subscription_type"] or "—").strip()
+                expires = row["expires_at"]
+                if expires and expires > datetime.now(timezone.utc):
+                    from app.utils.date_utils import format_date_short
+                    exp_str = expires.strftime("%d.%m.%Y")
+                    text += f"👤 <code>{row['telegram_id']}</code> · {uname} · {plan} · до {exp_str}\n"
+                else:
+                    text += f"👤 <code>{row['telegram_id']}</code> · {uname} · нет подписки\n"
+            if len(rows) > 20:
+                text += f"\n<i>...и ещё {len(rows) - 20}</i>"
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:qodev")],
+            [InlineKeyboardButton(text=i18n_get_text("ru", "admin.back"), callback_data="admin:main")],
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+
+    except Exception as e:
+        logger.exception("Error in admin:qodev: %s", e)
+        await safe_edit_text(
+            callback.message,
+            f"🌐 <b>QoDev</b>\n\n❌ Ошибка: {e}",
+            reply_markup=get_admin_back_keyboard(),
+            bot=callback.bot,
+        )

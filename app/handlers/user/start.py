@@ -109,6 +109,16 @@ async def cmd_start(message: Message, state: FSMContext):
                         link_result = await link_telegram_account(payload, telegram_id)
                         if link_result:
                             logger.info("SITE_LINK_SUCCESS user=%s token=%s", telegram_id, payload[:16])
+                            # Mark user as site-linked in local DB
+                            pool = await database.get_pool()
+                            async with pool.acquire() as conn:
+                                await conn.execute(
+                                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS site_linked BOOLEAN DEFAULT FALSE"
+                                )
+                                await conn.execute(
+                                    "UPDATE users SET site_linked = TRUE WHERE telegram_id = $1",
+                                    telegram_id,
+                                )
                             await message.answer(
                                 "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
                                 parse_mode="HTML",
