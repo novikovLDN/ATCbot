@@ -1624,3 +1624,149 @@ async def callback_apple_confirm(callback: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         bot=callback.bot, parse_mode="HTML",
     )
+
+
+# ── Apple ID Payment Handlers ────────────────────────────────────
+
+@router.callback_query(F.data.startswith("apple_pay_lava:"))
+async def callback_apple_pay_lava(callback: CallbackQuery):
+    """Apple ID — pay via Lava (card)."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    region = parts[1]
+    nominal = int(parts[2])
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    rate = _APPLE_RATES.get(region, 93)
+    price_rub = round(nominal * rate, 2)
+
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer("Оплата картой временно недоступна", show_alert=True)
+        return
+
+    currency = _APPLE_CURRENCIES.get(region, "$")
+    region_label = _APPLE_REGIONS.get(region, region)
+
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff=f"apple_id_{region}_{nominal}",
+        period_days=0,
+        price_kopecks=round(price_rub * 100),
+        purchase_type="apple_id",
+    )
+
+    invoice_data = await lava_service.create_invoice(
+        amount_rubles=price_rub,
+        purchase_id=purchase_id,
+        comment=f"Apple ID {region_label} {nominal}{currency}",
+    )
+
+    payment_url = invoice_data["payment_url"]
+
+    try:
+        await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_data["invoice_id"]))
+    except Exception:
+        pass
+
+    text = i18n_get_text(language, "payment.lava_waiting", amount=price_rub)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "payment.lava_pay_button"), url=payment_url)],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+    ])
+
+    lava_msg = await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+    async def _del(bot, cid, msg):
+        try:
+            await asyncio.sleep(15 * 60)
+            await bot.delete_message(chat_id=cid, message_id=msg.message_id)
+        except Exception:
+            pass
+    asyncio.create_task(_del(callback.bot, telegram_id, lava_msg))
+
+
+@router.callback_query(F.data.startswith("apple_pay_sbp:"))
+async def callback_apple_pay_sbp(callback: CallbackQuery):
+    """Apple ID — pay via SBP."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    region = parts[1]
+    nominal = int(parts[2])
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    rate = _APPLE_RATES.get(region, 93)
+    price_rub = round(nominal * rate, 2)
+
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff=f"apple_id_{region}_{nominal}",
+        period_days=0,
+        price_kopecks=round(price_rub * 100),
+        purchase_type="apple_id",
+    )
+
+    sbp_text = i18n_get_text(language, "main.sbp_payment_text", amount=price_rub)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "main.sbp_confirm_button", "✅ Я оплатил"),
+            callback_data=f"apple_sbp_confirm:{purchase_id}:{region}:{nominal}",
+        )],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+    ])
+
+    await callback.message.answer(sbp_text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int, price_rub: float):
+    """Send user confirmation + admin notification for Apple ID purchase."""
+    from datetime import datetime, timezone
+
+    language = await resolve_user_language(telegram_id)
+    currency = _APPLE_CURRENCIES.get(region, "$")
+    region_label = _APPLE_REGIONS.get(region, region)
+    nominal_str = f"{nominal}{currency}"
+    price_str = f"{price_rub:.2f}"
+
+    # User notification
+    text = i18n_get_text(
+        language, "shop.apple_success",
+        region=region_label, nominal=nominal_str, price=price_str,
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")],
+    ])
+    try:
+        await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        logger.error("APPLE_SUCCESS_MSG_FAILED user=%s error=%s", telegram_id, e)
+
+    # Admin notification with chat button
+    user = await database.get_user(telegram_id)
+    buyer_username = f"@{user['username']}" if user and user.get("username") else "—"
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    admin_text = i18n_get_text(
+        "ru", "shop.apple_admin",
+        buyer_id=telegram_id, buyer_username=buyer_username,
+        region=region_label, nominal=nominal_str,
+        price=price_str, date=now_str,
+    )
+    try:
+        admin_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
+        ])
+        await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb, parse_mode="HTML")
+    except Exception as e:
+        logger.error("APPLE_ADMIN_NOTIFY_FAILED error=%s", e)

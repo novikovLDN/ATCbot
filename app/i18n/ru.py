@@ -902,6 +902,8 @@ LANG = {
     'shop.apple_title': "🍎 <b>Пополнение Apple ID</b>\n\nВыберите регион вашего Apple ID:\n\n<blockquote>Не знаете свой регион?\nОткройте <b>Настройки → Apple ID → Медиаматериалы и покупки → Просмотреть</b> — там будет указана страна/регион.</blockquote>",
     'shop.apple_amount_title': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\n\nВыберите номинал пополнения:",
     'shop.apple_confirm': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\nНоминал: {nominal}\nК оплате: <b>{price:.2f} ₽</b>\n\n<blockquote>После оплаты администратор отправит вам код пополнения прямо в этот чат.</blockquote>",
+    'shop.apple_success': "✅ <b>Оплата прошла успешно!</b>\n\n🍎 Товар: Пополнение Apple ID\n🌍 Регион: {region}\n💰 Номинал: {nominal}\n💳 Сумма: {price} ₽\n\n⏳ Ожидайте получения кода пополнения в течение <b>5–15 минут</b>.\n\nЕсли вы не получили код, напишите нам:",
+    'shop.apple_admin': "🍎 <b>ПОКУПКА APPLE ID</b>\n\n👤 Покупатель: <code>{buyer_id}</code>\n📛 Username: {buyer_username}\n🌍 Регион: {region}\n💰 Номинал: {nominal}\n💳 Сумма: {price} ₽\n🕐 Дата: {date}\n\n💬 <i>Отправьте код через «Написать пользователю»</i>",
     'premium.enter_username': "💎 <b>Купить Telegram Premium</b>\n\nВведите свой username Telegram, если покупаете для себя, или username друга, если покупаете другу.\n\n⚠️ Обязательно через <b>@</b>\nПример: <code>@username</code>",
     'premium.invalid_username': "❌ Неверный username. Введите корректный username через @\n\nПример: <code>@username</code>\n\nОсталось попыток: {attempts}",
     'premium.attempts_exhausted': "❌ Вы исчерпали все попытки ввода username. Попробуйте ещё раз.",
