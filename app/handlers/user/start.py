@@ -104,7 +104,10 @@ async def cmd_start(message: Message, state: FSMContext):
                     and len(payload) <= 64
                     and payload.replace("_", "").replace("-", "").isalnum()):
                 try:
-                    from app.services.site_sync import link_telegram_account, is_enabled as _site_enabled
+                    from app.services.site_sync import (
+                        link_telegram_account, sync_balance, sync_referrals,
+                        is_enabled as _site_enabled,
+                    )
                     if _site_enabled():
                         link_result = await link_telegram_account(payload, telegram_id)
                         if link_result:
@@ -119,6 +122,17 @@ async def cmd_start(message: Message, state: FSMContext):
                                     "UPDATE users SET site_linked = TRUE WHERE telegram_id = $1",
                                     telegram_id,
                                 )
+                            # Sync data immediately after linking
+                            sub = await database.get_subscription(telegram_id)
+                            if sub and sub.get("expires_at"):
+                                from app.services.site_sync import sync_subscription
+                                exp_iso = sub["expires_at"].isoformat()
+                                plan = (sub.get("subscription_type") or "basic").strip().lower()
+                                await sync_subscription(telegram_id, exp_iso, plan)
+                            await sync_balance(telegram_id)
+                            await sync_referrals(telegram_id)
+                            logger.info("SITE_LINK_FULL_SYNC user=%s", telegram_id)
+
                             await message.answer(
                                 "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
                                 parse_mode="HTML",
