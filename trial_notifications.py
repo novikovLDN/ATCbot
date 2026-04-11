@@ -565,7 +565,7 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                     expired_text = i18n.get_text(language, "trial.expired")
                     keyboard = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(
-                            text=i18n.get_text(language, "main.buy"),
+                            text=i18n.get_text(language, "trial.expired_discount_btn"),
                             callback_data="menu_buy_vpn"
                         )]
                     ])
