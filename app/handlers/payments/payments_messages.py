@@ -627,6 +627,27 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         return
 
+    # --- Apple ID purchase: mark paid + send success + notify admin ---
+    is_apple_purchase = pending_purchase.get("purchase_type") == "apple_id"
+    if is_apple_purchase:
+        try:
+            tariff = pending_purchase.get("tariff", "apple_id_usa_0")
+            tariff_parts = tariff.split("_")
+            region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"
+            nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
+
+            from app.handlers.callbacks.navigation import send_apple_id_success
+            await send_apple_id_success(
+                message.bot, telegram_id, region, nominal, payment_amount_rubles,
+            )
+            await database.mark_pending_purchase_paid(purchase_id)
+            logger.info("APPLE_PAYMENT_FINALIZED purchase_id=%s user=%s", purchase_id, telegram_id)
+        except Exception as e:
+            logger.exception("APPLE_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
+            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await state.clear()
+        return
+
     # --- Traffic pack purchase: finalize + add Remnawave traffic ---
     is_traffic_pack = pending_purchase.get("purchase_type") == "traffic_pack"
     if is_traffic_pack:

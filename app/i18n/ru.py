@@ -682,8 +682,8 @@ LANG = {
     'referral.level_progress': "\n\n📈 Ваш уровень: {current_level}%\nДо уровня {next_level}% осталось {referrals_to_next} рефералов",
     'referral.link_copied': "Ссылка отправлена",
     'referral.max_level': "\n\n🎉 Вы достигли максимального уровня {current_level}%!",
-    'referral.max_level_reached': "🏆 У вас максимальный уровень программы",
-    'referral.next_level_line': "🚀 До уровня {next_status_name}:\nосталось {remaining_invites} подключений",
+    'referral.max_level_reached': "🏆 У вас максимальный уровень программы\n\n<blockquote><b>Не работает Телеграм у друга?</b>\nПригласи через сайт! Нажми кнопку «🌐 Веб-клиент»</blockquote>",
+    'referral.next_level_line': "🚀 До уровня {next_status_name}:\nосталось {remaining_invites} подключений\n\n<blockquote><b>Не работает Телеграм у друга?</b>\nПригласи через сайт! Нажми кнопку «🌐 Веб-клиент»</blockquote>",
     'referral.program': "💎 Программа лояльности",
     'referral.program_screen': "📊 Активность и статус доступа\n\n👤 Подключённых аккаунтов: {total_referred}\n\n💎 Начислено вознаграждений: {total_cashback:.2f} ₽\n🏆 Текущий статус: {current_status_name}\n📈 Уровень возврата: {cashback_percent}%\n\n{next_level_line}\n\n📅 Последняя активность: {last_activity_date}",
     'referral.program_status_footer': "🚀 До следующего уровня: осталось {remaining_invites} приглашений",
@@ -896,6 +896,14 @@ LANG = {
 
     # --- Telegram Premium ---
     'premium.main_button': "⚡️ Купить Telegram Premium ⚡️",
+
+    # --- Mini Shop ---
+    'shop.title': "🛍 <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote>⚡️ <b>Telegram Premium</b> — расширьте возможности мессенджера\n🍎 <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе</blockquote>\n\nВыберите что вас интересует:",
+    'shop.apple_title': "🍎 <b>Пополнение Apple ID</b>\n\nВыберите регион вашего Apple ID:\n\n<blockquote>Не знаете свой регион?\nОткройте <b>Настройки → Apple ID → Медиаматериалы и покупки → Просмотреть</b> — там будет указана страна/регион.</blockquote>",
+    'shop.apple_amount_title': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\n\nВыберите номинал пополнения:",
+    'shop.apple_confirm': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\nНоминал: {nominal}\nК оплате: <b>{price:.2f} ₽</b>\n\n<blockquote>Код пополнения будет отправлен в этот чат в течение 15 минут после оплаты.</blockquote>",
+    'shop.apple_success': "✅ <b>Оплата прошла успешно!</b>\n\n🍎 Товар: Пополнение Apple ID\n🌍 Регион: {region}\n💰 Номинал: {nominal}\n💳 Сумма: {price} ₽\n\n⏳ Ожидайте получения кода пополнения в течение <b>5–15 минут</b>.\n\nЕсли вы не получили код, напишите нам:",
+    'shop.apple_admin': "🍎 <b>ПОКУПКА APPLE ID</b>\n\n👤 Покупатель: <code>{buyer_id}</code>\n📛 Username: {buyer_username}\n🌍 Регион: {region}\n💰 Номинал: {nominal}\n💳 Сумма: {price} ₽\n🕐 Дата: {date}\n\n💬 <i>Отправьте код через «Написать пользователю»</i>",
     'premium.enter_username': "💎 <b>Купить Telegram Premium</b>\n\nВведите свой username Telegram, если покупаете для себя, или username друга, если покупаете другу.\n\n⚠️ Обязательно через <b>@</b>\nПример: <code>@username</code>",
     'premium.invalid_username': "❌ Неверный username. Введите корректный username через @\n\nПример: <code>@username</code>\n\nОсталось попыток: {attempts}",
     'premium.attempts_exhausted': "❌ Вы исчерпали все попытки ввода username. Попробуйте ещё раз.",

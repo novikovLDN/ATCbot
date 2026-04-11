@@ -201,8 +201,8 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             callback_data="menu_referral"
         )])
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "premium.main_button"),
-            callback_data="premium_buy"
+            text="🛍 Мини-магазинчик",
+            callback_data="mini_shop"
         )])
         buttons.append([
             InlineKeyboardButton(
@@ -362,11 +362,11 @@ def get_profile_keyboard(
     row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
     buttons.append(row2)
 
-    # Row 3: Мини апп + Мои подарки
+    # Row 3: Веб-клиент + Мои подарки
     buttons.append([
         InlineKeyboardButton(
-            text="👨‍💻 Мини апп",
-            web_app=WebAppInfo(url=MINI_APP_URL),
+            text="🌐 Веб-клиент",
+            url="https://qodev.dev",
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),

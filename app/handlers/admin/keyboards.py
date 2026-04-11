@@ -38,7 +38,11 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit"),
         ],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export"),
+            InlineKeyboardButton(text="🌐 QoDev", callback_data="admin:qodev"),
+        ],
+        [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
     ])
     return keyboard
 
@@ -153,6 +157,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("👥 Пригласить друга", "referral"),
         ("📲 Скачать Happ для iOS ⚡️", "happ_ios"),
         ("📲 Скачать Happ для Android 🤖", "happ_android"),
+        ("🌐 Веб-клиент QoDev", "web_client"),
     ]
     rows = []
     for label, key in buttons:
