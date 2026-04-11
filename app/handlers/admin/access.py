@@ -733,6 +733,16 @@ async def callback_admin_grant_flex_notify(callback: CallbackQuery, state: FSMCo
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_ADMIN_GRANT_FAIL: tg=%s %s", user_id, rmn_err)
 
+        # Site sync (fire-and-forget)
+        try:
+            from app.services.site_sync import notify_subscription_extend, sync_balance, is_enabled as _ss
+            if _ss():
+                sync_days = max(1, int(round(calculated_days)))
+                asyncio.ensure_future(notify_subscription_extend(user_id, sync_days, tariff))
+                asyncio.ensure_future(sync_balance(user_id))
+        except Exception:
+            pass
+
         text_admin = (
             f"✅ Выдан {tariff_label} доступ\n"
             f"👤 Пользователь: {user_id}\n"
@@ -1321,6 +1331,17 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             unit_text = {"minutes": "минут", "hours": "часов", "days": "дней"}.get(duration_unit, duration_unit)
+
+            # Site sync (fire-and-forget)
+            try:
+                from app.services.site_sync import notify_subscription_extend, sync_balance, is_enabled as _ss
+                if _ss():
+                    sync_days = duration_value if duration_unit == "days" else (duration_value // 60 // 24 or 1)
+                    asyncio.ensure_future(notify_subscription_extend(user_id, sync_days, "basic"))
+                    asyncio.ensure_future(sync_balance(user_id))
+            except Exception:
+                pass
+
             text = f"✅ Доступ выдан на {duration_value} {unit_text}"
             if notify_user:
                 text += "\nПользователь уведомлён."
@@ -1491,7 +1512,16 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 return
             
             text = f"✅ Доступ выдан на {days} дней"
-            
+
+            # Site sync (fire-and-forget)
+            try:
+                from app.services.site_sync import notify_subscription_extend, sync_balance, is_enabled as _ss
+                if _ss():
+                    asyncio.ensure_future(notify_subscription_extend(user_id, days, data.get("tariff", "basic")))
+                    asyncio.ensure_future(sync_balance(user_id))
+            except Exception:
+                pass
+
             if notify:
                 try:
                     user_text = f"Администратор выдал вам доступ на {days} дней"
@@ -1531,7 +1561,16 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
                 return
             
             text = "✅ Доступ на 1 год выдан"
-            
+
+            # Site sync (fire-and-forget)
+            try:
+                from app.services.site_sync import notify_subscription_extend, sync_balance, is_enabled as _ss
+                if _ss():
+                    asyncio.ensure_future(notify_subscription_extend(user_id, 365, "basic"))
+                    asyncio.ensure_future(sync_balance(user_id))
+            except Exception:
+                pass
+
             if notify:
                 # Use unified notification service
                 import admin_notifications
