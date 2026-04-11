@@ -824,7 +824,6 @@ async def callback_admin_qodev(callback: CallbackQuery):
                 plan = (row["subscription_type"] or "—").strip()
                 expires = row["expires_at"]
                 if expires and expires > datetime.now(timezone.utc):
-                    from app.utils.date_utils import format_date_short
                     exp_str = expires.strftime("%d.%m.%Y")
                     text += f"👤 <code>{row['telegram_id']}</code> · {uname} · {plan} · до {exp_str}\n"
                 else:
