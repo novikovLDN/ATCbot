@@ -195,6 +195,23 @@ async def get_user_status(telegram_id: int) -> Optional[dict]:
     return await _get("status", {"telegram_id": str(telegram_id)})
 
 
+# ── Link Telegram Account ──────────────────────────────────────
+
+async def link_telegram_account(token: str, telegram_id: int) -> Optional[dict]:
+    """Link Telegram account to site user via deep link token.
+
+    Flow:
+    1. Site generates link: t.me/bot?start=<telegramLinkToken>
+    2. User clicks link → bot receives /start <token>
+    3. Bot calls POST /api/bot/link { token, telegramId }
+    4. Site associates telegram_id with the user who generated the token
+    """
+    return await _post("link", {
+        "token": token,
+        "telegramId": str(telegram_id),
+    })
+
+
 # ── Full Sync (convenience) ────────────────────────────────────
 
 async def full_sync_after_payment(
