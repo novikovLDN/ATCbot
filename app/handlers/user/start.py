@@ -90,6 +90,34 @@ async def cmd_start(message: Message, state: FSMContext):
                     referral_code, telegram_id
                 )
     
+    # SITE LINK: Обработка привязки с сайта /start <telegramLinkToken>
+    # Сайт генерирует ссылку t.me/atlassecure_bot?start=<token>
+    # Бот вызывает POST /api/bot/link чтобы привязать telegram_id к аккаунту сайта
+    if message.text:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1:
+            payload = start_parts[1]
+            # Токен привязки — не ref_ и не gift_ (буквенно-цифровой, 10-64 символа)
+            if (not payload.startswith("ref_")
+                    and not payload.startswith("gift_")
+                    and len(payload) >= 10
+                    and len(payload) <= 64
+                    and payload.replace("_", "").replace("-", "").isalnum()):
+                try:
+                    from app.services.site_sync import link_telegram_account, is_enabled as _site_enabled
+                    if _site_enabled():
+                        link_result = await link_telegram_account(payload, telegram_id)
+                        if link_result:
+                            logger.info("SITE_LINK_SUCCESS user=%s token=%s", telegram_id, payload[:16])
+                            await message.answer(
+                                "✅ Сайт QoDev успешно привязан.\nТеперь синхронизация работает! ⚡️",
+                                parse_mode="HTML",
+                            )
+                        else:
+                            logger.warning("SITE_LINK_FAILED user=%s token=%s", telegram_id, payload[:16])
+                except Exception as e:
+                    logger.warning("SITE_LINK_ERROR user=%s error=%s", telegram_id, e)
+
     # GIFT ACTIVATION: Обработка подарочной ссылки /start gift_XXXXX
     if message.text:
         start_parts = message.text.strip().split(maxsplit=1)

@@ -464,6 +464,21 @@ async def main():
     else:
         logger.warning("Activation worker task skipped (DB not ready)")
 
+    # Запуск фоновой задачи для синхронизации с сайтом (каждые 5 минут)
+    site_sync_task = None
+    if database.DB_READY:
+        try:
+            from app.workers.site_sync_worker import site_sync_worker_task
+            from app.services.site_sync import is_enabled as _site_sync_enabled
+            if _site_sync_enabled():
+                site_sync_task = asyncio.create_task(site_sync_worker_task(bot))
+                background_tasks.append(site_sync_task)
+                logger.info("Site sync worker started (interval=5min)")
+            else:
+                logger.info("Site sync worker skipped (SITE_API_URL or SITE_BOT_API_KEY not configured)")
+        except Exception as e:
+            logger.warning("Site sync worker failed to start: %s", e)
+
     # Xray sync: safe optional background worker (fail-safe, never crashes bot)
     async def start_xray_sync_safe(bot_obj):
         if not XRAY_SYNC_AVAILABLE:
