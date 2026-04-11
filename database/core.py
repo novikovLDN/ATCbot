@@ -990,7 +990,7 @@ async def init_db() -> bool:
             """)
             await conn.execute("""
                 ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check
-                CHECK (tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate'))
+                CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%')
             """)
         except Exception:
             pass
