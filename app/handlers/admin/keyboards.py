@@ -38,7 +38,10 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text=i18n_get_text(language, "admin.system"), callback_data="admin:system"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.audit"), callback_data="admin:audit"),
         ],
-        [InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export")],
+        [
+            InlineKeyboardButton(text=i18n_get_text(language, "admin.export"), callback_data="admin:export"),
+            InlineKeyboardButton(text="🌐 QoDev", callback_data="admin:qodev"),
+        ],
     ])
     return keyboard
 
