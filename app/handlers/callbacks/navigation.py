@@ -1489,3 +1489,138 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ]
     await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot, parse_mode="HTML")
+
+
+# ── Mini Shop ────────────────────────────────────────────────────
+
+_APPLE_USD_RATE = 93    # RUB per 1 USD
+_APPLE_TRY_RATE = 2.9   # RUB per 1 TRY
+
+_APPLE_NOMINALS = {
+    "usa": [2, 6, 15, 20, 25, 30, 40, 50, 60],
+    "turkey": [100, 125, 150, 175, 200, 300, 500, 600],
+}
+_APPLE_CURRENCIES = {"usa": "$", "turkey": "TL"}
+_APPLE_RATES = {"usa": _APPLE_USD_RATE, "turkey": _APPLE_TRY_RATE}
+_APPLE_REGIONS = {"usa": "🇺🇸 USA", "turkey": "🇹🇷 Turkey"}
+
+
+@router.callback_query(F.data == "mini_shop")
+async def callback_mini_shop(callback: CallbackQuery):
+    """Mini shop main screen."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "shop.title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚡️ Telegram Premium", callback_data="premium_buy")],
+        [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+    ])
+
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id, text=text, reply_markup=keyboard, parse_mode="HTML",
+        )
+    else:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "apple_region")
+async def callback_apple_region(callback: CallbackQuery):
+    """Apple ID — region selection."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "shop.apple_title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇺🇸 USA", callback_data="apple_amount:usa")],
+        [InlineKeyboardButton(text="🇹🇷 Turkey", callback_data="apple_amount:turkey")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("apple_amount:"))
+async def callback_apple_amount(callback: CallbackQuery):
+    """Apple ID — nominal selection."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    region = callback.data.split(":")[1]
+    language = await resolve_user_language(callback.from_user.id)
+    nominals = _APPLE_NOMINALS.get(region, [])
+    currency = _APPLE_CURRENCIES.get(region, "$")
+    rate = _APPLE_RATES.get(region, 93)
+    region_label = _APPLE_REGIONS.get(region, region)
+
+    text = i18n_get_text(language, "shop.apple_amount_title", region=region_label)
+
+    buttons = []
+    row = []
+    for nom in nominals:
+        price_rub = round(nom * rate)
+        row.append(InlineKeyboardButton(
+            text=f"{nom}{currency} — {price_rub}₽",
+            callback_data=f"apple_confirm:{region}:{nom}",
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"), callback_data="apple_region",
+    )])
+
+    await safe_edit_text(
+        callback.message, text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        bot=callback.bot, parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("apple_confirm:"))
+async def callback_apple_confirm(callback: CallbackQuery):
+    """Apple ID — confirmation screen with payment options."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    parts = callback.data.split(":")
+    region = parts[1]
+    nominal = int(parts[2])
+    language = await resolve_user_language(callback.from_user.id)
+
+    currency = _APPLE_CURRENCIES.get(region, "$")
+    rate = _APPLE_RATES.get(region, 93)
+    region_label = _APPLE_REGIONS.get(region, region)
+    price_rub = round(nominal * rate, 2)
+    nominal_str = f"{nominal}{currency}"
+
+    text = i18n_get_text(language, "shop.apple_confirm",
+                         region=region_label, nominal=nominal_str, price=price_rub)
+
+    buttons = [
+        [InlineKeyboardButton(text="💳 Картой", callback_data=f"apple_pay_lava:{region}:{nominal}")],
+        [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}")],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
+        )],
+    ]
+
+    await safe_edit_text(
+        callback.message, text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        bot=callback.bot, parse_mode="HTML",
+    )
