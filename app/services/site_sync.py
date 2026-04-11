@@ -116,6 +116,11 @@ async def sync_balance(telegram_id: int) -> Optional[dict]:
     return data
 
 
+async def check_balance(telegram_id: int) -> Optional[dict]:
+    """GET /api/bot/sync-balance — check balance without modifying it."""
+    return await _get("sync-balance", {"telegram_id": str(telegram_id)})
+
+
 # ── Referral Sync ───────────────────────────────────────────────
 
 async def sync_referrals(telegram_id: int) -> Optional[dict]:
@@ -215,3 +220,14 @@ async def full_sync_after_payment(
 
     # 2. Sync balance (picks up any pending cashback)
     await sync_balance(telegram_id)
+
+
+async def periodic_sync(telegram_id: int):
+    """Periodic sync per TZ:
+    1. POST /api/bot/sync-balance → apply pendingCashback
+    2. POST /api/bot/sync-referrals
+    """
+    if not is_enabled():
+        return
+    await sync_balance(telegram_id)
+    await sync_referrals(telegram_id)
