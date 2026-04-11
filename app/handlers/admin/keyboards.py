@@ -156,6 +156,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("👥 Пригласить друга", "referral"),
         ("📲 Скачать Happ для iOS ⚡️", "happ_ios"),
         ("📲 Скачать Happ для Android 🤖", "happ_android"),
+        ("🌐 Веб-клиент QoDev", "web_client"),
     ]
     rows = []
     for label, key in buttons:
