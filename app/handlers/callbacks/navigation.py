@@ -1858,34 +1858,51 @@ async def callback_apple_pay_sbp(callback: CallbackQuery):
 
     rate = _APPLE_RATES.get(region, 93)
     price_rub = round(nominal * rate, 2)
+    price_kopecks = round(price_rub * 100)
     currency = _APPLE_CURRENCIES.get(region, "$")
     region_label = _APPLE_REGIONS.get(region, region)
 
-    purchase_id = await database.create_pending_purchase(
-        telegram_id=telegram_id,
-        tariff=f"apple_id_{region}_{nominal}",
-        period_days=0,
-        price_kopecks=round(price_rub * 100),
-        purchase_type="apple_id",
-    )
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer("СБП временно недоступен", show_alert=True)
+        return
 
     try:
-        import platega_service
-        result = await platega_service.create_payment(
-            amount_rubles=price_rub,
-            purchase_id=purchase_id,
-            description=f"Apple ID {region_label} {nominal}{currency}",
+        sbp_price_kopecks = platega_service.apply_sbp_markup(price_kopecks)
+        sbp_price_rubles = sbp_price_kopecks / 100.0
+
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff=f"apple_id_{region}_{nominal}",
+            period_days=0,
+            price_kopecks=sbp_price_kopecks,
+            purchase_type="apple_id",
         )
-        payment_url = result.get("payment_url") or result.get("url")
-        if payment_url:
-            text = i18n_get_text(language, "payment.sbp_waiting", amount=price_rub)
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📱 Оплатить по СБП", url=payment_url)],
-                [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
-            ])
-            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        else:
-            await callback.answer("Ошибка создания платежа СБП", show_alert=True)
+
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=sbp_price_rubles,
+            description=f"Apple ID {region_label} {nominal}{currency}",
+            purchase_id=purchase_id,
+        )
+
+        transaction_id = tx_data["transaction_id"]
+        redirect_url = tx_data["redirect_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+        except Exception:
+            pass
+
+        text = i18n_get_text(language, "payment.sbp_waiting", amount=sbp_price_rubles)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=i18n_get_text(language, "payment.sbp_pay_button"),
+                url=redirect_url,
+            )],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
     except Exception as e:
         logger.exception("APPLE_SBP_ERROR user=%s: %s", telegram_id, e)
         await callback.answer("Ошибка создания платежа СБП", show_alert=True)
