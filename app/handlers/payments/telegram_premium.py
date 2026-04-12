@@ -223,20 +223,13 @@ async def callback_premium_period(callback: CallbackQuery, state: FSMContext):
         language, "premium.choose_payment",
         username=username, period=period_text, price=f"{price_rubles:,}".replace(",", " "),
     )
-    premium_buttons = [
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data="premium_pay:card")],
-    ]
-    import platega_service
-    if platega_service.is_enabled():
-        premium_buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.international"),
-            callback_data="premium_pay:international",
-        )])
-    premium_buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "premium.back_button"),
-        callback_data=f"premium_period_back",
-    )])
-    kb = InlineKeyboardMarkup(inline_keyboard=premium_buttons)
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "premium.back_button"),
+            callback_data=f"premium_period_back",
+        )],
+    ])
     await safe_edit_text(callback.message, text, reply_markup=kb)
 
 
