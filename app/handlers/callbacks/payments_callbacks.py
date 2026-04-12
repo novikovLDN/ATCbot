@@ -1158,6 +1158,90 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
         await state.set_state(None)
 
 
+@payments_router.callback_query(F.data == "pay:international")
+async def callback_pay_international(callback: CallbackQuery, state: FSMContext):
+    """Международная оплата через Platega (paymentMethod=12)"""
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    current_state = await state.get_state()
+    if current_state != PurchaseState.choose_payment_method:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.set_state(None)
+        return
+
+    fsm_data = await state.get_data()
+    tariff_type = fsm_data.get("tariff_type")
+    period_days = fsm_data.get("period_days")
+    final_price_kopecks = fsm_data.get("final_price_kopecks")
+    country = fsm_data.get("country")
+
+    promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
+
+    if not tariff_type or not period_days or not final_price_kopecks:
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
+        await state.set_state(None)
+        return
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer("Международная оплата временно недоступна", show_alert=True)
+        return
+
+    try:
+        price_rubles = final_price_kopecks / 100.0
+
+        purchase_id = await subscription_service.create_subscription_purchase(
+            telegram_id=telegram_id,
+            tariff=tariff_type,
+            period_days=period_days,
+            price_kopecks=final_price_kopecks,
+            promo_code=promo_code,
+            country=country,
+            is_combo=fsm_data.get("combo_bypass_gb", 0) > 0,
+        )
+
+        await state.update_data(purchase_id=purchase_id)
+
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=price_rubles,
+            description=f"Atlas Secure VPN — {tariff_type} {period_days}d",
+            purchase_id=purchase_id,
+            payment_method=platega_service.PAYMENT_METHOD_INTERNATIONAL,
+        )
+
+        transaction_id = tx_data["transaction_id"]
+        redirect_url = tx_data["redirect_url"]
+
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(transaction_id))
+        except Exception:
+            pass
+
+        text = f"🌍 <b>Международная оплата</b>\n\nСумма: {price_rubles:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌍 Оплатить", url=redirect_url)],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_buy_vpn")],
+        ])
+
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+        await state.set_state(None)
+        await state.clear()
+
+    except Exception as e:
+        logger.exception(f"Error creating international payment: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+        await state.set_state(None)
+
+
 @payments_router.callback_query(F.data == "pay:crypto")
 async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     """Оплата через CryptoBot (криптовалюта)
@@ -1505,6 +1589,62 @@ async def callback_topup_sbp(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception(f"Error creating Platega SBP transaction for balance top-up: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
+@payments_router.callback_query(F.data.startswith("topup_international:"))
+async def callback_topup_international(callback: CallbackQuery):
+    """Пополнение баланса через международную оплату (Platega, paymentMethod=12)"""
+    if not await ensure_db_ready_callback(callback):
+        return
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        amount = int(callback.data.split(":")[1])
+    except ValueError:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+    if amount <= 0 or amount > 100000:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer("Международная оплата временно недоступна", show_alert=True)
+        return
+
+    try:
+        amount_kopecks = amount * 100
+        purchase_id = await subscription_service.create_balance_topup_purchase(
+            telegram_id=telegram_id, amount_kopecks=amount_kopecks, currency="RUB",
+        )
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=float(amount),
+            description=f"Пополнение баланса на {amount} ₽",
+            purchase_id=purchase_id,
+            payment_method=platega_service.PAYMENT_METHOD_INTERNATIONAL,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(tx_data["transaction_id"]))
+        except Exception:
+            pass
+
+        text = f"🌍 <b>Международная оплата</b>\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌍 Оплатить", url=tx_data["redirect_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error creating international topup: {e}")
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 

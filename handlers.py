@@ -1038,6 +1038,14 @@ async def show_payment_method_selection(
         callback_data="pay:sbp"
     )])
 
+    # Кнопка международной оплаты (Platega international)
+    import platega_service
+    if platega_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.international"),
+            callback_data="pay:international"
+        )])
+
     # Кнопка оплаты Telegram Stars
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.stars"),
