@@ -673,14 +673,14 @@ async def callback_setup_step2(callback: CallbackQuery):
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
 
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus", "trial"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or ""
+    # Bypass key: available independently of main subscription
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or ""
 
     text = i18n_get_text(language, "setup.key_install_title")
 
@@ -874,14 +874,14 @@ async def callback_setup_platform(callback: CallbackQuery):
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
 
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or None
+    # Bypass key: available independently of main subscription
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
 
     # Build text
     text = i18n_get_text(language, f"setup.combined_{platform}")
@@ -1025,14 +1025,14 @@ async def callback_setup_manual(callback: CallbackQuery):
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
 
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or None
+    # Bypass key: available independently of main subscription
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
@@ -1203,17 +1203,15 @@ async def callback_setup_qr_bypass(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    subscription = await database.get_subscription(telegram_id)
+    # Bypass key: available independently of main subscription
     bypass_url = None
-    if subscription:
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or None
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
 
     if not bypass_url:
         text = i18n_get_text(language, "setup.qr_bypass_unavailable")
