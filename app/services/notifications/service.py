@@ -157,7 +157,16 @@ def should_send_reminder(
         )
     
     time_until_expiry = calculate_time_until_expiry(expires_at, now)
-    
+
+    # Skip trial subscriptions — they have their own notification system (trial_notifications.py)
+    subscription_type = (subscription.get("subscription_type") or "").strip().lower()
+    if subscription_type == "trial":
+        return ReminderDecision(
+            should_send=False,
+            reminder_type=None,
+            reason="Trial subscription — handled by trial_notifications worker"
+        )
+
     # Determine subscription type
     admin_grant_days = subscription.get("admin_grant_days")
     last_action_type = subscription.get("last_action_type")

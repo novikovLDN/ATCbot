@@ -45,7 +45,7 @@ def get_renewal_keyboard_7d(language: str) -> InlineKeyboardMarkup:
             callback_data="menu_buy_vpn"
         )],
         [InlineKeyboardButton(
-            text="👤 Профиль",
+            text=i18n.get_text(language, "main.profile"),
             callback_data="menu_profile"
         )],
     ])
@@ -137,8 +137,8 @@ async def send_smart_reminders(bot: Bot):
                         if 0 <= delta.total_seconds() < REMINDER_IDEMPOTENCY_WINDOW.total_seconds():
                             logger.debug("Skipping reminder for user %s: last_reminder_at within idempotency window", telegram_id)
                             continue
-                    except (TypeError, AttributeError):
-                        pass
+                    except (TypeError, AttributeError) as e:
+                        logger.warning("Invalid last_reminder_at for user %s: %s", telegram_id, e)
 
                 language = await resolve_user_language(telegram_id)
                 
@@ -164,7 +164,7 @@ async def send_smart_reminders(bot: Bot):
                     audit_message = "Paid subscription reminder (7d before expiry)"
 
                 elif reminder_type == ReminderType.REMINDER_3D:
-                    text = i18n.get_text(language, "reminder.paid_3d_new")
+                    text = i18n.get_text(language, "reminder.paid_3d")
                     keyboard = get_renewal_keyboard_3d(language)
                     audit_message = "Paid subscription reminder (3d before expiry)"
 
