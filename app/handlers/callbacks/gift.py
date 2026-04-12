@@ -232,6 +232,14 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
             callback_data="gift_pay:lava"
         )])
 
+    # Международная оплата
+    import platega_service
+    if platega_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.international"),
+            callback_data="gift_pay:international"
+        )])
+
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="gift_subscription"

@@ -109,6 +109,12 @@ async def process_topup_amount(message: Message, state: FSMContext):
             text=i18n_get_text(language, "payment.lava"),
             callback_data=f"topup_lava:{amount}"
         )])
+    import platega_service
+    if platega_service.is_enabled():
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.international"),
+            callback_data=f"topup_international:{amount}"
+        )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="topup_balance"
