@@ -296,15 +296,21 @@ async def get_broadcast(broadcast_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
-async def save_broadcast_discount(broadcast_id: int, discount_percent: int) -> None:
-    """Save discount percentage for a broadcast promo button."""
+async def save_broadcast_discount(broadcast_id: int, discount_percent: int, discount_hours: int = 168, discount_label: str = "7 дней") -> None:
+    """Save discount percentage and duration for a broadcast promo button."""
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Ensure columns exist
+        try:
+            await conn.execute("ALTER TABLE broadcast_discounts ADD COLUMN IF NOT EXISTS discount_hours INTEGER DEFAULT 168")
+            await conn.execute("ALTER TABLE broadcast_discounts ADD COLUMN IF NOT EXISTS discount_label TEXT DEFAULT '7 дней'")
+        except Exception:
+            pass
         await conn.execute(
-            """INSERT INTO broadcast_discounts (broadcast_id, discount_percent)
-               VALUES ($1, $2)
-               ON CONFLICT (broadcast_id) DO UPDATE SET discount_percent = $2""",
-            broadcast_id, discount_percent
+            """INSERT INTO broadcast_discounts (broadcast_id, discount_percent, discount_hours, discount_label)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (broadcast_id) DO UPDATE SET discount_percent = $2, discount_hours = $3, discount_label = $4""",
+            broadcast_id, discount_percent, discount_hours, discount_label
         )
 
 

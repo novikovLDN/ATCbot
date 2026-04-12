@@ -168,10 +168,12 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
             return
 
         discount_percent = discount.get("discount_percent", 0)
+        discount_hours = discount.get("discount_hours", 168)  # default 7 days
+        discount_label = discount.get("discount_label", "7 дней")
 
-        # Auto-apply discount to user
+        # Auto-apply discount to user with configured duration
         from datetime import timedelta
-        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=discount_hours)
         await database.create_user_discount(
             telegram_id=telegram_id,
             discount_percent=discount_percent,
@@ -185,7 +187,7 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
 
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
-            f"🎁 Скидка {discount_percent}% автоматически применена! Действует 7 дней."
+            f"🎁 Скидка {discount_percent}% автоматически применена! Действует {discount_label}."
         )
 
     except Exception as e:
@@ -636,6 +638,7 @@ def _btn_label(btn_type: str) -> str:
         "referral": "👥 Реферальная программа",
         "happ_ios": "📲 Скачать Happ iOS",
         "happ_android": "📲 Скачать Happ Android",
+        "web_client": "🌐 Веб-клиент QoDev",
     }
     return labels.get(btn_type, btn_type)
 
@@ -657,15 +660,67 @@ async def process_broadcast_discount(message: Message, state: FSMContext):
 
     data = await state.get_data()
     buttons = data.get("broadcast_buttons", [])
-    # The pending promo type was saved when the button was selected
     pending_type = data.get("_pending_promo_type", "promo_buy")
     if pending_type not in buttons:
         buttons.append(pending_type)
     await state.update_data(broadcast_buttons=buttons, broadcast_discount=discount)
-    await state.set_state(BroadcastCreate.waiting_for_segment)
+    await state.set_state(BroadcastCreate.waiting_for_discount_duration)
+
+    duration_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="6 часов", callback_data="promo_duration:6h"),
+            InlineKeyboardButton(text="12 часов", callback_data="promo_duration:12h"),
+        ],
+        [
+            InlineKeyboardButton(text="1 день", callback_data="promo_duration:1d"),
+            InlineKeyboardButton(text="3 дня", callback_data="promo_duration:3d"),
+        ],
+        [
+            InlineKeyboardButton(text="7 дней", callback_data="promo_duration:7d"),
+            InlineKeyboardButton(text="14 дней", callback_data="promo_duration:14d"),
+        ],
+        [
+            InlineKeyboardButton(text="30 дней", callback_data="promo_duration:30d"),
+        ],
+    ])
     await message.answer(
-        f"Скидка {discount}% установлена.\n\nВыберите сегмент получателей:",
-        reply_markup=get_broadcast_segment_keyboard(language)
+        f"Скидка {discount}% установлена.\n\n⏱ Выберите время действия скидки:",
+        reply_markup=duration_keyboard,
+    )
+
+
+_DURATION_MAP = {
+    "6h": (6, "часов", "6 часов"),
+    "12h": (12, "часов", "12 часов"),
+    "1d": (24, "часов", "1 день"),
+    "3d": (72, "часов", "3 дня"),
+    "7d": (168, "часов", "7 дней"),
+    "14d": (336, "часов", "14 дней"),
+    "30d": (720, "часов", "30 дней"),
+}
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("promo_duration:"))
+async def callback_promo_duration(callback: CallbackQuery, state: FSMContext):
+    """Выбор времени действия скидки"""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+    await callback.answer()
+    language = await resolve_user_language(callback.from_user.id)
+
+    duration_key = callback.data.split(":")[1]
+    duration_hours, _, duration_label = _DURATION_MAP.get(duration_key, (168, "часов", "7 дней"))
+
+    data = await state.get_data()
+    discount = data.get("broadcast_discount", 0)
+
+    await state.update_data(broadcast_discount_hours=duration_hours, broadcast_discount_label=duration_label)
+    await state.set_state(BroadcastCreate.waiting_for_segment)
+
+    await callback.message.edit_text(
+        f"Скидка {discount}% на {duration_label}.\n\nВыберите сегмент получателей:",
+        reply_markup=get_broadcast_segment_keyboard(language),
     )
 
 
@@ -786,7 +841,10 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 
         # Save broadcast discount if set (for promo_buy or promo_traffic)
         if broadcast_discount and ("promo_buy" in broadcast_buttons or "promo_traffic" in broadcast_buttons):
-            await database.save_broadcast_discount(broadcast_id, broadcast_discount)
+            data_for_save = await state.get_data()
+            _disc_hours = data_for_save.get("broadcast_discount_hours", 168)
+            _disc_label = data_for_save.get("broadcast_discount_label", "7 дней")
+            await database.save_broadcast_discount(broadcast_id, broadcast_discount, _disc_hours, _disc_label)
 
         if is_ab_test:
             final_message_a = f"{emoji} {title}\n\n{message_a}"
