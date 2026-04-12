@@ -1592,6 +1592,62 @@ async def callback_topup_sbp(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
+@payments_router.callback_query(F.data.startswith("topup_international:"))
+async def callback_topup_international(callback: CallbackQuery):
+    """Пополнение баланса через международную оплату (Platega, paymentMethod=12)"""
+    if not await ensure_db_ready_callback(callback):
+        return
+    telegram_id = callback.from_user.id
+
+    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    if not is_allowed:
+        language = await resolve_user_language(telegram_id)
+        await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
+        return
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        amount = int(callback.data.split(":")[1])
+    except ValueError:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+    if amount <= 0 or amount > 100000:
+        await callback.answer(i18n_get_text(language, "errors.invalid_amount"), show_alert=True)
+        return
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer("Международная оплата временно недоступна", show_alert=True)
+        return
+
+    try:
+        amount_kopecks = amount * 100
+        purchase_id = await subscription_service.create_balance_topup_purchase(
+            telegram_id=telegram_id, amount_kopecks=amount_kopecks, currency="RUB",
+        )
+        tx_data = await platega_service.create_transaction(
+            amount_rubles=float(amount),
+            description=f"Пополнение баланса на {amount} ₽",
+            purchase_id=purchase_id,
+            payment_method=platega_service.PAYMENT_METHOD_INTERNATIONAL,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(tx_data["transaction_id"]))
+        except Exception:
+            pass
+
+        text = f"🌍 <b>Международная оплата</b>\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🌍 Оплатить", url=tx_data["redirect_url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="topup_balance")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error creating international topup: {e}")
+        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
+
+
 @payments_router.callback_query(F.data.startswith("topup_lava:"))
 async def callback_topup_lava(callback: CallbackQuery):
     """Пополнение баланса через Lava (карта)"""
