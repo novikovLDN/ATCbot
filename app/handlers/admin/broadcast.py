@@ -1098,36 +1098,42 @@ async def callback_broadcast_delete_exec(callback: CallbackQuery):
 
     await safe_edit_text(
         callback.message,
-        f"🗑 Удаляю {len(pairs)} сообщений броадкаста #{broadcast_id}...",
+        f"🗑 Удаляю {len(pairs)} сообщений броадкаста #{broadcast_id}...\n\n⏳ Это может занять несколько минут. Результат будет отправлен в чат.",
     )
 
-    bot = callback.bot
-    deleted = 0
-    failed = 0
-    for telegram_id, message_id in pairs:
-        try:
-            await bot.delete_message(chat_id=telegram_id, message_id=message_id)
-            deleted += 1
-        except Exception:
-            failed += 1
-        if deleted % 30 == 0:
-            await asyncio.sleep(1)  # Rate limit
+    # Run deletion in background to avoid webhook timeout
+    async def _delete_in_background():
+        bot = callback.bot
+        deleted = 0
+        failed = 0
+        for telegram_id, message_id in pairs:
+            try:
+                await bot.delete_message(chat_id=telegram_id, message_id=message_id)
+                deleted += 1
+            except Exception:
+                failed += 1
+            if deleted % 30 == 0:
+                await asyncio.sleep(1)  # Rate limit
 
-    await database.mark_broadcast_messages_deleted(broadcast_id)
+        await database.mark_broadcast_messages_deleted(broadcast_id)
 
-    text = (
-        f"✅ <b>Броадкаст #{broadcast_id} удалён</b>\n\n"
-        f"🗑 Удалено: {deleted}\n"
-        f"❌ Не удалось: {failed}\n"
-        f"📊 Всего: {len(pairs)}"
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 К списку", callback_data="broadcast:delete_list")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        text = (
+            f"✅ <b>Броадкаст #{broadcast_id} удалён</b>\n\n"
+            f"🗑 Удалено: {deleted}\n"
+            f"❌ Не удалось: {failed}\n"
+            f"📊 Всего: {len(pairs)}"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 К списку", callback_data="broadcast:delete_list")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
+        ])
+        await bot.send_message(
+            chat_id=config.ADMIN_TELEGRAM_ID, text=text,
+            reply_markup=keyboard, parse_mode="HTML",
+        )
+        logger.info(f"BROADCAST_BULK_DELETE broadcast_id={broadcast_id} deleted={deleted} failed={failed} total={len(pairs)}")
 
-    logger.info(f"BROADCAST_BULK_DELETE broadcast_id={broadcast_id} deleted={deleted} failed={failed} total={len(pairs)}")
+    asyncio.create_task(_delete_in_background())
 
 
 @admin_broadcast_router.callback_query(F.data == "broadcast:ab_stats")
