@@ -618,7 +618,7 @@ LANG = {
     'payment.crypto_waiting': "₿ Оплата криптовалютой\n\nСумма: {amount:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты через @CryptoBot.\nПосле подтверждения подписка будет активирована автоматически.",
     'payment.crypto_pay_button': "₿ Оплатить через CryptoBot",
     'payment.crypto_unavailable': "Оплата криптовалютой временно недоступна",
-    'payment.lava': "💳 Картой (Lava)",
+    'payment.lava': "💳 Банковская карта 2",
     'payment.lava_waiting': "💳 Оплата картой\n\nСумма: {amount:.2f} ₽\n\n⏳ Оплатите в течение 10 минут",
     'payment.lava_pay_button': "💳 Оплатить через Lava",
     'payment.lava_unavailable': "Оплата через Lava временно недоступна",
