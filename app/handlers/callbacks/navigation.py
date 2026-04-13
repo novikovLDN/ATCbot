@@ -1043,7 +1043,7 @@ async def callback_setup_manual(callback: CallbackQuery):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_platform:{platform}",
+            callback_data=f"setup_step2:{platform}",
         )],
     ]
 
