@@ -116,9 +116,9 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             logger.warning(f"Error checking trial availability for user {telegram_id}: {e}")
 
         if trial_available:
-            # Состояние 1: Новый пользователь → "Пробный период"
+            # Состояние 1: Новый пользователь → "Попробовать бесплатно"
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "trial.button"),
+                text="🎁 Попробовать бесплатно — 3 дня",
                 callback_data="activate_trial"
             )])
 
@@ -130,26 +130,25 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             if special_offer:
                 remaining = special_offer["remaining_text"]
                 buttons.append([InlineKeyboardButton(
-                    text=f"🔥 Спецпредложение -15% | ⏳ {remaining}",
+                    text=f"🔥 Продлить со скидкой 15% | ⏳ {remaining}",
                     callback_data="special_offer_buy"
                 )])
                 offer_shown = True
         except Exception as e:
             logger.warning(f"Error checking special offer for user {telegram_id}: {e}")
 
-        if not offer_shown:
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Купить обход блокировок",
-                callback_data="buy_bypass_only"
-            )])
-            buttons.append([InlineKeyboardButton(
-                text="⚡️ Купить подписку VPN",
-                callback_data="menu_buy_vpn"
-            )])
-            buttons.append([InlineKeyboardButton(
-                text="🚀 Выгодное комбо",
-                callback_data="buy_combo"
-            )])
+        if not offer_shown and not trial_available:
+            # Нет триала и нет спецпредложения — обычные кнопки
+            pass
+
+        buttons.append([InlineKeyboardButton(
+            text="⚡️ Купить подписку",
+            callback_data="menu_buy_vpn"
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="🌐 Только обход блокировок",
+            callback_data="buy_bypass_only"
+        )])
 
     # Traffic button removed — traffic info is now in profile screen
 
@@ -218,7 +217,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         # === Кнопки для пользователей БЕЗ подписки ===
         buttons.append([
             InlineKeyboardButton(
-                text=i18n_get_text(language, "main.help"),
+                text="❓ Помощь",
                 url="https://t.me/Atlas_SupportSecurity"
             ),
         ])

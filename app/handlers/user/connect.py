@@ -26,11 +26,11 @@ async def cmd_connect(message: Message):
     text = i18n_get_text(language, "setup.select_device")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
             InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(

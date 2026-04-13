@@ -526,11 +526,11 @@ async def callback_connect_instruction(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
             InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
@@ -695,44 +695,26 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        text += f"\n\n{i18n_get_text(language, 'setup.auto_install_header')}"
-
-        # Happ auto-setup: VPN + Bypass in one row
-        happ_row = [InlineKeyboardButton(
-            text="⚡️ Happ (VPN)",
+        # VPN key buttons
+        buttons.append([InlineKeyboardButton(
+            text="🔑 Добавить VPN ключ",
             url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )]
+        )])
+        # Bypass key buttons
         if bypass_url:
-            happ_row.append(InlineKeyboardButton(
-                text="⚡️ Happ (Обход)",
+            buttons.append([InlineKeyboardButton(
+                text="🌐 Добавить обход ключ",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            ))
-        buttons.append(happ_row)
-
-        # V2RayTun auto-setup: VPN + Bypass in one row
-        v2_row = [InlineKeyboardButton(
-            text="⚡️ V2RayTun (VPN)",
-            url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
-        )]
-        if bypass_url:
-            v2_row.append(InlineKeyboardButton(
-                text="⚡️ V2RayTun (Обход)",
-                url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
-            ))
-        buttons.append(v2_row)
-
-    # === Manual keys ===
-    text += i18n_get_text(language, "setup.manual_install_header")
-
-    if sub_url:
-        text += f"\n\n{i18n_get_text(language, 'setup.key_vpn')}\n<blockquote><code>{sub_url}</code></blockquote>"
-    if bypass_url:
-        text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
+            )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
         callback_data="setup_done",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_manual"),
+        callback_data=f"setup_manual:{platform}",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
@@ -828,11 +810,11 @@ async def callback_setup_device(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
             InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
