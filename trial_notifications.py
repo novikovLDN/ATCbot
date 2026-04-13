@@ -527,6 +527,12 @@ async def _process_single_trial_expiration(bot: Bot, pool, row: dict, now: datet
                     WHERE telegram_id = $1 AND source = 'trial' AND status = 'active'
                 """, telegram_id, far_future)
                 logger.info(f"trial_expired: TRANSITION_TO_BYPASS_ONLY user={telegram_id} — Remnawave stays active")
+                # Extend Remnawave expiry so bypass keeps working
+                try:
+                    from app.services.remnawave_service import extend_remnawave_for_bypass_bg
+                    extend_remnawave_for_bypass_bg(telegram_id)
+                except Exception as rmn_err:
+                    logger.warning(f"REMNAWAVE_BYPASS_EXTEND_FAIL: tg={telegram_id} {rmn_err}")
                 # Notify user that main subscription expired but bypass keeps working
                 try:
                     language = await resolve_user_language(telegram_id)

@@ -310,6 +310,12 @@ async def fast_expiry_cleanup_task(bot=None):
                                                                     f"cleanup: TRANSITION_TO_BYPASS_ONLY [user={telegram_id}, uuid={uuid_preview}] "
                                                                     f"— Remnawave stays active, Xray removed"
                                                                 )
+                                                                # Extend Remnawave expiry so bypass keeps working
+                                                                try:
+                                                                    from app.services.remnawave_service import extend_remnawave_for_bypass_bg
+                                                                    extend_remnawave_for_bypass_bg(telegram_id)
+                                                                except Exception as rmn_err:
+                                                                    logger.warning(f"REMNAWAVE_BYPASS_EXTEND_FAIL: tg={telegram_id} {rmn_err}")
                                                                 # Notify user
                                                                 if bot:
                                                                     try:

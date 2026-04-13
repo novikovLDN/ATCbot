@@ -300,6 +300,12 @@ async def check_and_disable_expired_subscription(telegram_id: int) -> bool:
                         "EXPIRY_TRANSITION_TO_BYPASS_ONLY user=%s — Remnawave stays active",
                         telegram_id,
                     )
+                    # Extend Remnawave expiry so bypass keeps working
+                    try:
+                        from app.services.remnawave_service import extend_remnawave_for_bypass_bg
+                        extend_remnawave_for_bypass_bg(telegram_id)
+                    except Exception as rmn_err:
+                        logger.warning("REMNAWAVE_BYPASS_EXTEND_FAIL: tg=%s %s", telegram_id, rmn_err)
                 return rows > 0
 
             result = await conn.execute(

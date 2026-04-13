@@ -228,6 +228,36 @@ def renew_remnawave_user_bg(telegram_id: int, tariff: str, subscription_end: dat
 
 # ── Disable (subscription expired) ─────────────────────────────────────
 
+async def extend_remnawave_for_bypass(telegram_id: int) -> None:
+    """Extend Remnawave expiry to far future for bypass-only mode.
+
+    When main subscription expires but user has bypass traffic,
+    Remnawave user must stay ACTIVE with a far-future expireAt.
+    Otherwise Remnawave marks user as expired and bypass stops working.
+    """
+    if not config.REMNAWAVE_ENABLED:
+        return
+    try:
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if not rmn_uuid:
+            return
+        user_data = await _get_user_with_recovery(telegram_id, rmn_uuid)
+        if not user_data:
+            return
+        api_uuid = user_data.get("uuid") or rmn_uuid
+
+        from datetime import timedelta
+        far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
+        logger.info("REMNAWAVE_BYPASS_EXTENDED: tg=%s uuid=%s — expiry set to +10 years", telegram_id, api_uuid[:8])
+    except Exception as e:
+        logger.error("REMNAWAVE_BYPASS_EXTEND_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+
+
+def extend_remnawave_for_bypass_bg(telegram_id: int) -> None:
+    _fire_and_forget(extend_remnawave_for_bypass(telegram_id))
+
+
 async def disable_remnawave_user(telegram_id: int) -> None:
     """Disable Remnawave user when subscription expires (keep data)."""
     if not config.REMNAWAVE_ENABLED:
