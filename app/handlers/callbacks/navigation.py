@@ -115,7 +115,13 @@ async def _get_main_text(telegram_id: int, language: str) -> str:
         if sub and sub_type and config.is_biz_tariff(sub_type):
             return i18n_get_text(language, "biz.main_screen")
         if not sub:
-            text = i18n_get_text(language, "main.welcome_no_sub")
+            # Check if user ever had a subscription (expired vs new)
+            user = await database.get_user(telegram_id)
+            trial_used = user.get("trial_used_at") if user else None
+            if trial_used:
+                text = i18n_get_text(language, "main.welcome_expired")
+            else:
+                text = i18n_get_text(language, "main.welcome_no_sub")
             return await format_text_with_incident(text, language)
         if sub and sub.get("is_bypass_only"):
             text = i18n_get_text(language, "main.welcome_bypass")

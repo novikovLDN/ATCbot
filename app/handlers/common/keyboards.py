@@ -177,42 +177,28 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         else:
             buttons.append([
                 InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.buy_renew"),
+                    text="🔄 Продлить подписку",
                     callback_data="menu_buy_vpn",
                 ),
                 InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
+                    text="🎁 Подарить другу",
                     callback_data="gift_subscription"
                 ),
             ])
         buttons.append([
             InlineKeyboardButton(
-                text=i18n_get_text(language, "main.instruction"),
-                callback_data="connect_instruction",
+                text="🎮 Игровой клуб",
+                callback_data="games_menu",
             ),
             InlineKeyboardButton(
-                text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
-                callback_data="games_menu"
+                text="💎 Программа лояльности",
+                callback_data="menu_referral",
             ),
         ])
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.referral"),
-            callback_data="menu_referral"
-        )])
-        buttons.append([InlineKeyboardButton(
-            text="🛍 Мини-магазинчик",
-            callback_data="mini_shop"
-        )])
         buttons.append([
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.help"),
-                url="https://t.me/Atlas_SupportSecurity"
-            ),
+            InlineKeyboardButton(text="🛍 Магазин", callback_data="mini_shop"),
+            InlineKeyboardButton(text="❓ Помощь", url="https://t.me/Atlas_SupportSecurity"),
         ])
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.settings", "main.settings"),
-            callback_data="menu_settings"
-        )])
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
         buttons.append([
