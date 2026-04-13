@@ -159,20 +159,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             callback_data="menu_profile"
         )])
         if is_bypass_only:
-            # Bypass-only: показываем кнопки докупить трафик и купить подписку
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Купить ГБ трафика",
-                callback_data="buy_traffic",
-            )])
+            # Bypass-only: кнопки докупить трафик и купить подписку
             buttons.append([
-                InlineKeyboardButton(
-                    text="⚡️ Купить подписку VPN",
-                    callback_data="menu_buy_vpn",
-                ),
-                InlineKeyboardButton(
-                    text="🚀 Комбо",
-                    callback_data="buy_combo",
-                ),
+                InlineKeyboardButton(text="🌐 Купить ГБ обхода", callback_data="buy_traffic"),
+                InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn"),
             ])
         else:
             buttons.append([
@@ -359,11 +349,11 @@ def get_profile_keyboard(
         ),
     ])
 
-    # Row 4: Назад
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back", "← Назад"),
-        callback_data="menu_main"
-    )])
+    # Row 4: Язык + Назад
+    buttons.append([
+        InlineKeyboardButton(text="🌐 Язык", callback_data="change_language"),
+        InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_main"),
+    ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
