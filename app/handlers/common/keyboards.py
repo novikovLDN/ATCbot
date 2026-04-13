@@ -159,60 +159,36 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             callback_data="menu_profile"
         )])
         if is_bypass_only:
-            # Bypass-only: показываем кнопки докупить трафик и купить подписку
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Купить ГБ трафика",
-                callback_data="buy_traffic",
-            )])
+            # Bypass-only: кнопки докупить трафик и купить подписку
             buttons.append([
-                InlineKeyboardButton(
-                    text="⚡️ Купить подписку VPN",
-                    callback_data="menu_buy_vpn",
-                ),
-                InlineKeyboardButton(
-                    text="🚀 Комбо",
-                    callback_data="buy_combo",
-                ),
+                InlineKeyboardButton(text="🌐 Купить ГБ обхода", callback_data="buy_traffic"),
+                InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn"),
             ])
         else:
             buttons.append([
                 InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.buy_renew"),
+                    text="🔄 Продлить подписку",
                     callback_data="menu_buy_vpn",
                 ),
                 InlineKeyboardButton(
-                    text=i18n_get_text(language, "main.gift_subscription", "🎁 Подарить"),
+                    text="🎁 Подарить другу",
                     callback_data="gift_subscription"
                 ),
             ])
         buttons.append([
             InlineKeyboardButton(
-                text=i18n_get_text(language, "main.instruction"),
-                callback_data="connect_instruction",
+                text="🎮 Игровой клуб",
+                callback_data="games_menu",
             ),
             InlineKeyboardButton(
-                text=i18n_get_text(language, "main.game_club", "🎮 Игровой клуб"),
-                callback_data="games_menu"
+                text="💎 Программа лояльности",
+                callback_data="menu_referral",
             ),
         ])
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.referral"),
-            callback_data="menu_referral"
-        )])
-        buttons.append([InlineKeyboardButton(
-            text="🛍 Мини-магазинчик",
-            callback_data="mini_shop"
-        )])
         buttons.append([
-            InlineKeyboardButton(
-                text=i18n_get_text(language, "main.help"),
-                url="https://t.me/Atlas_SupportSecurity"
-            ),
+            InlineKeyboardButton(text="🛍 Магазин", callback_data="mini_shop"),
+            InlineKeyboardButton(text="❓ Помощь", url="https://t.me/Atlas_SupportSecurity"),
         ])
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.settings", "main.settings"),
-            callback_data="menu_settings"
-        )])
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
         buttons.append([
@@ -373,11 +349,11 @@ def get_profile_keyboard(
         ),
     ])
 
-    # Row 4: Назад
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "common.back", "← Назад"),
-        callback_data="menu_main"
-    )])
+    # Row 4: Язык + Назад
+    buttons.append([
+        InlineKeyboardButton(text="🌐 Язык", callback_data="change_language"),
+        InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_main"),
+    ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
