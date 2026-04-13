@@ -201,13 +201,6 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
             callback_data=f"bypass_pay_lava:{gb}",
         )])
 
-    import platega_service as _ps
-    if _ps.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text="🌍 Международная оплата",
-            callback_data=f"bypass_pay_intl:{gb}",
-        )])
-
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="buy_bypass_only",
@@ -769,13 +762,6 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "traffic.pay_lava", price=price),
             callback_data=f"traffic_pay_lava:{gb}",
-        )])
-
-    # International payment
-    if platega_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=f"🌍 Международная ({price} ₽)",
-            callback_data=f"traffic_pay_intl:{gb}",
         )])
 
     buttons.append([InlineKeyboardButton(
@@ -1437,108 +1423,4 @@ async def callback_bypass_pay_lava(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception("BYPASS_LAVA_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-# ── International payment (Platega paymentMethod=12) ─────────────
-
-@traffic_router.callback_query(F.data.startswith("traffic_pay_intl:"))
-async def callback_traffic_pay_intl(callback: CallbackQuery):
-    """Pay for traffic pack via international acquiring."""
-    if not await ensure_db_ready_callback(callback):
-        return
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    pack = config.TRAFFIC_PACKS.get(gb) or config.TRAFFIC_PACKS_EXTENDED.get(gb)
-    if not pack:
-        return
-
-    import platega_service
-    if not platega_service.is_enabled():
-        await callback.answer("Международная оплата временно недоступна", show_alert=True)
-        return
-
-    traffic_discount = await database.get_user_traffic_discount(telegram_id)
-    discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
-    base_price = pack["price"]
-    price = math.ceil(base_price * (1 - discount_pct / 100)) if discount_pct > 0 else base_price
-    price_kopecks = price * 100
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id, tariff=f"traffic_{gb}gb", period_days=0,
-            price_kopecks=price_kopecks, purchase_type="traffic_pack",
-        )
-        tx_data = await platega_service.create_transaction(
-            amount_rubles=float(price), description=f"Atlas Secure Traffic {gb}GB",
-            purchase_id=purchase_id, payment_method=platega_service.PAYMENT_METHOD_INTERNATIONAL,
-        )
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(tx_data["transaction_id"]))
-        except Exception:
-            pass
-
-        text = f"🌍 <b>Международная оплата</b>\n\nТрафик: {gb} ГБ\nСумма: {price} ₽"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 Оплатить", url=tx_data["redirect_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_traffic")],
-        ])
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
-    except Exception as e:
-        logger.exception("TRAFFIC_INTL_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
-
-
-@traffic_router.callback_query(F.data.startswith("bypass_pay_intl:"))
-async def callback_bypass_pay_intl(callback: CallbackQuery):
-    """Pay for bypass pack via international acquiring."""
-    if not await ensure_db_ready_callback(callback):
-        return
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    try:
-        gb = int(callback.data.split(":")[1])
-    except (ValueError, IndexError):
-        return
-
-    price, pack = await _bypass_price(telegram_id, gb)
-    if not price:
-        return
-
-    import platega_service
-    if not platega_service.is_enabled():
-        await callback.answer("Международная оплата временно недоступна", show_alert=True)
-        return
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id, tariff=f"bypass_{gb}gb", period_days=0,
-            price_kopecks=price * 100, purchase_type="traffic_pack",
-        )
-        tx_data = await platega_service.create_transaction(
-            amount_rubles=float(price), description=f"Atlas Secure Bypass {gb}GB",
-            purchase_id=purchase_id, payment_method=platega_service.PAYMENT_METHOD_INTERNATIONAL,
-        )
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(tx_data["transaction_id"]))
-        except Exception:
-            pass
-
-        text = f"🌍 <b>Международная оплата</b>\n\nОбход: {gb} ГБ\nСумма: {price} ₽"
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 Оплатить", url=tx_data["redirect_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="buy_bypass_only")],
-        ])
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer()
-    except Exception as e:
-        logger.exception("BYPASS_INTL_ERROR user=%s gb=%s: %s", telegram_id, gb, e)
         await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)

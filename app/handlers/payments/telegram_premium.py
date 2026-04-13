@@ -223,20 +223,13 @@ async def callback_premium_period(callback: CallbackQuery, state: FSMContext):
         language, "premium.choose_payment",
         username=username, period=period_text, price=f"{price_rubles:,}".replace(",", " "),
     )
-    premium_buttons = [
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data="premium_pay:card")],
-    ]
-    import platega_service
-    if platega_service.is_enabled():
-        premium_buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.international"),
-            callback_data="premium_pay:international",
-        )])
-    premium_buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "premium.back_button"),
-        callback_data=f"premium_period_back",
-    )])
-    kb = InlineKeyboardMarkup(inline_keyboard=premium_buttons)
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "premium.back_button"),
+            callback_data=f"premium_period_back",
+        )],
+    ])
     await safe_edit_text(callback.message, text, reply_markup=kb)
 
 
@@ -375,63 +368,6 @@ async def callback_premium_pay_card(callback: CallbackQuery, state: FSMContext):
         await callback.answer()
     except Exception:
         pass
-
-
-@premium_router.callback_query(
-    F.data == "premium_pay:international",
-    StateFilter(TelegramPremiumState.choose_payment_method),
-)
-async def callback_premium_pay_international(callback: CallbackQuery, state: FSMContext):
-    """Pay for Telegram Premium via international acquiring (Platega)."""
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    data = await state.get_data()
-    username = data.get("premium_username")
-    days = data.get("premium_period_days")
-    price_rubles = data.get("premium_price_rubles")
-
-    if not all([username, days, price_rubles]):
-        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
-        await state.clear()
-        return
-
-    import platega_service
-    if not platega_service.is_enabled():
-        await callback.answer("Международная оплата временно недоступна", show_alert=True)
-        return
-
-    price_kopecks = price_rubles * 100
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id, tariff="telegram_premium", period_days=days,
-            price_kopecks=price_kopecks, purchase_type="telegram_premium", country=username,
-        )
-
-        tx_data = await platega_service.create_transaction(
-            amount_rubles=float(price_rubles),
-            description=f"TgId:{telegram_id} Telegram Premium {days}d @{username.lstrip('@')}",
-            purchase_id=purchase_id,
-            payment_method=platega_service.PAYMENT_METHOD_INTERNATIONAL,
-        )
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(tx_data["transaction_id"]))
-        except Exception:
-            pass
-
-        text = f"🌍 <b>Международная оплата</b>\n\nСумма: {price_rubles:,} ₽\n\n⏳ Перейдите по ссылке для оплаты."
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 Оплатить", url=tx_data["redirect_url"])],
-            [InlineKeyboardButton(text=i18n_get_text(language, "premium.back_button"), callback_data="premium_period_back")],
-        ])
-        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
-        await callback.answer()
-        await state.clear()
-
-    except Exception as e:
-        logger.exception("PREMIUM_INTL_ERROR user=%s: %s", telegram_id, e)
-        await callback.answer(i18n_get_text(language, "errors.payment_create"), show_alert=True)
 
 
 # ─── Post-payment: success handler ───

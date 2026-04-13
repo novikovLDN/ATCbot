@@ -435,10 +435,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     await state.set_state(PurchaseState.choose_tariff)
     
     text = (
-        f"💎 <b>Тарифы Atlas Secure</b>\n\n"
+        f"💎 <b>Выберите тариф</b>\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"{i18n_get_text(language, 'buy.tariff_business')}"
+        f"<blockquote>80% пользователей выбирают Basic</blockquote>"
     )
     
     # Получаем текущую подписку для динамических кнопок
@@ -480,12 +480,8 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.enter_promo"),
+            text="🎟 У меня промокод",
             callback_data="enter_promo"
-        )],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "buy.corporate_button"),
-            callback_data="corporate_access_request"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),

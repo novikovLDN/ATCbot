@@ -1020,7 +1020,7 @@ async def show_payment_method_selection(
     
     # Кнопка оплаты картой
     buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.card"),
+        text="💳 Банковская карта",
         callback_data="pay:card"
     )])
 
@@ -1028,7 +1028,7 @@ async def show_payment_method_selection(
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.lava"),
+            text="💳 Банковская карта 2",
             callback_data="pay:lava"
         )])
 
@@ -1037,14 +1037,6 @@ async def show_payment_method_selection(
         text=i18n_get_text(language, "payment.sbp"),
         callback_data="pay:sbp"
     )])
-
-    # Кнопка международной оплаты (Platega international)
-    import platega_service
-    if platega_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.international"),
-            callback_data="pay:international"
-        )])
 
     # Кнопка оплаты Telegram Stars
     buttons.append([InlineKeyboardButton(

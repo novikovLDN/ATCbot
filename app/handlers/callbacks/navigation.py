@@ -526,11 +526,11 @@ async def callback_connect_instruction(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
             InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
@@ -673,14 +673,14 @@ async def callback_setup_step2(callback: CallbackQuery):
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
 
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus", "trial"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or ""
+    # Bypass key: available independently of main subscription
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or ""
 
     text = i18n_get_text(language, "setup.key_install_title")
 
@@ -695,44 +695,26 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        text += f"\n\n{i18n_get_text(language, 'setup.auto_install_header')}"
-
-        # Happ auto-setup: VPN + Bypass in one row
-        happ_row = [InlineKeyboardButton(
-            text="⚡️ Happ (VPN)",
+        # VPN key buttons
+        buttons.append([InlineKeyboardButton(
+            text="🔑 Добавить VPN ключ",
             url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )]
+        )])
+        # Bypass key buttons
         if bypass_url:
-            happ_row.append(InlineKeyboardButton(
-                text="⚡️ Happ (Обход)",
+            buttons.append([InlineKeyboardButton(
+                text="🌐 Добавить обход ключ",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            ))
-        buttons.append(happ_row)
-
-        # V2RayTun auto-setup: VPN + Bypass in one row
-        v2_row = [InlineKeyboardButton(
-            text="⚡️ V2RayTun (VPN)",
-            url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
-        )]
-        if bypass_url:
-            v2_row.append(InlineKeyboardButton(
-                text="⚡️ V2RayTun (Обход)",
-                url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
-            ))
-        buttons.append(v2_row)
-
-    # === Manual keys ===
-    text += i18n_get_text(language, "setup.manual_install_header")
-
-    if sub_url:
-        text += f"\n\n{i18n_get_text(language, 'setup.key_vpn')}\n<blockquote><code>{sub_url}</code></blockquote>"
-    if bypass_url:
-        text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
+            )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
         callback_data="setup_done",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_manual"),
+        callback_data=f"setup_manual:{platform}",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
@@ -828,11 +810,11 @@ async def callback_setup_device(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
             InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
@@ -874,14 +856,14 @@ async def callback_setup_platform(callback: CallbackQuery):
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
 
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or None
+    # Bypass key: available independently of main subscription
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
 
     # Build text
     text = i18n_get_text(language, f"setup.combined_{platform}")
@@ -1025,14 +1007,14 @@ async def callback_setup_manual(callback: CallbackQuery):
         from vpn_utils import build_sub_url
         sub_url = build_sub_url(telegram_id)
 
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or None
+    # Bypass key: available independently of main subscription
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
@@ -1203,17 +1185,15 @@ async def callback_setup_qr_bypass(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    subscription = await database.get_subscription(telegram_id)
+    # Bypass key: available independently of main subscription
     bypass_url = None
-    if subscription:
-        sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
-        if config.REMNAWAVE_ENABLED and sub_type in ("basic", "plus"):
-            from app.services import remnawave_api
-            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-            if rmn_uuid:
-                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-                if traffic:
-                    bypass_url = traffic.get("subscriptionUrl", "") or None
+    if config.REMNAWAVE_ENABLED:
+        from app.services import remnawave_api
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+            if traffic:
+                bypass_url = traffic.get("subscriptionUrl", "") or None
 
     if not bypass_url:
         text = i18n_get_text(language, "setup.qr_bypass_unavailable")
@@ -1613,9 +1593,8 @@ async def callback_apple_confirm(callback: CallbackQuery):
 
     buttons = [
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data=f"apple_pay_card:{region}:{nominal}")],
-        [InlineKeyboardButton(text="💳 Банковская карта 2", callback_data=f"apple_pay_lava:{region}:{nominal}")],
+        [InlineKeyboardButton(text="💳 Картой (Lava)", callback_data=f"apple_pay_lava:{region}:{nominal}")],
         [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}")],
-        [InlineKeyboardButton(text="🌍 Международная оплата", callback_data=f"apple_pay_intl:{region}:{nominal}")],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",
         )],
@@ -1691,64 +1670,6 @@ async def callback_apple_pay_lava(callback: CallbackQuery):
         except Exception:
             pass
     asyncio.create_task(_del(callback.bot, telegram_id, lava_msg))
-
-
-@router.callback_query(F.data.startswith("apple_pay_intl:"))
-async def callback_apple_pay_intl(callback: CallbackQuery):
-    """Apple ID — international payment via Platega."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-    parts = callback.data.split(":")
-    region = parts[1]
-    nominal = int(parts[2])
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    rate = _APPLE_RATES.get(region, 93)
-    price_rub = round(nominal * rate, 2)
-    currency = _APPLE_CURRENCIES.get(region, "$")
-    region_label = _APPLE_REGIONS.get(region, region)
-
-    import platega_service
-    if not platega_service.is_enabled():
-        await callback.answer("Международная оплата временно недоступна", show_alert=True)
-        return
-
-    try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff=f"apple_id_{region}_{nominal}",
-            period_days=0,
-            price_kopecks=round(price_rub * 100),
-            purchase_type="apple_id",
-        )
-
-        tx_data = await platega_service.create_transaction(
-            amount_rubles=price_rub,
-            description=f"Apple ID {region_label} {nominal}{currency}",
-            purchase_id=purchase_id,
-            payment_method=platega_service.PAYMENT_METHOD_INTERNATIONAL,
-        )
-
-        redirect_url = tx_data["redirect_url"]
-        try:
-            await database.update_pending_purchase_invoice_id(purchase_id, str(tx_data["transaction_id"]))
-        except Exception:
-            pass
-
-        text = f"🌍 <b>Международная оплата</b>\n\nСумма: {price_rub:.2f} ₽\n\n⏳ Перейдите по ссылке для оплаты."
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 Оплатить", url=redirect_url)],
-            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
-        ])
-        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-
-    except Exception as e:
-        logger.exception("APPLE_INTL_ERROR user=%s: %s", telegram_id, e)
-        await callback.answer("Ошибка создания платежа", show_alert=True)
 
 
 async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int, price_rub: float):

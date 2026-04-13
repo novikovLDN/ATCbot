@@ -46,29 +46,20 @@ def apply_sbp_markup(price_kopecks: int) -> int:
     return math.ceil(price_kopecks * (1 + markup))
 
 
-# Payment method constants (from Platega API docs)
-PAYMENT_METHOD_SBP = 2
-PAYMENT_METHOD_CARD_RU = 11
-PAYMENT_METHOD_INTERNATIONAL = 12
-PAYMENT_METHOD_CRYPTO = 13
-
-
 async def create_transaction(
     amount_rubles: float,
     description: str,
     purchase_id: str,
-    payment_method: int = PAYMENT_METHOD_SBP,
     return_url: Optional[str] = None,
     failed_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Create payment transaction via Platega API.
+    Create SBP payment transaction via Platega API.
 
     Args:
         amount_rubles: Payment amount in rubles (already with markup applied)
         description: Payment description
         purchase_id: Internal purchase ID (stored in payload)
-        payment_method: Platega payment method (2=SBP, 11=Card RU, 12=International, 13=Crypto)
         return_url: Redirect URL after successful payment
         failed_url: Redirect URL after failed payment
 
@@ -82,7 +73,8 @@ async def create_transaction(
         raise Exception("Platega not configured")
 
     request_body = {
-        "paymentMethod": payment_method,
+        "paymentMethod": 2,  # SBP
+        "id": str(uuid4()),
         "paymentDetails": {
             "amount": round(amount_rubles, 2),
             "currency": "RUB",
@@ -92,6 +84,7 @@ async def create_transaction(
     }
     if return_url:
         request_body["return"] = return_url
+        request_body["returnUrl"] = None
     if failed_url:
         request_body["failedUrl"] = failed_url
 
