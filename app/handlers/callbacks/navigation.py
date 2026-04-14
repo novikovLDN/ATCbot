@@ -1607,7 +1607,7 @@ async def callback_apple_confirm(callback: CallbackQuery):
 
     buttons = [
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data=f"apple_pay_card:{region}:{nominal}")],
-        [InlineKeyboardButton(text="💳 Картой (Lava)", callback_data=f"apple_pay_lava:{region}:{nominal}")],
+        [InlineKeyboardButton(text="📱 СБП 3%", callback_data=f"apple_pay_lava:{region}:{nominal}")],
         [InlineKeyboardButton(text="📱 СБП", callback_data=f"apple_pay_sbp:{region}:{nominal}")],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"), callback_data=f"apple_amount:{region}",

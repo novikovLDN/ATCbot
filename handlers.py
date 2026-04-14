@@ -1028,7 +1028,7 @@ async def show_payment_method_selection(
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text="💳 Банковская карта 2",
+            text="📱 СБП 3%",
             callback_data="pay:lava"
         )])
 
