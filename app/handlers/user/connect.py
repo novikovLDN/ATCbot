@@ -39,7 +39,14 @@ async def cmd_connect(message: Message):
             callback_data="menu_main",
         )],
     ])
-    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    from app.handlers.callbacks.navigation import _DEVICE_SELECT_PHOTO
+    _ds_photo = _DEVICE_SELECT_PHOTO.get("prod" if config.IS_PROD else "stage", "")
+    if _ds_photo:
+        await message.answer_photo(
+            photo=_ds_photo, caption=text, reply_markup=keyboard, parse_mode="HTML",
+        )
+    else:
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @user_router.message(Command("white"))
