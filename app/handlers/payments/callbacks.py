@@ -246,18 +246,41 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
                 else:
                     period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
 
-            traffic_gb = config.TRAFFIC_LIMITS_GB.get(new_tariff, {}).get(period_days, 0)
+            months = max(1, period_days // 30)
+            price_int = int(final_price_rubles)
+            per_month = price_int // months if months > 1 else 0
 
-            if has_discount:
-                button_text = i18n_get_text(
-                    language, "buy.button_price_discount",
-                    base=int(base_price_rubles), final=int(final_price_rubles), period=period_text, gb=traffic_gb
-                )
+            # Badge: ⭐ for 3 months, 🔥 for 12 months
+            badge = ""
+            if months == 3:
+                badge = "⭐"
+            elif months >= 12:
+                badge = "🔥"
+
+            if months == 1:
+                # 1 month — no per-month price
+                if has_discount:
+                    button_text = i18n_get_text(
+                        language, "buy.button_price_discount",
+                        base=int(base_price_rubles), final=price_int, period=period_text,
+                    )
+                else:
+                    button_text = i18n_get_text(
+                        language, "buy.button_price",
+                        price=price_int, period=period_text,
+                    )
             else:
-                button_text = i18n_get_text(
-                    language, "buy.button_price",
-                    price=int(final_price_rubles), period=period_text, gb=traffic_gb
-                )
+                # Multi-month — show per-month price
+                if has_discount:
+                    button_text = i18n_get_text(
+                        language, "buy.button_price_discount_monthly",
+                        per_month=per_month, final=price_int, period=period_text, badge=badge,
+                    )
+                else:
+                    button_text = i18n_get_text(
+                        language, "buy.button_price_monthly",
+                        per_month=per_month, price=price_int, period=period_text, badge=badge,
+                    )
 
             buttons.append([InlineKeyboardButton(
                 text=button_text,
