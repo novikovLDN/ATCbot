@@ -166,29 +166,19 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             ])
         else:
             buttons.append([
-                InlineKeyboardButton(
-                    text="🔄 Продлить подписку",
-                    callback_data="menu_buy_vpn",
-                ),
-                InlineKeyboardButton(
-                    text="🎁 Подарить другу",
-                    callback_data="gift_subscription"
-                ),
+                InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="menu_buy_vpn"),
+                InlineKeyboardButton(text="🎁 Подарить", callback_data="gift_subscription"),
             ])
         buttons.append([
-            InlineKeyboardButton(
-                text="🎮 Игровой клуб",
-                callback_data="games_menu",
-            ),
-            InlineKeyboardButton(
-                text="💎 Программа лояльности",
-                callback_data="menu_referral",
-            ),
-        ])
-        buttons.append([
+            InlineKeyboardButton(text="🎮 Игровой клуб", callback_data="games_menu"),
             InlineKeyboardButton(text="🛍 Магазин", callback_data="mini_shop"),
-            InlineKeyboardButton(text="❓ Помощь", url="https://t.me/Atlas_SupportSecurity"),
         ])
+        buttons.append([InlineKeyboardButton(
+            text="💎 Программа лояльности", callback_data="menu_referral",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="❓ Помощь", url="https://t.me/Atlas_SupportSecurity",
+        )])
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
         buttons.append([
