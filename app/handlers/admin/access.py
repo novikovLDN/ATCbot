@@ -397,7 +397,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
             
             text += f"Срок действия: до {expires_str}\n"
             from vpn_utils import build_sub_url
-            sub_url = build_sub_url(overview.telegram_id)
+            sub_url = build_sub_url(overview.user['telegram_id'])
             if sub_url:
                 text += f"Ключ подписки:\n<code>{sub_url}</code>\n"
             else:
