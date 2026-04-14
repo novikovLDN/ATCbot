@@ -217,9 +217,9 @@ async def process_pending_activations(bot: Bot) -> tuple[int, str]:
                                 tariff_label = "Basic"
                             tariff_emoji = "🏢" if config.is_biz_tariff(sub_type) else ("⭐️" if sub_type == "plus" else "📦")
                             text = (
-                                "🎉 Добро пожаловать в Atlas Secure!\n"
-                                f"{tariff_emoji} Тариф: {tariff_label}\n"
-                                f"📅 До: {expires_str}"
+                                "🎉 <b>Подписка активирована!</b>\n\n"
+                                f"⚡ {tariff_label} · до {expires_str}\n\n"
+                                "Нажмите кнопку ниже чтобы подключить устройство."
                             )
                             keyboard = get_connect_keyboard()
                             await safe_send_message(
