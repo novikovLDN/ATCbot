@@ -9,7 +9,7 @@ All public functions follow fire-and-forget pattern:
 import asyncio
 import logging
 import uuid as uuid_lib
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import config
@@ -112,7 +112,9 @@ async def create_remnawave_user(
 
     try:
         short_uuid = str(uuid_lib.uuid4())[:12]
-        expire_str = subscription_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Bypass works by traffic (GB), not by date — set expiry far in the future
+        far_future = (subscription_end + timedelta(days=3650))
+        expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         result = await remnawave_api.create_user(
             username=str(telegram_id),
@@ -197,7 +199,7 @@ async def renew_remnawave_user(
         api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + traffic_add
-        expire_str = subscription_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        expire_str = (subscription_end + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         await remnawave_api.update_user(
             api_uuid,
