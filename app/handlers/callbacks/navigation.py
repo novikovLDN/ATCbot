@@ -488,6 +488,12 @@ async def callback_get_sub_key(callback: CallbackQuery):
 
 # ── Connect instruction ──────────────────────────────────────────
 
+_DEVICE_SELECT_PHOTO = {
+    "prod": "AgACAgQAAxkBAAE0NTZp3l3gdeBhxJkIS2TpkBb21eZRcgACuQxrG4hw8FLTA987VQE0UwEAAwIAA3gAAzsE",
+    "stage": "AgACAgQAAxkBAAIfk2neXiFB7muCDweE_DUQYBQQvuaPAAIBD2sbWKTxUkH53rjUNBxiAQADAgADeAADOwQ",
+}
+
+
 @router.callback_query(F.data == "connect_instruction")
 async def callback_connect_instruction(callback: CallbackQuery):
     """Подключиться → сразу выбор устройства."""
@@ -546,18 +552,19 @@ async def callback_connect_instruction(callback: CallbackQuery):
         )],
     ])
 
-    # If coming back from a photo screen, delete and send new text message
-    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
-    if has_photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML",
-        )
-    else:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    # Always send photo + text for device selection
+    _ds_photo = _DEVICE_SELECT_PHOTO.get("prod" if config.IS_PROD else "stage", "")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_photo(
+        chat_id=telegram_id,
+        photo=_ds_photo,
+        caption=text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
 
 
 # ── Step 1: Install App ──────────────────────────────────────────
