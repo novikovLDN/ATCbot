@@ -166,29 +166,19 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             ])
         else:
             buttons.append([
-                InlineKeyboardButton(
-                    text="🔄 Продлить подписку",
-                    callback_data="menu_buy_vpn",
-                ),
-                InlineKeyboardButton(
-                    text="🎁 Подарить другу",
-                    callback_data="gift_subscription"
-                ),
+                InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="menu_buy_vpn"),
+                InlineKeyboardButton(text="🎁 Подарить", callback_data="gift_subscription"),
             ])
         buttons.append([
-            InlineKeyboardButton(
-                text="🎮 Игровой клуб",
-                callback_data="games_menu",
-            ),
-            InlineKeyboardButton(
-                text="💎 Программа лояльности",
-                callback_data="menu_referral",
-            ),
-        ])
-        buttons.append([
+            InlineKeyboardButton(text="🎮 Игровой клуб", callback_data="games_menu"),
             InlineKeyboardButton(text="🛍 Магазин", callback_data="mini_shop"),
-            InlineKeyboardButton(text="❓ Помощь", url="https://t.me/Atlas_SupportSecurity"),
         ])
+        buttons.append([InlineKeyboardButton(
+            text="💎 Программа лояльности", callback_data="menu_referral",
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="❓ Помощь", url="https://t.me/Atlas_SupportSecurity",
+        )])
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
         buttons.append([
@@ -331,7 +321,7 @@ def get_profile_keyboard(
     # Row 2: Автопродление + Пополнить
     row2 = []
     if has_active_subscription and not is_bypass_only:
-        ar_text = "🔄 Автопродление ✅" if auto_renew else "🔄 Автопродление"
+        ar_text = "🔁 Автопродление ✅" if auto_renew else "🔁 Автопродление"
         ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
         row2.append(InlineKeyboardButton(text=ar_text, callback_data=ar_data))
     row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
@@ -340,7 +330,7 @@ def get_profile_keyboard(
     # Row 3: Веб-клиент + Мои подарки
     buttons.append([
         InlineKeyboardButton(
-            text="🌐 Веб-клиент",
+            text="🖥 Веб-клиент",
             url="https://qodev.dev",
         ),
         InlineKeyboardButton(
@@ -351,7 +341,7 @@ def get_profile_keyboard(
 
     # Row 4: Язык + Назад
     buttons.append([
-        InlineKeyboardButton(text="🌐 Язык", callback_data="change_language"),
+        InlineKeyboardButton(text="🗣 Язык", callback_data="change_language"),
         InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_main"),
     ])
 
