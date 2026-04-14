@@ -321,7 +321,7 @@ def get_profile_keyboard(
     # Row 2: Автопродление + Пополнить
     row2 = []
     if has_active_subscription and not is_bypass_only:
-        ar_text = "🔄 Автопродление ✅" if auto_renew else "🔄 Автопродление"
+        ar_text = "🔁 Автопродление ✅" if auto_renew else "🔁 Автопродление"
         ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
         row2.append(InlineKeyboardButton(text=ar_text, callback_data=ar_data))
     row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
@@ -330,7 +330,7 @@ def get_profile_keyboard(
     # Row 3: Веб-клиент + Мои подарки
     buttons.append([
         InlineKeyboardButton(
-            text="🌐 Веб-клиент",
+            text="🖥 Веб-клиент",
             url="https://qodev.dev",
         ),
         InlineKeyboardButton(
@@ -341,7 +341,7 @@ def get_profile_keyboard(
 
     # Row 4: Язык + Назад
     buttons.append([
-        InlineKeyboardButton(text="🌐 Язык", callback_data="change_language"),
+        InlineKeyboardButton(text="🗣 Язык", callback_data="change_language"),
         InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_main"),
     ])
 
