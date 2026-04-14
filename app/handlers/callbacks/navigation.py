@@ -62,18 +62,14 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, callback.from_user.id)
 
-    # Для пользователей без подписки — отправляем фото с текстом
-    sub = await database.get_subscription(telegram_id)
-    if not sub:
-        await callback.bot.send_photo(
-            chat_id=callback.message.chat.id,
-            photo=_MAIN_PHOTO_ID,
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-    else:
-        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard, parse_mode="HTML")
+    # Всегда отправляем фото с текстом на главном экране
+    await callback.bot.send_photo(
+        chat_id=callback.message.chat.id,
+        photo=_MAIN_PHOTO_ID,
+        caption=text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
 
 
 @router.callback_query(F.data == "back_to_main")
@@ -91,21 +87,17 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
     text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
 
-    sub = await database.get_subscription(telegram_id)
-    if not sub:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_photo(
-            chat_id=callback.message.chat.id,
-            photo=_MAIN_PHOTO_ID,
-            caption=text,
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-    else:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_photo(
+        chat_id=callback.message.chat.id,
+        photo=_MAIN_PHOTO_ID,
+        caption=text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
 
 
 async def _get_main_text(telegram_id: int, language: str) -> str:
@@ -496,6 +488,12 @@ async def callback_get_sub_key(callback: CallbackQuery):
 
 # ── Connect instruction ──────────────────────────────────────────
 
+_DEVICE_SELECT_PHOTO = {
+    "prod": "AgACAgQAAxkBAAE0NTZp3l3gdeBhxJkIS2TpkBb21eZRcgACuQxrG4hw8FLTA987VQE0UwEAAwIAA3gAAzsE",
+    "stage": "AgACAgQAAxkBAAIfk2neXiFB7muCDweE_DUQYBQQvuaPAAIBD2sbWKTxUkH53rjUNBxiAQADAgADeAADOwQ",
+}
+
+
 @router.callback_query(F.data == "connect_instruction")
 async def callback_connect_instruction(callback: CallbackQuery):
     """Подключиться → сразу выбор устройства."""
@@ -554,18 +552,19 @@ async def callback_connect_instruction(callback: CallbackQuery):
         )],
     ])
 
-    # If coming back from a photo screen, delete and send new text message
-    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
-    if has_photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=telegram_id, text=text, reply_markup=keyboard, parse_mode="HTML",
-        )
-    else:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    # Always send photo + text for device selection
+    _ds_photo = _DEVICE_SELECT_PHOTO.get("prod" if config.IS_PROD else "stage", "")
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_photo(
+        chat_id=telegram_id,
+        photo=_ds_photo,
+        caption=text,
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
 
 
 # ── Step 1: Install App ──────────────────────────────────────────
