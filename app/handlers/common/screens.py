@@ -202,7 +202,18 @@ async def show_profile(message_or_query, language: str):
             send_func = message_or_query.answer
         else:
             telegram_id = message_or_query.from_user.id
-            send_func = message_or_query.message.edit_text
+            # If current message is a photo, can't edit_text — delete and send new
+            has_photo = getattr(message_or_query.message, "photo", None) and len(message_or_query.message.photo) > 0
+            if has_photo:
+                try:
+                    await message_or_query.message.delete()
+                except Exception:
+                    pass
+                send_func = lambda text, **kw: message_or_query.bot.send_message(
+                    chat_id=telegram_id, text=text, **kw
+                )
+            else:
+                send_func = message_or_query.message.edit_text
     except AttributeError as e:
         logger.error(f"Invalid message_or_query type in show_profile: {type(message_or_query)}, error: {e}")
         raise
