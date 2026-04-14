@@ -54,7 +54,7 @@ async def _handle_platega_webhook(request: Request):
             body = await request.json()
         except Exception as e:
             logger.error(f"Platega webhook: invalid JSON: {e}")
-            return JSONResponse({"status": "invalid"})
+            return JSONResponse({"status": "invalid"}, status_code=400)
 
         result = await asyncio.wait_for(
             platega_service.process_webhook_data(headers, body, _bot),
@@ -108,7 +108,7 @@ async def _handle_cryptobot_webhook(request: Request):
             body = await request.json()
         except Exception as e:
             logger.error(f"CryptoBot webhook: invalid JSON: {e}")
-            return JSONResponse({"status": "invalid"})
+            return JSONResponse({"status": "invalid"}, status_code=400)
 
         result = await asyncio.wait_for(
             cryptobot_service.process_webhook_data(headers, raw_body, body, _bot),
@@ -154,7 +154,7 @@ async def _handle_lava_webhook(request: Request):
             body = await request.json()
         except Exception as e:
             logger.error(f"Lava webhook: invalid JSON: {e}")
-            return JSONResponse({"status": "invalid"})
+            return JSONResponse({"status": "invalid"}, status_code=400)
 
         result = await asyncio.wait_for(
             lava_service.process_webhook_data(headers, body, _bot),

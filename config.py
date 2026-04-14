@@ -422,8 +422,8 @@ TRAFFIC_LIMITS = {
 
 # Shortcut: human-readable GB for button labels
 TRAFFIC_LIMITS_GB = {
-    "basic": {30: 0, 90: 0, 180: 0, 365: 0},
-    "plus":  {30: 0, 90: 0, 180: 0, 365: 0},
+    "basic": {30: 10, 90: 10, 180: 10, 365: 10},
+    "plus":  {30: 10, 90: 10, 180: 10, 365: 10},
 }
 
 # Device limits per tariff

@@ -42,8 +42,11 @@ async def deeplink_redirect(client: str, url: str = Query(...)):
     if not scheme:
         return HTMLResponse("<h3>Unknown client</h3>", status_code=400)
 
-    deep_link = f"{scheme}{url}"
-    client_name = _CLIENT_NAMES.get(client, client)
+    from html import escape as html_escape
+    from urllib.parse import quote
+    safe_url = quote(url, safe='/:?&=@%+')
+    deep_link = f"{scheme}{safe_url}"
+    client_name = html_escape(_CLIENT_NAMES.get(client, client))
 
     html = f"""<!DOCTYPE html>
 <html>

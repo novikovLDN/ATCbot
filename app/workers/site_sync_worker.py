@@ -14,7 +14,7 @@ import time
 
 import database
 from app.services.site_sync import sync_balance, sync_referrals, is_enabled
-from app.utils.logging_helpers import log_event
+from app.core.structured_logger import log_event
 
 logger = logging.getLogger(__name__)
 
