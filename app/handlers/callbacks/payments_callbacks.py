@@ -64,9 +64,10 @@ async def callback_topup_balance(callback: CallbackQuery):
     
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
     # Показываем экран выбора суммы
-    text = i18n_get_text(language, "main.topup_balance_select_amount")
+    balance = await database.get_user_balance(telegram_id)
+    text = i18n_get_text(language, "main.topup_balance_select_amount", balance=f"{balance:.2f}")
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(

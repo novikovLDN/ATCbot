@@ -16,6 +16,7 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
+from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
 from app.handlers.common.screens import show_profile
 from app.handlers.common.keyboards import (
@@ -66,7 +67,7 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     if not sub:
         await callback.bot.send_photo(
             chat_id=callback.message.chat.id,
-            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            photo=_MAIN_PHOTO_ID,
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,
@@ -98,7 +99,7 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
             pass
         await callback.bot.send_photo(
             chat_id=callback.message.chat.id,
-            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            photo=_MAIN_PHOTO_ID,
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,
@@ -115,7 +116,13 @@ async def _get_main_text(telegram_id: int, language: str) -> str:
         if sub and sub_type and config.is_biz_tariff(sub_type):
             return i18n_get_text(language, "biz.main_screen")
         if not sub:
-            text = i18n_get_text(language, "main.welcome_no_sub")
+            # Check if user ever had a subscription (expired vs new)
+            user = await database.get_user(telegram_id)
+            trial_used = user.get("trial_used_at") if user else None
+            if trial_used:
+                text = i18n_get_text(language, "main.welcome_expired")
+            else:
+                text = i18n_get_text(language, "main.welcome_no_sub")
             return await format_text_with_incident(text, language)
         if sub and sub.get("is_bypass_only"):
             text = i18n_get_text(language, "main.welcome_bypass")
@@ -509,8 +516,16 @@ async def callback_connect_instruction(callback: CallbackQuery):
             if subscription:
                 sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
                 expires_at = subscription.get("expires_at")
-                if expires_at:
-                    override = 5 * 1024**3 if sub_type == "trial" else 10 * 1024**3
+                if expires_at and sub_type == "trial":
+                    override = 2 * 1024**3  # Trial: 2 GB bypass
+                    remnawave_service._fire_and_forget(
+                        remnawave_service.create_remnawave_user(
+                            telegram_id, sub_type, expires_at,
+                            traffic_limit_override=override,
+                        )
+                    )
+                elif expires_at and sub_type != "trial":
+                    override = 1 * 1024**3  # 1 GB starter pack
                     remnawave_service._fire_and_forget(
                         remnawave_service.create_remnawave_user(
                             telegram_id, sub_type, expires_at,
@@ -526,11 +541,11 @@ async def callback_connect_instruction(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
             InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
@@ -695,44 +710,26 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        text += f"\n\n{i18n_get_text(language, 'setup.auto_install_header')}"
-
-        # Happ auto-setup: VPN + Bypass in one row
-        happ_row = [InlineKeyboardButton(
-            text="⚡️ Happ (VPN)",
+        # VPN key buttons
+        buttons.append([InlineKeyboardButton(
+            text="🔑 Добавить VPN ключ",
             url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )]
+        )])
+        # Bypass key buttons
         if bypass_url:
-            happ_row.append(InlineKeyboardButton(
-                text="⚡️ Happ (Обход)",
+            buttons.append([InlineKeyboardButton(
+                text="🌐 Добавить обход ключ",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            ))
-        buttons.append(happ_row)
-
-        # V2RayTun auto-setup: VPN + Bypass in one row
-        v2_row = [InlineKeyboardButton(
-            text="⚡️ V2RayTun (VPN)",
-            url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
-        )]
-        if bypass_url:
-            v2_row.append(InlineKeyboardButton(
-                text="⚡️ V2RayTun (Обход)",
-                url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
-            ))
-        buttons.append(v2_row)
-
-    # === Manual keys ===
-    text += i18n_get_text(language, "setup.manual_install_header")
-
-    if sub_url:
-        text += f"\n\n{i18n_get_text(language, 'setup.key_vpn')}\n<blockquote><code>{sub_url}</code></blockquote>"
-    if bypass_url:
-        text += f"\n\n{i18n_get_text(language, 'setup.key_bypass')}\n<blockquote><code>{bypass_url}</code></blockquote>"
+            )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
         callback_data="setup_done",
+    )])
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "setup.btn_manual"),
+        callback_data=f"setup_manual:{platform}",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
@@ -828,11 +825,11 @@ async def callback_setup_device(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📱 iOS", callback_data="setup_step1:ios"),
+            InlineKeyboardButton(text="📱 iPhone / iPad", callback_data="setup_step1:ios"),
             InlineKeyboardButton(text="🤖 Android", callback_data="setup_step1:android"),
         ],
         [
-            InlineKeyboardButton(text="🍎 macOS", callback_data="setup_step1:macos"),
+            InlineKeyboardButton(text="🍎 Mac", callback_data="setup_step1:macos"),
             InlineKeyboardButton(text="🪟 Windows", callback_data="setup_step1:windows"),
         ],
         [InlineKeyboardButton(
@@ -1055,7 +1052,7 @@ async def callback_setup_manual(callback: CallbackQuery):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_platform:{platform}",
+            callback_data=f"setup_step2:{platform}",
         )],
     ]
 
