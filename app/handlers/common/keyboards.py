@@ -28,20 +28,15 @@ def get_connect_button():
 
 
 def get_connect_keyboard(language: str = "ru"):
-    """Клавиатура: Подключиться + Открыть мини апп + Профиль + Главный экран."""
+    """Клавиатура после активации: Подключиться + Помощь."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "connect.autosetup_btn"),
-            callback_data="setup_device",
+            text="⚡️ Подключиться",
+            callback_data="connect_instruction",
         )],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "connect.open_miniapp_btn"),
-            web_app=WebAppInfo(url=MINI_APP_URL),
-        )],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile")],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
+            text="💬 Нужна помощь",
+            url="https://t.me/Atlas_SupportSecurity",
         )],
     ])
 
