@@ -515,8 +515,16 @@ async def callback_connect_instruction(callback: CallbackQuery):
             if subscription:
                 sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
                 expires_at = subscription.get("expires_at")
-                if expires_at:
-                    override = 5 * 1024**3 if sub_type == "trial" else 10 * 1024**3
+                if expires_at and sub_type == "trial":
+                    override = 2 * 1024**3  # Trial: 2 GB bypass
+                    remnawave_service._fire_and_forget(
+                        remnawave_service.create_remnawave_user(
+                            telegram_id, sub_type, expires_at,
+                            traffic_limit_override=override,
+                        )
+                    )
+                elif expires_at and sub_type != "trial":
+                    override = 1 * 1024**3  # 1 GB starter pack
                     remnawave_service._fire_and_forget(
                         remnawave_service.create_remnawave_user(
                             telegram_id, sub_type, expires_at,
