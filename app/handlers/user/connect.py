@@ -6,6 +6,7 @@ import logging
 from aiogram import Router
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
+from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 
 import config
 import database
@@ -118,7 +119,7 @@ async def cmd_main(message: Message):
     sub = await database.get_subscription(telegram_id)
     if not sub:
         await message.answer_photo(
-            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            photo=_MAIN_PHOTO_ID,
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,

@@ -16,6 +16,7 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
+from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
 from app.handlers.common.screens import show_profile
 from app.handlers.common.keyboards import (
@@ -66,7 +67,7 @@ async def callback_main_menu(callback: CallbackQuery, state: FSMContext):
     if not sub:
         await callback.bot.send_photo(
             chat_id=callback.message.chat.id,
-            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            photo=_MAIN_PHOTO_ID,
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,
@@ -98,7 +99,7 @@ async def callback_back_to_main(callback: CallbackQuery, state: FSMContext):
             pass
         await callback.bot.send_photo(
             chat_id=callback.message.chat.id,
-            photo="AgACAgQAAxkBAAEpZhtp1AAB3Y9P6v5KtnNI5W2KLXLRGeAAAqsMaxtluqBSqDLmexoxay0BAAMCAAN5AAM7BA",
+            photo=_MAIN_PHOTO_ID,
             caption=text,
             parse_mode="HTML",
             reply_markup=keyboard,
