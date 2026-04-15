@@ -1087,15 +1087,15 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
     except Exception:
         pass
 
-    # 5. Отправляем главное меню
+    # 5. Отправляем главное меню с фото
     language = await resolve_user_language(telegram_id)
-    text = i18n_get_text(language, "main.welcome")
-    text = await format_text_with_incident(text, language)
+    text = await _get_main_text(telegram_id, language)
     keyboard = await get_main_menu_keyboard(language, telegram_id)
 
-    await callback.bot.send_message(
+    await callback.bot.send_photo(
         chat_id=telegram_id,
-        text=text,
+        photo=_MAIN_PHOTO_ID,
+        caption=text,
         reply_markup=keyboard,
         parse_mode="HTML",
     )
