@@ -104,11 +104,24 @@ async def callback_games_menu(callback: CallbackQuery):
         "Выбирай игру и испытай удачу! 🍀"
     )
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=get_games_menu_keyboard(language),
-        parse_mode="HTML",
-    )
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=get_games_menu_keyboard(language),
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_games_menu_keyboard(language),
+            parse_mode="HTML",
+        )
 
 
 @router.callback_query(F.data == "game_bowling")
