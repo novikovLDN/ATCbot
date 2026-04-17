@@ -14,7 +14,6 @@ import time
 
 import database
 from app.services.site_sync import sync_balance, sync_referrals, is_enabled
-from app.core.structured_logger import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +37,7 @@ async def site_sync_worker_task(bot=None):
                 continue
 
             start_time = time.monotonic()
-            log_event(logger, component="worker", operation="site_sync_iteration",
-                      event="ITERATION_START", worker="site_sync")
+            logger.info("SITE_SYNC_ITERATION_START")
 
             # Get users with active subscriptions
             pool = await database.get_pool()
@@ -65,12 +63,7 @@ async def site_sync_worker_task(bot=None):
                 await asyncio.sleep(SYNC_USER_DELAY)
 
             duration_ms = (time.monotonic() - start_time) * 1000
-            log_event(logger, component="worker", operation="site_sync_iteration",
-                      event="ITERATION_END", worker="site_sync", outcome="success",
-                      items_processed=synced, duration_ms=duration_ms)
-
-            if synced > 0 or errors > 0:
-                logger.info("SITE_SYNC_WORKER: synced=%d errors=%d duration=%.0fms", synced, errors, duration_ms)
+            logger.info("SITE_SYNC_ITERATION_END: synced=%d errors=%d duration=%.0fms", synced, errors, duration_ms)
 
         except asyncio.CancelledError:
             logger.info("site_sync_worker cancelled (shutdown)")
