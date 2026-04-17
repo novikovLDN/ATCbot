@@ -4149,9 +4149,10 @@ async def finalize_purchase(
         purchase_country = pending_purchase.get("country")
         is_combo_purchase = pending_purchase.get("is_combo", False)
         expected_amount_rubles = price_kopecks / 100.0
-        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift"))
+        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium"))
         is_gift_purchase = (purchase_type == "gift")
         is_traffic_pack = (purchase_type == "traffic_pack")
+        is_apple_id = (purchase_type == "apple_id")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
         # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
         # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
@@ -4312,6 +4313,32 @@ async def finalize_purchase(
                         "is_balance_topup": True,
                         "amount": amount_rubles,
                         "referral_reward": referral_reward_result
+                    }
+
+                # STEP 4.4b: ОБРАБОТКА ПОКУПКИ APPLE ID
+                if is_apple_id:
+                    logger.info(
+                        f"finalize_purchase: APPLE_ID [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"tariff={tariff_type}, amount={amount_rubles:.2f} RUB]"
+                    )
+                    now_utc = datetime.now(timezone.utc)
+                    payment_id = await conn.fetchval(
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        telegram_id, tariff_type, round(amount_rubles * 100),
+                        purchase_id, _to_db_utc(now_utc),
+                    )
+                    return {
+                        "success": True,
+                        "payment_id": payment_id,
+                        "expires_at": None,
+                        "vpn_key": None,
+                        "is_renewal": False,
+                        "is_balance_topup": False,
+                        "is_traffic_pack": False,
+                        "tariff_type": tariff_type,
+                        "price_kopecks": price_kopecks,
+                        "amount": amount_rubles,
                     }
 
                 # STEP 4.5: ОБРАБОТКА ПОДАРОЧНОЙ ПОДПИСКИ (gift)
