@@ -498,7 +498,9 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     ])
     
     # If message is a photo (e.g. no-sub main screen), delete and send new
-    if msg.photo:
+    if isinstance(event, Message):
+        await event.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    elif msg.photo:
         try:
             await msg.delete()
         except Exception:
