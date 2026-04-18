@@ -436,16 +436,16 @@ DEVICE_LIMITS = {
 # Комбо-тарифы: подписка + ГБ обхода в одном пакете
 COMBO_TARIFFS = {
     "combo_basic": {
-        30:  {"price": 307,  "gb": 25,  "base_tariff": "basic"},
-        90:  {"price": 804,  "gb": 75,  "base_tariff": "basic"},
-        180: {"price": 1462, "gb": 150, "base_tariff": "basic"},
-        365: {"price": 2689, "gb": 300, "base_tariff": "basic"},
+        30:  {"price": 269,  "gb": 25,  "base_tariff": "basic"},   # 5.5₽/ГБ
+        90:  {"price": 749,  "gb": 75,  "base_tariff": "basic"},   # 5.3₽/ГБ
+        180: {"price": 1449, "gb": 150, "base_tariff": "basic"},   # 5.1₽/ГБ
+        365: {"price": 2699, "gb": 300, "base_tariff": "basic"},   # 4.9₽/ГБ
     },
     "combo_plus": {
-        30:  {"price": 434,  "gb": 25,  "base_tariff": "plus"},
-        90:  {"price": 1059, "gb": 75,  "base_tariff": "plus"},
-        180: {"price": 1844, "gb": 150, "base_tariff": "plus"},
-        365: {"price": 3454, "gb": 300, "base_tariff": "plus"},
+        30:  {"price": 399,  "gb": 25,  "base_tariff": "plus"},    # 5.5₽/ГБ
+        90:  {"price": 999,  "gb": 75,  "base_tariff": "plus"},    # 5.3₽/ГБ
+        180: {"price": 1849, "gb": 150, "base_tariff": "plus"},    # 5.1₽/ГБ
+        365: {"price": 3499, "gb": 300, "base_tariff": "plus"},    # 4.9₽/ГБ
     },
 }
 
