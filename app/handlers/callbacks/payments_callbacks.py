@@ -649,11 +649,14 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         keyboard = get_payment_success_keyboard(language, subscription_type=subscription_type, is_renewal=is_renewal)
 
         if is_upgrade:
+            _is_combo = _combo_gb_from_fsm > 0
+            if _is_combo:
+                upgrade_label = "Комбо Plus" if subscription_type == "plus" else "Комбо Basic"
+            else:
+                upgrade_label = "Plus" if subscription_type == "plus" else "Basic"
             text = (
-                f"⭐️ Апгрейд до Plus!\n"
-                f"📅 До: {expires_str}\n\n"
-                f"📲 Чтобы конфигурации обновились в приложении:\n"
-                f"V2rayTUN — нажмите 🔄 (обновить подписку)"
+                f"✅ Ваш тариф изменён на <b>{upgrade_label}</b>\n"
+                f"📅 До: {expires_str}"
             )
             try:
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
