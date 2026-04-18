@@ -261,7 +261,10 @@ def extend_remnawave_for_bypass_bg(telegram_id: int) -> None:
 
 
 async def disable_remnawave_user(telegram_id: int) -> None:
-    """Disable Remnawave user when subscription expires (keep data)."""
+    """Disable Remnawave user when subscription expires.
+
+    If user still has bypass traffic remaining — extend instead of disable.
+    """
     if not config.REMNAWAVE_ENABLED:
         return
     try:
@@ -272,6 +275,18 @@ async def disable_remnawave_user(telegram_id: int) -> None:
         if not user_data:
             return
         api_uuid = user_data.get("uuid") or rmn_uuid
+
+        # Check if user still has bypass traffic — don't disable if GB remaining
+        traffic_limit = user_data.get("trafficLimitBytes", 0)
+        traffic_used = user_data.get("usedTrafficBytes", 0)
+        if traffic_limit > 0 and traffic_used < traffic_limit:
+            # User still has bypass GB — extend instead of disable
+            far_future = (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await remnawave_api.update_user(api_uuid, expireAt=far_future, status="ACTIVE")
+            logger.info("REMNAWAVE_KEPT_ACTIVE: tg=%s uuid=%s — bypass traffic remaining (%d/%d bytes)",
+                        telegram_id, api_uuid[:8], traffic_used, traffic_limit)
+            return
+
         await remnawave_api.update_user(api_uuid, status="DISABLED")
         logger.info("REMNAWAVE_DISABLED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
     except Exception as e:

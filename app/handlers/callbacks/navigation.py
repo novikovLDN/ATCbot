@@ -531,6 +531,10 @@ async def callback_connect_instruction(callback: CallbackQuery):
                         )
                     )
         else:
+            # Existing Remnawave user — ensure expiry is far future (bypass works by GB, not date)
+            remnawave_service._fire_and_forget(
+                remnawave_service.extend_remnawave_for_bypass(telegram_id)
+            )
             remnawave_service._fire_and_forget(
                 remnawave_service.ensure_squad(telegram_id)
             )
