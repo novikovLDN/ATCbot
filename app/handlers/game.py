@@ -210,10 +210,14 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
 
         if dice_value == 6:
             try:
+                # Preserve current tariff (don't downgrade Plus to Basic)
+                sub = await database.get_subscription(telegram_id)
+                current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
                 result = await database.grant_access(
                     telegram_id=telegram_id,
                     duration=timedelta(days=7),
                     source="game_strike",
+                    tariff=current_tariff,
                 )
                 end_dt = result.get("subscription_end")
                 if end_dt and hasattr(end_dt, "strftime"):
@@ -338,10 +342,14 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
 
         # Grant days equal to dice value (1-6)
         try:
+            # Preserve current tariff (don't downgrade Plus to Basic)
+            sub = await database.get_subscription(telegram_id)
+            current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
             result = await database.grant_access(
                 telegram_id=telegram_id,
                 duration=timedelta(days=dice_value),
                 source="game_dice",
+                tariff=current_tariff,
             )
             end_dt = result.get("subscription_end")
             if end_dt and hasattr(end_dt, "strftime"):

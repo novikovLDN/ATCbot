@@ -231,16 +231,27 @@ async def callback_settings(callback: CallbackQuery):
         pass
 
     language = await resolve_user_language(callback.from_user.id)
-    title = i18n_get_text(language, "main.settings_title", "main.settings_title")
+    title = i18n_get_text(language, "main.settings_title", "⚙️ Настройки")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n_get_text(language, "lang.change"), callback_data="change_language")],
+        [InlineKeyboardButton(text="🗣 Изменить язык", callback_data="change_language")],
+        [InlineKeyboardButton(text="🔐 Политика конфиденциальности", callback_data="about_privacy")],
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "main.ecosystem", "main.ecosystem"),
+            text=i18n_get_text(language, "main.ecosystem", "⚪️ Наша экосистема"),
             callback_data="menu_ecosystem"
         )],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
-    await safe_edit_text(callback.message, title, reply_markup=keyboard, bot=callback.bot)
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id, text=title, reply_markup=keyboard, parse_mode="HTML",
+        )
+    else:
+        await safe_edit_text(callback.message, title, reply_markup=keyboard, bot=callback.bot)
 
 
 @router.callback_query(F.data == "menu_about")
@@ -531,6 +542,10 @@ async def callback_connect_instruction(callback: CallbackQuery):
                         )
                     )
         else:
+            # Existing Remnawave user — ensure expiry is far future (bypass works by GB, not date)
+            remnawave_service._fire_and_forget(
+                remnawave_service.extend_remnawave_for_bypass(telegram_id)
+            )
             remnawave_service._fire_and_forget(
                 remnawave_service.ensure_squad(telegram_id)
             )
