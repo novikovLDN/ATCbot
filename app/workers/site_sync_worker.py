@@ -14,7 +14,6 @@ import time
 
 import database
 from app.services.site_sync import sync_balance, sync_referrals, is_enabled
-from app.utils.logging_helpers import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +37,16 @@ async def site_sync_worker_task(bot=None):
                 continue
 
             start_time = time.monotonic()
-            log_event(logger, component="worker", operation="site_sync_iteration",
-                      event="ITERATION_START", worker="site_sync")
+            logger.info("SITE_SYNC_ITERATION_START")
 
-            # Get users with active subscriptions
+            # Get only site-linked users with active subscriptions
             pool = await database.get_pool()
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
-                    """SELECT DISTINCT telegram_id FROM subscriptions
-                       WHERE expires_at > NOW() AND telegram_id IS NOT NULL
+                    """SELECT DISTINCT s.telegram_id FROM subscriptions s
+                       JOIN users u ON u.telegram_id = s.telegram_id
+                       WHERE s.expires_at > NOW() AND s.telegram_id IS NOT NULL
+                       AND u.site_linked = TRUE
                        LIMIT 500"""
                 )
 
@@ -65,12 +65,7 @@ async def site_sync_worker_task(bot=None):
                 await asyncio.sleep(SYNC_USER_DELAY)
 
             duration_ms = (time.monotonic() - start_time) * 1000
-            log_event(logger, component="worker", operation="site_sync_iteration",
-                      event="ITERATION_END", worker="site_sync", outcome="success",
-                      items_processed=synced, duration_ms=duration_ms)
-
-            if synced > 0 or errors > 0:
-                logger.info("SITE_SYNC_WORKER: synced=%d errors=%d duration=%.0fms", synced, errors, duration_ms)
+            logger.info("SITE_SYNC_ITERATION_END: synced=%d errors=%d duration=%.0fms", synced, errors, duration_ms)
 
         except asyncio.CancelledError:
             logger.info("site_sync_worker cancelled (shutdown)")

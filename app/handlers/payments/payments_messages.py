@@ -1011,11 +1011,14 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Один компактный экран: текст + кнопки копирования и профиль (без отдельной отправки ключей)
     is_upgrade = getattr(result, "is_basic_to_plus_upgrade", False)
     if is_upgrade:
+        _is_combo_purchase = getattr(result, "is_combo", False)
+        if _is_combo_purchase:
+            upgrade_label = "Комбо Plus" if subscription_type == "plus" else "Комбо Basic"
+        else:
+            upgrade_label = "Plus" if subscription_type == "plus" else "Basic"
         text = (
-            f"⭐️ Апгрейд до Plus!\n"
-            f"📅 До: {expires_str}\n\n"
-            f"📲 Чтобы конфигурации обновились в приложении:\n"
-            f"V2rayTUN — нажмите 🔄 (обновить подписку)"
+            f"✅ Ваш тариф изменён на <b>{upgrade_label}</b>\n"
+            f"📅 До: {expires_str}"
         )
         keyboard = get_payment_success_keyboard(language, subscription_type="plus", is_renewal=True)
         try:

@@ -228,7 +228,7 @@ async def callback_gift_period(callback: CallbackQuery, state: FSMContext):
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.lava", "💳 Картой (Lava)"),
+            text=i18n_get_text(language, "payment.lava", "📱 СБП 3%"),
             callback_data="gift_pay:lava"
         )])
 

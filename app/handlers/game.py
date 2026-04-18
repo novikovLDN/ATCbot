@@ -104,11 +104,24 @@ async def callback_games_menu(callback: CallbackQuery):
         "Выбирай игру и испытай удачу! 🍀"
     )
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=get_games_menu_keyboard(language),
-        parse_mode="HTML",
-    )
+    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
+    if has_photo:
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=get_games_menu_keyboard(language),
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_games_menu_keyboard(language),
+            parse_mode="HTML",
+        )
 
 
 @router.callback_query(F.data == "game_bowling")
@@ -197,10 +210,14 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
 
         if dice_value == 6:
             try:
+                # Preserve current tariff (don't downgrade Plus to Basic)
+                sub = await database.get_subscription(telegram_id)
+                current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
                 result = await database.grant_access(
                     telegram_id=telegram_id,
                     duration=timedelta(days=7),
                     source="game_strike",
+                    tariff=current_tariff,
                 )
                 end_dt = result.get("subscription_end")
                 if end_dt and hasattr(end_dt, "strftime"):
@@ -325,10 +342,14 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
 
         # Grant days equal to dice value (1-6)
         try:
+            # Preserve current tariff (don't downgrade Plus to Basic)
+            sub = await database.get_subscription(telegram_id)
+            current_tariff = (sub.get("subscription_type") or "basic").strip().lower() if sub else "basic"
             result = await database.grant_access(
                 telegram_id=telegram_id,
                 duration=timedelta(days=dice_value),
                 source="game_dice",
+                tariff=current_tariff,
             )
             end_dt = result.get("subscription_end")
             if end_dt and hasattr(end_dt, "strftime"):

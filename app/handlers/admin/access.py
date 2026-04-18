@@ -396,11 +396,12 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 text += "Статус подписки: ⛔ Истекла\n"
             
             text += f"Срок действия: до {expires_str}\n"
-            vpn_key = overview.subscription.get('vpn_key', '—')
-            if vpn_key and vpn_key != '—':
-                text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
+            from vpn_utils import build_sub_url
+            sub_url = build_sub_url(overview.user['telegram_id'])
+            if sub_url:
+                text += f"Ключ подписки:\n<code>{sub_url}</code>\n"
             else:
-                text += "VPN-ключ: —\n"
+                text += "Ключ подписки: —\n"
         else:
             text += "Статус подписки: ❌ Нет подписки\n"
             text += "VPN-ключ: —\n"
@@ -1871,11 +1872,12 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
             text += "Статус подписки: ⛔ Истекла\n"
         
         text += f"Срок действия: до {expires_str}\n"
-        vpn_key = overview.subscription.get('vpn_key', '—')
-        if vpn_key and vpn_key != '—':
-            text += f"VPN-ключ:\n<code>{vpn_key}</code>\n"
+        from vpn_utils import build_sub_url
+        sub_url = build_sub_url(overview.telegram_id)
+        if sub_url:
+            text += f"Ключ подписки:\n<code>{sub_url}</code>\n"
         else:
-            text += "VPN-ключ: —\n"
+            text += "Ключ подписки: —\n"
     else:
         text += "Статус подписки: ❌ Нет подписки\n"
         text += "VPN-ключ: —\n"

@@ -28,7 +28,7 @@ def _is_enabled() -> bool:
 class _MonitoredAcquireContextManager:
     """Async context manager that times pool.acquire() and logs if wait > 1s or > 5s."""
 
-    __slots__ = ("pool", "label")
+    __slots__ = ("pool", "label", "_conn")
 
     def __init__(self, pool: Any, label: str) -> None:
         self.pool = pool

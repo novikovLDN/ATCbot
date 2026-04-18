@@ -422,8 +422,8 @@ TRAFFIC_LIMITS = {
 
 # Shortcut: human-readable GB for button labels
 TRAFFIC_LIMITS_GB = {
-    "basic": {30: 0, 90: 0, 180: 0, 365: 0},
-    "plus":  {30: 0, 90: 0, 180: 0, 365: 0},
+    "basic": {30: 10, 90: 10, 180: 10, 365: 10},
+    "plus":  {30: 10, 90: 10, 180: 10, 365: 10},
 }
 
 # Device limits per tariff
@@ -436,16 +436,16 @@ DEVICE_LIMITS = {
 # Комбо-тарифы: подписка + ГБ обхода в одном пакете
 COMBO_TARIFFS = {
     "combo_basic": {
-        30:  {"price": 307,  "gb": 25,  "base_tariff": "basic"},
-        90:  {"price": 804,  "gb": 75,  "base_tariff": "basic"},
-        180: {"price": 1462, "gb": 150, "base_tariff": "basic"},
-        365: {"price": 2689, "gb": 300, "base_tariff": "basic"},
+        30:  {"price": 269,  "gb": 25,  "base_tariff": "basic"},   # 5.5₽/ГБ
+        90:  {"price": 749,  "gb": 75,  "base_tariff": "basic"},   # 5.3₽/ГБ
+        180: {"price": 1449, "gb": 150, "base_tariff": "basic"},   # 5.1₽/ГБ
+        365: {"price": 2699, "gb": 300, "base_tariff": "basic"},   # 4.9₽/ГБ
     },
     "combo_plus": {
-        30:  {"price": 434,  "gb": 25,  "base_tariff": "plus"},
-        90:  {"price": 1059, "gb": 75,  "base_tariff": "plus"},
-        180: {"price": 1844, "gb": 150, "base_tariff": "plus"},
-        365: {"price": 3454, "gb": 300, "base_tariff": "plus"},
+        30:  {"price": 399,  "gb": 25,  "base_tariff": "plus"},    # 5.5₽/ГБ
+        90:  {"price": 999,  "gb": 75,  "base_tariff": "plus"},    # 5.3₽/ГБ
+        180: {"price": 1849, "gb": 150, "base_tariff": "plus"},    # 5.1₽/ГБ
+        365: {"price": 3499, "gb": 300, "base_tariff": "plus"},    # 4.9₽/ГБ
     },
 }
 
