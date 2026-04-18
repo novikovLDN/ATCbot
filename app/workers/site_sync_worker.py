@@ -39,12 +39,14 @@ async def site_sync_worker_task(bot=None):
             start_time = time.monotonic()
             logger.info("SITE_SYNC_ITERATION_START")
 
-            # Get users with active subscriptions
+            # Get only site-linked users with active subscriptions
             pool = await database.get_pool()
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
-                    """SELECT DISTINCT telegram_id FROM subscriptions
-                       WHERE expires_at > NOW() AND telegram_id IS NOT NULL
+                    """SELECT DISTINCT s.telegram_id FROM subscriptions s
+                       JOIN users u ON u.telegram_id = s.telegram_id
+                       WHERE s.expires_at > NOW() AND s.telegram_id IS NOT NULL
+                       AND u.site_linked = TRUE
                        LIMIT 500"""
                 )
 
