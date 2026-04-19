@@ -91,7 +91,7 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         if isinstance(event, CallbackQuery):
             await event.answer(err_text, show_alert=True)
         else:
-            await bot.send_message(chat_id, err_text)
+            await bot.send_message(chat_id, err_text, parse_mode="HTML")
     
     try:
         stats = await database.get_referral_statistics(telegram_id)
@@ -210,7 +210,8 @@ async def show_profile(message_or_query, language: str):
                 except Exception:
                     pass
                 send_func = lambda text, **kw: message_or_query.bot.send_message(
-                    chat_id=telegram_id, text=text, **kw
+                    chat_id=telegram_id, text=text, **kw,
+                    parse_mode="HTML",
                 )
             else:
                 send_func = message_or_query.message.edit_text

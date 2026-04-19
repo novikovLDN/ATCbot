@@ -109,7 +109,7 @@ async def callback_referral_stats(callback: CallbackQuery):
             )]
         ])
         
-        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard)
+        await callback.bot.send_message(callback.message.chat.id, text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
         
     except Exception as e:

@@ -346,6 +346,7 @@ async def callback_premium_pay_card(callback: CallbackQuery, state: FSMContext):
         await callback.bot.send_message(
             chat_id=telegram_id,
             text=i18n_get_text(language, "payment.invoice_timeout"),
+            parse_mode="HTML",
         )
         asyncio.create_task(
             _schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id)

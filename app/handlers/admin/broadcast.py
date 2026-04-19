@@ -342,7 +342,7 @@ async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMC
     if action == "cancel":
         await state.clear()
         language = await resolve_user_language(callback.from_user.id)
-        await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"))
+        await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"), parse_mode="HTML")
         return
     if action != "confirm":
         return
@@ -350,7 +350,7 @@ async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMC
     text = data.get("broadcast_text")
     if not text:
         language = await resolve_user_language(callback.from_user.id)
-        await callback.message.edit_text(i18n_get_text(language, "broadcast._validation_message_empty"))
+        await callback.message.edit_text(i18n_get_text(language, "broadcast._validation_message_empty"), parse_mode="HTML")
         await state.clear()
         return
     try:
@@ -360,7 +360,8 @@ async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMC
         total = 0
     language = await resolve_user_language(callback.from_user.id)
     await callback.message.edit_text(
-        i18n_get_text(language, "broadcast._no_sub_sending", total=total)
+        i18n_get_text(language, "broadcast._no_sub_sending", total=total),
+        parse_mode="HTML",
     )
     await state.clear()
 
@@ -381,6 +382,7 @@ async def callback_no_sub_broadcast_confirm(callback: CallbackQuery, state: FSMC
                         await resolve_user_language(callback.from_user.id),
                         "admin.check_logs"
                     ),
+                    parse_mode="HTML",
                 )
             except Exception:
                 pass
@@ -584,7 +586,8 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
         await state.set_state(BroadcastCreate.waiting_for_segment)
         await callback.message.edit_text(
             "Выберите сегмент получателей:",
-            reply_markup=get_broadcast_segment_keyboard(language)
+            reply_markup=get_broadcast_segment_keyboard(language),
+            parse_mode="HTML",
         )
     elif btn_type in ("promo_buy", "promo_traffic"):
         # Need to ask for discount percentage
@@ -596,18 +599,21 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
         await state.set_state(BroadcastCreate.waiting_for_discount)
         if btn_type == "promo_traffic":
             await callback.message.edit_text(
-                "Введите процент скидки на трафик для акции (число от 1 до 99):"
+                "Введите процент скидки на трафик для акции (число от 1 до 99):",
+                parse_mode="HTML",
             )
         else:
             await callback.message.edit_text(
-                "Введите процент скидки для акции (число от 1 до 99):"
+                "Введите процент скидки для акции (число от 1 до 99):",
+                parse_mode="HTML",
             )
     elif btn_type == "done":
         # Finished selecting buttons, move to segment
         await state.set_state(BroadcastCreate.waiting_for_segment)
         await callback.message.edit_text(
             "Выберите сегмент получателей:",
-            reply_markup=get_broadcast_segment_keyboard(language)
+            reply_markup=get_broadcast_segment_keyboard(language),
+            parse_mode="HTML",
         )
     else:
         # Toggle button in list (add or remove)
@@ -622,7 +628,8 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
         await callback.message.edit_text(
             f"Выбранные кнопки: {', '.join(_btn_label(b) for b in buttons)}\n\n"
             "Выберите ещё кнопки или нажмите «Готово»:",
-            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons)
+            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+            parse_mode="HTML",
         )
 
 
@@ -721,6 +728,7 @@ async def callback_promo_duration(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         f"Скидка {discount}% на {duration_label}.\n\nВыберите сегмент получателей:",
         reply_markup=get_broadcast_segment_keyboard(language),
+        parse_mode="HTML",
     )
 
 
@@ -784,7 +792,8 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
     preview_confirm_text = i18n_get_text(language, "broadcast._preview_confirm", preview=preview_text)
     await callback.message.edit_text(
         preview_confirm_text,
-        reply_markup=get_broadcast_confirm_keyboard(language)
+        reply_markup=get_broadcast_confirm_keyboard(language),
+        parse_mode="HTML",
     )
 
 
@@ -868,7 +877,8 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 
         await callback.message.edit_text(
             i18n_get_text(language, "broadcast._sending", total=total),
-            reply_markup=None
+            reply_markup=None,
+            parse_mode="HTML",
         )
 
         # Prepare message variants before launching background task
@@ -974,7 +984,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             except Exception as e:
                 logger.exception(f"Error in broadcast send: {e}")
                 try:
-                    await bot.send_message(chat_id, f"Ошибка при отправке уведомления: {e}")
+                    await bot.send_message(chat_id, f"Ошибка при отправке уведомления: {e}", parse_mode="HTML")
                 except Exception:
                     pass
                 try:

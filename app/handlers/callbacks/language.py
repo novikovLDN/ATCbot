@@ -42,6 +42,7 @@ async def callback_change_language(callback: CallbackQuery):
             callback.message.chat.id,
             text,
             reply_markup=get_language_keyboard(language),
+            parse_mode="HTML",
         )
     else:
         await safe_edit_text(

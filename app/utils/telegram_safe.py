@@ -5,9 +5,23 @@ Handles TelegramBadRequest (chat not found), TelegramForbiddenError (blocked),
 and marks unreachable users in DB for background worker filtering.
 """
 import logging
+import re
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 logger = logging.getLogger(__name__)
+
+_TG_ADS_EMOJI_RE = re.compile(r'!\[(.+?)\]\(tg://emoji\?id=(\d+)\)')
+
+
+def convert_tg_emoji(text: str) -> str:
+    """Convert Telegram Ads emoji format to HTML tg-emoji tags.
+
+    Input:  ![🎮](tg://emoji?id=5319247469165433798)
+    Output: <tg-emoji emoji-id="5319247469165433798">🎮</tg-emoji>
+    """
+    return _TG_ADS_EMOJI_RE.sub(
+        r'<tg-emoji emoji-id="\2">\1</tg-emoji>', text
+    )
 
 
 async def safe_send_message(bot, telegram_id: int, text: str, **kwargs):
@@ -25,6 +39,7 @@ async def safe_send_message(bot, telegram_id: int, text: str, **kwargs):
     """
     if "parse_mode" not in kwargs:
         kwargs["parse_mode"] = "HTML"
+    text = convert_tg_emoji(text)
     try:
         return await bot.send_message(telegram_id, text, **kwargs)
 

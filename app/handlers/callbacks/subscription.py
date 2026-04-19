@@ -183,7 +183,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
                         await callback.bot.send_message(
                             chat_id=referrer_id,
-                            text=notification_text
+                            text=notification_text,
+                            parse_mode="HTML",
                         )
 
                         logger.info(
@@ -378,7 +379,7 @@ async def callback_renewal_pay(callback: CallbackQuery):
             currency="RUB",
             prices=prices
         )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
         from app.handlers.callbacks.payments_callbacks import _schedule_invoice_deletion
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()

@@ -1091,7 +1091,7 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
         pass
 
     # 2. Отправляем 🎉
-    msg = await callback.bot.send_message(chat_id=telegram_id, text="🎉")
+    msg = await callback.bot.send_message(chat_id=telegram_id, text="🎉", parse_mode="HTML")
 
     # 3. Ждём 2 секунды
     await asyncio.sleep(2)
@@ -1487,12 +1487,8 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     await database.set_combo_flag(telegram_id, True)
 
     months = period_days // 30
-    text = (
-        f"✅ <b>Комбо-подписка активирована!</b>\n\n"
-        f"📦 Тариф: <b>Комбо {base_tariff.capitalize()}</b> · {months} мес.\n"
-        f"🌐 Обход: <b>{gb} ГБ</b> начислено\n\n"
-        f"Нажмите «Подключиться» чтобы настроить устройство."
-    )
+    text = i18n_get_text(language, "combo.purchase_success",
+                         tariff=base_tariff.capitalize(), months=months, gb=gb)
     buttons = [
         [InlineKeyboardButton(text="📲 Подключиться", callback_data="connect_instruction")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
@@ -1799,6 +1795,7 @@ async def callback_apple_pay_card(callback: CallbackQuery):
         await callback.bot.send_message(
             chat_id=telegram_id,
             text=i18n_get_text(language, "payment.invoice_timeout"),
+            parse_mode="HTML",
         )
 
         async def _del_invoice(bot, cid, msg):
