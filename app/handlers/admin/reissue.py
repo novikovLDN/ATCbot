@@ -32,20 +32,20 @@ async def cmd_reissue_key(message: Message):
     """Перевыпустить VPN-ключ для пользователя (только для админа)"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized reissue_key attempt by user {message.from_user.id}")
-        await message.answer("Нет доступа")
+        await message.answer("Нет доступа", parse_mode="HTML")
         return
     
     try:
         # Парсим команду: /reissue_key <telegram_id>
         parts = message.text.split()
         if len(parts) != 2:
-            await message.answer("Использование: /reissue_key <telegram_id>")
+            await message.answer("Использование: /reissue_key <telegram_id>", parse_mode="HTML")
             return
         
         try:
             target_telegram_id = int(parts[1])
         except ValueError:
-            await message.answer("Неверный формат telegram_id. Используйте число.")
+            await message.answer("Неверный формат telegram_id. Используйте число.", parse_mode="HTML")
             return
         
         admin_telegram_id = message.from_user.id
@@ -55,7 +55,7 @@ async def cmd_reissue_key(message: Message):
         new_vpn_key, old_vpn_key = result
         
         if new_vpn_key is None:
-            await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа")
+            await message.answer(f"❌ Не удалось перевыпустить ключ для пользователя {target_telegram_id}.\nВозможные причины:\n- Нет активной подписки\n- Ошибка создания VPN-ключа", parse_mode="HTML")
             return
         
         # Уведомляем пользователя
@@ -67,7 +67,7 @@ async def cmd_reissue_key(message: Message):
             logging.info(f"Reissue notification sent to user {target_telegram_id}")
         except Exception as e:
             logging.error(f"Error sending reissue notification to user {target_telegram_id}: {e}")
-            await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}")
+            await message.answer(f"✅ Ключ перевыпущен, но не удалось отправить уведомление пользователю: {e}", parse_mode="HTML")
             return
         
         await message.answer(
@@ -80,4 +80,4 @@ async def cmd_reissue_key(message: Message):
         
     except Exception as e:
         logging.exception(f"Error in cmd_reissue_key: {e}")
-        await message.answer("Ошибка при перевыпуске ключа. Проверь логи.")
+        await message.answer("Ошибка при перевыпуске ключа. Проверь логи.", parse_mode="HTML")

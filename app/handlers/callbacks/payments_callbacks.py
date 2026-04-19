@@ -223,7 +223,7 @@ async def callback_topup_custom(callback: CallbackQuery, state: FSMContext):
     # Отправляем сообщение с инструкцией
     text = i18n_get_text(language, "main.topup_enter_amount")
     
-    await callback.message.answer(text)
+    await callback.message.answer(text, parse_mode="HTML")
 
 
 @payments_router.callback_query(F.data == "withdraw_start")
@@ -499,7 +499,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         
         if not result or not result.get("success"):
             error_text = i18n_get_text(language, "errors.payment_processing")
-            await callback.message.answer(error_text)
+            await callback.message.answer(error_text, parse_mode="HTML")
             await state.set_state(None)
             return
         

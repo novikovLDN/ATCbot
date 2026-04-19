@@ -316,7 +316,8 @@ async def callback_special_offer_buy(callback: CallbackQuery, state: FSMContext)
     if not special_offer:
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
-            "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене."
+            "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене.",
+            parse_mode="HTML",
         )
         return
 
@@ -346,7 +347,8 @@ async def callback_trial_discount_15(callback: CallbackQuery, state: FSMContext)
             created_by=0,  # system
         )
         await callback.message.answer(
-            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.warning(f"Failed to apply trial discount for {telegram_id}: {e}")
@@ -376,7 +378,8 @@ async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
             created_by=0,  # system
         )
         await callback.message.answer(
-            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.warning(f"Failed to apply paid discount for {telegram_id}: {e}")
@@ -427,7 +430,7 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
             user = await database.get_user(telegram_id)
             language = await resolve_user_language(callback.from_user.id)
             error_text = i18n_get_text(language, "errors.profile_load")
-            await callback.message.answer(error_text)
+            await callback.message.answer(error_text, parse_mode="HTML")
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
@@ -467,6 +470,7 @@ async def callback_get_sub_key(callback: CallbackQuery):
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
             i18n_get_text(language, "get_key.no_subscription", "❌ У вас нет активной подписки."),
+            parse_mode="HTML",
         )
         return
 

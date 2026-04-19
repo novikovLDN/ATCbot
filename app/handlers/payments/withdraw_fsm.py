@@ -80,24 +80,24 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         attempts = fsm_data.get("withdraw_amount_attempts", 0) + 1
         if attempts >= _MAX_ATTEMPTS:
             await state.clear()
-            await message.answer(i18n_get_text(language, "withdraw.too_many_attempts"))
+            await message.answer(i18n_get_text(language, "withdraw.too_many_attempts"), parse_mode="HTML")
             return
         await state.update_data(withdraw_amount_attempts=attempts)
-        await message.answer(i18n_get_text(language, "errors.invalid_amount"))
+        await message.answer(i18n_get_text(language, "errors.invalid_amount"), parse_mode="HTML")
         return
 
     amount = float(cleaned.replace(",", "."))
 
     if amount < MIN_WITHDRAW_RUBLES:
-        await message.answer(i18n_get_text(language, "withdraw.min_amount_error"))
+        await message.answer(i18n_get_text(language, "withdraw.min_amount_error"), parse_mode="HTML")
         return
     if amount > MAX_WITHDRAW_RUBLES:
-        await message.answer(i18n_get_text(language, "errors.invalid_amount"))
+        await message.answer(i18n_get_text(language, "errors.invalid_amount"), parse_mode="HTML")
         return
 
     balance = await database.get_user_balance(message.from_user.id)
     if amount > balance:
-        await message.answer(i18n_get_text(language, "withdraw.insufficient_funds"))
+        await message.answer(i18n_get_text(language, "withdraw.insufficient_funds"), parse_mode="HTML")
         return
 
     await state.update_data(withdraw_amount=amount, withdraw_amount_attempts=0)
@@ -107,7 +107,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_confirm_amount")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_cancel")]
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @payments_router.message(StateFilter(WithdrawStates.withdraw_requisites))
@@ -140,10 +140,10 @@ async def process_withdraw_requisites(message: Message, state: FSMContext):
         attempts = fsm_data.get("withdraw_req_attempts", 0) + 1
         if attempts >= _MAX_ATTEMPTS:
             await state.clear()
-            await message.answer(i18n_get_text(language, "withdraw.too_many_attempts"))
+            await message.answer(i18n_get_text(language, "withdraw.too_many_attempts"), parse_mode="HTML")
             return
         await state.update_data(withdraw_req_attempts=attempts)
-        await message.answer(i18n_get_text(language, "withdraw.invalid_requisites"))
+        await message.answer(i18n_get_text(language, "withdraw.invalid_requisites"), parse_mode="HTML")
         return
 
     await state.update_data(withdraw_requisites=requisites, withdraw_req_attempts=0)
@@ -155,4 +155,4 @@ async def process_withdraw_requisites(message: Message, state: FSMContext):
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.confirm"), callback_data="withdraw_final_confirm")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="withdraw_back_to_requisites")]
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")

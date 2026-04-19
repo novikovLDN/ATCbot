@@ -84,7 +84,7 @@ async def cmd_promo_stats(message: Message):
             details={"error": error}
         )
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "errors.try_later"))
+        await message.answer(i18n_get_text(language, "errors.try_later"), parse_mode="HTML")
         return
     
     # STEP 4 — PART B: AUTHORIZATION GUARDS
@@ -92,7 +92,7 @@ async def cmd_promo_stats(message: Message):
     is_authorized, auth_error = require_admin(telegram_id)
     if not is_authorized:
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.access_denied", "error_access_denied"))
+        await message.answer(i18n_get_text(language, "errors.access_denied", "error_access_denied"), parse_mode="HTML")
         return
     
     # STEP 4 — PART F: SECURITY LOGGING POLICY
@@ -109,11 +109,11 @@ async def cmd_promo_stats(message: Message):
         
         # Формируем текст ответа
         text = await format_promo_stats_text(stats)
-        await message.answer(text)
+        await message.answer(text, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error getting promo stats: {e}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "errors.promo_stats"))
+        await message.answer(i18n_get_text(language, "errors.promo_stats"), parse_mode="HTML")
 
 @admin_stats_router.callback_query(F.data == "admin_promo_stats")
 async def callback_admin_promo_stats(callback: CallbackQuery):
@@ -816,7 +816,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
 
         language = await resolve_user_language(message.from_user.id)
 
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
 
         await state.clear()
 
@@ -862,7 +862,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
 
             ])
 
-            await message.answer(text, reply_markup=keyboard)
+            await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
             return
 
@@ -940,7 +940,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
 
         
 
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
         
 
@@ -950,7 +950,7 @@ async def process_admin_referral_search(message: Message, state: FSMContext):
 
         language = await resolve_user_language(message.from_user.id)
 
-        await message.answer(i18n_get_text(language, "errors.stats_search"))
+        await message.answer(i18n_get_text(language, "errors.stats_search"), parse_mode="HTML")
 
 @admin_stats_router.callback_query(F.data.startswith("admin:referral_detail:"))
 

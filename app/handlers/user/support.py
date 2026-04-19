@@ -36,6 +36,7 @@ async def cmd_help(message: Message, bot: Bot):
     await message.answer(
         i18n_get_text(language, "main.support_text", "support_text"),
         reply_markup=keyboard,
+        parse_mode="HTML",
     )
 
 

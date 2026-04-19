@@ -211,6 +211,7 @@ async def show_profile(message_or_query, language: str):
                     pass
                 send_func = lambda text, **kw: message_or_query.bot.send_message(
                     chat_id=telegram_id, text=text, **kw,
+                    parse_mode="HTML",
                 )
             else:
                 send_func = message_or_query.message.edit_text
@@ -404,9 +405,9 @@ async def show_profile(message_or_query, language: str):
             error_text = i18n_get_text(language, "errors.profile_load")
 
             if isinstance(message_or_query, CallbackQuery):
-                await message_or_query.message.answer(error_text)
+                await message_or_query.message.answer(error_text, parse_mode="HTML")
             elif isinstance(message_or_query, Message):
-                await message_or_query.answer(error_text)
+                await message_or_query.answer(error_text, parse_mode="HTML")
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
             # Последняя попытка - отправить простой текст без локализации
@@ -414,9 +415,9 @@ async def show_profile(message_or_query, language: str):
                 language = await resolve_user_language(telegram_id)
                 error_text = i18n_get_text(language, "errors.profile_load")
                 if isinstance(message_or_query, CallbackQuery):
-                    await message_or_query.message.answer(error_text)
+                    await message_or_query.message.answer(error_text, parse_mode="HTML")
                 elif isinstance(message_or_query, Message):
-                    await message_or_query.answer(error_text)
+                    await message_or_query.answer(error_text, parse_mode="HTML")
             except Exception as e3:
                 logger.exception(f"Critical: Failed to send error message to user {telegram_id}: {e3}")
 

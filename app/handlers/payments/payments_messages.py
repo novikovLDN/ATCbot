@@ -123,7 +123,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             details={"error": error}
         )
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "errors.try_later"))
+        await message.answer(i18n_get_text(language, "errors.try_later"), parse_mode="HTML")
         return
     
     # STEP 4 — PART A: INPUT TRUST BOUNDARIES
@@ -139,7 +139,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             details={"error": payload_error, "payload_preview": payload[:50] if payload else None}
         )
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "errors.try_later"))
+        await message.answer(i18n_get_text(language, "errors.try_later"), parse_mode="HTML")
         return
     
     # STEP 6 — F1: GLOBAL OPERATIONAL FLAGS
@@ -152,7 +152,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         language = await resolve_user_language(telegram_id)
         await message.answer(
-            i18n_get_text(language, "main.service_unavailable")
+            i18n_get_text(language, "main.service_unavailable"),
+            parse_mode="HTML",
         )
         return
     # READ-ONLY system state awareness (informational only, does not affect flow)
@@ -219,7 +220,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )]
         ])
         
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         logger.error("Payment received but service unavailable (DB not ready)")
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
@@ -301,7 +302,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                     f"payment_total={payment.total_amount}, correlation_id={message.message_id}]"
                 )
                 error_text = i18n_get_text(language, "errors.payment_processing")
-                await message.answer(error_text)
+                await message.answer(error_text, parse_mode="HTML")
                 return
             
             topup_provider = "telegram_stars" if is_stars_payment else "telegram"
@@ -322,7 +323,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             except PaymentFinalizationError as e:
                 logger.error(f"Balance topup finalization failed: user={telegram_id}, error={e}")
                 error_text = i18n_get_text(language, "errors.payment_processing")
-                await message.answer(error_text)
+                await message.answer(error_text, parse_mode="HTML")
                 duration_ms = (time.time() - start_time) * 1000
                 error_type = classify_error(e)
                 log_handler_exit(
@@ -384,7 +385,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 # Continue to send — better to risk duplicate than to lose notification entirely
 
             try:
-                await message.answer(text, reply_markup=keyboard)
+                await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                 logger.info(
                     f"NOTIFICATION_SENT [type=balance_topup, payment_id={payment_id}, user={telegram_id}]"
                 )
@@ -438,7 +439,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     except InvalidPaymentPayloadError as e:
         logger.error(f"Invalid payment payload: {payload}, error={e}")
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
         log_handler_exit(
@@ -454,7 +455,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     except PaymentServiceError as e:
         logger.error(f"Payment service error: {e}")
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
         log_handler_exit(
@@ -474,7 +475,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         # Legacy formats are not supported for new purchases - only balance topup
         logger.error(f"Unsupported payload type for subscription payment: {payload_info.payload_type}, payload={payload}")
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
             handler_name="process_successful_payment",
@@ -492,7 +493,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     if not purchase_id:
         logger.error(f"No purchase_id in payload: {payload}")
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
             handler_name="process_successful_payment",
@@ -509,7 +510,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
     pending_purchase = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
     if not pending_purchase:
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.session_expired"))
+        await message.answer(i18n_get_text(language, "errors.session_expired"), parse_mode="HTML")
         logger.error(
             f"payment_rejected: provider=telegram_payment, user={telegram_id}, purchase_id={purchase_id}, "
             f"reason=pending_purchase_not_found_or_expired"
@@ -591,11 +592,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 return
             else:
                 logger.error(f"Gift finalization returned unexpected result: {gift_result}")
-                await message.answer(i18n_get_text(language, "errors.payment_processing"))
+                await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
                 return
         except Exception as e:
             logger.exception(f"Gift payment finalization failed: user={telegram_id}, error={e}")
-            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
             return
 
     # --- Telegram Premium purchase: mark paid + send success + notify admin ---
@@ -614,7 +615,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )
         except Exception as e:
             logger.exception("PREMIUM_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         await state.clear()
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
@@ -644,7 +645,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             logger.info("APPLE_PAYMENT_FINALIZED purchase_id=%s user=%s", purchase_id, telegram_id)
         except Exception as e:
             logger.exception("APPLE_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
-            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         await state.clear()
         return
 
@@ -752,10 +753,10 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )
             else:
                 logger.error(f"Traffic pack finalization unexpected result: {traffic_result}")
-                await message.answer(i18n_get_text(language, "errors.payment_processing"))
+                await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         except Exception as e:
             logger.exception(f"Traffic pack payment finalization failed: user={telegram_id}, error={e}")
-            await message.answer(i18n_get_text(language, "errors.payment_processing"))
+            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         await state.clear()
         duration_ms = (time.time() - start_time) * 1000
         log_handler_exit(
@@ -889,7 +890,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         language = await resolve_user_language(telegram_id)
         error_text = i18n_get_text(language, "errors.payment_processing")
-        await message.answer(error_text)
+        await message.answer(error_text, parse_mode="HTML")
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
         log_handler_exit(
@@ -915,7 +916,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         
         language = await resolve_user_language(telegram_id)
         error_text = i18n_get_text(language, "errors.subscription_activation")
-        await message.answer(error_text)
+        await message.answer(error_text, parse_mode="HTML")
         
         # Log event for admin
         try:
@@ -952,7 +953,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
         
         language = await resolve_user_language(telegram_id)
         error_text = i18n_get_text(language, "errors.subscription_activation")
-        await message.answer(error_text)
+        await message.answer(error_text, parse_mode="HTML")
         duration_ms = (time.time() - start_time) * 1000
         error_type = classify_error(e)
         log_handler_exit(

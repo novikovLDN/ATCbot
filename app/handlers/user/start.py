@@ -216,7 +216,7 @@ async def cmd_start(message: Message, state: FSMContext):
                             keyboard = get_language_keyboard(language)
                         else:
                             keyboard = await get_main_menu_keyboard(language, telegram_id)
-                        await message.answer(text, reply_markup=keyboard)
+                        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         logger.warning(f"GIFT_ACTIVATION_FAILED user={telegram_id} code={gift_code} error={error}")
                         return
                 except Exception as e:
@@ -227,7 +227,7 @@ async def cmd_start(message: Message, state: FSMContext):
                         keyboard = get_language_keyboard(language)
                     else:
                         keyboard = await get_main_menu_keyboard(language, telegram_id)
-                    await message.answer(text, reply_markup=keyboard)
+                    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     return
 
     # 1. REFERRAL REGISTRATION: Process ONLY for new users
@@ -281,4 +281,4 @@ async def cmd_start(message: Message, state: FSMContext):
     
     # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
     text = i18n_get_text(start_language, "lang.select_title")
-    await message.answer(text, reply_markup=get_language_keyboard(start_language))
+    await message.answer(text, reply_markup=get_language_keyboard(start_language), parse_mode="HTML")

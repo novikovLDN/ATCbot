@@ -173,7 +173,7 @@ async def process_traffic_amount(message: Message, state: FSMContext):
         if gb <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Введите положительное целое число ГБ.")
+        await message.answer("❌ Введите положительное целое число ГБ.", parse_mode="HTML")
         return
 
     await state.update_data(gb_amount=gb)
@@ -211,7 +211,7 @@ async def callback_admin_traffic_confirm(callback: CallbackQuery, state: FSMCont
     await state.clear()
 
     if not user_id or not action or not gb:
-        await callback.message.answer("❌ Данные сессии потеряны. Попробуйте заново.")
+        await callback.message.answer("❌ Данные сессии потеряны. Попробуйте заново.", parse_mode="HTML")
         return
 
     extra_bytes = gb * 1024**3

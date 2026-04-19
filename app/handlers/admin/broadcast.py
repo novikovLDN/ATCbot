@@ -197,7 +197,8 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
 
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
-            f"🎁 Скидка {discount_percent}% автоматически применена! Действует {discount_label}."
+            f"🎁 Скидка {discount_percent}% автоматически применена! Действует {discount_label}.",
+            parse_mode="HTML",
         )
 
     except Exception as e:
@@ -246,6 +247,7 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
                         callback_data="menu_buy_vpn",
                     )],
                 ]),
+                parse_mode="HTML",
             )
             return
 
@@ -307,7 +309,7 @@ async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
     if message.text and message.text.strip().lower() in ("/cancel", "cancel", "отмена"):
         await state.clear()
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.operation_cancelled"))
+        await message.answer(i18n_get_text(language, "admin.operation_cancelled"), parse_mode="HTML")
         return
     if not message.text or not message.text.strip():
         language = await resolve_user_language(message.from_user.id)
@@ -320,11 +322,11 @@ async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
     except Exception as e:
         logger.exception(f"Error fetching no_sub broadcast users: {e}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.check_logs"))
+        await message.answer(i18n_get_text(language, "admin.check_logs"), parse_mode="HTML")
         return
     if total == 0:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "broadcast._no_sub_zero_recipients"))
+        await message.answer(i18n_get_text(language, "broadcast._no_sub_zero_recipients"), parse_mode="HTML")
         await state.clear()
         return
     await state.update_data(broadcast_text=text)
@@ -337,7 +339,8 @@ async def process_no_sub_broadcast_text(message: Message, state: FSMContext):
     ])
     await message.answer(
         i18n_get_text(language, "broadcast._no_sub_preview", preview=preview, total=total),
-        reply_markup=keyboard
+        reply_markup=keyboard,
+        parse_mode="HTML",
     )
 
 
@@ -437,7 +440,8 @@ async def callback_broadcast_create(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(BroadcastCreate.waiting_for_title)
     await callback.message.answer(
-        i18n_get_text(language, "broadcast._enter_title")
+        i18n_get_text(language, "broadcast._enter_title"),
+        parse_mode="HTML",
     )
 
 
@@ -452,7 +456,8 @@ async def process_broadcast_title(message: Message, state: FSMContext):
     await state.set_state(BroadcastCreate.waiting_for_test_type)
     await message.answer(
         i18n_get_text(language, "broadcast._select_type"),
-        reply_markup=get_broadcast_test_type_keyboard(language)
+        reply_markup=get_broadcast_test_type_keyboard(language),
+        parse_mode="HTML",
     )
 
 
@@ -511,7 +516,8 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     await message.answer(
         "Отправьте эмодзи для уведомления (любой смайлик):\n\n"
         "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆\n\n"
-        "Или нажмите /skip чтобы отправить без эмодзи."
+        "Или нажмите /skip чтобы отправить без эмодзи.",
+        parse_mode="HTML",
     )
 
 
@@ -525,7 +531,7 @@ async def process_broadcast_message(message: Message, state: FSMContext):
     # Поддержка отмены только для текстовых сообщений
     if message.text and message.text.strip().lower() in ("/cancel", "cancel", "отмена"):
         await state.clear()
-        await message.answer(i18n_get_text(language, "admin.operation_cancelled"))
+        await message.answer(i18n_get_text(language, "admin.operation_cancelled"), parse_mode="HTML")
         return
 
     # Принимаем либо фото (с подписью), либо текст
@@ -546,14 +552,15 @@ async def process_broadcast_message(message: Message, state: FSMContext):
             caption=None,
         )
     else:
-        await message.answer(i18n_get_text(language, "broadcast._enter_message"))
+        await message.answer(i18n_get_text(language, "broadcast._enter_message"), parse_mode="HTML")
         return
 
     await state.set_state(BroadcastCreate.waiting_for_emoji)
     await message.answer(
         "Отправьте эмодзи для уведомления (любой смайлик):\n\n"
         "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆\n\n"
-        "Или нажмите /skip чтобы отправить без эмодзи."
+        "Или нажмите /skip чтобы отправить без эмодзи.",
+        parse_mode="HTML",
     )
 
 
@@ -565,7 +572,7 @@ async def process_broadcast_emoji(message: Message, state: FSMContext):
     language = await resolve_user_language(message.from_user.id)
 
     if not message.text or not message.text.strip():
-        await message.answer("Отправьте эмодзи или /skip:")
+        await message.answer("Отправьте эмодзи или /skip:", parse_mode="HTML")
         return
 
     text = message.text.strip()
@@ -574,13 +581,14 @@ async def process_broadcast_emoji(message: Message, state: FSMContext):
         await state.update_data(emoji="", type="custom")
     else:
         if len(text) > 10:
-            await message.answer("Слишком длинный текст. Отправьте эмодзи (1-2 символа) или /skip:")
+            await message.answer("Слишком длинный текст. Отправьте эмодзи (1-2 символа) или /skip:", parse_mode="HTML")
             return
         await state.update_data(emoji=text, type="custom")
     await state.set_state(BroadcastCreate.waiting_for_buttons)
     await message.answer(
         "Выберите кнопки для уведомления:",
-        reply_markup=get_broadcast_buttons_keyboard(language)
+        reply_markup=get_broadcast_buttons_keyboard(language),
+        parse_mode="HTML",
     )
 
 
@@ -677,7 +685,7 @@ async def process_broadcast_discount(message: Message, state: FSMContext):
         if not 1 <= discount <= 99:
             raise ValueError
     except (ValueError, AttributeError):
-        await message.answer("Введите число от 1 до 99:")
+        await message.answer("Введите число от 1 до 99:", parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -708,6 +716,7 @@ async def process_broadcast_discount(message: Message, state: FSMContext):
     await message.answer(
         f"Скидка {discount}% установлена.\n\n⏱ Выберите время действия скидки:",
         reply_markup=duration_keyboard,
+        parse_mode="HTML",
     )
 
 
@@ -842,18 +851,18 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 
     # Проверка данных
     if not all([title, segment]):
-        await callback.message.answer("Ошибка: не все данные заполнены. Начните заново.")
+        await callback.message.answer("Ошибка: не все данные заполнены. Начните заново.", parse_mode="HTML")
         await state.clear()
         return
 
     if is_ab_test:
         if not all([message_a, message_b]):
-            await callback.message.answer("Ошибка: не заполнены тексты вариантов A и B. Начните заново.")
+            await callback.message.answer("Ошибка: не заполнены тексты вариантов A и B. Начните заново.", parse_mode="HTML")
             await state.clear()
             return
     else:
         if not (message_text or has_photo):
-            await callback.message.answer("Ошибка: не заполнен текст уведомления. Начните заново.")
+            await callback.message.answer("Ошибка: не заполнен текст уведомления. Начните заново.", parse_mode="HTML")
             await state.clear()
             return
 
@@ -1014,7 +1023,7 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
 
     except Exception as e:
         logger.exception(f"Error in broadcast send: {e}")
-        await callback.message.answer(f"Ошибка при отправке уведомления: {e}")
+        await callback.message.answer(f"Ошибка при отправке уведомления: {e}", parse_mode="HTML")
         try:
             from app.services.admin_alerts import send_alert
             await send_alert(callback.bot, "worker", f"Broadcast send error: {type(e).__name__}: {str(e)[:200]}")
@@ -1193,7 +1202,8 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
     except Exception as e:
         logger.exception(f"Error in callback_broadcast_ab_stats: {e}")
         await callback.message.answer(
-            i18n_get_text(language, "broadcast._ab_stats_error")
+            i18n_get_text(language, "broadcast._ab_stats_error"),
+            parse_mode="HTML",
         )
 
 
@@ -1214,7 +1224,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
         # Получаем информацию об уведомлении
         broadcast = await database.get_broadcast(broadcast_id)
         if not broadcast:
-            await callback.message.answer("Уведомление не найдено.")
+            await callback.message.answer("Уведомление не найдено.", parse_mode="HTML")
             return
         
         # Получаем статистику
@@ -1263,7 +1273,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
     
     except (ValueError, IndexError) as e:
         logging.error(f"Error parsing broadcast ID: {e}")
-        await callback.message.answer("Ошибка: неверный ID уведомления.")
+        await callback.message.answer("Ошибка: неверный ID уведомления.", parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_broadcast_ab_stat_detail: {e}")
-        await callback.message.answer("Ошибка при получении статистики A/B теста. Проверь логи.")
+        await callback.message.answer("Ошибка при получении статистики A/B теста. Проверь логи.", parse_mode="HTML")

@@ -24,7 +24,7 @@ async def cmd_admin_audit(message: Message):
     """Показать последние записи audit_log (только для админа)"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized admin_audit attempt by user {message.from_user.id}")
-        await message.answer("Недостаточно прав")
+        await message.answer("Недостаточно прав", parse_mode="HTML")
         return
     
     try:
@@ -32,7 +32,7 @@ async def cmd_admin_audit(message: Message):
         audit_logs = await database.get_last_audit_logs(limit=10)
         
         if not audit_logs:
-            await message.answer("Аудит пуст. Действий не зафиксировано.")
+            await message.answer("Аудит пуст. Действий не зафиксировано.", parse_mode="HTML")
             return
         
         # Формируем сообщение
@@ -119,12 +119,12 @@ async def cmd_admin_audit(message: Message):
             
             text = "\n".join(lines)
         
-        await message.answer(text)
+        await message.answer(text, parse_mode="HTML")
         logging.info(f"Admin audit log viewed by admin {message.from_user.id}")
         
     except Exception as e:
         logging.exception(f"Error in cmd_admin_audit: {e}")
-        await message.answer("Ошибка при получении audit log. Проверь логи.")
+        await message.answer("Ошибка при получении audit log. Проверь логи.", parse_mode="HTML")
 
 
 @admin_audit_router.callback_query(F.data == "admin:audit")
