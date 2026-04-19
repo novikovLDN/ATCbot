@@ -309,9 +309,11 @@ async def _send_confirmation(
         )
 
         # Fire-and-forget: create or renew Remnawave bypass user
+        # Skip for combo purchases — combo traffic is managed separately
+        is_combo = result.get("is_combo", False)
         try:
             from app.services.remnawave_service import renew_remnawave_user_bg
-            if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS:
+            if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS and not is_combo:
                 _pd = result.get("period_days", 30) or 30
                 renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=_pd)
         except Exception as rmn_err:
