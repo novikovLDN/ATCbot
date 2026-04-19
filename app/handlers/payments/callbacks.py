@@ -204,7 +204,7 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
     if is_combo:
         # Комбо-тариф: берём цены из COMBO_TARIFFS
         tariff_data = config.COMBO_TARIFFS.get(new_tariff, {})
-        period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12"}
+        period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
         for period_days, info in tariff_data.items():
             btn_text = i18n_get_text(language, period_keys.get(period_days, "combo.period_1"), gb=info["gb"], price=info["price"])
             buttons.append([InlineKeyboardButton(
