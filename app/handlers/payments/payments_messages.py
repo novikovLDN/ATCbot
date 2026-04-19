@@ -1177,17 +1177,18 @@ async def process_successful_payment(message: Message, state: FSMContext):
     )
 
     # Fire-and-forget: create or renew Remnawave bypass user
+    # Skip for combo purchases — combo traffic is added separately below
+    fsm_data = await state.get_data()
+    combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
     try:
         from app.services.remnawave_service import renew_remnawave_user_bg
         _sub_type = (tariff_type or "basic").strip().lower()
-        if expires_at and _sub_type not in ("trial",) + config.BIZ_TARIFFS:
+        if expires_at and _sub_type not in ("trial",) + config.BIZ_TARIFFS and combo_bypass_gb <= 0:
             renew_remnawave_user_bg(telegram_id, _sub_type, expires_at, period_days=period_days)
     except Exception as rmn_err:
         logger.warning("REMNAWAVE_HOOK_FAIL: stars tg=%s %s", telegram_id, rmn_err)
 
     # Combo/Bypass: начисляем трафик обхода если покупка была через комбо или bypass-only
-    fsm_data = await state.get_data()
-    combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
     bypass_only_gb = fsm_data.get("bypass_only_gb", 0)
 
     if combo_bypass_gb > 0 or bypass_only_gb > 0:
