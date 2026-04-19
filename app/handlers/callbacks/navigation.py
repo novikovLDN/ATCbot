@@ -1341,7 +1341,7 @@ async def callback_combo_tariff(callback: CallbackQuery):
     text += "\n\nВыберите период:"
 
     buttons = []
-    period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12"}
+    period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
     for period_days, info in tariff.items():
         btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=info["price"])
         buttons.append([InlineKeyboardButton(

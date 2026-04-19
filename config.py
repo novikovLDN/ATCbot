@@ -436,34 +436,37 @@ DEVICE_LIMITS = {
 # Комбо-тарифы: подписка + ГБ обхода в одном пакете
 COMBO_TARIFFS = {
     "combo_basic": {
-        30:  {"price": 269,  "gb": 25,  "base_tariff": "basic"},   # 5.5₽/ГБ
-        90:  {"price": 749,  "gb": 75,  "base_tariff": "basic"},   # 5.3₽/ГБ
-        180: {"price": 1449, "gb": 150, "base_tariff": "basic"},   # 5.1₽/ГБ
-        365: {"price": 2699, "gb": 300, "base_tariff": "basic"},   # 4.9₽/ГБ
+        30:  {"price": 269,  "gb": 75,   "base_tariff": "basic"},   # 3.6₽/ГБ
+        90:  {"price": 719,  "gb": 200,  "base_tariff": "basic"},   # 3.6₽/ГБ
+        180: {"price": 1289, "gb": 400,  "base_tariff": "basic"},   # 3.2₽/ГБ
+        365: {"price": 2299, "gb": 800,  "base_tariff": "basic"},   # 2.9₽/ГБ
+        730: {"price": 5919, "gb": 1500, "base_tariff": "basic"},   # 3.9₽/ГБ
     },
     "combo_plus": {
-        30:  {"price": 399,  "gb": 25,  "base_tariff": "plus"},    # 5.5₽/ГБ
-        90:  {"price": 999,  "gb": 75,  "base_tariff": "plus"},    # 5.3₽/ГБ
-        180: {"price": 1849, "gb": 150, "base_tariff": "plus"},    # 5.1₽/ГБ
-        365: {"price": 3499, "gb": 300, "base_tariff": "plus"},    # 4.9₽/ГБ
+        30:  {"price": 399,  "gb": 75,   "base_tariff": "plus"},    # 5.3₽/ГБ
+        90:  {"price": 1069, "gb": 200,  "base_tariff": "plus"},    # 5.3₽/ГБ
+        180: {"price": 1919, "gb": 400,  "base_tariff": "plus"},    # 4.8₽/ГБ
+        365: {"price": 3419, "gb": 800,  "base_tariff": "plus"},    # 4.3₽/ГБ
+        730: {"price": 6819, "gb": 1500, "base_tariff": "plus"},    # 4.5₽/ГБ
     },
 }
 
 TRAFFIC_PACKS = {
-    5:  {"price": 44,  "bytes": 5  * 1024**3, "discount": ""},
-    15: {"price": 115, "bytes": 15 * 1024**3, "discount": "🔥 -13%"},
-    25: {"price": 175, "bytes": 25 * 1024**3, "discount": "🔥 -20%"},
-    45: {"price": 270, "bytes": 45 * 1024**3, "discount": "🔥 -32%"},
-    60:  {"price": 318, "bytes": 60  * 1024**3, "discount": "🔥 -40%"},
-    120: {"price": 588, "bytes": 120 * 1024**3, "discount": "🔥 -44%"},
+    15:  {"price": 89,   "bytes": 15  * 1024**3, "discount": ""},
+    50:  {"price": 269,  "bytes": 50  * 1024**3, "discount": "🔥 -10%"},
+    75:  {"price": 389,  "bytes": 75  * 1024**3, "discount": "🔥 -13%"},
+    100: {"price": 469,  "bytes": 100 * 1024**3, "discount": "🔥 -22%"},
+    150: {"price": 669,  "bytes": 150 * 1024**3, "discount": "🔥 -26%"},
+    200: {"price": 859,  "bytes": 200 * 1024**3, "discount": "🔥 -28%"},
 }
 
 TRAFFIC_PACKS_EXTENDED = {
-    300:  {"price": 1440,  "bytes": 300  * 1024**3, "discount": "🔥 -45%"},
-    600:  {"price": 2820,  "bytes": 600  * 1024**3, "discount": "🔥 -47%"},
-    1500: {"price": 7050,  "bytes": 1500 * 1024**3, "discount": "🔥 -47%"},
-    3000: {"price": 13800, "bytes": 3000 * 1024**3, "discount": "🔥 -48%"},
-    5400: {"price": 24840, "bytes": 5400 * 1024**3, "discount": "🔥 -48%"},
+    300:  {"price": 1199,  "bytes": 300  * 1024**3, "discount": "🔥 -33%"},
+    600:  {"price": 2299,  "bytes": 600  * 1024**3, "discount": "🔥 -36%"},
+    1200: {"price": 4399,  "bytes": 1200 * 1024**3, "discount": "🔥 -39%"},
+    2200: {"price": 7899,  "bytes": 2200 * 1024**3, "discount": "🔥 -40%"},
+    5000: {"price": 17999, "bytes": 5000 * 1024**3, "discount": "🔥 -40%"},
+    8000: {"price": 28799, "bytes": 8000 * 1024**3, "discount": "🔥 -40%"},
 }
 
 # Thresholds for traffic notifications (bytes remaining, flag key)

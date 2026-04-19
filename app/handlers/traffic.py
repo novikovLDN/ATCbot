@@ -54,24 +54,28 @@ async def callback_buy_bypass_only(callback: CallbackQuery):
     traffic_discount = await database.get_user_traffic_discount(telegram_id)
     discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
 
-    # Build pack buttons (same packs as regular traffic)
+    # Build pack buttons (2 per row)
     buttons = []
+    row = []
     for gb, pack in config.TRAFFIC_PACKS.items():
         base_price = pack["price"]
         if discount_pct > 0:
             final_price = math.ceil(base_price * (1 - discount_pct / 100))
-            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
+            label = f"{gb} ГБ — {final_price} ₽"
         else:
             label = f"{gb} ГБ — {base_price} ₽"
-            if pack["discount"]:
-                label += f"  {pack['discount']}"
-        buttons.append([InlineKeyboardButton(
+        row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_bypass_pack:{gb}",
-        )])
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
-        text="🌐 Расширенный пакет",
+        text="📦 Больше объёма →",
         callback_data="buy_bypass_extended",
     )])
     buttons.append([InlineKeyboardButton(
@@ -111,19 +115,23 @@ async def callback_buy_bypass_extended(callback: CallbackQuery):
     discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
 
     buttons = []
+    row = []
     for gb, pack in config.TRAFFIC_PACKS_EXTENDED.items():
         base_price = pack["price"]
         if discount_pct > 0:
             final_price = math.ceil(base_price * (1 - discount_pct / 100))
-            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
+            label = f"{gb} ГБ — {final_price} ₽"
         else:
             label = f"{gb} ГБ — {base_price} ₽"
-            if pack["discount"]:
-                label += f"  {pack['discount']}"
-        buttons.append([InlineKeyboardButton(
+        row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_bypass_pack:{gb}",
-        )])
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
@@ -622,24 +630,28 @@ async def callback_buy_traffic(callback: CallbackQuery):
     traffic_discount = await database.get_user_traffic_discount(telegram_id)
     discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
 
-    # Build pack buttons
+    # Build pack buttons (2 per row)
     buttons = []
+    row = []
     for gb, pack in config.TRAFFIC_PACKS.items():
         base_price = pack["price"]
         if discount_pct > 0:
             final_price = math.ceil(base_price * (1 - discount_pct / 100))
-            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
+            label = f"{gb} ГБ — {final_price} ₽"
         else:
             label = f"{gb} ГБ — {base_price} ₽"
-            if pack["discount"]:
-                label += f"  {pack['discount']}"
-        buttons.append([InlineKeyboardButton(
+        row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_traffic_pack:{gb}",
-        )])
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
-        text="🌐 Расширенный пакет",
+        text="📦 Больше объёма →",
         callback_data="buy_traffic_extended",
     )])
     buttons.append([InlineKeyboardButton(
@@ -668,19 +680,23 @@ async def callback_buy_traffic_extended(callback: CallbackQuery):
     discount_pct = traffic_discount["discount_percent"] if traffic_discount else 0
 
     buttons = []
+    row = []
     for gb, pack in config.TRAFFIC_PACKS_EXTENDED.items():
         base_price = pack["price"]
         if discount_pct > 0:
             final_price = math.ceil(base_price * (1 - discount_pct / 100))
-            label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_pct}%)"
+            label = f"{gb} ГБ — {final_price} ₽"
         else:
             label = f"{gb} ГБ — {base_price} ₽"
-            if pack["discount"]:
-                label += f"  {pack['discount']}"
-        buttons.append([InlineKeyboardButton(
+        row.append(InlineKeyboardButton(
             text=label,
             callback_data=f"buy_traffic_pack:{gb}",
-        )])
+        ))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
