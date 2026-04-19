@@ -90,7 +90,7 @@ async def process_promo_code(message: Message, state: FSMContext):
         expires_at = promo_session.get("expires_at", 0)
         expires_in = max(0, int(expires_at - time.time()))
         text = i18n_get_text(language, "main.promo_applied")
-        await message.answer(text)
+        await message.answer(text, parse_mode="HTML")
         # CRITICAL FIX: Используем каноничный экран тарифов вместо локального render
         from app.handlers.common.screens import show_tariffs_main_screen
         await show_tariffs_main_screen(message, state)
@@ -120,8 +120,8 @@ async def process_promo_code(message: Message, state: FSMContext):
         await state.set_state(None)
         
         text = i18n_get_text(language, "main.promo_applied")
-        await message.answer(text)
-        
+        await message.answer(text, parse_mode="HTML")
+
         logger.info(
             f"promo_applied: user={telegram_id}, promo_code={promo_code}, "
             f"discount_percent={discount_percent}%, old_purchases_cancelled=True"
