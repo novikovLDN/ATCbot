@@ -93,16 +93,7 @@ async def callback_games_menu(callback: CallbackQuery):
 
     language = await resolve_user_language(telegram_id)
 
-    text = (
-        "🎮 <b>Добро пожаловать в Игровой зал!</b>\n\n"
-        "Здесь вы можете отвлечься и попытать удачу — "
-        "а заодно выиграть призы и бонусы.\n\n"
-        "🎳 <b>Боулинг</b> — сбей кегли и получи бонусные дни подписки\n"
-        "🎲 <b>Кубики</b> — брось кубик и получи столько дней, сколько выпало\n"
-        "💣 <b>Бомбер</b> — стратегическая игра на выживание\n"
-        "🌾 <b>Ферма</b> — выращивай растения и получай рубли на баланс\n\n"
-        "Выбирай игру и испытай удачу! 🍀"
-    )
+    text = i18n_get_text(language, "games.menu_title")
 
     has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
     if has_photo:
