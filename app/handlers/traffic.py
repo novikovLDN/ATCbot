@@ -296,12 +296,10 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
         except Exception as e:
             logger.warning(f"Failed to activate trial for bypass buyer {telegram_id}: {e}")
 
-    text = "✅ <b>Обход блокировок активирован!</b>\n\n"
-    text += f"📦 +{gb} ГБ трафика начислено\n"
     if trial_activated:
-        text += "\n🎁 <b>Бонус:</b> Пробный период VPN (3 дня) активирован!\n"
-    text += "\n💡 <i>Трафик не сгорает — накапливается между покупками.</i>\n"
-    text += "\nОткройте <b>Личный кабинет</b> чтобы получить ключ подключения."
+        text = i18n_get_text(language, "traffic.bypass_activated_trial", gb=gb)
+    else:
+        text = i18n_get_text(language, "traffic.bypass_activated", gb=gb)
 
     buttons = [
         [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
@@ -386,7 +384,7 @@ async def callback_traffic_info(callback: CallbackQuery):
                     traffic_limit_override=override,
                 )
             )
-            text = "⏳ Настраиваем обход блокировок...\nНажмите 🔄 через несколько секунд."
+            text = i18n_get_text(language, "traffic.bypass_provisioning")
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh")],
                 [InlineKeyboardButton(
@@ -516,7 +514,7 @@ async def show_traffic_info_message(message):
                     traffic_limit_override=override,
                 )
             )
-            text = "⏳ Настраиваем обход блокировок...\nНажмите 🔄 через несколько секунд."
+            text = i18n_get_text(language, "traffic.bypass_provisioning")
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Обновить", callback_data="traffic_refresh")],
                 [InlineKeyboardButton(
