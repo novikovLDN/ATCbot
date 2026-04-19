@@ -211,7 +211,6 @@ async def show_profile(message_or_query, language: str):
                     pass
                 send_func = lambda text, **kw: message_or_query.bot.send_message(
                     chat_id=telegram_id, text=text, **kw,
-                    parse_mode="HTML",
                 )
             else:
                 send_func = message_or_query.message.edit_text
@@ -405,9 +404,9 @@ async def show_profile(message_or_query, language: str):
             error_text = i18n_get_text(language, "errors.profile_load")
 
             if isinstance(message_or_query, CallbackQuery):
-                await message_or_query.message.answer(error_text)
+                await message_or_query.message.answer(error_text, parse_mode="HTML")
             elif isinstance(message_or_query, Message):
-                await message_or_query.answer(error_text)
+                await message_or_query.answer(error_text, parse_mode="HTML")
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
             # Последняя попытка - отправить простой текст без локализации
@@ -415,9 +414,9 @@ async def show_profile(message_or_query, language: str):
                 language = await resolve_user_language(telegram_id)
                 error_text = i18n_get_text(language, "errors.profile_load")
                 if isinstance(message_or_query, CallbackQuery):
-                    await message_or_query.message.answer(error_text)
+                    await message_or_query.message.answer(error_text, parse_mode="HTML")
                 elif isinstance(message_or_query, Message):
-                    await message_or_query.answer(error_text)
+                    await message_or_query.answer(error_text, parse_mode="HTML")
             except Exception as e3:
                 logger.exception(f"Critical: Failed to send error message to user {telegram_id}: {e3}")
 
@@ -447,9 +446,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         f"💎 <b>Выберите тариф</b>\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"<blockquote>80% пользователей выбирают Basic</blockquote>"
+        f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
+        f"<blockquote>Трафик обхода включён · от 269 ₽/мес</blockquote>"
     )
-    
+
     # Получаем текущую подписку для динамических кнопок
     subscription = await database.get_subscription(telegram_id)
     is_bypass_only_sub = bool(subscription and subscription.get("is_bypass_only"))
@@ -462,7 +462,8 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             f"Для основной подписки выберите тариф:\n\n"
             f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
             f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-            f"{i18n_get_text(language, 'buy.tariff_business')}"
+            f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
+            f"<blockquote>Трафик обхода включён · от 269 ₽/мес</blockquote>"
         )
 
     if current_tariff == "basic":
@@ -487,6 +488,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         [InlineKeyboardButton(
             text=i18n_get_text(language, plus_btn_key),
             callback_data="tariff:plus"
+        )],
+        [InlineKeyboardButton(
+            text="🚀 Комбо (VPN + обход)",
+            callback_data="buy_combo"
         )],
         [InlineKeyboardButton(
             text="🎟 У меня промокод",

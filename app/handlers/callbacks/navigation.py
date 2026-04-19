@@ -316,7 +316,8 @@ async def callback_special_offer_buy(callback: CallbackQuery, state: FSMContext)
     if not special_offer:
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
-            "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене."
+            "⏰ Срок спецпредложения истёк. Вы можете приобрести подписку по обычной цене.",
+            parse_mode="HTML",
         )
         return
 
@@ -346,7 +347,8 @@ async def callback_trial_discount_15(callback: CallbackQuery, state: FSMContext)
             created_by=0,  # system
         )
         await callback.message.answer(
-            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.warning(f"Failed to apply trial discount for {telegram_id}: {e}")
@@ -376,7 +378,8 @@ async def callback_paid_discount_15(callback: CallbackQuery, state: FSMContext):
             created_by=0,  # system
         )
         await callback.message.answer(
-            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:"
+            "🎁 Скидка 15% автоматически применена! Действует 7 дней.\n\nВыберите тариф:",
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.warning(f"Failed to apply paid discount for {telegram_id}: {e}")
@@ -427,7 +430,7 @@ async def callback_go_profile(callback: CallbackQuery, state: FSMContext):
             user = await database.get_user(telegram_id)
             language = await resolve_user_language(callback.from_user.id)
             error_text = i18n_get_text(language, "errors.profile_load")
-            await callback.message.answer(error_text)
+            await callback.message.answer(error_text, parse_mode="HTML")
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
@@ -467,6 +470,7 @@ async def callback_get_sub_key(callback: CallbackQuery):
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
             i18n_get_text(language, "get_key.no_subscription", "❌ У вас нет активной подписки."),
+            parse_mode="HTML",
         )
         return
 
@@ -1306,7 +1310,7 @@ async def callback_buy_combo(callback: CallbackQuery):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data="menu_main",
+            callback_data="menu_buy_vpn",
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1319,7 +1323,7 @@ async def callback_buy_combo(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("combo_tariff:"))
-async def callback_combo_tariff(callback: CallbackQuery):
+async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
     """Выбор периода комбо-тарифа."""
     try:
         await callback.answer()
@@ -1338,12 +1342,26 @@ async def callback_combo_tariff(callback: CallbackQuery):
     else:
         text = i18n_get_text(language, "combo.tariff_plus")
 
-    text += "\n\nВыберите период:"
+    # Check for active promo
+    from app.handlers.common.utils import get_promo_session
+    promo_session = await get_promo_session(state)
+    discount_pct = promo_session.get("discount_percent", 0) if promo_session else 0
+
+    if discount_pct > 0:
+        text += f"\n\n🎁 Промокод: скидка {discount_pct}%\nВыберите период:"
+    else:
+        text += "\n\nВыберите период:"
 
     buttons = []
     period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
     for period_days, info in tariff.items():
-        btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=info["price"])
+        base_price = info["price"]
+        if discount_pct > 0:
+            import math
+            final_price = math.ceil(base_price * (1 - discount_pct / 100))
+            btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=final_price)
+        else:
+            btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=base_price)
         buttons.append([InlineKeyboardButton(
             text=btn_text,
             callback_data=f"combo_period:{combo_type}:{period_days}",
@@ -1383,8 +1401,18 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
 
     info = tariff[period_days]
     base_tariff = info["base_tariff"]
-    price_kopecks = info["price"] * 100
+    base_price_kopecks = info["price"] * 100
     gb = info["gb"]
+
+    # Apply promo discount if active
+    from app.handlers.common.utils import get_promo_session
+    promo_session = await get_promo_session(state)
+    if promo_session:
+        discount_pct = promo_session.get("discount_percent", 0)
+        import math
+        price_kopecks = math.ceil(base_price_kopecks * (1 - discount_pct / 100))
+    else:
+        price_kopecks = base_price_kopecks
 
     # Сохраняем данные в FSM для стандартного платёжного потока
     await state.update_data(
@@ -1521,6 +1549,7 @@ async def callback_mini_shop(callback: CallbackQuery):
     text = i18n_get_text(language, "shop.title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡️ Telegram Premium", callback_data="premium_buy")],
+        [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
         [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])

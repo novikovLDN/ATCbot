@@ -22,7 +22,7 @@ async def process_admin_promocode_code_name(message: Message, state: FSMContext)
     """Обработка имени промокода"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
 
@@ -35,13 +35,13 @@ async def process_admin_promocode_code_name(message: Message, state: FSMContext)
     else:
         code = code_input.upper().strip()
         if len(code) < 3 or len(code) > 32:
-            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"))
+            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"), parse_mode="HTML")
             return
         if not all(c.isalnum() for c in code):
-            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"))
+            await message.answer(i18n_get_text(language, "admin.promocode_code_invalid"), parse_mode="HTML")
             return
         if await database.has_active_promo(code):
-            await message.answer(i18n_get_text(language, "admin.promocode_code_exists"))
+            await message.answer(i18n_get_text(language, "admin.promocode_code_exists"), parse_mode="HTML")
             return
 
     await state.update_data(promocode_code=code)
@@ -52,7 +52,7 @@ async def process_admin_promocode_code_name(message: Message, state: FSMContext)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @admin_promo_fsm_router.message(AdminCreatePromocode.waiting_for_discount_percent)
@@ -60,7 +60,7 @@ async def process_admin_promocode_discount(message: Message, state: FSMContext):
     """Обработка процента скидки"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
 
@@ -68,10 +68,10 @@ async def process_admin_promocode_discount(message: Message, state: FSMContext):
     try:
         discount_percent = int(message.text.strip())
         if discount_percent < 0 or discount_percent > 100:
-            await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"))
+            await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"), parse_mode="HTML")
             return
     except ValueError:
-        await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"))
+        await message.answer(i18n_get_text(language, "admin.promocode_discount_invalid"), parse_mode="HTML")
         return
 
     await state.update_data(promocode_discount=discount_percent)
@@ -85,7 +85,7 @@ async def process_admin_promocode_discount(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="🗓 Месяцы", callback_data="admin:promocode_unit:months")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @admin_promo_fsm_router.message(AdminCreatePromocode.waiting_for_duration_value)
@@ -93,7 +93,7 @@ async def process_admin_promocode_duration_value(message: Message, state: FSMCon
     """Обработка значения длительности"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
 
@@ -101,10 +101,10 @@ async def process_admin_promocode_duration_value(message: Message, state: FSMCon
     try:
         value = int(message.text.strip())
         if value <= 0:
-            await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"))
+            await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"), parse_mode="HTML")
             return
     except ValueError:
-        await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"))
+        await message.answer(i18n_get_text(language, "admin.promocode_duration_invalid"), parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -116,7 +116,7 @@ async def process_admin_promocode_duration_value(message: Message, state: FSMCon
     elif unit == "months":
         duration_seconds = value * 30 * 86400
     else:
-        await message.answer("Ошибка: неверная единица времени")
+        await message.answer("Ошибка: неверная единица времени", parse_mode="HTML")
         await state.clear()
         return
 
@@ -128,7 +128,7 @@ async def process_admin_promocode_duration_value(message: Message, state: FSMCon
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:promocode_cancel")]
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @admin_promo_fsm_router.message(AdminCreatePromocode.waiting_for_max_uses)
@@ -136,7 +136,7 @@ async def process_admin_promocode_max_uses(message: Message, state: FSMContext):
     """Обработка максимального количества использований"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
 
@@ -144,10 +144,10 @@ async def process_admin_promocode_max_uses(message: Message, state: FSMContext):
     try:
         max_uses = int(message.text.strip())
         if max_uses < 1:
-            await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"))
+            await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"), parse_mode="HTML")
             return
     except ValueError:
-        await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"))
+        await message.answer(i18n_get_text(language, "admin.promocode_max_uses_invalid"), parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -180,4 +180,4 @@ async def process_admin_promocode_max_uses(message: Message, state: FSMContext):
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.promocode_confirm"), callback_data="admin:promocode_confirm")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.promocode_cancel"), callback_data="admin:promocode_cancel")]
     ])
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")

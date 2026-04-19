@@ -730,7 +730,7 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     if promo_session:
         # Промокод уже применён - показываем сообщение
         text = i18n_get_text(language, "buy.promo_applied")
-        await callback.message.answer(text)
+        await callback.message.answer(text, parse_mode="HTML")
         return
 
     # CRITICAL FIX: Очищаем предыдущие FSM состояния перед установкой нового
@@ -741,7 +741,7 @@ async def callback_enter_promo(callback: CallbackQuery, state: FSMContext):
     await state.set_state(PromoCodeInput.waiting_for_promo)
 
     text = i18n_get_text(language, "buy.enter_promo_text")
-    await callback.message.answer(text)
+    await callback.message.answer(text, parse_mode="HTML")
 
 
 @payments_callbacks_router.callback_query(F.data == "promo_back")
@@ -945,7 +945,7 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
             )],
         ])
 
-        await callback.message.answer(user_confirmation_text, reply_markup=user_keyboard)
+        await callback.message.answer(user_confirmation_text, reply_markup=user_keyboard, parse_mode="HTML")
         
         # Write audit log
         try:
@@ -967,7 +967,7 @@ async def callback_corporate_access_confirm(callback: CallbackQuery, state: FSMC
         # Still confirm user even if admin notification fails
         try:
             user_confirmation_text = i18n_get_text(language, "buy.corporate_request_accepted")
-            await callback.message.answer(user_confirmation_text)
+            await callback.message.answer(user_confirmation_text, parse_mode="HTML")
         except Exception:
             pass
         await state.clear()

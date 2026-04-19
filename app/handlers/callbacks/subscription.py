@@ -234,7 +234,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.exception(f"Error activating trial for user {telegram_id}: {e}")
         error_text = i18n_get_text(language, "main.trial_activation_error")
-        await callback.message.answer(error_text)
+        await callback.message.answer(error_text, parse_mode="HTML")
 
 
 @subscription_router.callback_query(F.data == "menu_profile", StateFilter(default_state))
@@ -279,7 +279,7 @@ async def callback_profile(callback: CallbackQuery, state: FSMContext):
             user = await database.get_user(telegram_id)
             language = await resolve_user_language(callback.from_user.id)
             error_text = i18n_get_text(language, "errors.profile_load")
-            await callback.message.answer(error_text)
+            await callback.message.answer(error_text, parse_mode="HTML")
         except Exception as e2:
             logger.exception(f"Error sending error message to user {telegram_id}: {e2}")
 
@@ -401,7 +401,7 @@ async def callback_subscription_history(callback: CallbackQuery):
 
     if not history:
         text = i18n_get_text(language, "subscription.history_empty", "subscription_history_empty")
-        await callback.message.answer(text)
+        await callback.message.answer(text, parse_mode="HTML")
         return
 
     text = i18n_get_text(language, "subscription.history", "subscription_history") + "\n\n"
@@ -436,4 +436,4 @@ async def callback_subscription_history(callback: CallbackQuery):
         expires_label = i18n_get_text(language, "subscription.history_expires")
         text += f"  {expires_label} {end_str}\n\n"
 
-    await callback.message.answer(text, reply_markup=get_back_keyboard(language))
+    await callback.message.answer(text, reply_markup=get_back_keyboard(language), parse_mode="HTML")

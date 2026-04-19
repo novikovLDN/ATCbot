@@ -137,5 +137,13 @@ class TelegramPremiumState(StatesGroup):
     processing_payment = State()
 
 
+class TelegramStarsState(StatesGroup):
+    choose_pack = State()
+    choose_recipient = State()
+    waiting_for_username = State()
+    choose_payment_method = State()
+    processing_payment = State()
+
+
 class BomberState(StatesGroup):
     playing = State()

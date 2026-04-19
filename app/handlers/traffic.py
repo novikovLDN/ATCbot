@@ -522,7 +522,7 @@ async def show_traffic_info_message(message):
                     callback_data="menu_main",
                 )],
             ])
-            await message.answer(text, reply_markup=kb)
+            await message.answer(text, reply_markup=kb, parse_mode="HTML")
             return
         text = i18n_get_text(language, "traffic.not_provisioned")
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -833,7 +833,7 @@ async def callback_traffic_pay_balance(callback: CallbackQuery):
         )
     except Exception as e:
         logger.error("TRAFFIC_PURCHASE_BALANCE_ERROR: tg=%s %s", telegram_id, e)
-        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         return
 
     # Record purchase

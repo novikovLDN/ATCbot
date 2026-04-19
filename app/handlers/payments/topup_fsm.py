@@ -66,11 +66,11 @@ async def process_topup_amount(message: Message, state: FSMContext):
                     callback_data="topup_balance"
                 )]
             ])
-            await message.answer(error_text, reply_markup=back_kb)
+            await message.answer(error_text, reply_markup=back_kb, parse_mode="HTML")
             return
         await state.update_data(topup_attempts=attempts)
         error_text = i18n_get_text(language, "main.topup_amount_invalid")
-        await message.answer(error_text)
+        await message.answer(error_text, parse_mode="HTML")
         return
 
     amount = int(raw_text)
@@ -78,13 +78,13 @@ async def process_topup_amount(message: Message, state: FSMContext):
     # Проверяем минимальную сумму
     if amount < 100:
         error_text = i18n_get_text(language, "main.topup_amount_too_low")
-        await message.answer(error_text)
+        await message.answer(error_text, parse_mode="HTML")
         return
 
     # Проверяем максимальную сумму (технический лимит)
     if amount > 100000:
         error_text = i18n_get_text(language, "main.topup_amount_too_high")
-        await message.answer(error_text)
+        await message.answer(error_text, parse_mode="HTML")
         return
 
     # Очищаем FSM состояние
@@ -115,4 +115,4 @@ async def process_topup_amount(message: Message, state: FSMContext):
     )])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")

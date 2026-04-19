@@ -239,12 +239,12 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         if len(report_text) > 4000:
             # Отправляем первую часть
             first_part = "\n".join(report_lines[:len(report_lines)//2])
-            await callback.message.answer(first_part)
+            await callback.message.answer(first_part, parse_mode="HTML")
             # Отправляем вторую часть
             second_part = "\n".join(report_lines[len(report_lines)//2:])
-            await callback.message.answer(second_part)
+            await callback.message.answer(second_part, parse_mode="HTML")
         else:
-            await callback.message.answer(report_text)
+            await callback.message.answer(report_text, parse_mode="HTML")
         
         # Логируем в audit_log
         await database._log_audit_event_atomic_standalone(
@@ -317,7 +317,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
     # B3.3 - ADMIN OVERRIDE: Admin operations intentionally bypass system_state checks
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     
@@ -335,7 +335,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
             # Это строка - ищем по username
             username = user_input.lstrip('@')  # Убираем @, если есть
             if not username:  # Пустая строка после удаления @
-                await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+                await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.", parse_mode="HTML")
                 await state.clear()
                 return
             username = username.lower()  # Приводим к нижнему регистру
@@ -345,7 +345,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         
         # Если пользователь не найден
         if not user:
-            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.", parse_mode="HTML")
             await state.clear()
             return
         
@@ -353,7 +353,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         try:
             overview = await admin_service.get_admin_user_overview(user["telegram_id"])
         except UserNotFoundError:
-            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.", parse_mode="HTML")
             await state.clear()
             return
         
@@ -452,7 +452,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         
     except Exception as e:
         logging.exception(f"Error in process_admin_user_id: {e}")
-        await message.answer("Ошибка при получении информации о пользователе. Проверь логи.")
+        await message.answer("Ошибка при получении информации о пользователе. Проверь логи.", parse_mode="HTML")
         await state.clear()
 
 
@@ -492,7 +492,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
         
         if not history:
             text = "🧾 История подписок\n\nИстория подписок пуста."
-            await callback.message.answer(text, reply_markup=get_admin_back_keyboard(language))
+            await callback.message.answer(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
             await callback.answer()
             return
         
@@ -528,7 +528,7 @@ async def callback_admin_user_history(callback: CallbackQuery):
             
             text += f"  До: {end_str}\n\n"
         
-        await callback.message.answer(text, reply_markup=get_admin_back_keyboard(language))
+        await callback.message.answer(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
         await callback.answer()
         
         # Логируем просмотр истории
@@ -601,17 +601,17 @@ async def process_admin_grant_flex_amount(message: Message, state: FSMContext):
     try:
         value = float(message.text.strip().replace(",", "."))
         if value <= 0:
-            await message.answer("Введите положительное число.")
+            await message.answer("Введите положительное число.", parse_mode="HTML")
             return
         await state.update_data(grant_amount=value)
         await state.set_state(AdminGrantState.waiting_unit)
         language = await resolve_user_language(message.from_user.id)
-        await message.answer("Выберите единицу срока:", reply_markup=get_admin_grant_flex_unit_keyboard(language))
+        await message.answer("Выберите единицу срока:", reply_markup=get_admin_grant_flex_unit_keyboard(language), parse_mode="HTML")
     except ValueError:
-        await message.answer("Введите число (например: 30).")
+        await message.answer("Введите число (например: 30).", parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in process_admin_grant_flex_amount: {e}")
-        await message.answer("Ошибка.")
+        await message.answer("Ошибка.", parse_mode="HTML")
         await state.clear()
 
 
@@ -1249,14 +1249,14 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
     """
     language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     
     try:
         value = int(message.text.strip())
         if value <= 0:
-            await message.answer("❌ Введите положительное число")
+            await message.answer("❌ Введите положительное число", parse_mode="HTML")
             return
         
         data = await state.get_data()
@@ -1271,16 +1271,16 @@ async def process_admin_grant_value(message: Message, state: FSMContext):
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:grant:notify:no")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:main")],
         ])
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminGrantAccess.waiting_for_notify)
         
         logger.debug(f"FSM: AdminGrantAccess.waiting_for_notify set, value={value}, unit={unit}")
         
     except ValueError:
-        await message.answer("❌ Введите число")
+        await message.answer("❌ Введите число", parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in process_admin_grant_value: {e}")
-        await message.answer("Ошибка")
+        await message.answer("Ошибка", parse_mode="HTML")
         await state.clear()
 
 
@@ -1376,7 +1376,7 @@ async def callback_admin_grant_notify(callback: CallbackQuery, state: FSMContext
             
         except Exception as e:
             logger.exception(f"Error granting custom access: {e}")
-            await callback.message.answer(f"❌ Ошибка: {str(e)[:100]}", reply_markup=get_admin_back_keyboard(language))
+            await callback.message.answer(f"❌ Ошибка: {str(e)[:100]}", reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
         
         await state.clear()
         logger.debug(f"FSM: AdminGrantAccess cleared after grant")
