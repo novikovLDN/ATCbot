@@ -197,7 +197,7 @@ async def callback_topup_stars(callback: CallbackQuery):
             currency="XTR",
             prices=[LabeledPrice(label=i18n_get_text(language, "payment.stars_invoice_label"), amount=stars_amount)]
         )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:
@@ -298,7 +298,7 @@ async def callback_withdraw_final_confirm(callback: CallbackQuery, state: FSMCon
             [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"withdraw_approve:{wid}")],
             [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"withdraw_reject:{wid}")],
         ])
-        await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb)
+        await bot.send_message(config.ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_kb, parse_mode="HTML")
         logger.info(f"ADMIN_NOTIFICATION_SENT withdrawal_id={wid} user={telegram_id} amount={amount:.2f} RUB")
     except Exception as e:
         logger.error(f"CRITICAL: Failed to send withdrawal notification to admin: withdrawal_id={wid} user={telegram_id} error={e}", exc_info=True)
@@ -339,7 +339,7 @@ async def callback_withdraw_approve(callback: CallbackQuery, bot: Bot):
             lang = await resolve_user_language(wr["telegram_id"])
             text = i18n_get_text(lang, "withdraw.approved")
             try:
-                await bot.send_message(wr["telegram_id"], text)
+                await bot.send_message(wr["telegram_id"], text, parse_mode="HTML")
             except Exception as e:
                 logger.warning(f"Failed to send withdrawal approved notification to {wr['telegram_id']}: {e}")
             await callback.answer("✅ Подтверждено", show_alert=True)
@@ -368,7 +368,7 @@ async def callback_withdraw_reject(callback: CallbackQuery, bot: Bot):
             lang = await resolve_user_language(wr["telegram_id"])
             text = i18n_get_text(lang, "withdraw.rejected")
             try:
-                await bot.send_message(wr["telegram_id"], text)
+                await bot.send_message(wr["telegram_id"], text, parse_mode="HTML")
             except Exception as e:
                 logger.warning(f"Failed to send withdrawal rejected notification to {wr['telegram_id']}: {e}")
             await callback.answer("❌ Отклонено", show_alert=True)
@@ -882,7 +882,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
             currency="RUB",
             prices=prices
         )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
 
         # КРИТИЧНО: Переводим в состояние processing_payment
@@ -1016,7 +1016,7 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
             currency="XTR",
             prices=prices
         )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
 
         await state.set_state(PurchaseState.processing_payment)
@@ -1634,7 +1634,7 @@ async def callback_topup_card(callback: CallbackQuery):
             currency="RUB",
             prices=[LabeledPrice(label=i18n_get_text(language, "main.topup_invoice_label"), amount=amount_kopecks)]
         )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:
@@ -1762,7 +1762,7 @@ async def callback_pay_tariff_card(callback: CallbackQuery, state: FSMContext):
             currency="RUB",
             prices=prices
         )
-        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"))
+        await callback.bot.send_message(chat_id=telegram_id, text=i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await callback.answer()
     except Exception as e:

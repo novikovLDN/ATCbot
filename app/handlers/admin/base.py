@@ -257,7 +257,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         
         # Отправляем начальное сообщение
         status_text = f"🔄 Массовый перевыпуск ключей\n\nВсего подписок: {total_count}\nОбработано: 0/{total_count}\nУспешно: 0\nОшибок: 0"
-        status_message = await callback.message.edit_text(status_text, reply_markup=None)
+        status_message = await callback.message.edit_text(status_text, reply_markup=None, parse_mode="HTML")
         # Примечание: status_message используется для динамического обновления, защита не нужна
         
         # Обрабатываем каждую подписку ИТЕРАТИВНО (НЕ параллельно)
@@ -287,7 +287,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
                     )
                     try:
                         try:
-                            await status_message.edit_text(status_text)
+                            await status_message.edit_text(status_text, parse_mode="HTML")
                         except TelegramBadRequest as e:
                             if "message is not modified" not in str(e):
                                 raise
@@ -324,7 +324,7 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         ])
         
         try:
-            await status_message.edit_text(final_text, reply_markup=keyboard)
+            await status_message.edit_text(final_text, reply_markup=keyboard, parse_mode="HTML")
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
                 raise
@@ -341,7 +341,8 @@ async def callback_admin_reissue_all_active(callback: CallbackQuery, bot: Bot):
         logging.exception(f"Error in callback_admin_reissue_all_active: {e}")
         await callback.message.edit_text(
             i18n_get_text(language, "admin.reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
-            reply_markup=get_admin_back_keyboard(language)
+            reply_markup=get_admin_back_keyboard(language),
+            parse_mode="HTML",
         )
 
 
@@ -644,7 +645,8 @@ async def callback_remnawave_mass_provision(callback: CallbackQuery):
             try:
                 await bot.send_message(
                     chat_id,
-                    f"⏳ Прогресс: {processed}/{total} (✅ {success} / ❌ {failed})"
+                    f"⏳ Прогресс: {processed}/{total} (✅ {success} / ❌ {failed})",
+                    parse_mode="HTML",
                 )
             except Exception:
                 pass
@@ -658,7 +660,8 @@ async def callback_remnawave_mass_provision(callback: CallbackQuery):
                 f"🏁 Массовый провижн завершён!\n\n"
                 f"Всего: {total}\n"
                 f"✅ Успешно: {success}\n"
-                f"❌ Ошибки: {failed}"
+                f"❌ Ошибки: {failed}",
+                parse_mode="HTML",
             )
         except Exception:
             pass
@@ -731,7 +734,8 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
             await bot.send_message(
                 test_user_id,
                 "🎁 [ТЕСТ] Уведомление об активации триала\n\n"
-                "Ваш триал активирован! Пользуйтесь VPN бесплатно."
+                "Ваш триал активирован! Пользуйтесь VPN бесплатно.",
+                parse_mode="HTML",
             )
             result_text = "✅ Тест активации триала выполнен"
             
@@ -740,7 +744,8 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
             await bot.send_message(
                 test_user_id,
                 "💰 [ТЕСТ] Уведомление о первой покупке\n\n"
-                "Спасибо за покупку! Ваша подписка активирована."
+                "Спасибо за покупку! Ваша подписка активирована.",
+                parse_mode="HTML",
             )
             result_text = "✅ Тест уведомления о первой покупке выполнен"
             
@@ -749,7 +754,8 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
             await bot.send_message(
                 test_user_id,
                 "🔄 [ТЕСТ] Уведомление о продлении\n\n"
-                "Ваша подписка автоматически продлена."
+                "Ваша подписка автоматически продлена.",
+                parse_mode="HTML",
             )
             result_text = "✅ Тест уведомления о продлении выполнен"
             
@@ -758,7 +764,8 @@ async def callback_admin_test(callback: CallbackQuery, bot: Bot):
             await bot.send_message(
                 test_user_id,
                 "⏰ [ТЕСТ] Напоминание о подписке\n\n"
-                "Ваша подписка скоро истечёт. Продлите её сейчас!"
+                "Ваша подписка скоро истечёт. Продлите её сейчас!",
+                parse_mode="HTML",
             )
             result_text = "✅ Тест напоминаний выполнен"
             

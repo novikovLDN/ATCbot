@@ -113,7 +113,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         
         # Отправляем начальное сообщение
         status_text = f"🔄 Массовый перевыпуск ключей\n\nВсего пользователей: {total_count}\nОбработано: 0/{total_count}\nУспешно: 0\nОшибок: 0"
-        status_message = await callback.message.edit_text(status_text, reply_markup=None)
+        status_message = await callback.message.edit_text(status_text, reply_markup=None, parse_mode="HTML")
         # Примечание: status_message используется для динамического обновления, защита не нужна
         
         # Обрабатываем каждую подписку
@@ -165,7 +165,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
                     )
                     try:
                         try:
-                            await status_message.edit_text(status_text)
+                            await status_message.edit_text(status_text, parse_mode="HTML")
                         except TelegramBadRequest as e:
                             if "message is not modified" not in str(e):
                                 raise
@@ -198,7 +198,7 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         ])
         
         try:
-            await status_message.edit_text(final_text, reply_markup=keyboard)
+            await status_message.edit_text(final_text, reply_markup=keyboard, parse_mode="HTML")
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
                 raise
@@ -258,7 +258,8 @@ async def callback_admin_keys_reissue_all(callback: CallbackQuery, bot: Bot):
         logging.exception(f"Error in callback_admin_keys_reissue_all: {e}")
         await callback.message.edit_text(
             i18n_get_text(language, "admin.reissue_bulk_error", error=str(e)[:80], default=f"❌ Ошибка при массовом перевыпуске: {str(e)[:80]}"),
-            reply_markup=get_admin_back_keyboard(language)
+            reply_markup=get_admin_back_keyboard(language),
+            parse_mode="HTML",
         )
 
 
@@ -305,7 +306,7 @@ async def callback_admin_user(callback: CallbackQuery, state: FSMContext):
         return
     
     text = i18n_get_text(language, "admin.user_prompt_enter_id")
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
     await state.set_state(AdminUserSearch.waiting_for_user_id)
     await callback.answer()
 
@@ -567,7 +568,7 @@ async def callback_admin_grant_basic(callback: CallbackQuery, state: FSMContext)
         user_id = int(callback.data.split(":")[1])
         await state.update_data(grant_user_id=user_id, grant_tariff="basic")
         await state.set_state(AdminGrantState.waiting_amount)
-        await callback.message.edit_text("Введите срок действия (число):")
+        await callback.message.edit_text("Введите срок действия (число):", parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_basic: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
@@ -585,7 +586,7 @@ async def callback_admin_grant_plus(callback: CallbackQuery, state: FSMContext):
         user_id = int(callback.data.split(":")[1])
         await state.update_data(grant_user_id=user_id, grant_tariff="plus")
         await state.set_state(AdminGrantState.waiting_amount)
-        await callback.message.edit_text("Введите срок действия (число):")
+        await callback.message.edit_text("Введите срок действия (число):", parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_plus: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
@@ -654,7 +655,7 @@ async def callback_admin_grant_flex_unit(callback: CallbackQuery, state: FSMCont
             "✅ Подтвердить   ❌ Отмена"
         )
         language = await resolve_user_language(callback.from_user.id)
-        await callback.message.edit_text(text, reply_markup=get_admin_grant_flex_confirm_keyboard(language))
+        await callback.message.edit_text(text, reply_markup=get_admin_grant_flex_confirm_keyboard(language), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_flex_unit: {e}")
         await callback.answer("Ошибка", show_alert=True)
@@ -680,6 +681,7 @@ async def callback_admin_grant_flex_confirm(callback: CallbackQuery, state: FSMC
         await callback.message.edit_text(
             "Уведомить пользователя о выдаче доступа?",
             reply_markup=get_admin_grant_flex_notify_keyboard(language),
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.exception(f"Error in callback_admin_grant_flex_confirm: {e}")
@@ -818,7 +820,7 @@ async def callback_admin_switch_plus(callback: CallbackQuery):
             "✅ Подтвердить   ❌ Отмена"
         )
         language = await resolve_user_language(callback.from_user.id)
-        await callback.message.edit_text(text, reply_markup=_admin_switch_confirm_keyboard(user_id, "plus", language))
+        await callback.message.edit_text(text, reply_markup=_admin_switch_confirm_keyboard(user_id, "plus", language), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_admin_switch_plus: {e}")
         await callback.answer("Ошибка", show_alert=True)
@@ -840,7 +842,7 @@ async def callback_admin_switch_basic(callback: CallbackQuery):
             "✅ Подтвердить   ❌ Отмена"
         )
         language = await resolve_user_language(callback.from_user.id)
-        await callback.message.edit_text(text, reply_markup=_admin_switch_confirm_keyboard(user_id, "basic", language))
+        await callback.message.edit_text(text, reply_markup=_admin_switch_confirm_keyboard(user_id, "basic", language), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_admin_switch_basic: {e}")
         await callback.answer("Ошибка", show_alert=True)
@@ -874,7 +876,7 @@ async def callback_admin_switch_confirm(callback: CallbackQuery, bot: Bot):
             await database._log_audit_event_atomic_standalone("ADMIN_SWITCH_TO_BASIC", callback.from_user.id, user_id, "Tariff switched to Basic")
         tariff_label = "Plus" if tariff == "plus" else "Basic"
         text = f"✅ Готово. Тариф изменён на {tariff_label}\n\nУведомить пользователя?"
-        await callback.message.edit_text(text, reply_markup=_admin_switch_notify_keyboard(user_id, tariff, language))
+        await callback.message.edit_text(text, reply_markup=_admin_switch_notify_keyboard(user_id, tariff, language), parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_admin_switch_confirm: {e}")
         await callback.answer("Ошибка смены тарифа", show_alert=True)
@@ -916,7 +918,7 @@ async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
             language=await resolve_user_language(callback.from_user.id),
         )
         text = f"✅ Тариф изменён на {tariff_label}."
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     except Exception as e:
         logger.exception(f"Error in callback_admin_switch_notify: {e}")
         await callback.answer("Ошибка", show_alert=True)
@@ -944,7 +946,7 @@ async def callback_admin_grant(callback: CallbackQuery, state: FSMContext):
         
         # Показываем клавиатуру выбора срока
         text = "Выберите срок доступа:"
-        await callback.message.edit_text(text, reply_markup=get_admin_grant_days_keyboard(user_id))
+        await callback.message.edit_text(text, reply_markup=get_admin_grant_days_keyboard(user_id), parse_mode="HTML")
         await state.set_state(AdminGrantAccess.waiting_for_days)
         
         logger.debug(f"FSM: AdminGrantAccess.waiting_for_days set for user {user_id}")
@@ -965,7 +967,7 @@ async def _do_grant_1_year_setup(callback: CallbackQuery, state: FSMContext, lan
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:notify:no")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
     ])
-    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await state.set_state(AdminGrantAccess.waiting_for_notify)
 
 
@@ -998,7 +1000,7 @@ async def callback_admin_grant_days(callback: CallbackQuery, state: FSMContext, 
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:notify:no")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminGrantAccess.waiting_for_notify)
         
         logger.debug(f"FSM: AdminGrantAccess.waiting_for_notify set for quick action (days={days})")
@@ -1055,7 +1057,7 @@ async def callback_admin_grant_minutes(callback: CallbackQuery, state: FSMContex
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data=f"admin:notify:no:minutes:{user_id}:{minutes}")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         
         # Clear FSM - notify handlers will work without FSM
         await state.clear()
@@ -1151,7 +1153,7 @@ async def callback_admin_grant_custom_from_days(callback: CallbackQuery, state: 
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_days"), callback_data="admin:grant_unit:days")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminGrantAccess.waiting_for_unit)
         
         logger.debug(f"FSM: AdminGrantAccess.waiting_for_unit set for user {user_id} (from waiting_for_days state)")
@@ -1190,7 +1192,7 @@ async def callback_admin_grant_custom(callback: CallbackQuery, state: FSMContext
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.grant_unit_days"), callback_data="admin:grant_unit:days")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data=f"admin:grant:{user_id}")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminGrantAccess.waiting_for_unit)
         
         logger.debug(f"FSM: AdminGrantAccess.waiting_for_unit set for user {user_id} (from any state)")
@@ -1227,7 +1229,7 @@ async def callback_admin_grant_unit(callback: CallbackQuery, state: FSMContext):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:main")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminGrantAccess.waiting_for_value)
         
         logger.debug(f"FSM: AdminGrantAccess.waiting_for_value set, unit={unit}")
@@ -1526,7 +1528,7 @@ async def callback_admin_grant_quick_notify_fsm(callback: CallbackQuery, state: 
             if notify:
                 try:
                     user_text = f"Администратор выдал вам доступ на {days} дней"
-                    await bot.send_message(user_id, user_text)
+                    await bot.send_message(user_id, user_text, parse_mode="HTML")
                     logger.info(f"NOTIFICATION_SENT [type=admin_grant, user_id={user_id}, days={days}]")
                     text += "\nПользователь уведомлён."
                 except Exception as e:
@@ -1672,7 +1674,7 @@ async def callback_admin_revoke(callback: CallbackQuery, bot: Bot, state: FSMCon
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.notify_no"), callback_data="admin:revoke:notify:no")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel", "admin_cancel"), callback_data=f"admin:user")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminRevokeAccess.waiting_for_notify_choice)
         
         # 5️⃣ ЛОГИРОВАНИЕ: выбран user_id
@@ -1826,7 +1828,8 @@ async def _show_admin_user_card(message_or_callback, user_id: int, admin_telegra
         if hasattr(message_or_callback, 'edit_text'):
             await message_or_callback.edit_text(
                 i18n_get_text(language, "admin.user_not_found"),
-                reply_markup=get_admin_back_keyboard(language)
+                reply_markup=get_admin_back_keyboard(language),
+                parse_mode="HTML",
             )
         else:
             await message_or_callback.answer("❌ Пользователь не найден")
@@ -2238,6 +2241,7 @@ async def callback_admin_delete_user_confirm(callback: CallbackQuery):
         await callback.message.edit_text(
             "❌ Ошибка при удалении пользователя. Проверь логи.",
             reply_markup=get_admin_back_keyboard(language),
+            parse_mode="HTML",
         )
 
 

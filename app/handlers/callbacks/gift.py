@@ -388,6 +388,7 @@ async def callback_gift_pay_card(callback: CallbackQuery, state: FSMContext):
         await callback.bot.send_message(
             chat_id=telegram_id,
             text=i18n_get_text(language, "payment.invoice_timeout"),
+            parse_mode="HTML",
         )
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await state.set_state(GiftState.processing_payment)
@@ -460,6 +461,7 @@ async def callback_gift_pay_stars(callback: CallbackQuery, state: FSMContext):
         await callback.bot.send_message(
             chat_id=telegram_id,
             text=i18n_get_text(language, "payment.invoice_timeout"),
+            parse_mode="HTML",
         )
         asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg))
         await state.set_state(GiftState.processing_payment)

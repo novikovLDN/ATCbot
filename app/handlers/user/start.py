@@ -259,7 +259,8 @@ async def cmd_start(message: Message, state: FSMContext):
                 
                 await message.bot.send_message(
                     chat_id=referrer_id,
-                    text=notification_text
+                    text=notification_text,
+                    parse_mode="HTML",
                 )
                 
                 logger.info(

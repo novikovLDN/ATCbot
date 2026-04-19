@@ -31,5 +31,6 @@ async def cmd_language(message: Message, bot: Bot):
     await bot.send_message(
         message.chat.id,
         text,
-        reply_markup=get_language_keyboard(language)
+        reply_markup=get_language_keyboard(language),
+        parse_mode="HTML",
     )

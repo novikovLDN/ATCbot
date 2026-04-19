@@ -79,7 +79,7 @@ async def callback_admin_export(callback: CallbackQuery):
         return
     
     text = i18n_get_text(language, "admin.export_prompt")
-    await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard(language))
+    await callback.message.edit_text(text, reply_markup=get_admin_export_keyboard(language), parse_mode="HTML")
     await callback.answer()
 
 
