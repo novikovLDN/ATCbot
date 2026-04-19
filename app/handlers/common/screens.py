@@ -446,8 +446,8 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         f"💎 <b>Выберите тариф</b>\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"🚀 <b>Комбо</b> — подписка + обход блокировок в одном пакете\n"
-        f"Трафик обхода включён · от 269 ₽/мес"
+        f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
+        f"<blockquote>Трафик обхода включён · от 269 ₽/мес</blockquote>"
     )
 
     # Получаем текущую подписку для динамических кнопок
@@ -462,8 +462,8 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             f"Для основной подписки выберите тариф:\n\n"
             f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
             f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-            f"🚀 <b>Комбо</b> — подписка + обход блокировок в одном пакете\n"
-            f"Трафик обхода включён · от 269 ₽/мес"
+            f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
+            f"<blockquote>Трафик обхода включён · от 269 ₽/мес</blockquote>"
         )
 
     if current_tariff == "basic":
