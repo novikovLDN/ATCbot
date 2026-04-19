@@ -211,7 +211,6 @@ async def show_profile(message_or_query, language: str):
                     pass
                 send_func = lambda text, **kw: message_or_query.bot.send_message(
                     chat_id=telegram_id, text=text, **kw,
-                    parse_mode="HTML",
                 )
             else:
                 send_func = message_or_query.message.edit_text
