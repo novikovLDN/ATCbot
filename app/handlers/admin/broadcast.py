@@ -149,6 +149,8 @@ def _build_broadcast_reply_markup(
                 text="🌐 Веб-клиент QoDev",
                 url="https://qodev.dev",
             )])
+        elif btn == "buy_combo":
+            rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -658,6 +660,7 @@ def _btn_label(btn_type: str) -> str:
         "happ_ios": "📲 Скачать Happ iOS",
         "happ_android": "📲 Скачать Happ Android",
         "web_client": "🌐 Веб-клиент QoDev",
+        "buy_combo": "🏆 Купить Комбо",
     }
     return labels.get(btn_type, btn_type)
 
