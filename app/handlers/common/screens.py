@@ -446,9 +446,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         f"💎 <b>Выберите тариф</b>\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"<blockquote>80% пользователей выбирают Basic</blockquote>"
+        f"🚀 <b>Комбо</b> — подписка + обход блокировок в одном пакете\n"
+        f"Трафик обхода включён · от 269 ₽/мес"
     )
-    
+
     # Получаем текущую подписку для динамических кнопок
     subscription = await database.get_subscription(telegram_id)
     is_bypass_only_sub = bool(subscription and subscription.get("is_bypass_only"))
@@ -461,7 +462,8 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             f"Для основной подписки выберите тариф:\n\n"
             f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
             f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-            f"{i18n_get_text(language, 'buy.tariff_business')}"
+            f"🚀 <b>Комбо</b> — подписка + обход блокировок в одном пакете\n"
+            f"Трафик обхода включён · от 269 ₽/мес"
         )
 
     if current_tariff == "basic":
@@ -486,6 +488,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         [InlineKeyboardButton(
             text=i18n_get_text(language, plus_btn_key),
             callback_data="tariff:plus"
+        )],
+        [InlineKeyboardButton(
+            text="🚀 Комбо (VPN + обход)",
+            callback_data="buy_combo"
         )],
         [InlineKeyboardButton(
             text="🎟 У меня промокод",
