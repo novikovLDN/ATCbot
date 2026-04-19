@@ -1487,12 +1487,8 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     await database.set_combo_flag(telegram_id, True)
 
     months = period_days // 30
-    text = (
-        f"✅ <b>Комбо-подписка активирована!</b>\n\n"
-        f"📦 Тариф: <b>Комбо {base_tariff.capitalize()}</b> · {months} мес.\n"
-        f"🌐 Обход: <b>{gb} ГБ</b> начислено\n\n"
-        f"Нажмите «Подключиться» чтобы настроить устройство."
-    )
+    text = i18n_get_text(language, "combo.purchase_success",
+                         tariff=base_tariff.capitalize(), months=months, gb=gb)
     buttons = [
         [InlineKeyboardButton(text="📲 Подключиться", callback_data="connect_instruction")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],

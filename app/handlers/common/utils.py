@@ -420,6 +420,9 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
         parse_mode: Режим парсинга (HTML, Markdown и т.д.). По умолчанию "HTML".
         bot: Bot instance (требуется для fallback на send_message)
     """
+    from app.utils.telegram_safe import convert_tg_emoji
+    text = convert_tg_emoji(text)
+
     if asyncio.iscoroutine(reply_markup):
         raise RuntimeError("reply_markup coroutine passed without await. Must await keyboard builder before passing to safe_edit_text.")
 
