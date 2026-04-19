@@ -628,6 +628,34 @@ async def process_successful_payment(message: Message, state: FSMContext):
         )
         return
 
+    # --- Telegram Stars purchase: mark paid + send success + notify admin ---
+    is_stars_purchase = pending_purchase.get("purchase_type") == "telegram_stars"
+    if is_stars_purchase:
+        try:
+            from app.handlers.payments.telegram_stars_purchase import send_stars_success
+            await send_stars_success(
+                message.bot, telegram_id, purchase_id, pending_purchase,
+            )
+            await database.mark_pending_purchase_paid(purchase_id)
+            logger.info(
+                "STARS_PAYMENT_FINALIZED purchase_id=%s user=%s amount=%s",
+                purchase_id, telegram_id, payment_amount_rubles,
+            )
+        except Exception as e:
+            logger.exception("STARS_PAYMENT_ERROR purchase_id=%s error=%s", purchase_id, e)
+            await message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+        await state.clear()
+        duration_ms = (time.time() - start_time) * 1000
+        log_handler_exit(
+            handler_name="process_successful_payment",
+            outcome="success",
+            telegram_id=telegram_id,
+            operation="payment_finalization",
+            duration_ms=duration_ms,
+            payment_type="telegram_stars",
+        )
+        return
+
     # --- Apple ID purchase: mark paid + send success + notify admin ---
     is_apple_purchase = pending_purchase.get("purchase_type") == "apple_id"
     if is_apple_purchase:

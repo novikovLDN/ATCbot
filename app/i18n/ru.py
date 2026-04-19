@@ -899,7 +899,7 @@ LANG = {
     'premium.main_button': "⚡️ Купить Telegram Premium ⚡️",
 
     # --- Mini Shop ---
-    'shop.title': "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — расширьте возможности мессенджера\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе</blockquote>\n\nВыберите что вас интересует:",
+    'shop.title': "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — расширьте возможности мессенджера\n⭐ <b>Telegram Stars</b> — звёзды для себя или в подарок\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе</blockquote>\n\nВыберите что вас интересует:",
     'shop.apple_title': "🍎 <b>Пополнение Apple ID</b>\n\nВыберите регион вашего Apple ID:\n\n<blockquote>Не знаете свой регион?\nОткройте <b>Настройки → Apple ID → Медиаматериалы и покупки → Просмотреть</b> — там будет указана страна/регион.</blockquote>",
     'shop.apple_amount_title': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\n\nВыберите номинал пополнения:",
     'shop.apple_confirm': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\nНоминал: {nominal}\nК оплате: <b>{price:.2f} ₽</b>\n\n<blockquote>Код пополнения будет отправлен в этот чат в течение 15 минут после оплаты.</blockquote>",

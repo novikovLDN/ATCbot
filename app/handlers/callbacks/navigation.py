@@ -1549,6 +1549,7 @@ async def callback_mini_shop(callback: CallbackQuery):
     text = i18n_get_text(language, "shop.title")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚡️ Telegram Premium", callback_data="premium_buy")],
+        [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
         [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
