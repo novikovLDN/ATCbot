@@ -47,6 +47,10 @@ async def _safe_send(
     caption: str | None = None,
 ) -> int | None:
     """Send message or photo. Returns message_id on success, None on failure."""
+    from app.utils.telegram_safe import convert_tg_emoji
+    text = convert_tg_emoji(text)
+    if caption:
+        caption = convert_tg_emoji(caption)
     async with semaphore:
         for attempt in range(BROADCAST_RETRY_LIMIT):
             try:
@@ -78,6 +82,10 @@ async def _safe_send_with_buttons(
     caption: str | None = None,
 ) -> int | None:
     """Send message with optional inline buttons. Returns message_id on success, None on failure."""
+    from app.utils.telegram_safe import convert_tg_emoji
+    text = convert_tg_emoji(text)
+    if caption:
+        caption = convert_tg_emoji(caption)
     async with semaphore:
         for attempt in range(BROADCAST_RETRY_LIMIT):
             try:
