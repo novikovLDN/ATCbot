@@ -508,7 +508,8 @@ async def process_broadcast_message_b(message: Message, state: FSMContext):
     await state.set_state(BroadcastCreate.waiting_for_emoji)
     await message.answer(
         "Отправьте эмодзи для уведомления (любой смайлик):\n\n"
-        "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆"
+        "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆\n\n"
+        "Или нажмите /skip чтобы отправить без эмодзи."
     )
 
 
@@ -549,7 +550,8 @@ async def process_broadcast_message(message: Message, state: FSMContext):
     await state.set_state(BroadcastCreate.waiting_for_emoji)
     await message.answer(
         "Отправьте эмодзи для уведомления (любой смайлик):\n\n"
-        "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆"
+        "Популярные: 📢 🔥 🎉 💰 ⚡ 🎁 🚀 ❗ 💎 🏆\n\n"
+        "Или нажмите /skip чтобы отправить без эмодзи."
     )
 
 
@@ -561,16 +563,18 @@ async def process_broadcast_emoji(message: Message, state: FSMContext):
     language = await resolve_user_language(message.from_user.id)
 
     if not message.text or not message.text.strip():
-        await message.answer("Отправьте эмодзи для уведомления:")
+        await message.answer("Отправьте эмодзи или /skip:")
         return
 
-    emoji = message.text.strip()
-    # Allow any text as emoji prefix (user can send any emoji or even short text)
-    if len(emoji) > 10:
-        await message.answer("Слишком длинный текст. Отправьте эмодзи (1-2 символа):")
-        return
+    text = message.text.strip()
 
-    await state.update_data(emoji=emoji, type="custom")
+    if text.lower() in ("/skip", "skip"):
+        await state.update_data(emoji="", type="custom")
+    else:
+        if len(text) > 10:
+            await message.answer("Слишком длинный текст. Отправьте эмодзи (1-2 символа) или /skip:")
+            return
+        await state.update_data(emoji=text, type="custom")
     await state.set_state(BroadcastCreate.waiting_for_buttons)
     await message.answer(
         "Выберите кнопки для уведомления:",
@@ -765,11 +769,12 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
         "active_subscriptions": "Только активные подписки"
     }
 
+    prefix = f"{emoji} " if emoji else ""
     if is_ab_test:
         message_a = data_for_preview.get("message_a", "")
         message_b = data_for_preview.get("message_b", "")
         preview_text = (
-            f"{emoji} {title}\n\n"
+            f"{prefix}{title}\n\n"
             f"🔬 A/B ТЕСТ\n\n"
             f"Вариант A:\n{message_a}\n\n"
             f"Вариант B:\n{message_b}\n\n"
@@ -782,7 +787,7 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
         else:
             body = message_text
         preview_text = (
-            f"{emoji} {title}\n\n"
+            f"{prefix}{title}\n\n"
             f"{body}\n\n"
             f"Сегмент: {segment_name.get(segment, segment)}"
         )
@@ -863,14 +868,15 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
             _disc_label = data_for_save.get("broadcast_discount_label", "7 дней")
             await database.save_broadcast_discount(broadcast_id, broadcast_discount, _disc_hours, _disc_label)
 
+        prefix = f"{emoji} " if emoji else ""
         if is_ab_test:
-            final_message_a = f"{emoji} {title}\n\n{message_a}"
-            final_message_b = f"{emoji} {title}\n\n{message_b}"
+            final_message_a = f"{prefix}{title}\n\n{message_a}"
+            final_message_b = f"{prefix}{title}\n\n{message_b}"
         else:
             if has_photo:
-                final_message = f"{emoji} {title}\n\n{caption}".strip()
+                final_message = f"{prefix}{title}\n\n{caption}".strip()
             else:
-                final_message = f"{emoji} {title}\n\n{message_text}"
+                final_message = f"{prefix}{title}\n\n{message_text}"
 
         # Build inline keyboard for broadcast message
         reply_markup = _build_broadcast_reply_markup(broadcast_buttons, broadcast_id, broadcast_discount)
