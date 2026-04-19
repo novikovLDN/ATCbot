@@ -367,10 +367,10 @@ async def show_profile(message_or_query, language: str):
                     happ_url = traffic.get("happ_url", "")
 
                     text += f"\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n"
-                    text += f"📥 {_fmt(used)} / {_fmt(limit_bytes)}\n"
+                    text += f"<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {_fmt(used)} / {_fmt(limit_bytes)}\n"
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
-                        text += f"🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
+                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
                         if happ_url:
                             text += f"\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>"
 

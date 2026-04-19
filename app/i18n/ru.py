@@ -902,7 +902,7 @@ LANG = {
     'premium.main_button': "⚡️ Купить Telegram Premium ⚡️",
 
     # --- Mini Shop ---
-    'shop.title': "🛍 <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote>⚡️ <b>Telegram Premium</b> — расширьте возможности мессенджера\n🍎 <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе</blockquote>\n\nВыберите что вас интересует:",
+    'shop.title': "<tg-emoji emoji-id=\"5193065010795911968\">🛍</tg-emoji> <b>Мини-магазинчик</b>\n\nЗдесь можно купить полезные цифровые товары — быстро, без нервов и лишних сложностей.\n\n<blockquote><tg-emoji emoji-id=\"5456140674028019486\">⚡️</tg-emoji> <b>Telegram Premium</b> — расширьте возможности мессенджера\n<tg-emoji emoji-id=\"5422545633112249830\">🍎</tg-emoji> <b>Пополнение Apple ID</b> — пополните баланс App Store в любом регионе</blockquote>\n\nВыберите что вас интересует:",
     'shop.apple_title': "🍎 <b>Пополнение Apple ID</b>\n\nВыберите регион вашего Apple ID:\n\n<blockquote>Не знаете свой регион?\nОткройте <b>Настройки → Apple ID → Медиаматериалы и покупки → Просмотреть</b> — там будет указана страна/регион.</blockquote>",
     'shop.apple_amount_title': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\n\nВыберите номинал пополнения:",
     'shop.apple_confirm': "🍎 <b>Пополнение Apple ID</b>\n\nРегион: {region}\nНоминал: {nominal}\nК оплате: <b>{price:.2f} ₽</b>\n\n<blockquote>Код пополнения будет отправлен в этот чат в течение 15 минут после оплаты.</blockquote>",
@@ -923,7 +923,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Мой трафик",
-    'traffic.info': "📊 <b>Обход блокировок</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ До: {expires}\n\n🔗 <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Куда вставить:</b>\n├ <b>Happ</b> → Главная → <b>+</b> → Вставить из буфера\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.info': "<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {used} / {limit}\n{bar} {pct}%\n\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> До: {expires}\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Куда вставить:</b>\n├ <b>Happ</b> → Главная → <b>+</b> → Вставить из буфера\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Нет активной подписки.",
     'traffic.trial_no_bypass': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Обход доступен на тарифах Basic и Plus.",
     'traffic.trial_upgrade_hint': "Купите подписку Basic или Plus, чтобы разблокировать больше ГБ и покупку трафика",
