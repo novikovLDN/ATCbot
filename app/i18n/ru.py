@@ -968,4 +968,5 @@ LANG = {
     'combo.period_3': "3 мес · {gb} ГБ обхода · {price} ₽",
     'combo.period_6': "6 мес · {gb} ГБ обхода · {price} ₽",
     'combo.period_12': "12 мес · {gb} ГБ обхода · {price} ₽",
+    'combo.period_24': "24 мес · {gb} ГБ обхода · {price} ₽",
 }
