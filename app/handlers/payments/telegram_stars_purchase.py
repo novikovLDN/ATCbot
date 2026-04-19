@@ -269,25 +269,38 @@ async def process_stars_username(message: Message, state: FSMContext):
         f"💰 К оплате: <b>{price} ₽</b>\n\n"
         f"Выберите способ оплаты:"
     )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="stars_pay:card")],
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"stars_pack:{stars}",
-        )],
-    ])
-    await message.answer(confirm_text, reply_markup=kb, parse_mode="HTML")
+
+    balance = await database.get_user_balance(telegram_id)
+    buttons = []
+    if balance >= price:
+        buttons.append([InlineKeyboardButton(
+            text=f"💰 Баланс ({balance:.2f} ₽)",
+            callback_data="stars_pay:balance",
+        )])
+    if config.TG_PROVIDER_TOKEN:
+        buttons.append([InlineKeyboardButton(text="💳 Банковская карта", callback_data="stars_pay:card")])
+
+    import lava_service
+    if lava_service.is_enabled():
+        buttons.append([InlineKeyboardButton(text="💳 Карта (Lava)", callback_data="stars_pay:lava")])
+
+    if config.PLATEGA_MERCHANT_ID:
+        import math
+        sbp_price = math.ceil(price * (1 + config.SBP_MARKUP_PERCENT / 100))
+        buttons.append([InlineKeyboardButton(text=f"📱 СБП ({sbp_price} ₽)", callback_data="stars_pay:sbp")])
+
+    buttons.append([InlineKeyboardButton(
+        text=i18n_get_text(language, "common.back"),
+        callback_data=f"stars_pack:{stars}",
+    )])
+    await message.answer(confirm_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 
-# ─── Screen 4: Payment via card ───
+# ─── Shared: extract & validate FSM data ───
 
-@stars_purchase_router.callback_query(
-    F.data == "stars_pay:card",
-    StateFilter(TelegramStarsState.choose_payment_method),
-)
-async def callback_stars_pay_card(callback: CallbackQuery, state: FSMContext):
+async def _get_stars_fsm_data(callback: CallbackQuery, state: FSMContext):
+    """Extract stars purchase data from FSM. Returns (username, stars, price, language) or None."""
     telegram_id = callback.from_user.id
-
     is_allowed, rate_limit_msg = check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
@@ -295,81 +308,194 @@ async def callback_stars_pay_card(callback: CallbackQuery, state: FSMContext):
             rate_limit_msg or i18n_get_text(language, "common.rate_limit_message"),
             show_alert=True,
         )
-        return
+        return None
 
     language = await resolve_user_language(telegram_id)
     data = await state.get_data()
-
     username = data.get("stars_username")
     stars = data.get("stars_amount")
     price = data.get("stars_price")
 
     if not all([username, stars, price]):
-        await callback.answer(
-            i18n_get_text(language, "errors.session_expired"), show_alert=True,
-        )
+        await callback.answer(i18n_get_text(language, "errors.session_expired"), show_alert=True)
         await state.clear()
-        return
+        return None
+    return username, stars, price, language
 
-    if not config.TG_PROVIDER_TOKEN:
-        await callback.answer(
-            i18n_get_text(language, "errors.payments_unavailable"), show_alert=True,
-        )
-        return
 
+async def _create_stars_purchase(telegram_id, username, stars, price):
+    """Create pending purchase and return purchase_id."""
     price_kopecks = price * 100
+    purchase_id = await database.create_pending_purchase(
+        telegram_id=telegram_id,
+        tariff="telegram_stars",
+        period_days=0,
+        price_kopecks=price_kopecks,
+        purchase_type="telegram_stars",
+        country=f"{username}|{stars}",
+    )
+    logger.info("STARS_PURCHASE_CREATED user=%s purchase_id=%s stars=%s price=%s", telegram_id, purchase_id, stars, price)
+    return purchase_id, price_kopecks
+
+
+# ─── Payment: Balance ───
+
+@stars_purchase_router.callback_query(F.data == "stars_pay:balance", StateFilter(TelegramStarsState.choose_payment_method))
+async def callback_stars_pay_balance(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    result = await _get_stars_fsm_data(callback, state)
+    if not result:
+        return
+    username, stars, price, language = result
+    telegram_id = callback.from_user.id
+
+    balance = await database.get_user_balance(telegram_id)
+    if balance < price:
+        await callback.message.answer("❌ Недостаточно средств на балансе.", parse_mode="HTML")
+        return
 
     try:
-        purchase_id = await database.create_pending_purchase(
-            telegram_id=telegram_id,
-            tariff="telegram_stars",
-            period_days=0,
-            price_kopecks=price_kopecks,
-            purchase_type="telegram_stars",
-            country=f"{username}|{stars}",
-        )
+        purchase_id, price_kopecks = await _create_stars_purchase(telegram_id, username, stars, price)
+        await database.decrease_balance(telegram_id, price, source="stars_purchase", description=f"Telegram Stars {stars}⭐ → {username}")
+        await database.mark_pending_purchase_paid(purchase_id)
+        await send_stars_success(callback.bot, telegram_id, purchase_id)
+    except Exception as e:
+        logger.exception("STARS_BALANCE_ERROR user=%s error=%s", telegram_id, e)
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+        return
+
+    await state.clear()
+
+
+# ─── Payment: Card (TG Payments) ───
+
+@stars_purchase_router.callback_query(F.data == "stars_pay:card", StateFilter(TelegramStarsState.choose_payment_method))
+async def callback_stars_pay_card(callback: CallbackQuery, state: FSMContext):
+    result = await _get_stars_fsm_data(callback, state)
+    if not result:
+        return
+    username, stars, price, language = result
+    telegram_id = callback.from_user.id
+
+    if not config.TG_PROVIDER_TOKEN:
+        await callback.answer(i18n_get_text(language, "errors.payments_unavailable"), show_alert=True)
+        return
+
+    try:
+        purchase_id, price_kopecks = await _create_stars_purchase(telegram_id, username, stars, price)
         await state.update_data(stars_purchase_id=purchase_id)
-
-        logger.info(
-            "STARS_PURCHASE_CREATED user=%s purchase_id=%s username=%s stars=%s price=%s",
-            telegram_id, purchase_id, username, stars, price,
-        )
-
-        payload = f"purchase:{purchase_id}"
-        description = f"Telegram Stars — {stars}⭐ для {username}"
-
-        prices = [LabeledPrice(label=f"{stars} Telegram Stars", amount=price_kopecks)]
 
         invoice_msg = await callback.bot.send_invoice(
             chat_id=telegram_id,
             title="Telegram Stars",
-            description=description,
-            payload=payload,
+            description=f"Telegram Stars — {stars}⭐ для {username}",
+            payload=f"purchase:{purchase_id}",
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
-            prices=prices,
+            prices=[LabeledPrice(label=f"{stars} Telegram Stars", amount=price_kopecks)],
         )
-        await callback.bot.send_message(
-            chat_id=telegram_id,
-            text=i18n_get_text(language, "payment.invoice_timeout"),
-            parse_mode="HTML",
-        )
-        asyncio.create_task(
-            _schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id)
-        )
-
+        await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), parse_mode="HTML")
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, invoice_msg.message_id))
         await state.set_state(TelegramStarsState.processing_payment)
-
     except Exception as e:
-        logger.exception("STARS_PAYMENT_ERROR user=%s error=%s", telegram_id, e)
-        await callback.answer(
-            i18n_get_text(language, "errors.payment_processing"), show_alert=True,
-        )
+        logger.exception("STARS_CARD_ERROR user=%s error=%s", telegram_id, e)
+        await callback.answer(i18n_get_text(language, "errors.payment_processing"), show_alert=True)
 
     try:
         await callback.answer()
     except Exception:
         pass
+
+
+# ─── Payment: Lava (card) ───
+
+@stars_purchase_router.callback_query(F.data == "stars_pay:lava", StateFilter(TelegramStarsState.choose_payment_method))
+async def callback_stars_pay_lava(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    result = await _get_stars_fsm_data(callback, state)
+    if not result:
+        return
+    username, stars, price, language = result
+    telegram_id = callback.from_user.id
+
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer("Оплата временно недоступна", show_alert=True)
+        return
+
+    try:
+        purchase_id, price_kopecks = await _create_stars_purchase(telegram_id, username, stars, price)
+        invoice = await lava_service.create_invoice(
+            amount=float(price),
+            order_id=purchase_id,
+            description=f"Telegram Stars {stars}⭐ → {username}",
+        )
+        if not invoice or not invoice.get("url"):
+            await callback.message.answer("❌ Ошибка создания платежа.", parse_mode="HTML")
+            return
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить", url=invoice["url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        ])
+        msg = await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), reply_markup=kb, parse_mode="HTML")
+        asyncio.create_task(_schedule_invoice_deletion(callback.bot, telegram_id, msg.message_id))
+        await state.set_state(TelegramStarsState.processing_payment)
+    except Exception as e:
+        logger.exception("STARS_LAVA_ERROR user=%s error=%s", telegram_id, e)
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
+
+
+# ─── Payment: SBP (Platega) ───
+
+@stars_purchase_router.callback_query(F.data == "stars_pay:sbp", StateFilter(TelegramStarsState.choose_payment_method))
+async def callback_stars_pay_sbp(callback: CallbackQuery, state: FSMContext):
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    result = await _get_stars_fsm_data(callback, state)
+    if not result:
+        return
+    username, stars, price, language = result
+    telegram_id = callback.from_user.id
+
+    import math
+    sbp_price = math.ceil(price * (1 + config.SBP_MARKUP_PERCENT / 100))
+    price_kopecks = sbp_price * 100
+
+    try:
+        purchase_id, _ = await _create_stars_purchase(telegram_id, username, stars, sbp_price)
+
+        from app.services.payments import platega_service
+        transaction = await platega_service.create_transaction(
+            amount_kopecks=price_kopecks,
+            order_id=purchase_id,
+            description=f"Telegram Stars {stars}⭐ → {username}",
+            payment_method=2,
+        )
+        if not transaction or not transaction.get("url"):
+            await callback.message.answer("❌ Ошибка создания платежа СБП.", parse_mode="HTML")
+            return
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📱 Оплатить через СБП", url=transaction["url"])],
+            [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="mini_shop")],
+        ])
+        await callback.bot.send_message(telegram_id, i18n_get_text(language, "payment.invoice_timeout"), reply_markup=kb, parse_mode="HTML")
+        await state.set_state(TelegramStarsState.processing_payment)
+    except Exception as e:
+        logger.exception("STARS_SBP_ERROR user=%s error=%s", telegram_id, e)
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
 
 
 # ─── Post-payment: success + admin notification ───
