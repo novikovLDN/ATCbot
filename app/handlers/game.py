@@ -134,6 +134,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
             await callback.message.edit_text(
                 i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
                 reply_markup=get_back_keyboard(language),
+                parse_mode="HTML",
             )
             logger.info("GAME_BOWL [user=%s] pool unavailable", telegram_id)
             return
@@ -165,6 +166,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     await callback.message.edit_text(
                         text,
                         reply_markup=get_games_back_keyboard(language),
+                        parse_mode="HTML",
                     )
                     logger.info(
                         "GAME_BOWL [user=%s] cooldown days=%s hours=%s",
@@ -185,7 +187,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                         callback_data="menu_main",
                     )],
                 ])
-                await callback.message.edit_text(paywall_text, reply_markup=keyboard)
+                await callback.message.edit_text(paywall_text, reply_markup=keyboard, parse_mode="HTML")
                 logger.info("GAME_BOWL [user=%s] no_subscription paywall", telegram_id)
                 return
 
@@ -244,6 +246,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
 
 
@@ -266,6 +269,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
             await callback.message.edit_text(
                 i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
                 reply_markup=get_games_back_keyboard(language),
+                parse_mode="HTML",
             )
             logger.info("GAME_DICE [user=%s] pool unavailable", telegram_id)
             return
@@ -297,6 +301,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                     await callback.message.edit_text(
                         text,
                         reply_markup=get_games_back_keyboard(language),
+                        parse_mode="HTML",
                     )
                     logger.info(
                         "GAME_DICE [user=%s] cooldown days=%s hours=%s",
@@ -317,7 +322,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                         callback_data="games_menu",
                     )],
                 ])
-                await callback.message.edit_text(paywall_text, reply_markup=keyboard)
+                await callback.message.edit_text(paywall_text, reply_markup=keyboard, parse_mode="HTML")
                 logger.info("GAME_DICE [user=%s] no_subscription paywall", telegram_id)
                 return
 
@@ -368,6 +373,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
 
 
@@ -431,6 +437,7 @@ async def callback_game_bomber(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         text,
         reply_markup=create_bomber_grid_keyboard(mines, player_bombs, language),
+        parse_mode="HTML",
     )
 
 
@@ -457,6 +464,7 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text(
                 text,
                 reply_markup=get_games_back_keyboard(language),
+                parse_mode="HTML",
             )
             logger.info("GAME_BOMBER [user=%s] self_destruct cell=%s", telegram_id, cell_idx)
             return
@@ -469,11 +477,13 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text(
                 text,
                 reply_markup=create_bomber_grid_keyboard(mines, player_bombs, language, game_over=True),
+                parse_mode="HTML",
             )
             await asyncio.sleep(2)
             await callback.message.edit_text(
                 text,
                 reply_markup=get_games_back_keyboard(language),
+                parse_mode="HTML",
             )
             logger.info("GAME_BOMBER [user=%s] mine_exploded cell=%s", telegram_id, cell_idx)
             return
@@ -493,6 +503,7 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
 
 
@@ -516,6 +527,7 @@ async def callback_bomber_exit(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             text,
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         
         logger.info("GAME_BOMBER [user=%s] safe_exit bombs=%s", telegram_id, bomb_count)
@@ -526,6 +538,7 @@ async def callback_bomber_exit(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
 
 
@@ -670,6 +683,7 @@ async def callback_game_farm(callback: CallbackQuery):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     
@@ -728,6 +742,7 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     
@@ -781,6 +796,7 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     
@@ -830,6 +846,7 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     
@@ -879,6 +896,7 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     
@@ -953,6 +971,7 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
             await callback.message.edit_text(
                 i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
                 reply_markup=get_games_back_keyboard(language),
+                parse_mode="HTML",
             )
             return
         
@@ -995,7 +1014,8 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(
         "Хотите убрать погибшее растение?",
-        reply_markup=keyboard
+        reply_markup=keyboard,
+        parse_mode="HTML",
     )
 
 
@@ -1015,6 +1035,7 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     
@@ -1083,6 +1104,7 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     
@@ -1138,6 +1160,7 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
+            parse_mode="HTML",
         )
         return
     

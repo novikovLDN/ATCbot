@@ -57,7 +57,7 @@ async def callback_admin_discount_create(callback: CallbackQuery):
             return
         
         text = f"🎯 Назначить скидку\n\nВыберите процент скидки:"
-        await callback.message.edit_text(text, reply_markup=get_admin_discount_percent_keyboard(user_id))
+        await callback.message.edit_text(text, reply_markup=get_admin_discount_percent_keyboard(user_id), parse_mode="HTML")
         await callback.answer()
         
     except Exception as e:
@@ -79,7 +79,7 @@ async def callback_admin_discount_percent(callback: CallbackQuery):
         discount_percent = int(parts[3])
         
         text = f"🎯 Назначить скидку {discount_percent}%\n\nВыберите срок действия скидки:"
-        await callback.message.edit_text(text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent))
+        await callback.message.edit_text(text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent), parse_mode="HTML")
         await callback.answer()
         
     except Exception as e:
@@ -452,7 +452,7 @@ async def callback_admin_balance_management_start(callback: CallbackQuery, state
         return
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "admin.balance_management_prompt", "admin_balance_management_prompt")
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
     await state.set_state(AdminBalanceManagement.waiting_for_user_search)
     await callback.answer()
 
@@ -510,7 +510,7 @@ async def callback_admin_credit_balance_start(callback: CallbackQuery, state: FS
         return
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, "admin.credit_balance_prompt", "admin_credit_balance_prompt")
-    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language))
+    await callback.message.edit_text(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
     await state.set_state(AdminCreditBalance.waiting_for_user_search)
     await callback.answer()
 
@@ -693,7 +693,7 @@ async def callback_admin_credit_balance_confirm(callback: CallbackQuery, state: 
             try:
                 new_balance = await database.get_user_balance(target_user_id)
                 notification_text = f"💰 Администратор начислил вам {amount:.2f} ₽ на баланс.\n\nТекущий баланс: {new_balance:.2f} ₽"
-                await bot.send_message(chat_id=target_user_id, text=notification_text)
+                await bot.send_message(chat_id=target_user_id, text=notification_text, parse_mode="HTML")
             except Exception as e:
                 logger.warning(f"Failed to send balance credit notification to user {target_user_id}: {e}")
             
@@ -742,7 +742,8 @@ async def callback_admin_credit_balance_cancel(callback: CallbackQuery, state: F
     
     await callback.message.edit_text(
         i18n_get_text(language, "admin.operation_cancelled"),
-        reply_markup=get_admin_back_keyboard(language)
+        reply_markup=get_admin_back_keyboard(language),
+        parse_mode="HTML",
     )
     await state.clear()
     await callback.answer()
@@ -865,7 +866,7 @@ async def callback_admin_debit_confirm(callback: CallbackQuery, state: FSMContex
             )
             try:
                 notif = i18n_get_text(language, "admin.debit_user_notification", amount=amount)
-                await bot.send_message(chat_id=target_user_id, text=notif)
+                await bot.send_message(chat_id=target_user_id, text=notif, parse_mode="HTML")
             except Exception as e:
                 logger.warning(f"Failed to send debit notification to user {target_user_id}: {e}")
             new_balance = await database.get_user_balance(target_user_id)
@@ -900,7 +901,7 @@ async def callback_admin_debit_cancel(callback: CallbackQuery, state: FSMContext
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"), reply_markup=get_admin_back_keyboard(language))
+    await callback.message.edit_text(i18n_get_text(language, "admin.operation_cancelled"), reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
     await state.clear()
     await callback.answer()
 

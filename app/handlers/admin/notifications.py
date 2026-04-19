@@ -761,6 +761,7 @@ async def _send_x2_cashback_notifications(
             await bot.send_message(
                 admin_chat_id,
                 f"✅ Рассылка x2 кешбэк завершена\n\n📤 Отправлено: {sent_count}/{len(user_ids)}",
+                parse_mode="HTML",
             )
         except Exception:
             pass

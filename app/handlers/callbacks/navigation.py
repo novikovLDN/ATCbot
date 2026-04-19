@@ -1091,7 +1091,7 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
         pass
 
     # 2. Отправляем 🎉
-    msg = await callback.bot.send_message(chat_id=telegram_id, text="🎉")
+    msg = await callback.bot.send_message(chat_id=telegram_id, text="🎉", parse_mode="HTML")
 
     # 3. Ждём 2 секунды
     await asyncio.sleep(2)
@@ -1795,6 +1795,7 @@ async def callback_apple_pay_card(callback: CallbackQuery):
         await callback.bot.send_message(
             chat_id=telegram_id,
             text=i18n_get_text(language, "payment.invoice_timeout"),
+            parse_mode="HTML",
         )
 
         async def _del_invoice(bot, cid, msg):
