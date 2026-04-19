@@ -298,7 +298,7 @@ async def callback_gift_pay_balance(callback: CallbackQuery, state: FSMContext):
             description=f"Подарочная подписка {_tariff_display_name(tariff)} на {_period_display(period_days)}",
         )
         if not success:
-            await callback.message.answer(i18n_get_text(language, "errors.payment_processing"))
+            await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
             await state.clear()
             return
 
@@ -319,7 +319,7 @@ async def callback_gift_pay_balance(callback: CallbackQuery, state: FSMContext):
 
     except Exception as e:
         logger.exception(f"Error processing gift balance payment: user={telegram_id}, error={e}")
-        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"))
+        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
         await state.clear()
 
 

@@ -106,11 +106,11 @@ async def callback_admin_export_data(callback: CallbackQuery):
             filename = "active_subscriptions_export.csv"
             headers = ["ID", "Telegram ID", "VPN Key", "Expires At", "Reminder Sent"]
         else:
-            await callback.message.answer("Неверный тип экспорта")
+            await callback.message.answer("Неверный тип экспорта", parse_mode="HTML")
             return
         
         if not data:
-            await callback.message.answer("Нет данных для экспорта")
+            await callback.message.answer("Нет данных для экспорта", parse_mode="HTML")
             return
         
         # Маппинг заголовков на ключи в данных
@@ -148,7 +148,7 @@ async def callback_admin_export_data(callback: CallbackQuery):
                 file_to_send,
                 caption=f"📤 Экспорт: {export_type}"
             )
-            await callback.message.answer("✅ Файл отправлен")
+            await callback.message.answer("✅ Файл отправлен", parse_mode="HTML")
             
             # Логируем экспорт
             await database._log_audit_event_atomic_standalone(
@@ -167,4 +167,4 @@ async def callback_admin_export_data(callback: CallbackQuery):
         
     except Exception as e:
         logger.exception(f"Error in callback_admin_export_data: {e}")
-        await callback.message.answer("Ошибка при экспорте данных. Проверь логи.")
+        await callback.message.answer("Ошибка при экспорте данных. Проверь логи.", parse_mode="HTML")

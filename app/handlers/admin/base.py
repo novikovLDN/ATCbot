@@ -30,7 +30,7 @@ async def cmd_admin(message: Message):
     """Административный дашборд"""
     language = await resolve_user_language(message.from_user.id)
     text = i18n_get_text(language, "admin.dashboard_title")
-    await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language))
+    await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language), parse_mode="HTML")
 
 
 @admin_base_router.callback_query(F.data == "admin:dashboard")
@@ -596,12 +596,13 @@ async def callback_remnawave_mass_provision(callback: CallbackQuery):
     total = len(users)
 
     if total == 0:
-        await callback.message.answer("✅ Все пользователи с подпиской уже в Remnawave.")
+        await callback.message.answer("✅ Все пользователи с подпиской уже в Remnawave.", parse_mode="HTML")
         return
 
     await callback.message.answer(
         f"🌐 Массовый провижн: {total} пользователей.\n"
-        f"Параллельно по 20, пауза 2 сек. Работает в фоне."
+        f"Параллельно по 20, пауза 2 сек. Работает в фоне.",
+        parse_mode="HTML",
     )
 
     import asyncio
@@ -882,7 +883,7 @@ async def process_admin_chat_user_id(message: Message, state: FSMContext):
         return
     if message.text and message.text.strip().lower() in ("/cancel", "отмена"):
         await state.clear()
-        await message.answer("Отменено.")
+        await message.answer("Отменено.", parse_mode="HTML")
         return
 
     user_input = message.text.strip() if message.text else ""
@@ -907,7 +908,7 @@ async def process_admin_chat_user_id(message: Message, state: FSMContext):
                 target_username = row["username"]
 
     if not target_user_id:
-        await message.answer("❌ Пользователь не найден. Введите корректный ID или @username:")
+        await message.answer("❌ Пользователь не найден. Введите корректный ID или @username:", parse_mode="HTML")
         return
 
     if not target_username:
@@ -943,6 +944,7 @@ async def process_admin_chat_message(message: Message, state: FSMContext, bot: B
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="← Админ-панель", callback_data="admin:main")],
             ]),
+            parse_mode="HTML",
         )
         return
 
@@ -952,7 +954,7 @@ async def process_admin_chat_message(message: Message, state: FSMContext, bot: B
 
     if not target_id:
         await state.clear()
-        await message.answer("❌ Ошибка: ID пользователя потерян. Начните заново.")
+        await message.answer("❌ Ошибка: ID пользователя потерян. Начните заново.", parse_mode="HTML")
         return
 
     try:
@@ -975,11 +977,11 @@ async def process_admin_chat_message(message: Message, state: FSMContext, bot: B
         elif message.text:
             await bot.send_message(chat_id=target_id, text=message.text, parse_mode="HTML")
         else:
-            await message.answer("⚠️ Этот тип сообщения не поддерживается.")
+            await message.answer("⚠️ Этот тип сообщения не поддерживается.", parse_mode="HTML")
             return
 
-        await message.answer(f"✅ Доставлено → {target_name}")
+        await message.answer(f"✅ Доставлено → {target_name}", parse_mode="HTML")
 
     except Exception as e:
         logger.warning("ADMIN_CHAT_SEND_ERROR: target=%s error=%s", target_id, e)
-        await message.answer(f"❌ Не удалось отправить: {e}")
+        await message.answer(f"❌ Не удалось отправить: {e}", parse_mode="HTML")

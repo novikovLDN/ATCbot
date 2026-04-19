@@ -117,7 +117,7 @@ async def process_admin_discount_percent(message: Message, state: FSMContext):
     """Обработка введённого процента скидки"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     
@@ -128,21 +128,21 @@ async def process_admin_discount_percent(message: Message, state: FSMContext):
         try:
             discount_percent = int(message.text.strip())
             if discount_percent < 1 or discount_percent > 99:
-                await message.answer("Процент скидки должен быть от 1 до 99. Попробуйте снова:")
+                await message.answer("Процент скидки должен быть от 1 до 99. Попробуйте снова:", parse_mode="HTML")
                 return
         except ValueError:
-            await message.answer("Введите число от 1 до 99:")
+            await message.answer("Введите число от 1 до 99:", parse_mode="HTML")
             return
         
         await state.update_data(discount_percent=discount_percent)
         
         text = f"🎯 Назначить скидку {discount_percent}%\n\nВыберите срок действия скидки:"
-        await message.answer(text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent))
+        await message.answer(text, reply_markup=get_admin_discount_expires_keyboard(user_id, discount_percent), parse_mode="HTML")
         await state.set_state(AdminDiscountCreate.waiting_for_expires)
         
     except Exception as e:
         logging.exception(f"Error in process_admin_discount_percent: {e}")
-        await message.answer("Ошибка. Проверь логи.")
+        await message.answer("Ошибка. Проверь логи.", parse_mode="HTML")
         await state.clear()
 
 
@@ -222,7 +222,7 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
     """Обработка введённого срока действия скидки"""
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     
@@ -236,10 +236,10 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
         try:
             expires_days = int(message.text.strip())
             if expires_days < 0:
-                await message.answer("Количество дней должно быть неотрицательным. Попробуйте снова:")
+                await message.answer("Количество дней должно быть неотрицательным. Попробуйте снова:", parse_mode="HTML")
                 return
         except ValueError:
-            await message.answer("Введите число (количество дней или 0 для бессрочной):")
+            await message.answer("Введите число (количество дней или 0 для бессрочной):", parse_mode="HTML")
             return
         
         # Рассчитываем expires_at
@@ -258,16 +258,16 @@ async def process_admin_discount_expires(message: Message, state: FSMContext, bo
         if success:
             expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
             text = f"✅ Персональная скидка {discount_percent}% назначена\n\nСрок действия: {expires_str}"
-            await message.answer(text, reply_markup=get_admin_back_keyboard(language))
+            await message.answer(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
         else:
             text = "❌ Ошибка при создании скидки"
-            await message.answer(text, reply_markup=get_admin_back_keyboard(language))
+            await message.answer(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
         
         await state.clear()
         
     except Exception as e:
         logging.exception(f"Error in process_admin_discount_expires: {e}")
-        await message.answer("Ошибка. Проверь логи.")
+        await message.answer("Ошибка. Проверь логи.", parse_mode="HTML")
         await state.clear()
 
 
@@ -422,7 +422,7 @@ async def process_incident_text(message: Message, state: FSMContext):
     
     if message.text and message.text.startswith("/cancel"):
         await state.clear()
-        await message.answer("Отменено")
+        await message.answer("Отменено", parse_mode="HTML")
         return
     
     incident_text = message.text
@@ -430,7 +430,7 @@ async def process_incident_text(message: Message, state: FSMContext):
     # Включаем режим инцидента и сохраняем текст
     await database.set_incident_mode(True, incident_text)
     
-    await message.answer(f"✅ Текст инцидента сохранён. Режим инцидента включён.")
+    await message.answer(f"✅ Текст инцидента сохранён. Режим инцидента включён.", parse_mode="HTML")
     
     # Логируем действие
     await database._log_audit_event_atomic_standalone(
@@ -462,7 +462,7 @@ async def process_admin_balance_user_search(message: Message, state: FSMContext)
     """Обработка поиска пользователя для управления балансом → показ профиля с ➕➖"""
     language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     try:
@@ -474,7 +474,7 @@ async def process_admin_balance_user_search(message: Message, state: FSMContext)
             username = user_input.lstrip('@').lower()
             user = await database.find_user_by_id_or_username(username=username)
         if not user:
-            await message.answer(i18n_get_text(language, "admin.user_not_found_check_id"))
+            await message.answer(i18n_get_text(language, "admin.user_not_found_check_id"), parse_mode="HTML")
             return
         target_user_id = user["telegram_id"]
         balance = await database.get_user_balance(target_user_id)
@@ -493,11 +493,11 @@ async def process_admin_balance_user_search(message: Message, state: FSMContext)
             [InlineKeyboardButton(text="➖ Снять", callback_data=f"admin:debit_balance:{target_user_id}")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await state.clear()
     except Exception as e:
         logging.exception(f"Error in process_admin_balance_user_search: {e}")
-        await message.answer("Ошибка при поиске пользователя.")
+        await message.answer("Ошибка при поиске пользователя.", parse_mode="HTML")
         await state.clear()
 
 
@@ -546,7 +546,7 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
     """Обработка поиска пользователя для выдачи средств"""
     language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     
@@ -562,7 +562,7 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
             user = await database.find_user_by_id_or_username(username=username)
         
         if not user:
-            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.")
+            await message.answer("Пользователь не найден.\nПроверьте Telegram ID или username.", parse_mode="HTML")
             await state.clear()
             return
         
@@ -573,12 +573,12 @@ async def process_admin_credit_balance_user_search(message: Message, state: FSMC
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:main")]
         ])
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminCreditBalance.waiting_for_amount)
         
     except Exception as e:
         logging.exception(f"Error in process_admin_credit_balance_user_search: {e}")
-        await message.answer("Ошибка при поиске пользователя. Проверьте логи.")
+        await message.answer("Ошибка при поиске пользователя. Проверьте логи.", parse_mode="HTML")
         await state.clear()
 
 
@@ -587,7 +587,7 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
     """Обработка ввода суммы для выдачи средств"""
     language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     
@@ -595,7 +595,7 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
         amount = float(message.text.strip().replace(",", "."))
         
         if amount <= 0:
-            await message.answer("❌ Сумма должна быть положительным числом.\n\nВведите сумму в рублях:")
+            await message.answer("❌ Сумма должна быть положительным числом.\n\nВведите сумму в рублях:", parse_mode="HTML")
             return
 
         # SECURITY: Limit single admin balance adjustment to prevent accidental/malicious large credits
@@ -604,7 +604,8 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
             await message.answer(
                 f"❌ Максимальная сумма одной операции: {ADMIN_MAX_SINGLE_CREDIT:.0f} ₽\n\n"
                 f"Для сумм свыше {ADMIN_MAX_SINGLE_CREDIT:.0f} ₽ выполните несколько операций.\n"
-                f"Введите сумму в рублях:"
+                f"Введите сумму в рублях:",
+                parse_mode="HTML",
             )
             logger.warning(
                 f"ADMIN_CREDIT_LIMIT_EXCEEDED: admin={message.from_user.id}, "
@@ -616,7 +617,7 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
         target_user_id = data.get("target_user_id")
 
         if not target_user_id:
-            await message.answer("Ошибка: пользователь не найден. Начните заново.")
+            await message.answer("Ошибка: пользователь не найден. Начните заново.", parse_mode="HTML")
             await state.clear()
             return
 
@@ -643,14 +644,14 @@ async def process_admin_credit_balance_amount(message: Message, state: FSMContex
             ]
         ])
         
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminCreditBalance.waiting_for_confirmation)
         
     except ValueError:
-        await message.answer("❌ Неверный формат суммы.\n\nВведите число (например: 500 или 100.50):")
+        await message.answer("❌ Неверный формат суммы.\n\nВведите число (например: 500 или 100.50):", parse_mode="HTML")
     except Exception as e:
         logging.exception(f"Error in process_admin_credit_balance_amount: {e}")
-        await message.answer("Ошибка при обработке суммы. Проверьте логи.")
+        await message.answer("Ошибка при обработке суммы. Проверьте логи.", parse_mode="HTML")
         await state.clear()
 
 
@@ -781,13 +782,13 @@ async def process_admin_debit_amount(message: Message, state: FSMContext):
     """Обработка ввода суммы для снятия средств"""
     language = await resolve_user_language(message.from_user.id)
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         await state.clear()
         return
     try:
         amount = float(message.text.strip().replace(",", "."))
         if amount <= 0:
-            await message.answer("❌ Сумма должна быть положительной.")
+            await message.answer("❌ Сумма должна быть положительной.", parse_mode="HTML")
             return
 
         # SECURITY: Limit single admin debit to prevent accidental large debits
@@ -795,7 +796,8 @@ async def process_admin_debit_amount(message: Message, state: FSMContext):
         if amount > ADMIN_MAX_SINGLE_DEBIT:
             await message.answer(
                 f"❌ Максимальная сумма одной операции: {ADMIN_MAX_SINGLE_DEBIT:.0f} ₽\n"
-                f"Введите сумму в рублях:"
+                f"Введите сумму в рублях:",
+                parse_mode="HTML",
             )
             logger.warning(
                 f"ADMIN_DEBIT_LIMIT_EXCEEDED: admin={message.from_user.id}, "
@@ -806,12 +808,12 @@ async def process_admin_debit_amount(message: Message, state: FSMContext):
         data = await state.get_data()
         target_user_id = data.get("target_user_id")
         if not target_user_id:
-            await message.answer("Ошибка: пользователь не найден.")
+            await message.answer("Ошибка: пользователь не найден.", parse_mode="HTML")
             await state.clear()
             return
         balance = await database.get_user_balance(target_user_id)
         if amount > balance:
-            await message.answer(i18n_get_text(language, "admin.debit_insufficient", balance=balance))
+            await message.answer(i18n_get_text(language, "admin.debit_insufficient", balance=balance), parse_mode="HTML")
             return
         await state.update_data(amount=amount)
         text = (
@@ -828,13 +830,13 @@ async def process_admin_debit_amount(message: Message, state: FSMContext):
                 InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:debit_cancel")
             ]
         ])
-        await message.answer(text, reply_markup=keyboard)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         await state.set_state(AdminDebitBalance.waiting_for_confirmation)
     except ValueError:
-        await message.answer("❌ Неверный формат суммы. Введите число:")
+        await message.answer("❌ Неверный формат суммы. Введите число:", parse_mode="HTML")
     except Exception as e:
         logging.exception(f"Error in process_admin_debit_amount: {e}")
-        await message.answer("Ошибка при обработке суммы.")
+        await message.answer("Ошибка при обработке суммы.", parse_mode="HTML")
         await state.clear()
 
 

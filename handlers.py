@@ -529,10 +529,10 @@ async def ensure_db_ready_message(message_or_query, allow_readonly_in_stage: boo
         try:
             if hasattr(message_or_query, 'answer') and hasattr(message_or_query, 'text'):
                 # Это Message
-                await message_or_query.answer(error_text)
+                await message_or_query.answer(error_text, parse_mode="HTML")
             elif hasattr(message_or_query, 'message') and hasattr(message_or_query, 'answer'):
                 # Это CallbackQuery
-                await message_or_query.message.answer(error_text)
+                await message_or_query.message.answer(error_text, parse_mode="HTML")
                 await message_or_query.answer()
         except Exception as e:
             logging.exception(f"Error sending degraded mode message: {e}")

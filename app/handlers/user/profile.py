@@ -31,7 +31,7 @@ async def cmd_profile(message: Message):
     
     if not user:
         language = await resolve_user_language(telegram_id)
-        await message.answer(i18n_get_text(language, "errors.start_command", "error_start_command"))
+        await message.answer(i18n_get_text(language, "errors.start_command", "error_start_command"), parse_mode="HTML")
         return
     
     language = await resolve_user_language(telegram_id)

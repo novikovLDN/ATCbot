@@ -25,17 +25,17 @@ async def cmd_pending_activations(message: Message):
     if message.from_user.id != config.ADMIN_TELEGRAM_ID:
         logging.warning(f"Unauthorized pending_activations attempt by user {message.from_user.id}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "admin.access_denied"))
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
         return
     
     if not database.DB_READY:
-        await message.answer("❌ База данных недоступна")
+        await message.answer("❌ База данных недоступна", parse_mode="HTML")
         return
     
     try:
         pool = await database.get_pool()
         if pool is None:
-            await message.answer("❌ Не удалось подключиться к базе данных")
+            await message.answer("❌ Не удалось подключиться к базе данных", parse_mode="HTML")
             return
         
         async with pool.acquire() as conn:
@@ -96,4 +96,4 @@ async def cmd_pending_activations(message: Message):
     except Exception as e:
         logger.exception(f"Error in cmd_pending_activations: {e}")
         language = await resolve_user_language(message.from_user.id)
-        await message.answer(i18n_get_text(language, "errors.data_fetch", error=str(e)[:100], default=f"❌ Ошибка при получении данных: {str(e)[:100]}"))
+        await message.answer(i18n_get_text(language, "errors.data_fetch", error=str(e)[:100], default=f"❌ Ошибка при получении данных: {str(e)[:100]}"), parse_mode="HTML")

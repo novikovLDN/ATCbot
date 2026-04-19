@@ -175,10 +175,10 @@ async def process_promo_discount(message: Message, state: FSMContext):
     try:
         discount = int(message.text.strip())
         if not (5 <= discount <= max_discount):
-            await message.answer(f"Введите число от 5 до {max_discount}:")
+            await message.answer(f"Введите число от 5 до {max_discount}:", parse_mode="HTML")
             return
     except (ValueError, AttributeError):
-        await message.answer(f"Введите число от 5 до {max_discount}:")
+        await message.answer(f"Введите число от 5 до {max_discount}:", parse_mode="HTML")
         return
 
     await state.update_data(promo_discount=discount)
@@ -193,7 +193,7 @@ async def process_promo_discount(message: Message, state: FSMContext):
         ],
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin:notif_promo")]
     ])
-    await message.answer(i18n_get_text(language, "admin.notif_promo_choose_period"), reply_markup=keyboard)
+    await message.answer(i18n_get_text(language, "admin.notif_promo_choose_period"), reply_markup=keyboard, parse_mode="HTML")
 
 
 @admin_notifications_router.callback_query(F.data.startswith("admin:promo_period:"), AdminPromoNotif.choose_period)
