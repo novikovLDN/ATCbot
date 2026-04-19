@@ -68,10 +68,18 @@ async def process_confirmed_payment(
 
         # Check if this is an Apple ID purchase
         is_apple_id = result.get("tariff_type", "").startswith("apple_id_")
+        is_premium = result.get("purchase_type") == "telegram_premium" or result.get("tariff_type") == "telegram_premium"
+        is_stars = result.get("purchase_type") == "telegram_stars" or result.get("tariff_type") == "telegram_stars"
 
         # Notification failure must NOT fail the payment — DB is already committed
         try:
-            if is_apple_id:
+            if is_stars:
+                from app.handlers.payments.telegram_stars_purchase import send_stars_success
+                await send_stars_success(bot, telegram_id, purchase_id)
+            elif is_premium:
+                from app.handlers.payments.telegram_premium import send_premium_success
+                await send_premium_success(bot, telegram_id, purchase_id)
+            elif is_apple_id:
                 # Apple ID purchase — send user + admin notifications
                 tariff = result.get("tariff_type", "")
                 # Parse: apple_id_usa_40 → region=usa, nominal=40
@@ -313,7 +321,7 @@ async def _send_confirmation(
         is_combo = result.get("is_combo", False)
         try:
             from app.services.remnawave_service import renew_remnawave_user_bg
-            if expires_at and subscription_type not in ("trial",) + config.BIZ_TARIFFS and not is_combo:
+            if expires_at and subscription_type not in ("trial", "telegram_premium", "telegram_stars") + config.BIZ_TARIFFS and not is_combo:
                 _pd = result.get("period_days", 30) or 30
                 renew_remnawave_user_bg(telegram_id, subscription_type, expires_at, period_days=_pd)
         except Exception as rmn_err:
