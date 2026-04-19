@@ -139,7 +139,12 @@ async def callback_stars_buy(callback: CallbackQuery, state: FSMContext):
 
 @stars_purchase_router.callback_query(
     F.data.startswith("stars_pack:"),
-    StateFilter(TelegramStarsState.choose_pack, TelegramStarsState.choose_recipient),
+    StateFilter(
+        TelegramStarsState.choose_pack,
+        TelegramStarsState.choose_recipient,
+        TelegramStarsState.waiting_for_username,
+        TelegramStarsState.choose_payment_method,
+    ),
 )
 async def callback_stars_pack(callback: CallbackQuery, state: FSMContext):
     try:
