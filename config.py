@@ -452,20 +452,21 @@ COMBO_TARIFFS = {
 }
 
 TRAFFIC_PACKS = {
-    5:  {"price": 44,  "bytes": 5  * 1024**3, "discount": ""},
-    15: {"price": 115, "bytes": 15 * 1024**3, "discount": "🔥 -13%"},
-    25: {"price": 175, "bytes": 25 * 1024**3, "discount": "🔥 -20%"},
-    45: {"price": 270, "bytes": 45 * 1024**3, "discount": "🔥 -32%"},
-    60:  {"price": 318, "bytes": 60  * 1024**3, "discount": "🔥 -40%"},
-    120: {"price": 588, "bytes": 120 * 1024**3, "discount": "🔥 -44%"},
+    15:  {"price": 89,   "bytes": 15  * 1024**3, "discount": ""},
+    50:  {"price": 269,  "bytes": 50  * 1024**3, "discount": "🔥 -10%"},
+    75:  {"price": 389,  "bytes": 75  * 1024**3, "discount": "🔥 -13%"},
+    100: {"price": 469,  "bytes": 100 * 1024**3, "discount": "🔥 -22%"},
+    150: {"price": 669,  "bytes": 150 * 1024**3, "discount": "🔥 -26%"},
+    200: {"price": 859,  "bytes": 200 * 1024**3, "discount": "🔥 -28%"},
 }
 
 TRAFFIC_PACKS_EXTENDED = {
-    300:  {"price": 1440,  "bytes": 300  * 1024**3, "discount": "🔥 -45%"},
-    600:  {"price": 2820,  "bytes": 600  * 1024**3, "discount": "🔥 -47%"},
-    1500: {"price": 7050,  "bytes": 1500 * 1024**3, "discount": "🔥 -47%"},
-    3000: {"price": 13800, "bytes": 3000 * 1024**3, "discount": "🔥 -48%"},
-    5400: {"price": 24840, "bytes": 5400 * 1024**3, "discount": "🔥 -48%"},
+    300:  {"price": 1199,  "bytes": 300  * 1024**3, "discount": "🔥 -33%"},
+    600:  {"price": 2299,  "bytes": 600  * 1024**3, "discount": "🔥 -36%"},
+    1200: {"price": 4399,  "bytes": 1200 * 1024**3, "discount": "🔥 -39%"},
+    2200: {"price": 7899,  "bytes": 2200 * 1024**3, "discount": "🔥 -40%"},
+    5000: {"price": 17999, "bytes": 5000 * 1024**3, "discount": "🔥 -40%"},
+    8000: {"price": 28799, "bytes": 8000 * 1024**3, "discount": "🔥 -40%"},
 }
 
 # Thresholds for traffic notifications (bytes remaining, flag key)
