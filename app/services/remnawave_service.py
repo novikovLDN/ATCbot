@@ -354,6 +354,44 @@ async def add_traffic(telegram_id: int, extra_bytes: int) -> bool:
         return False
 
 
+async def add_bypass_traffic(
+    telegram_id: int,
+    extra_bytes: int,
+    subscription_type: str,
+    subscription_end: Optional[datetime] = None,
+    period_days: int = 30,
+) -> bool:
+    """Add bypass traffic; create Remnawave user if none exists yet.
+
+    First-time combo/bypass buyers have no Remnawave UUID at the moment of
+    payment confirmation, so plain add_traffic() returns False. This helper
+    falls back to create_remnawave_user(traffic_limit_override=extra_bytes)
+    so the purchased GB actually land on a fresh account.
+    """
+    if not config.REMNAWAVE_ENABLED:
+        return False
+    try:
+        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+        if rmn_uuid:
+            if await add_traffic(telegram_id, extra_bytes):
+                return True
+            # Stale UUID (user deleted in Remnawave) — drop and recreate
+            await database.clear_remnawave_uuid(telegram_id)
+
+        expire_at = subscription_end or (datetime.now(timezone.utc) + timedelta(days=3650))
+        await create_remnawave_user(
+            telegram_id,
+            subscription_type,
+            expire_at,
+            traffic_limit_override=extra_bytes,
+            period_days=period_days,
+        )
+        return bool(await database.get_remnawave_uuid(telegram_id))
+    except Exception as e:
+        logger.error("REMNAWAVE_ADD_BYPASS_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
+        return False
+
+
 # ── Tariff change (Basic → Plus) ───────────────────────────────────────
 
 async def update_tariff(telegram_id: int, new_tariff: str, period_days: int = 30) -> None:

@@ -737,7 +737,13 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
             traffic_bytes = gb * 1024**3
 
             try:
-                rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+                rmn_success = await remnawave_service.add_bypass_traffic(
+                    telegram_id,
+                    traffic_bytes,
+                    subscription_type=subscription_type,
+                    subscription_end=expires_at,
+                    period_days=period_days,
+                )
                 if not rmn_success:
                     logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL_BALANCE user={telegram_id} gb={gb}")
                 await database.record_traffic_purchase(telegram_id, gb, 0)
