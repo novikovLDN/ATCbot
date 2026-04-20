@@ -4149,7 +4149,7 @@ async def finalize_purchase(
         purchase_country = pending_purchase.get("country")
         is_combo_purchase = pending_purchase.get("is_combo", False)
         expected_amount_rubles = price_kopecks / 100.0
-        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium"))
+        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium", "telegram_stars"))
         is_gift_purchase = (purchase_type == "gift")
         is_traffic_pack = (purchase_type == "traffic_pack")
         is_apple_id = (purchase_type == "apple_id")
