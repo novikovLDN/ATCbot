@@ -1230,7 +1230,17 @@ async def process_successful_payment(message: Message, state: FSMContext):
         try:
             rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
             if not rmn_success:
-                logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL user={telegram_id} gb={gb}")
+                # Remnawave user doesn't exist yet — create with combo/bypass GB
+                from datetime import timedelta
+                _sub = await database.get_subscription(telegram_id)
+                _expires = _sub.get("expires_at") if _sub else None
+                if not _expires:
+                    _expires = datetime.now(timezone.utc) + timedelta(days=period_days or 30)
+                await remnawave_service.create_remnawave_user(
+                    telegram_id, tariff_type or "basic", _expires,
+                    traffic_limit_override=traffic_bytes, period_days=period_days or 30,
+                )
+                logger.info(f"COMBO_REMNAWAVE_USER_CREATED user={telegram_id} gb={gb}")
             await database.record_traffic_purchase(telegram_id, gb, 0)
             logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
         except Exception as traffic_err:

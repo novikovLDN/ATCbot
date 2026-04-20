@@ -1523,7 +1523,15 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     try:
         rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
         if not rmn_success:
-            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
+            # Remnawave user doesn't exist yet — create with combo GB
+            from datetime import datetime, timezone, timedelta
+            _sub = await database.get_subscription(telegram_id)
+            _expires = _sub.get("expires_at") if _sub else datetime.now(timezone.utc) + timedelta(days=period_days)
+            await remnawave_service.create_remnawave_user(
+                telegram_id, base_tariff, _expires,
+                traffic_limit_override=traffic_bytes, period_days=period_days,
+            )
+            logger.info(f"COMBO_REMNAWAVE_USER_CREATED user={telegram_id} gb={gb}")
     except Exception as traffic_err:
         logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
 
