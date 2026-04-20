@@ -126,6 +126,9 @@ async def create_remnawave_user(
             rmn_uuid = result.get("uuid") or short_uuid
             await database.set_remnawave_uuid(telegram_id, rmn_uuid)
             await database.reset_traffic_notification_flags(telegram_id)
+            # Invalidate cached Happ crypto link (new UUID = new subscription URL)
+            from app.services.happ_crypto import invalidate_crypto_link
+            await invalidate_crypto_link(telegram_id)
             sub_url = result.get("subscriptionUrl", "")
             logger.info(
                 "REMNAWAVE_USER_CREATED: tg=%s uuid=%s sub_url=%s tariff=%s limit=%d",

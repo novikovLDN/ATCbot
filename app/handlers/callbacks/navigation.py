@@ -720,7 +720,7 @@ async def callback_setup_step2(callback: CallbackQuery):
     buttons = []
 
     # === Auto-setup deeplinks ===
-    if sub_url:
+    if sub_url or bypass_url:
         from urllib.parse import quote, urlparse
         if config.PUBLIC_BASE_URL:
             base_url = config.PUBLIC_BASE_URL
@@ -728,17 +728,34 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        # VPN key buttons
-        buttons.append([InlineKeyboardButton(
-            text="🔑 Добавить VPN ключ",
-            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )])
-        # Bypass key buttons
+        # Try Happ crypto links (encrypted, recommended)
+        from app.services.happ_crypto import get_or_create_crypto_link
+
+        if sub_url:
+            crypto_vpn = await get_or_create_crypto_link(telegram_id, sub_url)
+            if crypto_vpn:
+                buttons.append([InlineKeyboardButton(
+                    text="🔒 Добавить VPN ключ в Happ",
+                    url=f"{base_url}/open/happ-crypto?url={quote(crypto_vpn, safe='')}",
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    text="🔑 Добавить VPN ключ",
+                    url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+                )])
+
         if bypass_url:
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Добавить обход ключ",
-                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            )])
+            crypto_bypass = await get_or_create_crypto_link(telegram_id, bypass_url)
+            if crypto_bypass:
+                buttons.append([InlineKeyboardButton(
+                    text="🔒 Добавить обход в Happ",
+                    url=f"{base_url}/open/happ-crypto?url={quote(crypto_bypass, safe='')}",
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    text="🌐 Добавить обход ключ",
+                    url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+                )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
