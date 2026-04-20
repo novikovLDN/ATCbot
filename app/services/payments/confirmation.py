@@ -359,6 +359,27 @@ async def _send_confirmation(
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
 
+        # Combo: add bypass traffic (was missing for webhook payments!)
+        if is_combo:
+            try:
+                _pd = result.get("period_days", 30) or 30
+                combo_key = f"combo_{subscription_type}"
+                combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
+                if combo_info:
+                    combo_gb = combo_info["gb"]
+                    traffic_bytes = combo_gb * 1024**3
+                    from app.services.remnawave_service import add_traffic
+                    rmn_ok = await add_traffic(telegram_id, traffic_bytes)
+                    if rmn_ok:
+                        await database.record_traffic_purchase(telegram_id, combo_gb, 0)
+                        logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
+                    else:
+                        logger.warning("COMBO_BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
+                else:
+                    logger.warning("COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s", provider, telegram_id, combo_key, _pd)
+            except Exception as combo_err:
+                logger.error("COMBO_BYPASS_TRAFFIC_ERROR: provider=%s user=%s error=%s", provider, telegram_id, combo_err)
+
 
 async def _handle_traffic_pack_confirmation(
     provider: str,
