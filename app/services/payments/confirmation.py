@@ -343,8 +343,14 @@ async def _send_confirmation(
                 if combo_info:
                     combo_gb = combo_info["gb"]
                     traffic_bytes = combo_gb * 1024**3
-                    from app.services.remnawave_service import add_traffic
-                    rmn_ok = await add_traffic(telegram_id, traffic_bytes)
+                    from app.services.remnawave_service import add_bypass_traffic
+                    rmn_ok = await add_bypass_traffic(
+                        telegram_id,
+                        traffic_bytes,
+                        subscription_type=subscription_type,
+                        subscription_end=expires_at,
+                        period_days=_pd,
+                    )
                     if rmn_ok:
                         await database.record_traffic_purchase(telegram_id, combo_gb, 0)
                         logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
