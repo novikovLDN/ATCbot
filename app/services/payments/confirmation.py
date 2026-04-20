@@ -98,34 +98,9 @@ async def process_confirmed_payment(
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
 
-        # Check if this is an Apple ID purchase
-        is_apple_id = result.get("tariff_type", "").startswith("apple_id_")
-        is_premium = result.get("purchase_type") == "telegram_premium" or result.get("tariff_type") == "telegram_premium"
-        is_stars = result.get("purchase_type") == "telegram_stars" or result.get("tariff_type") == "telegram_stars"
-
         # Notification failure must NOT fail the payment — DB is already committed
         try:
-            if is_stars:
-                from app.handlers.payments.telegram_stars_purchase import send_stars_success
-                await send_stars_success(bot, telegram_id, purchase_id)
-            elif is_premium:
-                from app.handlers.payments.telegram_premium import send_premium_success
-                await send_premium_success(bot, telegram_id, purchase_id)
-            elif is_apple_id:
-                # Apple ID purchase — send user + admin notifications
-                tariff = result.get("tariff_type", "")
-                # Parse: apple_id_usa_40 → region=usa, nominal=40
-                tariff_parts = tariff.split("_")
-                if len(tariff_parts) >= 4:
-                    region = tariff_parts[2]
-                    nominal = int(tariff_parts[3])
-                else:
-                    region = "usa"
-                    nominal = 0
-                price_kopecks = result.get("price_kopecks", 0)
-                from app.handlers.callbacks.navigation import send_apple_id_success
-                await send_apple_id_success(bot, telegram_id, region, nominal, price_kopecks / 100)
-            elif is_traffic_pack:
+            if is_traffic_pack:
                 await _handle_traffic_pack_confirmation(
                     provider=provider,
                     bot=bot,
