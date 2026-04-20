@@ -50,6 +50,38 @@ async def process_confirmed_payment(
         Response dict with "status" key ("ok", "already_processed", "error")
     """
     try:
+        # Check if this is a notification-only purchase (no subscription to activate)
+        pending = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
+        if not pending:
+            logger.error(f"{provider} webhook: pending purchase not found: {purchase_id}")
+            return {"status": "error", "message": "Purchase not found"}
+
+        _purchase_type = pending.get("purchase_type", "subscription")
+        _tariff = pending.get("tariff", "")
+
+        # Stars / Premium / Apple ID — just mark paid + send notifications (no finalize)
+        if _purchase_type in ("telegram_stars", "telegram_premium") or _tariff.startswith("apple_id_"):
+            await database.mark_pending_purchase_paid(purchase_id)
+            logger.info(f"{provider} webhook: {_purchase_type} marked paid, purchase_id={purchase_id}")
+
+            try:
+                if _purchase_type == "telegram_stars":
+                    from app.handlers.payments.telegram_stars_purchase import send_stars_success
+                    await send_stars_success(bot, telegram_id, purchase_id, pending)
+                elif _purchase_type == "telegram_premium":
+                    from app.handlers.payments.telegram_premium import send_premium_success
+                    await send_premium_success(bot, telegram_id, purchase_id, pending)
+                elif _tariff.startswith("apple_id_"):
+                    tariff_parts = _tariff.split("_")
+                    region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"
+                    nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
+                    from app.handlers.callbacks.navigation import send_apple_id_success
+                    await send_apple_id_success(bot, telegram_id, region, nominal, amount_rubles)
+            except Exception as notif_err:
+                logger.error(f"{provider} webhook: notification failed for {_purchase_type}: {notif_err}")
+
+            return {"status": "ok", "purchase_id": purchase_id}
+
         result = await database.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider=provider,
