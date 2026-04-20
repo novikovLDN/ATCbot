@@ -913,6 +913,13 @@ async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
         # Это несоответствие, но мы не можем откатить VPN API
         raise
     
+    # Invalidate Happ crypto cache (new UUID = new subscription URL)
+    try:
+        from app.services.happ_crypto import invalidate_crypto_link
+        await invalidate_crypto_link(telegram_id)
+    except Exception:
+        pass
+
     new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
     logger.info(
         f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "
@@ -1238,6 +1245,13 @@ async def reissue_vpn_key_atomic(
                         pass
                 except Exception as e:
                     logger.warning(f"Failed to remove old UUID for user {telegram_id}: {e}")
+
+            # Invalidate Happ crypto cache
+            try:
+                from app.services.happ_crypto import invalidate_crypto_link
+                await invalidate_crypto_link(telegram_id)
+            except Exception:
+                pass
 
             new_uuid_preview = f"{new_uuid[:8]}..." if len(new_uuid) > 8 else "***"
             logger.info(

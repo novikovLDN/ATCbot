@@ -48,11 +48,13 @@ async def deeplink_redirect(client: str, url: str = Query(...)):
     from urllib.parse import quote
 
     if client == "happ-crypto":
-        # Crypto link is already a full happ://crypt4/... URL passed via `url` param
         deep_link = url
     else:
         safe_url = quote(url, safe='/:?&=@%+')
         deep_link = f"{scheme}{safe_url}"
+
+    # XSS protection: escape for HTML embedding
+    deep_link_html = html_escape(deep_link)
     client_name = html_escape(_CLIENT_NAMES.get(client, client))
 
     html = f"""<!DOCTYPE html>
@@ -88,9 +90,9 @@ async def deeplink_redirect(client: str, url: str = Query(...)):
   <h2>{client_name}</h2>
   <p>Opening {client_name}...</p>
   <p>If the app did not open automatically, tap the button below.</p>
-  <a class="btn" href="{deep_link}">Open {client_name}</a>
+  <a class="btn" href="{deep_link_html}">Open {client_name}</a>
 </div>
-<script>window.location = "{deep_link}";</script>
+<script>window.location = "{deep_link_html}";</script>
 </body>
 </html>"""
 

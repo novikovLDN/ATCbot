@@ -715,6 +715,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         # No UUID or stale (404) — clear and create fresh
                         if rmn_uuid:
                             await database.clear_remnawave_uuid(telegram_id)
+                            from app.services.happ_crypto import invalidate_crypto_link
+                            await invalidate_crypto_link(telegram_id)
                         try:
                             from app.services import remnawave_service
                             from datetime import datetime, timezone, timedelta

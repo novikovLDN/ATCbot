@@ -79,6 +79,8 @@ async def _get_user_with_recovery(telegram_id: int, rmn_uuid: str):
             telegram_id, rmn_uuid,
         )
         await database.clear_remnawave_uuid(telegram_id)
+        from app.services.happ_crypto import invalidate_crypto_link
+        await invalidate_crypto_link(telegram_id)
         return None
 
     user_data = await remnawave_api.get_user(rmn_uuid)
@@ -312,6 +314,8 @@ async def delete_remnawave_user(telegram_id: int) -> None:
         api_uuid = (user_data.get("uuid") if user_data else None) or rmn_uuid
         await remnawave_api.delete_user(api_uuid)
         await database.clear_remnawave_uuid(telegram_id)
+        from app.services.happ_crypto import invalidate_crypto_link
+        await invalidate_crypto_link(telegram_id)
         logger.info("REMNAWAVE_DELETED: tg=%s uuid=%s", telegram_id, api_uuid[:8])
     except Exception as e:
         logger.error("REMNAWAVE_DELETE_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
