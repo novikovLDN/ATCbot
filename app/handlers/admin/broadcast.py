@@ -420,7 +420,7 @@ async def callback_admin_broadcast(callback: CallbackQuery):
         [InlineKeyboardButton(text="🗑 Удалить уведомление", callback_data="broadcast:delete_list")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:notifications")],
     ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
     await callback.answer()
 
     # Логируем действие
@@ -1050,6 +1050,7 @@ async def callback_broadcast_delete_list(callback: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:broadcast")],
             ]),
+            bot=callback.bot,
         )
         return
 
@@ -1075,7 +1076,7 @@ async def callback_broadcast_delete_list(callback: CallbackQuery):
     text = "\n".join(lines)
     if not any("delete_confirm" in str(b) for row in buttons for b in row):
         text += "\n\n⚠️ Ни один броадкаст не имеет сохранённых message_id. Удаление доступно только для новых уведомлений."
-    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await safe_edit_text(callback.message, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), bot=callback.bot)
 
 
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast:delete_confirm:"))
@@ -1096,6 +1097,7 @@ async def callback_broadcast_delete_confirm(callback: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:delete_list")],
             ]),
+            bot=callback.bot,
         )
         return
 
@@ -1108,7 +1110,7 @@ async def callback_broadcast_delete_confirm(callback: CallbackQuery):
         [InlineKeyboardButton(text=f"✅ Удалить {len(pairs)} сообщений", callback_data=f"broadcast:delete_exec:{broadcast_id}")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast:delete_list")],
     ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
 
 
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast:delete_exec:"))
@@ -1129,12 +1131,14 @@ async def callback_broadcast_delete_exec(callback: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="broadcast:delete_list")],
             ]),
+            bot=callback.bot,
         )
         return
 
     await safe_edit_text(
         callback.message,
         f"🗑 Удаляю {len(pairs)} сообщений броадкаста #{broadcast_id}...\n\n⏳ Это может занять несколько минут. Результат будет отправлен в чат.",
+        bot=callback.bot,
     )
 
     # Run deletion in background to avoid webhook timeout
@@ -1189,12 +1193,12 @@ async def callback_broadcast_ab_stats(callback: CallbackQuery):
         
         if not ab_tests:
             text = i18n_get_text(language, "broadcast._ab_stats_empty")
-            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language), bot=callback.bot)
             return
         
         text = i18n_get_text(language, "broadcast._ab_stats_select")
         keyboard = get_ab_test_list_keyboard(ab_tests, language)
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         
         # Логируем действие
         await database._log_audit_event_atomic_standalone("admin_view_ab_stats_list", callback.from_user.id, None, f"Viewed {len(ab_tests)} A/B tests")
@@ -1235,7 +1239,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="broadcast:ab_stats")],
             ])
-            await safe_edit_text(callback.message, text, reply_markup=keyboard)
+            await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
             return
         
         # Формируем текст статистики
@@ -1266,7 +1270,7 @@ async def callback_broadcast_ab_stat_detail(callback: CallbackQuery):
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="broadcast:ab_stats")],
         ])
         
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         
         # Логируем действие
         await database._log_audit_event_atomic_standalone("admin_view_ab_stat_detail", callback.from_user.id, None, f"Viewed A/B stats for broadcast {broadcast_id}")

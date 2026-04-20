@@ -24,12 +24,14 @@ router = APIRouter()
 
 _SCHEMES = {
     "happ": "happ://add/",
+    "happ-crypto": "",  # crypto link is passed as-is (already contains full scheme)
     "v2raytun": "v2raytun://import/",
     "hiddify": "hiddify://import/",
 }
 
 _CLIENT_NAMES = {
     "happ": "Happ",
+    "happ-crypto": "Happ",
     "v2raytun": "V2RayTun",
     "hiddify": "Hiddify",
 }
@@ -44,8 +46,15 @@ async def deeplink_redirect(client: str, url: str = Query(...)):
 
     from html import escape as html_escape
     from urllib.parse import quote
-    safe_url = quote(url, safe='/:?&=@%+')
-    deep_link = f"{scheme}{safe_url}"
+
+    if client == "happ-crypto":
+        deep_link = url
+    else:
+        safe_url = quote(url, safe='/:?&=@%+')
+        deep_link = f"{scheme}{safe_url}"
+
+    # XSS protection: escape for HTML embedding
+    deep_link_html = html_escape(deep_link)
     client_name = html_escape(_CLIENT_NAMES.get(client, client))
 
     html = f"""<!DOCTYPE html>
@@ -81,9 +90,9 @@ async def deeplink_redirect(client: str, url: str = Query(...)):
   <h2>{client_name}</h2>
   <p>Opening {client_name}...</p>
   <p>If the app did not open automatically, tap the button below.</p>
-  <a class="btn" href="{deep_link}">Open {client_name}</a>
+  <a class="btn" href="{deep_link_html}">Open {client_name}</a>
 </div>
-<script>window.location = "{deep_link}";</script>
+<script>window.location = "{deep_link_html}";</script>
 </body>
 </html>"""
 

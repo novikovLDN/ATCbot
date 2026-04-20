@@ -720,7 +720,7 @@ async def callback_setup_step2(callback: CallbackQuery):
     buttons = []
 
     # === Auto-setup deeplinks ===
-    if sub_url:
+    if sub_url or bypass_url:
         from urllib.parse import quote, urlparse
         if config.PUBLIC_BASE_URL:
             base_url = config.PUBLIC_BASE_URL
@@ -728,17 +728,34 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        # VPN key buttons
-        buttons.append([InlineKeyboardButton(
-            text="🔑 Добавить VPN ключ",
-            url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )])
-        # Bypass key buttons
+        # Try Happ crypto links (encrypted, recommended)
+        from app.services.happ_crypto import get_or_create_crypto_link
+
+        if sub_url:
+            crypto_vpn = await get_or_create_crypto_link(telegram_id, sub_url)
+            if crypto_vpn:
+                buttons.append([InlineKeyboardButton(
+                    text="🔒 Добавить VPN ключ в Happ",
+                    url=f"{base_url}/open/happ-crypto?url={quote(crypto_vpn, safe='')}",
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    text="🔑 Добавить VPN ключ",
+                    url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
+                )])
+
         if bypass_url:
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Добавить обход ключ",
-                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            )])
+            crypto_bypass = await get_or_create_crypto_link(telegram_id, bypass_url)
+            if crypto_bypass:
+                buttons.append([InlineKeyboardButton(
+                    text="🔒 Добавить обход в Happ",
+                    url=f"{base_url}/open/happ-crypto?url={quote(crypto_bypass, safe='')}",
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    text="🌐 Добавить обход ключ",
+                    url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+                )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
@@ -1506,7 +1523,15 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     try:
         rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
         if not rmn_success:
-            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
+            # Remnawave user doesn't exist yet — create with combo GB
+            from datetime import datetime, timezone, timedelta
+            _sub = await database.get_subscription(telegram_id)
+            _expires = _sub.get("expires_at") if _sub else datetime.now(timezone.utc) + timedelta(days=period_days)
+            await remnawave_service.create_remnawave_user(
+                telegram_id, base_tariff, _expires,
+                traffic_limit_override=traffic_bytes, period_days=period_days,
+            )
+            logger.info(f"COMBO_REMNAWAVE_USER_CREATED user={telegram_id} gb={gb}")
     except Exception as traffic_err:
         logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
 

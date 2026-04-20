@@ -50,6 +50,38 @@ async def process_confirmed_payment(
         Response dict with "status" key ("ok", "already_processed", "error")
     """
     try:
+        # Check if this is a notification-only purchase (no subscription to activate)
+        pending = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
+        if not pending:
+            logger.error(f"{provider} webhook: pending purchase not found: {purchase_id}")
+            return {"status": "error", "message": "Purchase not found"}
+
+        _purchase_type = pending.get("purchase_type", "subscription")
+        _tariff = pending.get("tariff", "")
+
+        # Stars / Premium / Apple ID — just mark paid + send notifications (no finalize)
+        if _purchase_type in ("telegram_stars", "telegram_premium") or _tariff.startswith("apple_id_"):
+            await database.mark_pending_purchase_paid(purchase_id)
+            logger.info(f"{provider} webhook: {_purchase_type} marked paid, purchase_id={purchase_id}")
+
+            try:
+                if _purchase_type == "telegram_stars":
+                    from app.handlers.payments.telegram_stars_purchase import send_stars_success
+                    await send_stars_success(bot, telegram_id, purchase_id, pending)
+                elif _purchase_type == "telegram_premium":
+                    from app.handlers.payments.telegram_premium import send_premium_success
+                    await send_premium_success(bot, telegram_id, purchase_id, pending)
+                elif _tariff.startswith("apple_id_"):
+                    tariff_parts = _tariff.split("_")
+                    region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"
+                    nominal = int(tariff_parts[3]) if len(tariff_parts) >= 4 else 0
+                    from app.handlers.callbacks.navigation import send_apple_id_success
+                    await send_apple_id_success(bot, telegram_id, region, nominal, amount_rubles)
+            except Exception as notif_err:
+                logger.error(f"{provider} webhook: notification failed for {_purchase_type}: {notif_err}")
+
+            return {"status": "ok", "purchase_id": purchase_id}
+
         result = await database.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider=provider,
@@ -66,34 +98,9 @@ async def process_confirmed_payment(
         is_balance_topup = result.get("is_balance_topup", False)
         is_traffic_pack = result.get("is_traffic_pack", False)
 
-        # Check if this is an Apple ID purchase
-        is_apple_id = result.get("tariff_type", "").startswith("apple_id_")
-        is_premium = result.get("purchase_type") == "telegram_premium" or result.get("tariff_type") == "telegram_premium"
-        is_stars = result.get("purchase_type") == "telegram_stars" or result.get("tariff_type") == "telegram_stars"
-
         # Notification failure must NOT fail the payment — DB is already committed
         try:
-            if is_stars:
-                from app.handlers.payments.telegram_stars_purchase import send_stars_success
-                await send_stars_success(bot, telegram_id, purchase_id)
-            elif is_premium:
-                from app.handlers.payments.telegram_premium import send_premium_success
-                await send_premium_success(bot, telegram_id, purchase_id)
-            elif is_apple_id:
-                # Apple ID purchase — send user + admin notifications
-                tariff = result.get("tariff_type", "")
-                # Parse: apple_id_usa_40 → region=usa, nominal=40
-                tariff_parts = tariff.split("_")
-                if len(tariff_parts) >= 4:
-                    region = tariff_parts[2]
-                    nominal = int(tariff_parts[3])
-                else:
-                    region = "usa"
-                    nominal = 0
-                price_kopecks = result.get("price_kopecks", 0)
-                from app.handlers.callbacks.navigation import send_apple_id_success
-                await send_apple_id_success(bot, telegram_id, region, nominal, price_kopecks / 100)
-            elif is_traffic_pack:
+            if is_traffic_pack:
                 await _handle_traffic_pack_confirmation(
                     provider=provider,
                     bot=bot,
@@ -327,6 +334,36 @@ async def _send_confirmation(
         except Exception as rmn_err:
             logger.warning("REMNAWAVE_HOOK_FAIL: provider=%s tg=%s %s", provider, telegram_id, rmn_err)
 
+        # Combo: add bypass traffic
+        if is_combo:
+            try:
+                _pd = result.get("period_days", 30) or 30
+                combo_key = f"combo_{subscription_type}"
+                combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
+                if combo_info:
+                    combo_gb = combo_info["gb"]
+                    traffic_bytes = combo_gb * 1024**3
+                    from app.services.remnawave_service import add_traffic
+                    rmn_ok = await add_traffic(telegram_id, traffic_bytes)
+                    if not rmn_ok:
+                        # User doesn't exist in Remnawave yet — create with combo GB
+                        from app.services import remnawave_service
+                        from datetime import timedelta
+                        _expires = expires_at or (datetime.now(timezone.utc) + timedelta(days=_pd))
+                        await remnawave_service.create_remnawave_user(
+                            telegram_id, subscription_type, _expires,
+                            traffic_limit_override=traffic_bytes, period_days=_pd,
+                        )
+                        rmn_ok = True
+                        logger.info("COMBO_REMNAWAVE_USER_CREATED: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
+                    if rmn_ok:
+                        await database.record_traffic_purchase(telegram_id, combo_gb, 0)
+                        logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
+                else:
+                    logger.warning("COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s", provider, telegram_id, combo_key, _pd)
+            except Exception as combo_err:
+                logger.error("COMBO_BYPASS_TRAFFIC_ERROR: provider=%s user=%s error=%s", provider, telegram_id, combo_err)
+
 
 async def _handle_traffic_pack_confirmation(
     provider: str,
@@ -367,6 +404,8 @@ async def _handle_traffic_pack_confirmation(
             # No UUID or stale (404) — clear and create fresh
             if rmn_uuid:
                 await database.clear_remnawave_uuid(telegram_id)
+                from app.services.happ_crypto import invalidate_crypto_link
+                await invalidate_crypto_link(telegram_id)
             try:
                 from app.services import remnawave_service
                 from datetime import datetime, timezone, timedelta

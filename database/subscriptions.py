@@ -913,6 +913,13 @@ async def reissue_subscription_key(subscription_id: int) -> "Tuple[str, str]":
         # Это несоответствие, но мы не можем откатить VPN API
         raise
     
+    # Invalidate Happ crypto cache (new UUID = new subscription URL)
+    try:
+        from app.services.happ_crypto import invalidate_crypto_link
+        await invalidate_crypto_link(telegram_id)
+    except Exception:
+        pass
+
     new_uuid_preview = f"{new_uuid[:8]}..." if new_uuid and len(new_uuid) > 8 else (new_uuid or "N/A")
     logger.info(
         f"reissue_subscription_key: SUCCESS [subscription_id={subscription_id}, "
@@ -1238,6 +1245,13 @@ async def reissue_vpn_key_atomic(
                         pass
                 except Exception as e:
                     logger.warning(f"Failed to remove old UUID for user {telegram_id}: {e}")
+
+            # Invalidate Happ crypto cache
+            try:
+                from app.services.happ_crypto import invalidate_crypto_link
+                await invalidate_crypto_link(telegram_id)
+            except Exception:
+                pass
 
             new_uuid_preview = f"{new_uuid[:8]}..." if len(new_uuid) > 8 else "***"
             logger.info(
@@ -3901,16 +3915,16 @@ async def create_pending_purchase(
         except Exception as e:
             if "purchase_type_check" in str(e) or "tariff_check" in str(e):
                 # Auto-fix CHECK constraints for traffic_pack support
-                logger.warning("create_pending_purchase: fixing CHECK constraints for traffic_pack")
+                logger.warning("create_pending_purchase: fixing CHECK constraints")
                 await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_purchase_type_check")
                 await conn.execute(
                     "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_purchase_type_check "
-                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'traffic_pack', 'apple_id'))"
+                    "CHECK (purchase_type IN ('subscription', 'balance_topup', 'gift', 'telegram_premium', 'telegram_stars', 'traffic_pack', 'apple_id'))"
                 )
                 await conn.execute("ALTER TABLE pending_purchases DROP CONSTRAINT IF EXISTS pending_purchases_tariff_check")
                 await conn.execute(
                     "ALTER TABLE pending_purchases ADD CONSTRAINT pending_purchases_tariff_check "
-                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%')"
+                    "CHECK (tariff IS NULL OR tariff IN ('basic', 'plus', 'biz_starter', 'biz_team', 'biz_business', 'biz_pro', 'biz_enterprise', 'biz_ultimate', 'telegram_premium', 'telegram_stars') OR tariff LIKE 'traffic_%' OR tariff LIKE 'apple_id_%' OR tariff LIKE 'bypass_%')"
                 )
                 await conn.execute(_insert_sql, *_insert_args)
             else:
