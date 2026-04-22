@@ -50,9 +50,13 @@ async def process_confirmed_payment(
         Response dict with "status" key ("ok", "already_processed", "error")
     """
     try:
-        # Check if this is a notification-only purchase (no subscription to activate)
-        pending = await database.get_pending_purchase(purchase_id, telegram_id, check_expiry=False)
-        if not pending:
+        # Check if this is a notification-only purchase (no subscription to activate).
+        # Accept both 'pending' and 'expired' — user may have started a new purchase
+        # flow which marked this one expired before the webhook arrived. The payment
+        # itself is still valid and must not be dropped. Consistent with
+        # lookup_pending_purchase() upstream and finalize_purchase()'s recovery path.
+        pending = await database.get_pending_purchase_by_id(purchase_id, check_expiry=False)
+        if not pending or pending.get("telegram_id") != telegram_id:
             logger.error(f"{provider} webhook: pending purchase not found: {purchase_id}")
             return {"status": "error", "message": "Purchase not found"}
 
@@ -61,7 +65,13 @@ async def process_confirmed_payment(
 
         # Stars / Premium / Apple ID — just mark paid + send notifications (no finalize)
         if _purchase_type in ("telegram_stars", "telegram_premium") or _tariff.startswith("apple_id_"):
-            await database.mark_pending_purchase_paid(purchase_id)
+            marked = await database.mark_pending_purchase_paid(purchase_id)
+            if not marked:
+                logger.info(
+                    f"{provider} webhook: {_purchase_type} already finalized (concurrent webhook), "
+                    f"purchase_id={purchase_id} — skipping notification to avoid duplicate"
+                )
+                return {"status": "already_processed", "purchase_id": purchase_id}
             logger.info(f"{provider} webhook: {_purchase_type} marked paid, purchase_id={purchase_id}")
 
             try:
