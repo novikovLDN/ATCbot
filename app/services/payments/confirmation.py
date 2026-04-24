@@ -60,8 +60,8 @@ async def process_confirmed_payment(
             logger.error(f"{provider} webhook: pending purchase not found: {purchase_id}")
             return {"status": "error", "message": "Purchase not found"}
 
-        _purchase_type = pending.get("purchase_type", "subscription")
-        _tariff = pending.get("tariff", "")
+        _purchase_type = pending.get("purchase_type") or "subscription"
+        _tariff = pending.get("tariff") or ""
 
         # Stars / Premium / Apple ID — just mark paid + send notifications (no finalize)
         if _purchase_type in ("telegram_stars", "telegram_premium") or _tariff.startswith("apple_id_"):
