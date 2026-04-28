@@ -35,7 +35,7 @@ try:
 except Exception as e:
     XRAY_SYNC_AVAILABLE = False
     xray_sync = None
-    print(f"[XRAY_SYNC] disabled: {e}")
+    logging.getLogger(__name__).warning("[XRAY_SYNC] disabled: %s", e)
 
 # ====================================================================================
 # STEP 2 — OBSERVABILITY & SLO FOUNDATION: LOGGING CONTRACT
@@ -138,6 +138,10 @@ async def main():
         except Exception as e:
             raise RuntimeError(f"Redis connectivity check failed: {type(e).__name__}: {e}") from e
     else:
+        if config.IS_PROD:
+            raise RuntimeError(
+                "REDIS_URL is required in PROD: MemoryStorage would lose FSM state on restart"
+            )
         storage = MemoryStorage()
         logger.warning("FSM_STORAGE=memory — states will be lost on restart")
 
@@ -482,7 +486,7 @@ async def main():
     # Xray sync: safe optional background worker (fail-safe, never crashes bot)
     async def start_xray_sync_safe(bot_obj):
         if not XRAY_SYNC_AVAILABLE:
-            print("[XRAY_SYNC] module not available, skipping startup")
+            logger.warning("[XRAY_SYNC] module not available, skipping startup")
             return None
         if not config.XRAY_SYNC_ENABLED:
             logger.info("[XRAY_SYNC] disabled by config (XRAY_SYNC_ENABLED=false), skipping")
@@ -492,7 +496,7 @@ async def main():
             return None
         try:
             task = asyncio.create_task(xray_sync.start(bot_obj))
-            print("[XRAY_SYNC] started successfully")
+            logger.info("[XRAY_SYNC] started successfully")
             return task
         except Exception as e:
             logger.error("[XRAY_SYNC] failed to start: %s", e)

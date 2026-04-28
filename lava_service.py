@@ -96,7 +96,7 @@ async def create_invoice(
         data["comment"] = comment[:255]
 
     async def _make_request():
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/create",
                 headers=_headers(data),
