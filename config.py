@@ -483,6 +483,11 @@ REMNAWAVE_SUB_BASE_URL = env("REMNAWAVE_SUB_BASE_URL", default="https://rmnw.atl
 # Internal squad UUID for assigning new users (e.g. "Clients" squad)
 REMNAWAVE_SQUAD_UUID = env("REMNAWAVE_SQUAD_UUID", default="")
 
+# Happ Crypto Link (encrypted subscription protection)
+HAPP_CRYPTO_API_URL = env("HAPP_CRYPTO_API_URL", default="https://crypto.happ.su/api-v2.php")
+HAPP_CRYPTO_ENABLED = env("HAPP_CRYPTO_ENABLED", default="true").lower() in ("true", "1", "yes")
+HAPP_CRYPTO_TIMEOUT = int(env("HAPP_CRYPTO_TIMEOUT", default="5"))
+
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 

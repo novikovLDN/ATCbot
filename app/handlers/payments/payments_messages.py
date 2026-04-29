@@ -715,6 +715,8 @@ async def process_successful_payment(message: Message, state: FSMContext):
                         # No UUID or stale (404) — clear and create fresh
                         if rmn_uuid:
                             await database.clear_remnawave_uuid(telegram_id)
+                            from app.services.happ_crypto import invalidate_crypto_link
+                            await invalidate_crypto_link(telegram_id)
                         try:
                             from app.services import remnawave_service
                             far_future = datetime.now(timezone.utc) + timedelta(days=3650)
@@ -1233,7 +1235,16 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 period_days=period_days,
             )
             if not rmn_success:
-                logger.warning(f"COMBO_BYPASS_TRAFFIC_FAIL user={telegram_id} gb={gb}")
+                # Remnawave user doesn't exist yet — create with combo/bypass GB
+                _sub = await database.get_subscription(telegram_id)
+                _expires = _sub.get("expires_at") if _sub else None
+                if not _expires:
+                    _expires = datetime.now(timezone.utc) + timedelta(days=period_days or 30)
+                await remnawave_service.create_remnawave_user(
+                    telegram_id, tariff_type or "basic", _expires,
+                    traffic_limit_override=traffic_bytes, period_days=period_days or 30,
+                )
+                logger.info(f"COMBO_REMNAWAVE_USER_CREATED user={telegram_id} gb={gb}")
             await database.record_traffic_purchase(telegram_id, gb, 0)
             logger.info(f"COMBO_BYPASS_TRAFFIC_ADDED user={telegram_id} gb={gb} type={'combo' if combo_bypass_gb else 'bypass_only'}")
         except Exception as traffic_err:

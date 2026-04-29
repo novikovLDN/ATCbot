@@ -920,7 +920,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 Мой трафик",
-    'traffic.info': "<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {used} / {limit}\n{bar} {pct}%\n\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> До: {expires}\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Куда вставить:</b>\n├ <b>Happ</b> → Главная → <b>+</b> → Вставить из буфера\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.info': "<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {used} / {limit}\n{bar} {pct}%\n\n<tg-emoji emoji-id=\"5454415424319931791\">⏳</tg-emoji> До: {expires}\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ для других клиентов</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Куда вставить:</b>\n├ <b>Happ</b> → Настройки → Подключить Happ в боте\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Нет активной подписки.",
     'traffic.trial_no_bypass': "📊 <b>Обход блокировок</b> 🇷🇺\n\n🔒 Обход доступен на тарифах Basic и Plus.",
     'traffic.trial_upgrade_hint': "Купите подписку Basic или Plus, чтобы разблокировать больше ГБ и покупку трафика",

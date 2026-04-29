@@ -364,15 +364,26 @@ async def show_profile(message_or_query, language: str):
                         return "🤍" * filled + "🩶" * (length - filled)
 
                     sub_url = traffic.get("subscriptionUrl", "")
-                    happ_url = traffic.get("happ_url", "")
 
                     text += f"\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n"
                     text += f"<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {_fmt(used)} / {_fmt(limit_bytes)}\n"
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
-                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
-                        if happ_url:
-                            text += f"\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>"
+                        # Try to get encrypted Happ link
+                        from app.services.happ_crypto import get_or_create_crypto_link
+                        crypto_link = await get_or_create_crypto_link(telegram_id, sub_url)
+
+                        if crypto_link:
+                            from urllib.parse import quote, urlparse
+                            if config.PUBLIC_BASE_URL:
+                                _base = config.PUBLIC_BASE_URL
+                            else:
+                                parsed = urlparse(config.WEBHOOK_URL)
+                                _base = f"{parsed.scheme}://{parsed.netloc}"
+                            crypto_redirect = f"{_base}/open/happ-crypto?url={quote(crypto_link, safe='')}"
+                            text += f"🔒 <b>Подключить в Happ</b> <i>(рекомендуется)</i>\n<blockquote>Конфиги зашифрованы — нельзя скопировать или передать</blockquote>\n<a href=\"{crypto_redirect}\">🔒 Добавить в Happ</a>\n\n"
+
+                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ для других клиентов</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")

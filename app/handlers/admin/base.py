@@ -564,6 +564,7 @@ async def callback_admin_system(callback: CallbackQuery):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:system")],
             [InlineKeyboardButton(text="🌐 Добавить всех в Remnawave", callback_data="admin:remnawave_mass_provision")],
+            [InlineKeyboardButton(text="🔒 Миграция Happ Crypto", callback_data="admin:happ_crypto_migrate")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.test_menu"), callback_data="admin:test_menu")],
             [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
         ])
@@ -581,6 +582,18 @@ async def callback_admin_system(callback: CallbackQuery):
     except Exception as e:
         logging.exception(f"Error in callback_admin_system: {e}")
         await callback.answer("Ошибка при получении системной информации", show_alert=True)
+
+
+@admin_base_router.callback_query(F.data == "admin:happ_crypto_migrate")
+async def callback_happ_crypto_migrate(callback: CallbackQuery):
+    """Run batch Happ crypto link migration for all users."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("⛔", show_alert=True)
+        return
+    await callback.answer("🔒 Запущена миграция crypto-ссылок...")
+    import asyncio
+    from app.workers.happ_crypto_worker import migrate_all_crypto_links
+    asyncio.create_task(migrate_all_crypto_links(bot=callback.bot, admin_chat_id=callback.from_user.id))
 
 
 @admin_base_router.callback_query(F.data == "admin:remnawave_mass_provision")
