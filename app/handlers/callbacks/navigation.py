@@ -1832,9 +1832,8 @@ async def callback_apple_pay_card(callback: CallbackQuery):
         purchase_type="apple_id",
     )
 
-    import time as _time
     from aiogram.types import LabeledPrice
-    payload = f"apple_id_{purchase_id}_{int(_time.time())}"
+    payload = f"purchase:{purchase_id}"
 
     try:
         invoice_msg = await callback.bot.send_invoice(

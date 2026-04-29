@@ -6,7 +6,7 @@ Architecture invariant: Bot never generates VLESS locally. vpn_key must come fro
 """
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
 from aiogram.filters import StateFilter
@@ -719,7 +719,6 @@ async def process_successful_payment(message: Message, state: FSMContext):
                             await invalidate_crypto_link(telegram_id)
                         try:
                             from app.services import remnawave_service
-                            from datetime import datetime, timezone, timedelta
                             far_future = datetime.now(timezone.utc) + timedelta(days=3650)
                             await remnawave_service.create_remnawave_user(
                                 telegram_id, "basic", far_future,
@@ -1228,10 +1227,15 @@ async def process_successful_payment(message: Message, state: FSMContext):
         traffic_bytes = gb * 1024**3
 
         try:
-            rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+            rmn_success = await remnawave_service.add_bypass_traffic(
+                telegram_id,
+                traffic_bytes,
+                subscription_type=(tariff_type or "basic").strip().lower(),
+                subscription_end=expires_at,
+                period_days=period_days,
+            )
             if not rmn_success:
                 # Remnawave user doesn't exist yet — create with combo/bypass GB
-                from datetime import timedelta
                 _sub = await database.get_subscription(telegram_id)
                 _expires = _sub.get("expires_at") if _sub else None
                 if not _expires:

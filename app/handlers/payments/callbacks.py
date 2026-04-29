@@ -15,6 +15,7 @@ import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
 from app.services.subscriptions import service as subscription_service
+from app.services.subscriptions.exceptions import InvalidTariffError, PriceCalculationError
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.screens import _open_buy_screen, show_tariffs_main_screen
 from handlers import show_payment_method_selection
@@ -232,7 +233,13 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
                     period_days=period_days,
                     promo_code=promo_code
                 )
+            except (InvalidTariffError, PriceCalculationError):
+                continue
             except Exception:
+                logger.exception(
+                    "calculate_price failed tariff=%s period=%s telegram_id=%s",
+                    new_tariff, period_days, telegram_id,
+                )
                 continue
 
             base_price_rubles = price_info["base_price_kopecks"] / 100.0

@@ -59,6 +59,18 @@ async def clear_remnawave_uuid(telegram_id: int) -> None:
 
 # ── Traffic notification flags ─────────────────────────────────────────
 
+# Static SQL per allowed flag column. Indexing into this dict is the only way
+# to reach the UPDATE statement, so flag_key can never be interpolated into SQL.
+_TRAFFIC_FLAG_UPDATE_SQL: Dict[str, str] = {
+    "traffic_notified_8gb":   "UPDATE users SET traffic_notified_8gb   = TRUE WHERE telegram_id = $1",
+    "traffic_notified_5gb":   "UPDATE users SET traffic_notified_5gb   = TRUE WHERE telegram_id = $1",
+    "traffic_notified_3gb":   "UPDATE users SET traffic_notified_3gb   = TRUE WHERE telegram_id = $1",
+    "traffic_notified_1gb":   "UPDATE users SET traffic_notified_1gb   = TRUE WHERE telegram_id = $1",
+    "traffic_notified_500mb": "UPDATE users SET traffic_notified_500mb = TRUE WHERE telegram_id = $1",
+    "traffic_notified_0":     "UPDATE users SET traffic_notified_0     = TRUE WHERE telegram_id = $1",
+}
+
+
 async def get_traffic_notification_flags(telegram_id: int) -> Dict[str, bool]:
     if not _core.DB_READY:
         return {}
@@ -81,18 +93,14 @@ async def get_traffic_notification_flags(telegram_id: int) -> Dict[str, bool]:
 async def set_traffic_notification_flag(telegram_id: int, flag_key: str) -> None:
     if not _core.DB_READY:
         return
-    # Whitelist valid flag columns to prevent injection
-    valid = {"traffic_notified_8gb", "traffic_notified_5gb", "traffic_notified_3gb", "traffic_notified_1gb", "traffic_notified_500mb", "traffic_notified_0"}
-    if flag_key not in valid:
+    sql = _TRAFFIC_FLAG_UPDATE_SQL.get(flag_key)
+    if sql is None:
         return
     pool = await get_pool()
     if pool is None:
         return
     async with pool.acquire() as conn:
-        await conn.execute(
-            f"UPDATE users SET {flag_key} = TRUE WHERE telegram_id = $1",
-            telegram_id,
-        )
+        await conn.execute(sql, telegram_id)
 
 
 async def reset_traffic_notification_flags(telegram_id: int) -> None:

@@ -74,7 +74,7 @@ async def create_invoice(
     }
 
     async def _make_request():
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(
                 f"{CRYPTOBOT_API_URL}/createInvoice",
                 headers=_get_headers(),

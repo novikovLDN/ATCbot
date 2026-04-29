@@ -27,6 +27,15 @@ IS_LOCAL = APP_ENV == "local"
 IS_STAGE = APP_ENV == "stage"
 IS_PROD = APP_ENV == "prod"
 
+# Local development: load .env automatically. In stage/prod the platform injects env vars,
+# and python-dotenv is not used (avoid pulling secrets from a stray .env file in the image).
+if IS_LOCAL:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
 def env(key: str, default: str = "") -> str:
     """
     Получить переменную окружения с префиксом окружения
@@ -282,17 +291,6 @@ BALANCE_TOPUP_AMOUNTS = [250, 750, 999]
 
 # Суммы пополнения баланса (в Stars, +70% от рублёвых)
 BALANCE_TOPUP_AMOUNTS_STARS = [230, 690, 920]
-
-# Реквизиты СБП (для оплаты)
-SBP_DETAILS = {
-    "bank": "Банк",
-    "account": "12345678901234567890",
-    "name": "ИП Иванов Иван Иванович",
-}
-
-# Поддержка
-SUPPORT_EMAIL = "support@example.com"
-SUPPORT_TELEGRAM = "@support"
 
 # Telegram Payments provider token (получить через BotFather после подключения ЮKassa)
 # В PROD: ОБЯЗАТЕЛЕН (иначе платежи не работают)

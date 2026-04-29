@@ -110,10 +110,11 @@ jobs:
       - name: Install security tools
         run: pip install pip-audit safety
 
-      - name: Check dependencies for known vulnerabilities
-        run: pip-audit -r requirements.txt --desc on --fix --dry-run || true
+      # Fail the pipeline on any known CVE in production deps. Triage in PR.
+      - name: pip-audit (gate)
+        run: pip-audit -r requirements.txt --desc on --strict
 
-      - name: Safety check
+      - name: Safety check (informational)
         run: safety check -r requirements.txt --output text || true
         continue-on-error: true
 

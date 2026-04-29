@@ -144,10 +144,9 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
         now = datetime.now(timezone.utc)
         trial_expires_at = now + duration
 
-        success = await database.mark_trial_used(telegram_id, trial_expires_at)
-        if not success:
-            raise Exception("Failed to mark trial as used")
-
+        # Сначала выдаём VPN-доступ. Если VPN API зависнет или упадёт,
+        # флаг trial_used_at НЕ будет установлен — юзер сможет повторить попытку
+        # (вместо того, чтобы «потерять» триал из-за таймаута внешнего API).
         result = await database.grant_access(
             telegram_id=telegram_id,
             duration=duration,
@@ -161,6 +160,17 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
         if not uuid or not vpn_key:
             raise Exception("Failed to create VPN access for trial")
+
+        # VPN успешно выдан — теперь помечаем trial как использованный.
+        # Если этот шаг упадёт, юзер получит доступ, а флаг останется пустым
+        # (в худшем случае сможет активировать повторно — мелкий приемлемый риск
+        # по сравнению с потерей триала из-за обрыва VPN API).
+        mark_ok = await database.mark_trial_used(telegram_id, trial_expires_at)
+        if not mark_ok:
+            logger.error(
+                f"mark_trial_used FAILED after grant_access succeeded: user={telegram_id} — "
+                f"subscription active but trial_used_at not set"
+            )
 
         # 2. REFERRAL LIFECYCLE: Activate referral (REGISTERED → ACTIVATED)
         try:
