@@ -97,9 +97,10 @@ async def cmd_start(message: Message, state: FSMContext):
         start_parts = message.text.strip().split(maxsplit=1)
         if len(start_parts) > 1:
             payload = start_parts[1]
-            # Токен привязки — не ref_ и не gift_ (буквенно-цифровой, 10-64 символа)
+            # Токен привязки — не ref_, не gift_ и не bgift_ (буквенно-цифровой, 10-64 символа)
             if (not payload.startswith("ref_")
                     and not payload.startswith("gift_")
+                    and not payload.startswith("bgift_")
                     and len(payload) >= 10
                     and len(payload) <= 64
                     and payload.replace("_", "").replace("-", "").isalnum()):
@@ -141,6 +142,95 @@ async def cmd_start(message: Message, state: FSMContext):
                             logger.warning("SITE_LINK_FAILED user=%s token=%s", telegram_id, payload[:16])
                 except Exception as e:
                     logger.warning("SITE_LINK_ERROR user=%s error=%s", telegram_id, e)
+
+    # BYPASS GIFT LINK: /start bgift_<CODE> — admin-created GB gift link.
+    # Grants the configured bypass GB through Remnawave; one redemption per user.
+    if message.text:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1 and start_parts[1].startswith("bgift_"):
+            bgift_code = start_parts[1][6:]  # Strip "bgift_" prefix
+            if bgift_code and 4 <= len(bgift_code) <= 32 and bgift_code.isalnum():
+                language = await resolve_user_language(telegram_id)
+                try:
+                    result = await database.redeem_bypass_gift_link(
+                        code=bgift_code,
+                        telegram_id=telegram_id,
+                    )
+                    status = result.get("status")
+                    keyboard = (
+                        get_language_keyboard(language) if is_new_user
+                        else await get_main_menu_keyboard(language, telegram_id)
+                    )
+
+                    if status == "success":
+                        gb = result.get("gb_amount") or 0
+                        # Grant GB via Remnawave (creates account if user has none).
+                        from app.services.remnawave_service import add_bypass_traffic
+                        extra_bytes = int(gb) * 1024 * 1024 * 1024
+                        granted = False
+                        try:
+                            granted = await add_bypass_traffic(
+                                telegram_id=telegram_id,
+                                extra_bytes=extra_bytes,
+                                subscription_type="basic",
+                                subscription_end=None,
+                                period_days=30,
+                            )
+                        except Exception as rmn_err:
+                            logger.exception(
+                                "BGIFT_REMNAWAVE_FAIL user=%s code=%s err=%s",
+                                telegram_id, bgift_code, rmn_err,
+                            )
+
+                        if granted:
+                            text = i18n_get_text(
+                                language, "bypass_gift.activated",
+                                gb=gb,
+                            )
+                            logger.info(
+                                "BGIFT_REDEEMED user=%s code=%s gb=%s",
+                                telegram_id, bgift_code, gb,
+                            )
+                        else:
+                            # Remnawave failed — DB redemption is recorded, but
+                            # the GB didn't actually land. Inform admin via logs;
+                            # user sees a soft retry message.
+                            text = i18n_get_text(language, "bypass_gift.error_remnawave")
+                            logger.error(
+                                "BGIFT_REDEEMED_BUT_REMNAWAVE_FAILED user=%s code=%s gb=%s",
+                                telegram_id, bgift_code, gb,
+                            )
+                        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                        return
+
+                    error_keys = {
+                        "already_redeemed": "bypass_gift.error_already_redeemed",
+                        "expired": "bypass_gift.error_expired",
+                        "max_uses_reached": "bypass_gift.error_max_uses",
+                        "deleted": "bypass_gift.error_not_found",
+                        "not_found": "bypass_gift.error_not_found",
+                    }
+                    text = i18n_get_text(
+                        language, error_keys.get(status, "bypass_gift.error_not_found"),
+                    )
+                    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                    logger.info(
+                        "BGIFT_REDEMPTION_FAILED user=%s code=%s status=%s",
+                        telegram_id, bgift_code, status,
+                    )
+                    return
+                except Exception as e:
+                    logger.exception(
+                        "BGIFT_REDEMPTION_ERROR user=%s code=%s err=%s",
+                        telegram_id, bgift_code, e,
+                    )
+                    text = i18n_get_text(language, "bypass_gift.error_not_found")
+                    keyboard = (
+                        get_language_keyboard(language) if is_new_user
+                        else await get_main_menu_keyboard(language, telegram_id)
+                    )
+                    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                    return
 
     # GIFT ACTIVATION: Обработка подарочной ссылки /start gift_XXXXX
     if message.text:

@@ -837,4 +837,12 @@ LANG = {
     'traffic.notify_1gb': "🔴 Less than 1 GB of bypass traffic! Bypass will stop soon.",
     'traffic.notify_500mb': "❗️ Only {remaining} of bypass traffic left!",
     'traffic.notify_zero': "🚫 Bypass traffic depleted.\n\nAtlas Fast 🇩🇪 continues working without limits.",
+
+    # Bypass gift links — user-facing redemption messages
+    'bypass_gift.activated': "🎁 <b>Gift activated!</b>\n\nYou received <b>{gb} GB</b> of bypass traffic.\n\nThese GB are now available and work independently of your subscription. Open «Enable bypass» to use them.",
+    'bypass_gift.error_already_redeemed': "🎁 <b>This link was already redeemed by your account.</b>\n\nEach link can be used only once per account. If you need more traffic, ask the sender for a new link.",
+    'bypass_gift.error_not_found': "❌ <b>Gift link not found.</b>\n\nCheck that the link is correct or contact the sender.",
+    'bypass_gift.error_expired': "⏰ <b>This gift link has expired.</b>\n\nAsk the sender to create a new one.",
+    'bypass_gift.error_max_uses': "🚫 <b>Redemption limit reached.</b>\n\nThis link has already been used the maximum number of times. Ask the sender for a new link.",
+    'bypass_gift.error_remnawave': "⚠️ <b>Could not credit your GB — please try again later.</b>\n\nIf the problem persists, contact support.",
 }
