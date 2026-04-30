@@ -508,10 +508,7 @@ async def callback_admin_bgift_view(callback: CallbackQuery, state: FSMContext):
         return
 
     redemptions = await database.get_bypass_gift_link_redemptions(link_id, limit=20)
-    link["redemption_count"] = len(redemptions)  # show count for current page
-    # For accurate count, query DB once more; cheap and safer.
-    full_count = await database.get_bypass_gift_link_redemptions(link_id, limit=10000)
-    link["redemption_count"] = len(full_count)
+    link["redemption_count"] = await database.count_bypass_gift_link_redemptions(link_id)
 
     text = "🎁 <b>Информация о гифт-ссылке</b>\n\n" + _format_link_summary(link)
     if redemptions:

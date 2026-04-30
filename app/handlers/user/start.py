@@ -164,11 +164,20 @@ async def cmd_start(message: Message, state: FSMContext):
 
                     if status == "success":
                         gb = result.get("gb_amount") or 0
+                        link_id = (result.get("link") or {}).get("id")
                         # Grant GB via Remnawave (creates account if user has none).
+                        # We need to make sure there's an active subscription row so
+                        # set_remnawave_uuid (WHERE status='active') can persist the
+                        # UUID. But ensure_bypass_only_subscription clobbers an
+                        # existing active row's expires_at to +10y — so only call it
+                        # when the user has NO active subscription.
                         from app.services.remnawave_service import add_bypass_traffic
                         extra_bytes = int(gb) * 1024 * 1024 * 1024
                         granted = False
                         try:
+                            existing_active = await database.get_subscription(telegram_id)
+                            if not existing_active:
+                                await database.ensure_bypass_only_subscription(telegram_id)
                             granted = await add_bypass_traffic(
                                 telegram_id=telegram_id,
                                 extra_bytes=extra_bytes,
@@ -192,14 +201,24 @@ async def cmd_start(message: Message, state: FSMContext):
                                 telegram_id, bgift_code, gb,
                             )
                         else:
-                            # Remnawave failed — DB redemption is recorded, but
-                            # the GB didn't actually land. Inform admin via logs;
-                            # user sees a soft retry message.
+                            # Remnawave failed — roll back the redemption record so
+                            # the user can retry without hitting the per-user
+                            # uniqueness guard. Logs flag the issue for admin.
+                            if link_id is not None:
+                                try:
+                                    rolled_back = await database.rollback_bypass_gift_redemption(
+                                        link_id, telegram_id,
+                                    )
+                                    logger.error(
+                                        "BGIFT_REMNAWAVE_FAIL_ROLLBACK user=%s code=%s gb=%s rolled_back=%s",
+                                        telegram_id, bgift_code, gb, rolled_back,
+                                    )
+                                except Exception as rb_err:
+                                    logger.exception(
+                                        "BGIFT_ROLLBACK_FAIL user=%s code=%s err=%s",
+                                        telegram_id, bgift_code, rb_err,
+                                    )
                             text = i18n_get_text(language, "bypass_gift.error_remnawave")
-                            logger.error(
-                                "BGIFT_REDEEMED_BUT_REMNAWAVE_FAILED user=%s code=%s gb=%s",
-                                telegram_id, bgift_code, gb,
-                            )
                         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                         return
 

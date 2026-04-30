@@ -203,6 +203,41 @@ async def soft_delete_bypass_gift_link(link_id: int) -> bool:
         return result == "UPDATE 1"
 
 
+async def count_bypass_gift_link_redemptions(link_id: int) -> int:
+    """Total redemption count for a single link (cheap COUNT(*))."""
+    if not _core.DB_READY:
+        return 0
+    pool = await get_pool()
+    if pool is None:
+        return 0
+    async with pool.acquire() as conn:
+        n = await conn.fetchval(
+            "SELECT COUNT(*) FROM bypass_gift_redemptions WHERE link_id = $1",
+            link_id,
+        )
+        return int(n or 0)
+
+
+async def rollback_bypass_gift_redemption(link_id: int, telegram_id: int) -> bool:
+    """Delete a (link_id, telegram_id) redemption record.
+
+    Used when the post-redemption side-effect (Remnawave grant) failed,
+    so the user can retry the same link without being blocked by the
+    UNIQUE(link_id, telegram_id) idempotency guard.
+    """
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM bypass_gift_redemptions WHERE link_id = $1 AND telegram_id = $2",
+            link_id, telegram_id,
+        )
+        return result == "DELETE 1"
+
+
 # ── Redeem ─────────────────────────────────────────────────────────────
 
 async def redeem_bypass_gift_link(code: str, telegram_id: int) -> Dict[str, Any]:

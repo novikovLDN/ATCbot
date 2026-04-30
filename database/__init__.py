@@ -198,8 +198,10 @@ from database.bypass_gift_links import (  # noqa: F401
     get_bypass_gift_link_by_id,
     list_bypass_gift_links,
     get_bypass_gift_link_redemptions,
+    count_bypass_gift_link_redemptions,
     soft_delete_bypass_gift_link,
     redeem_bypass_gift_link,
+    rollback_bypass_gift_redemption,
     get_bypass_gift_links_summary,
 )
 
