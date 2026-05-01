@@ -112,7 +112,11 @@ async def create_remnawave_user(
 
     try:
         short_uuid = str(uuid_lib.uuid4())[:12]
-        expire_str = subscription_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Bypass works by traffic (GB), not by date. Set expireAt far in the
+        # future so Remnawave never auto-expires the user when the main
+        # subscription ends — as long as GB remain, bypass must keep working.
+        far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+        expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         result = await remnawave_api.create_user(
             username=str(telegram_id),
@@ -197,7 +201,10 @@ async def renew_remnawave_user(
         api_uuid = user_data.get("uuid") or rmn_uuid
         current_limit = user_data.get("trafficLimitBytes", 0)
         new_limit = current_limit + traffic_add
-        expire_str = subscription_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Bypass works by traffic (GB), not by date — keep expireAt far future
+        # so Remnawave is never marked expired while GB remain.
+        far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+        expire_str = far_future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         await remnawave_api.update_user(
             api_uuid,

@@ -43,8 +43,135 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text="🌐 QoDev", callback_data="admin:qodev"),
         ],
         [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
+        [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
     ])
     return keyboard
+
+
+def get_admin_bypass_gift_menu_keyboard(language: str = "ru"):
+    """Главное меню раздела «Гифт-ссылки на ГБ»."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать ссылку", callback_data="admin:bgift_create")],
+        [InlineKeyboardButton(text="📋 Все ссылки и статистика", callback_data="admin:bgift_list:0")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+    ])
+
+
+def get_admin_bypass_gift_validity_keyboard(language: str = "ru"):
+    """Шаг 1 — выбор срока действия ссылки (дни)."""
+    days_options = [1, 3, 5, 7, 10, 14]
+    rows = []
+    row = []
+    for d in days_options:
+        row.append(InlineKeyboardButton(
+            text=f"{d} дн.",
+            callback_data=f"admin:bgift_validity:{d}",
+        ))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="admin:bgift_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_admin_bypass_gift_gb_keyboard(language: str = "ru"):
+    """Шаг 2 — выбор количества ГБ (preset + custom)."""
+    gb_options = [1, 3, 5, 10, 20, 50]
+    rows = []
+    row = []
+    for gb in gb_options:
+        row.append(InlineKeyboardButton(
+            text=f"{gb} ГБ",
+            callback_data=f"admin:bgift_gb:{gb}",
+        ))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✏️ Указать вручную", callback_data="admin:bgift_gb_custom")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="admin:bgift_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_admin_bypass_gift_max_uses_keyboard(language: str = "ru"):
+    """Шаг 3 — выбор максимального числа активаций."""
+    use_options = [1, 5, 10, 50, 100]
+    rows = []
+    row = []
+    for u in use_options:
+        row.append(InlineKeyboardButton(
+            text=f"{u}",
+            callback_data=f"admin:bgift_uses:{u}",
+        ))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✏️ Указать вручную", callback_data="admin:bgift_uses_custom")])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="admin:bgift_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_admin_bypass_gift_confirm_keyboard(language: str = "ru"):
+    """Шаг 4 — подтверждение создания."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Создать ссылку", callback_data="admin:bgift_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:bgift_cancel")],
+    ])
+
+
+def get_admin_bypass_gift_link_actions_keyboard(link_id: int, language: str = "ru"):
+    """Действия по конкретной ссылке."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Кто активировал", callback_data=f"admin:bgift_redemptions:{link_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить ссылку", callback_data=f"admin:bgift_delete:{link_id}")],
+        [InlineKeyboardButton(text="📋 К списку", callback_data="admin:bgift_list:0")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:bgift")],
+    ])
+
+
+def get_admin_bypass_gift_back_keyboard(language: str = "ru"):
+    """Возврат в раздел гифт-ссылок."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Список ссылок", callback_data="admin:bgift_list:0")],
+        [InlineKeyboardButton(text="⬅️ В раздел", callback_data="admin:bgift")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+    ])
+
+
+def get_admin_bypass_gift_list_keyboard(
+    links: list,
+    page: int,
+    has_next: bool,
+    language: str = "ru",
+):
+    """Постраничная клавиатура списка ссылок: каждая ссылка — отдельная кнопка."""
+    rows = []
+    for link in links:
+        code = link.get("code", "?")
+        gb = link.get("gb_amount", 0)
+        used = link.get("redemption_count", 0)
+        total = link.get("max_uses", 0)
+        deleted = link.get("deleted_at") is not None
+        prefix = "🗑 " if deleted else ""
+        rows.append([InlineKeyboardButton(
+            text=f"{prefix}{code} · {gb} ГБ · {used}/{total}",
+            callback_data=f"admin:bgift_view:{link.get('id')}",
+        )])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"admin:bgift_list:{page - 1}"))
+    if has_next:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"admin:bgift_list:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="➕ Создать", callback_data="admin:bgift_create")])
+    rows.append([InlineKeyboardButton(text="⬅️ В раздел", callback_data="admin:bgift")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def get_admin_back_keyboard(language: str = "ru"):

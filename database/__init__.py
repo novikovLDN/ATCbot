@@ -190,6 +190,21 @@ from database.traffic import (  # noqa: F401
     delete_user_traffic_discount,
 )
 
+# Bypass gift links (admin-created GB redemption links)
+from database.bypass_gift_links import (  # noqa: F401
+    generate_bypass_gift_code,
+    create_bypass_gift_link,
+    get_bypass_gift_link_by_code,
+    get_bypass_gift_link_by_id,
+    list_bypass_gift_links,
+    get_bypass_gift_link_redemptions,
+    count_bypass_gift_link_redemptions,
+    soft_delete_bypass_gift_link,
+    redeem_bypass_gift_link,
+    rollback_bypass_gift_redemption,
+    get_bypass_gift_links_summary,
+)
+
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
 from database.admin import (  # noqa: F401
     expire_old_pending_purchases,

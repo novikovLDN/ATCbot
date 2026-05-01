@@ -109,6 +109,16 @@ class AdminCreatePromocode(StatesGroup):
     confirm_creation = State()
 
 
+class AdminCreateBypassGiftLink(StatesGroup):
+    """FSM for admin gift-link creation: validity → GB → max_uses → confirm."""
+    waiting_for_validity = State()
+    waiting_for_gb = State()
+    waiting_for_gb_custom = State()
+    waiting_for_max_uses = State()
+    waiting_for_max_uses_custom = State()
+    waiting_for_confirm = State()
+
+
 class AdminChat(StatesGroup):
     waiting_for_user_id = State()
     chatting = State()
