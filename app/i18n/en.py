@@ -853,7 +853,7 @@ LANG = {
         "⚡️ <b>Connect in one tap</b>\n\n"
         "Add the key to start using bypass.\n\n"
         "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
-        "<b>Your bypass key:</b>\n"
+        "<b>Your Crypto key:</b>\n"
         "<code>{key}</code>\n"
         "<i>Tap the key to copy it.</i>\n\n"
         "━━━━━━━━━━━━━━━━━\n"
@@ -868,7 +868,7 @@ LANG = {
         "2. Tap <b>+</b> and choose <b>«Import from clipboard»</b>\n"
         "3. Select the new profile\n"
         "4. Toggle the connection on\n\n"
-        "<blockquote>💡 The «Add key» buttons above do all of this automatically — no copying needed.</blockquote>"
+        "<blockquote>💡 The Crypto key works in Happ. For V2RayTun use the «Add key in V2RayTun» button above.</blockquote>"
     ),
     'bgift_setup.connect_no_key': (
         "⚡️ <b>Connect in one tap</b>\n\n"

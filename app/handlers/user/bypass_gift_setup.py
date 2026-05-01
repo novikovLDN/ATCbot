@@ -9,14 +9,17 @@ bypass GB delivery:
   2. Install app (per-platform photo + download links — same content as
      the standard setup_step1, but isolated callbacks so the gift flow
      can be evolved without affecting the regular onboarding path)
-  3. Connect screen with the bypass subscription URL, copy-friendly code
-     block, and short Happ / V2RayTun import instructions.
+  3. Connect screen with the Remnawave Happ Crypto link (test variant —
+     fall back to the standard subscription URL if the panel doesn't
+     expose a crypto link).
 
 This screen is intentionally NOT registered to the global menu — it's
 only opened by `bgift_setup` callback emitted from /start bgift_<CODE>.
 """
 import asyncio
+import html
 import logging
+from urllib.parse import quote, urlparse
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -60,6 +63,27 @@ def _download_links() -> dict:
     return _DOWNLOAD_LINKS
 
 
+def _resolve_public_base_url() -> str:
+    """Return https://host base for /open/<client> redirect endpoint.
+
+    Returns "" if neither PUBLIC_BASE_URL nor a parseable WEBHOOK_URL is
+    available — caller MUST skip deeplink buttons in that case (an empty
+    or malformed url= breaks Telegram's send_message).
+    """
+    pub = (config.PUBLIC_BASE_URL or "").strip()
+    if pub:
+        return pub.rstrip("/")
+    wh = (getattr(config, "WEBHOOK_URL", "") or "").strip()
+    if wh:
+        try:
+            parsed = urlparse(wh)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+        except Exception:
+            pass
+    return ""
+
+
 SUPPORT_URL = "https://t.me/Atlas_SupportSecurity"
 
 
@@ -75,6 +99,15 @@ async def callback_bgift_setup(callback: CallbackQuery):
 
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
+
+    # Idempotent safety net: bump Remnawave expiry to far future for users
+    # whose account was created before the +10y fix (commit 6c89ae3).
+    if config.REMNAWAVE_ENABLED:
+        try:
+            from app.services.remnawave_service import extend_remnawave_for_bypass_bg
+            extend_remnawave_for_bypass_bg(telegram_id)
+        except Exception as e:
+            logger.warning("BGIFT_EXTEND_BYPASS_FAIL user=%s err=%s", telegram_id, e)
 
     text = i18n_get_text(language, "bgift_setup.select_device")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -213,27 +246,33 @@ async def callback_bgift_step1(callback: CallbackQuery):
 
 # ── Step 2: connect (bypass key + tailored instructions) ─────────────
 
-async def _fetch_bypass_url(telegram_id: int) -> str:
-    """Get the user's Remnawave bypass subscription URL."""
+async def _fetch_keys(telegram_id: int) -> tuple:
+    """Return (crypto_link, sub_url) for the user.
+
+    crypto_link — Remnawave Happ Crypto deeplink (preferred for this screen)
+    sub_url     — Standard subscription URL (fallback + auto-import button)
+    Either may be empty.
+    """
     if not config.REMNAWAVE_ENABLED:
-        return ""
+        return ("", "")
     try:
         from app.services import remnawave_api
         rmn_uuid = await database.get_remnawave_uuid(telegram_id)
         if not rmn_uuid:
-            return ""
+            return ("", "")
+        # Two requests but cached at HTTP layer; both call /api/users/{uuid}
+        crypto_link = await remnawave_api.get_user_happ_crypto_link(rmn_uuid) or ""
         traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-        if not traffic:
-            return ""
-        return (traffic.get("subscriptionUrl") or "").strip()
+        sub_url = (traffic or {}).get("subscriptionUrl", "") or ""
+        return (crypto_link, sub_url)
     except Exception as e:
-        logger.warning("BGIFT_FETCH_BYPASS_URL_FAIL user=%s err=%s", telegram_id, e)
-        return ""
+        logger.warning("BGIFT_FETCH_KEYS_FAIL user=%s err=%s", telegram_id, e)
+        return ("", "")
 
 
 @bgift_setup_router.callback_query(F.data.startswith("bgift_step2:"))
 async def callback_bgift_step2(callback: CallbackQuery):
-    """Connect screen — bypass key + Happ / V2RayTun instructions."""
+    """Connect screen — Remnawave Happ Crypto link + import instructions."""
     try:
         await callback.answer()
     except Exception:
@@ -246,37 +285,44 @@ async def callback_bgift_step2(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    bypass_url = await _fetch_bypass_url(telegram_id)
-    if bypass_url:
+    crypto_link, sub_url = await _fetch_keys(telegram_id)
+
+    # Prefer the Remnawave-native crypto link for this test screen.
+    # Fall back to the standard subscription URL if the panel doesn't
+    # expose a crypto link.
+    display_key = crypto_link or sub_url
+    using_crypto = bool(crypto_link)
+
+    if display_key:
+        # HTML-escape — subscription URLs may contain "&" in query strings
+        # which would break <code> rendering otherwise.
         text = i18n_get_text(
             language, "bgift_setup.connect_screen",
-            key=bypass_url,
+            key=html.escape(display_key, quote=False),
         )
     else:
-        # Edge case: Remnawave UUID gone or HTTP failure.
         text = i18n_get_text(language, "bgift_setup.connect_no_key")
 
     buttons: list = []
+    base_url = _resolve_public_base_url()
 
-    # One-tap import deeplinks (only if we have a key and a public base URL)
-    if bypass_url:
+    # One-tap import button via /open/<client> redirect endpoint. The
+    # endpoint takes the *standard* subscription URL — Happ then converts
+    # it to its native add format. We only show this if we have a real
+    # public base URL AND a sub_url to pass.
+    if base_url and sub_url:
         try:
-            from urllib.parse import quote, urlparse
-            if config.PUBLIC_BASE_URL:
-                base_url = config.PUBLIC_BASE_URL
-            else:
-                parsed = urlparse(config.WEBHOOK_URL)
-                base_url = f"{parsed.scheme}://{parsed.netloc}"
             buttons.append([InlineKeyboardButton(
                 text="🌐 Добавить ключ в Happ",
-                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+                url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
             )])
             buttons.append([InlineKeyboardButton(
                 text="🌐 Добавить ключ в V2RayTun",
-                url=f"{base_url}/open/v2raytun?url={quote(bypass_url, safe='')}",
+                url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
             )])
         except Exception as e:
             logger.warning("BGIFT_DEEPLINK_BUILD_FAIL user=%s err=%s", telegram_id, e)
+            buttons = []  # drop partial deeplink rows on failure
 
     buttons.append([InlineKeyboardButton(
         text="✅ Готово",
@@ -293,13 +339,22 @@ async def callback_bgift_step2(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    if not using_crypto and display_key:
+        logger.info(
+            "BGIFT_STEP2_FALLBACK_TO_SUB_URL user=%s — Remnawave panel didn't expose Happ Crypto Link",
+            telegram_id,
+        )
+
     photo_id = _setup_photo("install_keys")
     try:
         await callback.message.delete()
     except Exception:
         pass
 
-    if photo_id:
+    # Telegram caption limit is 1024; text-message limit is 4096. Long
+    # crypto links can push the caption over — fall back to text-only.
+    CAPTION_LIMIT = 1024
+    if photo_id and len(text) <= CAPTION_LIMIT:
         await callback.bot.send_photo(
             chat_id=telegram_id,
             photo=photo_id,
