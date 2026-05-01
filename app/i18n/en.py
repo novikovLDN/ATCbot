@@ -854,7 +854,7 @@ LANG = {
         "Add the key to start using bypass.\n\n"
         "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
         "<b>Your Crypto key:</b>\n"
-        "<code>{key}</code>\n"
+        "<code>{crypto_key}</code>\n"
         "<i>Tap the key to copy it.</i>\n\n"
         "━━━━━━━━━━━━━━━━━\n"
         "<b>📲 Manual setup</b>\n\n"

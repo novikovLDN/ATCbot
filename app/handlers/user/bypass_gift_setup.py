@@ -298,7 +298,7 @@ async def callback_bgift_step2(callback: CallbackQuery):
         # which would break <code> rendering otherwise.
         text = i18n_get_text(
             language, "bgift_setup.connect_screen",
-            key=html.escape(display_key, quote=False),
+            crypto_key=html.escape(display_key, quote=False),
         )
     else:
         text = i18n_get_text(language, "bgift_setup.connect_no_key")
