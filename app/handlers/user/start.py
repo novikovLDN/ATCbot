@@ -157,6 +157,7 @@ async def cmd_start(message: Message, state: FSMContext):
                         telegram_id=telegram_id,
                     )
                     status = result.get("status")
+                    # Default keyboard for non-success outcomes (errors).
                     keyboard = (
                         get_language_keyboard(language) if is_new_user
                         else await get_main_menu_keyboard(language, telegram_id)
@@ -196,6 +197,15 @@ async def cmd_start(message: Message, state: FSMContext):
                                 language, "bypass_gift.activated",
                                 gb=gb,
                             )
+                            # Success keyboard: dedicated "Connect Bypass" button
+                            # leading to the gift-only setup flow.
+                            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+                            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                                [InlineKeyboardButton(
+                                    text=i18n_get_text(language, "bypass_gift.connect_btn"),
+                                    callback_data="bgift_setup",
+                                )],
+                            ])
                             logger.info(
                                 "BGIFT_REDEEMED user=%s code=%s gb=%s",
                                 telegram_id, bgift_code, gb,

@@ -845,4 +845,36 @@ LANG = {
     'bypass_gift.error_expired': "⏰ <b>This gift link has expired.</b>\n\nAsk the sender to create a new one.",
     'bypass_gift.error_max_uses': "🚫 <b>Redemption limit reached.</b>\n\nThis link has already been used the maximum number of times. Ask the sender for a new link.",
     'bypass_gift.error_remnawave': "⚠️ <b>Could not credit your GB — please try again later.</b>\n\nIf the problem persists, contact support.",
+    'bypass_gift.connect_btn': "🌐 Connect Bypass",
+
+    # Bypass gift — dedicated setup flow (only reachable from gift link)
+    'bgift_setup.select_device': "📱 <b>Choose your device</b>\n\nWe'll set up bypass in two short steps. First, pick the device you'll use.",
+    'bgift_setup.connect_screen': (
+        "⚡️ <b>Connect in one tap</b>\n\n"
+        "Add the key to start using bypass.\n\n"
+        "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
+        "<b>Your bypass key:</b>\n"
+        "<code>{key}</code>\n"
+        "<i>Tap the key to copy it.</i>\n\n"
+        "━━━━━━━━━━━━━━━━━\n"
+        "<b>📲 Manual setup</b>\n\n"
+        "<b>In Happ:</b>\n"
+        "1. Open Happ\n"
+        "2. Tap <b>+</b> in the top-right corner\n"
+        "3. Choose <b>«Add from clipboard»</b>\n"
+        "4. Toggle the connection on\n\n"
+        "<b>In V2RayTun:</b>\n"
+        "1. Open V2RayTun\n"
+        "2. Tap <b>+</b> and choose <b>«Import from clipboard»</b>\n"
+        "3. Select the new profile\n"
+        "4. Toggle the connection on\n\n"
+        "<blockquote>💡 The «Add key» buttons above do all of this automatically — no copying needed.</blockquote>"
+    ),
+    'bgift_setup.connect_no_key': (
+        "⚡️ <b>Connect in one tap</b>\n\n"
+        "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
+        "⚠️ We couldn't fetch your bypass key. "
+        "Wait a minute and tap «Back → Next» again. "
+        "If the error persists, please contact support."
+    ),
 }
