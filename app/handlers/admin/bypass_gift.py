@@ -258,15 +258,17 @@ async def message_admin_bgift_gb_custom(message: Message, state: FSMContext):
 
 
 async def _proceed_to_max_uses(source, state: FSMContext, gb: int):
-    """Helper: store gb, advance to max-uses step, send the prompt."""
+    """Helper: store gb, advance to max-uses step, send the prompt.
+
+    `source` is either a CallbackQuery (preset GB selection) or a Message
+    (custom GB entry). Both expose `from_user`.
+    """
     data = await state.get_data()
     days = data.get("bgift_validity_days")
     await state.update_data(bgift_gb=gb)
     await state.set_state(AdminCreateBypassGiftLink.waiting_for_max_uses)
 
-    language = await resolve_user_language(
-        source.from_user.id if hasattr(source, "from_user") else source.message.from_user.id
-    )
+    language = await resolve_user_language(source.from_user.id)
     text = (
         f"🎁 <b>Создание гифт-ссылки</b>\n\n"
         f"✅ Срок действия: <b>{days} дн.</b>\n"
@@ -344,15 +346,14 @@ async def message_admin_bgift_uses_custom(message: Message, state: FSMContext):
 
 
 async def _proceed_to_confirm(source, state: FSMContext, uses: int):
+    """`source` is CallbackQuery (preset uses) or Message (custom uses)."""
     data = await state.get_data()
     days = data.get("bgift_validity_days")
     gb = data.get("bgift_gb")
     await state.update_data(bgift_max_uses=uses)
     await state.set_state(AdminCreateBypassGiftLink.waiting_for_confirm)
 
-    language = await resolve_user_language(
-        source.from_user.id if hasattr(source, "from_user") else source.message.from_user.id
-    )
+    language = await resolve_user_language(source.from_user.id)
     text = (
         f"🎁 <b>Подтверждение создания</b>\n\n"
         f"⏳ Срок действия ссылки: <b>{days} дн.</b>\n"
