@@ -428,6 +428,15 @@ async def process_admin_user_id(message: Message, state: FSMContext):
         if overview.is_vip:
             text += f"\n👑 VIP-статус: активен\n"
 
+        # Traffic discount indicator (separate from subscription discount)
+        if overview.user_traffic_discount:
+            tdp = overview.user_traffic_discount.get("discount_percent", 0)
+            tde = overview.user_traffic_discount.get("expires_at")
+            if tde:
+                text += f"\n🌐 Скидка на ГБ обхода: {tdp}% (до {tde.strftime('%d.%m.%Y')})\n"
+            else:
+                text += f"\n🌐 Скидка на ГБ обхода: {tdp}% (бессрочно)\n"
+
         # Используем actions для определения доступных действий
         sub_type = (overview.subscription.get("subscription_type") or "basic").strip().lower() if overview.subscription else "basic"
         if sub_type not in config.VALID_SUBSCRIPTION_TYPES:
@@ -440,6 +449,7 @@ async def process_admin_user_id(message: Message, state: FSMContext):
                 has_discount=overview.user_discount is not None,
                 is_vip=overview.is_vip,
                 subscription_type=sub_type,
+                has_traffic_discount=overview.user_traffic_discount is not None,
             ),
             parse_mode="HTML"
         )
@@ -916,6 +926,7 @@ async def callback_admin_switch_notify(callback: CallbackQuery, bot: Bot):
             is_vip=overview.is_vip,
             subscription_type=sub_type,
             language=await resolve_user_language(callback.from_user.id),
+            has_traffic_discount=overview.user_traffic_discount is not None,
         )
         text = f"✅ Тариф изменён на {tariff_label}."
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")

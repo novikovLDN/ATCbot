@@ -38,6 +38,7 @@ class AdminUserOverview:
     user_discount: Optional[Dict[str, Any]]
     is_vip: bool
     trial_available: bool
+    user_traffic_discount: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -92,15 +93,18 @@ async def get_admin_user_overview(user_id: int) -> AdminUserOverview:
     # Get user statistics
     stats = await database.get_user_extended_stats(user_id)
     
-    # Get user discount
+    # Get user discount (subscription discount)
     user_discount = await database.get_user_discount(user_id)
-    
+
+    # Get user traffic discount (bypass GB purchases)
+    user_traffic_discount = await database.get_user_traffic_discount(user_id)
+
     # Get VIP status
     is_vip = await database.is_vip_user(user_id)
-    
+
     # Check trial availability using trial service
     trial_available = await trial_service.is_trial_available(user_id)
-    
+
     return AdminUserOverview(
         user=user,
         subscription=subscription,
@@ -108,7 +112,8 @@ async def get_admin_user_overview(user_id: int) -> AdminUserOverview:
         stats=stats,
         user_discount=user_discount,
         is_vip=is_vip,
-        trial_available=trial_available
+        trial_available=trial_available,
+        user_traffic_discount=user_traffic_discount,
     )
 
 

@@ -61,6 +61,12 @@ class AdminDiscountCreate(StatesGroup):
     waiting_for_expires = State()
 
 
+class AdminTrafficDiscountCreate(StatesGroup):
+    """Per-user discount on bypass GB purchases (separate from sub discount)."""
+    waiting_for_percent = State()
+    waiting_for_expires = State()
+
+
 class AdminTrafficEdit(StatesGroup):
     waiting_for_amount = State()
     waiting_for_confirm = State()

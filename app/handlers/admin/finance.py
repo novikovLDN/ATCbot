@@ -19,12 +19,15 @@ from app.handlers.common.states import (
     AdminCreditBalance,
     AdminDebitBalance,
     AdminDiscountCreate,
+    AdminTrafficDiscountCreate,
     IncidentEdit,
 )
 from app.handlers.admin.keyboards import (
     get_admin_back_keyboard,
     get_admin_discount_percent_keyboard,
     get_admin_discount_expires_keyboard,
+    get_admin_traffic_discount_percent_keyboard,
+    get_admin_traffic_discount_expires_keyboard,
 )
 from app.handlers.common.utils import safe_edit_text
 
@@ -279,7 +282,7 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
         language = await resolve_user_language(callback.from_user.id)
         await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
         return
-    
+
     language = await resolve_user_language(callback.from_user.id)
 
     try:
@@ -290,7 +293,7 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
             telegram_id=user_id,
             deleted_by=callback.from_user.id
         )
-        
+
         if success:
             text = "✅ Персональная скидка удалена"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
@@ -299,9 +302,299 @@ async def callback_admin_discount_delete(callback: CallbackQuery):
             text = "❌ Скидка не найдена или уже удалена"
             await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
             await callback.answer("Скидка не найдена", show_alert=True)
-        
+
     except Exception as e:
         logging.exception(f"Error in callback_admin_discount_delete: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+# ====================================================================================
+# TRAFFIC-PACK DISCOUNT (per-user discount on bypass GB purchases)
+# ====================================================================================
+#
+# Mirrors the subscription discount flow but writes to user_traffic_discounts
+# (consumed by app/handlers/traffic.py:get_user_traffic_discount).
+
+@admin_finance_router.callback_query(F.data.startswith("admin:tdiscount_create:"))
+async def callback_admin_tdiscount_create(callback: CallbackQuery):
+    """Назначить скидку на покупку ГБ обхода — выбор процента."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    try:
+        user_id = int(callback.data.split(":")[2])
+
+        existing = await database.get_user_traffic_discount(user_id)
+        if existing:
+            pct = existing.get("discount_percent", 0)
+            text = (
+                f"❌ У пользователя уже есть скидка <b>{pct}%</b> на ГБ обхода.\n\n"
+                "Сначала удалите существующую."
+            )
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
+            await callback.answer("Скидка уже существует", show_alert=True)
+            return
+
+        text = "🌐 <b>Скидка на ГБ обхода</b>\n\nВыберите процент:"
+        await safe_edit_text(
+            callback.message, text,
+            reply_markup=get_admin_traffic_discount_percent_keyboard(user_id, language),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_tdiscount_create: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@admin_finance_router.callback_query(F.data.startswith("admin:tdiscount_percent:"))
+async def callback_admin_tdiscount_percent(callback: CallbackQuery):
+    """Выбран процент — показать клавиатуру срока действия."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        discount_percent = int(parts[3])
+        if not (1 <= discount_percent <= 99):
+            await callback.answer("Неверный процент", show_alert=True)
+            return
+        text = f"🌐 <b>Скидка {discount_percent}% на ГБ обхода</b>\n\nВыберите срок действия:"
+        await safe_edit_text(
+            callback.message, text,
+            reply_markup=get_admin_traffic_discount_expires_keyboard(user_id, discount_percent, language),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_tdiscount_percent: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@admin_finance_router.callback_query(F.data.startswith("admin:tdiscount_percent_manual:"))
+async def callback_admin_tdiscount_percent_manual(callback: CallbackQuery, state: FSMContext):
+    """Ручной ввод процента."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    try:
+        user_id = int(callback.data.split(":")[2])
+        await state.update_data(tdiscount_user_id=user_id)
+        await state.set_state(AdminTrafficDiscountCreate.waiting_for_percent)
+
+        text = "🌐 <b>Скидка на ГБ обхода</b>\n\nВведите процент скидки (1–99):"
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_tdiscount_percent_manual: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@admin_finance_router.message(AdminTrafficDiscountCreate.waiting_for_percent)
+async def process_admin_tdiscount_percent(message: Message, state: FSMContext):
+    """FSM: получили процент — переходим к выбору срока."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
+        await state.clear()
+        return
+    language = await resolve_user_language(message.from_user.id)
+    try:
+        try:
+            discount_percent = int((message.text or "").strip())
+        except ValueError:
+            await message.answer("Введите число от 1 до 99:", parse_mode="HTML")
+            return
+        if not (1 <= discount_percent <= 99):
+            await message.answer("Процент должен быть от 1 до 99. Попробуйте ещё раз:", parse_mode="HTML")
+            return
+
+        data = await state.get_data()
+        user_id = data.get("tdiscount_user_id")
+        if not user_id:
+            await message.answer("Сессия устарела. Откройте раздел пользователя заново.", parse_mode="HTML")
+            await state.clear()
+            return
+        await state.update_data(tdiscount_percent=discount_percent)
+
+        text = f"🌐 <b>Скидка {discount_percent}% на ГБ обхода</b>\n\nВыберите срок действия:"
+        await message.answer(
+            text,
+            reply_markup=get_admin_traffic_discount_expires_keyboard(user_id, discount_percent, language),
+            parse_mode="HTML",
+        )
+        await state.set_state(AdminTrafficDiscountCreate.waiting_for_expires)
+    except Exception as e:
+        logger.exception(f"Error in process_admin_tdiscount_percent: {e}")
+        await message.answer("Ошибка. Проверь логи.", parse_mode="HTML")
+        await state.clear()
+
+
+@admin_finance_router.callback_query(F.data.startswith("admin:tdiscount_expires:"))
+async def callback_admin_tdiscount_expires(callback: CallbackQuery, bot: Bot):
+    """Выбран срок — сохраняем скидку."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        discount_percent = int(parts[3])
+        expires_days = int(parts[4])
+
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(days=expires_days)
+            if expires_days > 0 else None
+        )
+
+        success = await database.create_user_traffic_discount(
+            telegram_id=user_id,
+            discount_percent=discount_percent,
+            expires_at=expires_at,
+            created_by=callback.from_user.id,
+        )
+
+        if success:
+            await database._log_audit_event_atomic_standalone(
+                "admin_traffic_discount_created", callback.from_user.id, user_id,
+                f"Traffic discount {discount_percent}% expires_days={expires_days}",
+            )
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
+            text = (
+                f"✅ Скидка <b>{discount_percent}%</b> на покупку ГБ обхода назначена\n\n"
+                f"Пользователь: <code>{user_id}</code>\n"
+                f"Срок действия: {expires_str}"
+            )
+            await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
+            await callback.answer("Скидка назначена", show_alert=True)
+        else:
+            await safe_edit_text(callback.message, "❌ Ошибка при создании скидки", reply_markup=get_admin_back_keyboard(language))
+            await callback.answer("Ошибка", show_alert=True)
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_tdiscount_expires: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@admin_finance_router.callback_query(F.data.startswith("admin:tdiscount_expires_manual:"))
+async def callback_admin_tdiscount_expires_manual(callback: CallbackQuery, state: FSMContext):
+    """Ручной ввод срока."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    try:
+        parts = callback.data.split(":")
+        user_id = int(parts[2])
+        discount_percent = int(parts[3])
+        await state.update_data(tdiscount_user_id=user_id, tdiscount_percent=discount_percent)
+        await state.set_state(AdminTrafficDiscountCreate.waiting_for_expires)
+
+        text = (
+            "🌐 <b>Скидка на ГБ обхода</b>\n\n"
+            "Введите количество дней действия скидки (или <code>0</code> для бессрочной):"
+        )
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_tdiscount_expires_manual: {e}")
+        await callback.answer("Ошибка. Проверь логи.", show_alert=True)
+
+
+@admin_finance_router.message(AdminTrafficDiscountCreate.waiting_for_expires)
+async def process_admin_tdiscount_expires(message: Message, state: FSMContext, bot: Bot):
+    """FSM: получили срок — сохраняем скидку."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(message.from_user.id)
+        await message.answer(i18n_get_text(language, "admin.access_denied"), parse_mode="HTML")
+        await state.clear()
+        return
+    language = await resolve_user_language(message.from_user.id)
+    try:
+        data = await state.get_data()
+        user_id = data.get("tdiscount_user_id")
+        discount_percent = data.get("tdiscount_percent")
+        if not user_id or not discount_percent:
+            await message.answer("Сессия устарела. Откройте раздел пользователя заново.", parse_mode="HTML")
+            await state.clear()
+            return
+
+        try:
+            expires_days = int((message.text or "").strip())
+        except ValueError:
+            await message.answer("Введите число (количество дней или 0 для бессрочной):", parse_mode="HTML")
+            return
+        if expires_days < 0:
+            await message.answer("Количество дней должно быть неотрицательным. Попробуйте ещё раз:", parse_mode="HTML")
+            return
+
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(days=expires_days)
+            if expires_days > 0 else None
+        )
+
+        success = await database.create_user_traffic_discount(
+            telegram_id=user_id,
+            discount_percent=discount_percent,
+            expires_at=expires_at,
+            created_by=message.from_user.id,
+        )
+
+        if success:
+            await database._log_audit_event_atomic_standalone(
+                "admin_traffic_discount_created", message.from_user.id, user_id,
+                f"Traffic discount {discount_percent}% expires_days={expires_days}",
+            )
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if expires_at else "бессрочно"
+            text = (
+                f"✅ Скидка <b>{discount_percent}%</b> на покупку ГБ обхода назначена\n\n"
+                f"Пользователь: <code>{user_id}</code>\n"
+                f"Срок действия: {expires_str}"
+            )
+            await message.answer(text, reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
+        else:
+            await message.answer("❌ Ошибка при создании скидки", reply_markup=get_admin_back_keyboard(language), parse_mode="HTML")
+
+        await state.clear()
+    except Exception as e:
+        logger.exception(f"Error in process_admin_tdiscount_expires: {e}")
+        await message.answer("Ошибка. Проверь логи.", parse_mode="HTML")
+        await state.clear()
+
+
+@admin_finance_router.callback_query(F.data.startswith("admin:tdiscount_delete:"))
+async def callback_admin_tdiscount_delete(callback: CallbackQuery):
+    """Удалить скидку на ГБ обхода."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        language = await resolve_user_language(callback.from_user.id)
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    try:
+        user_id = int(callback.data.split(":")[2])
+        success = await database.delete_user_traffic_discount(user_id)
+        if success:
+            await database._log_audit_event_atomic_standalone(
+                "admin_traffic_discount_deleted", callback.from_user.id, user_id,
+                "Traffic discount removed",
+            )
+            text = "✅ Скидка на ГБ обхода удалена"
+            await callback.answer("Скидка удалена", show_alert=True)
+        else:
+            text = "❌ Скидка не найдена или уже удалена"
+            await callback.answer("Скидка не найдена", show_alert=True)
+        await safe_edit_text(callback.message, text, reply_markup=get_admin_back_keyboard(language))
+    except Exception as e:
+        logger.exception(f"Error in callback_admin_tdiscount_delete: {e}")
         await callback.answer("Ошибка. Проверь логи.", show_alert=True)
 
 

@@ -192,7 +192,15 @@ def get_admin_export_keyboard(language: str = "ru"):
     return keyboard
 
 
-def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int = None, has_discount: bool = False, is_vip: bool = False, subscription_type: str = "basic", language: str = "ru"):
+def get_admin_user_keyboard(
+    has_active_subscription: bool = False,
+    user_id: int = None,
+    has_discount: bool = False,
+    is_vip: bool = False,
+    subscription_type: str = "basic",
+    language: str = "ru",
+    has_traffic_discount: bool = False,
+):
     """Клавиатура для раздела пользователя. subscription_type нужен для кнопки «Заменить подписку»."""
     buttons = []
     if has_active_subscription:
@@ -213,11 +221,16 @@ def get_admin_user_keyboard(has_active_subscription: bool = False, user_id: int 
             else:
                 buttons.append([InlineKeyboardButton(text="📦 Перевести на Basic", callback_data=f"admin_switch_basic:{user_id}")])
         buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_access"), callback_data=f"admin:revoke:user:{user_id}")])
-        # Кнопки управления скидками
+        # Кнопки управления скидками на подписку
         if has_discount:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.delete_discount"), callback_data=f"admin:discount_delete:{user_id}")])
         else:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.create_discount"), callback_data=f"admin:discount_create:{user_id}")])
+        # Кнопки управления скидками на покупку ГБ обхода
+        if has_traffic_discount:
+            buttons.append([InlineKeyboardButton(text="❌ Удалить скидку на ГБ", callback_data=f"admin:tdiscount_delete:{user_id}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="🌐 Скидка на ГБ обхода", callback_data=f"admin:tdiscount_create:{user_id}")])
         # Кнопки управления VIP-статусом
         if is_vip:
             buttons.append([InlineKeyboardButton(text=i18n_get_text(language, "admin.revoke_vip"), callback_data=f"admin:vip_revoke:{user_id}")])
@@ -427,3 +440,51 @@ def get_admin_discount_expires_keyboard(user_id: int, discount_percent: int, lan
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     return keyboard
+
+
+# ── Traffic-pack discount (separate from subscription discount) ─────
+
+def get_admin_traffic_discount_percent_keyboard(user_id: int, language: str = "ru"):
+    """Шаг 1 — выбор процента скидки на покупку ГБ обхода."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="10%", callback_data=f"admin:tdiscount_percent:{user_id}:10"),
+            InlineKeyboardButton(text="15%", callback_data=f"admin:tdiscount_percent:{user_id}:15"),
+        ],
+        [
+            InlineKeyboardButton(text="25%", callback_data=f"admin:tdiscount_percent:{user_id}:25"),
+            InlineKeyboardButton(text="50%", callback_data=f"admin:tdiscount_percent:{user_id}:50"),
+        ],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "admin.discount_manual"),
+            callback_data=f"admin:tdiscount_percent_manual:{user_id}",
+        )],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+    ])
+
+
+def get_admin_traffic_discount_expires_keyboard(user_id: int, discount_percent: int, language: str = "ru"):
+    """Шаг 2 — выбор срока действия скидки на ГБ."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "admin.discount_expires_7"),
+                callback_data=f"admin:tdiscount_expires:{user_id}:{discount_percent}:7",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "admin.discount_expires_30"),
+                callback_data=f"admin:tdiscount_expires:{user_id}:{discount_percent}:30",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "admin.discount_expires_unlimited"),
+                callback_data=f"admin:tdiscount_expires:{user_id}:{discount_percent}:0",
+            ),
+            InlineKeyboardButton(
+                text=i18n_get_text(language, "admin.discount_manual"),
+                callback_data=f"admin:tdiscount_expires_manual:{user_id}:{discount_percent}",
+            ),
+        ],
+        [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+    ])
