@@ -741,21 +741,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
                             )
                     if not rmn_success:
                         # No UUID or stale (404) — clear and create fresh.
-                        # If the user has no active subscription row, set_remnawave_uuid
-                        # (filtered by status='active') would silently no-op and the
-                        # newly created Remnawave UUID would be lost. Bootstrap a
-                        # bypass-only subscription row in that case so the UPDATE has
-                        # a row to write to. Skip when an active sub already exists
-                        # (don't clobber expires_at of a paid subscription).
+                        # set_remnawave_uuid is now status-agnostic and will
+                        # bootstrap a row if none exists, so the new UUID is
+                        # always persisted regardless of subscription state.
                         if rmn_uuid:
                             await database.clear_remnawave_uuid(telegram_id)
-                        existing_active = await database.get_subscription(telegram_id)
-                        if not existing_active:
-                            await database.ensure_bypass_only_subscription(telegram_id)
-                            logger.info(
-                                "TRAFFIC_PACK_BYPASS_ONLY_BOOTSTRAPPED user=%s gb=%s",
-                                telegram_id, traffic_gb,
-                            )
                         try:
                             from app.services import remnawave_service
                             from datetime import datetime, timezone, timedelta

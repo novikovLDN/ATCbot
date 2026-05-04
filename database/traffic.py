@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 import database.core as _core
-from database.core import get_pool
+from database.core import get_pool, _to_db_utc
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 # ── Remnawave UUID ─────────────────────────────────────────────────────
 
 async def get_remnawave_uuid(telegram_id: int) -> Optional[str]:
+    """Return user's Remnawave UUID, or None.
+
+    Intentionally NOT filtered by subscription status — the Remnawave UUID
+    is associated with the user (telegram_id), not with the active state of
+    their subscription. We want callers (add_traffic, extend_remnawave,
+    disable_remnawave, traffic-pack purchase, etc.) to always find the UUID
+    when one exists, regardless of whether the subscription is active,
+    expired, or in bypass-only mode.
+    """
     if not _core.DB_READY:
         return None
     pool = await get_pool()
@@ -26,22 +35,50 @@ async def get_remnawave_uuid(telegram_id: int) -> Optional[str]:
         return None
     async with pool.acquire() as conn:
         return await conn.fetchval(
-            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            "SELECT remnawave_uuid FROM subscriptions WHERE telegram_id = $1",
             telegram_id,
         )
 
 
 async def set_remnawave_uuid(telegram_id: int, uuid: str) -> None:
+    """Persist Remnawave UUID for a user.
+
+    Status-agnostic: writes to whatever subscription row exists for the user.
+    If no row exists at all, bootstrap a minimal bypass-only row so the UUID
+    isn't lost (subscriptions.telegram_id is UNIQUE — exactly one row per
+    user). This guarantees create_remnawave_user / set_remnawave_uuid never
+    silently no-op, regardless of subscription state.
+    """
     if not _core.DB_READY:
         return
     pool = await get_pool()
     if pool is None:
         return
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE subscriptions SET remnawave_uuid = $1 WHERE telegram_id = $2 AND status = 'active'",
+        result = await conn.execute(
+            "UPDATE subscriptions SET remnawave_uuid = $1 WHERE telegram_id = $2",
             uuid, telegram_id,
         )
+        if result == "UPDATE 0":
+            # No subscription row exists — bootstrap a bypass-only row so
+            # subsequent operations can find the UUID.
+            from datetime import datetime, timezone, timedelta
+            far_future = datetime.now(timezone.utc) + timedelta(days=3650)
+            try:
+                # Ensure column exists on legacy schemas (no-op on modern ones)
+                await conn.execute(
+                    "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS is_bypass_only BOOLEAN DEFAULT FALSE"
+                )
+            except Exception:
+                pass
+            await conn.execute(
+                """INSERT INTO subscriptions
+                       (telegram_id, status, subscription_type, is_bypass_only,
+                        expires_at, source, remnawave_uuid)
+                   VALUES ($1, 'active', 'basic', TRUE, $2, 'bypass_only', $3)
+                   ON CONFLICT (telegram_id) DO UPDATE SET remnawave_uuid = EXCLUDED.remnawave_uuid""",
+                telegram_id, _to_db_utc(far_future), uuid,
+            )
 
 
 async def clear_remnawave_uuid(telegram_id: int) -> None:
