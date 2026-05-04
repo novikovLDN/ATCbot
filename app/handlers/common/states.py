@@ -161,5 +161,14 @@ class TelegramStarsState(StatesGroup):
     processing_payment = State()
 
 
+class SteamPurchaseState(StatesGroup):
+    """Shop: «Пополнить Steam». Disclaimer → amount → login → payment."""
+    waiting_for_disclaimer_ack = State()  # noop placeholder; ack is a button click
+    choose_amount = State()
+    waiting_for_login = State()
+    choose_payment_method = State()
+    processing_payment = State()
+
+
 class BomberState(StatesGroup):
     playing = State()
