@@ -415,9 +415,22 @@ async def _handle_traffic_pack_confirmation(
                     provider, telegram_id, traffic_gb, rmn_err,
                 )
         if not rmn_success:
-            # No UUID or stale (404) — clear and create fresh
+            # No UUID or stale (404) — clear and create fresh.
+            # If the user has no active subscription row, set_remnawave_uuid
+            # (filtered by status='active') would silently no-op and the newly
+            # created Remnawave UUID would be lost. Bootstrap a bypass-only
+            # subscription row in that case so the UPDATE has a row to write
+            # to. Skip when an active sub already exists (don't clobber
+            # expires_at of a paid subscription).
             if rmn_uuid:
                 await database.clear_remnawave_uuid(telegram_id)
+            existing_active = await database.get_subscription(telegram_id)
+            if not existing_active:
+                await database.ensure_bypass_only_subscription(telegram_id)
+                logger.info(
+                    "TRAFFIC_PACK_BYPASS_ONLY_BOOTSTRAPPED provider=%s user=%s gb=%s",
+                    provider, telegram_id, traffic_gb,
+                )
             try:
                 from app.services import remnawave_service
                 from datetime import datetime, timezone, timedelta
