@@ -457,6 +457,14 @@ async def finalize_subscription_payment(
     amount_rubles: float,
     invoice_id: Optional[str] = None
 ) -> PaymentResult:
+    # Local import keeps the metrics module optional during tests.
+    try:
+        from app.core import metrics as _metrics
+        _metrics.counter(_metrics.M.PAYMENT_INTENT_TOTAL).inc(
+            labels={"provider": payment_provider, "outcome": "created"},
+        )
+    except Exception:
+        pass
     """
     Finalize subscription payment.
     
@@ -565,6 +573,17 @@ async def finalize_subscription_payment(
         # Extract referral reward if present
         referral_reward = result.get("referral_reward")
         
+        try:
+            from app.core import metrics as _metrics
+            _metrics.counter(_metrics.M.PAYMENT_INTENT_TOTAL).inc(
+                labels={"provider": payment_provider, "outcome": "paid"},
+            )
+            _metrics.counter(_metrics.M.SUBSCRIPTION_GRANT_TOTAL).inc(
+                labels={"source": "payment", "outcome": "success"},
+            )
+        except Exception:
+            pass
+
         return PaymentResult(
             success=True,
             payment_id=result["payment_id"],
@@ -579,8 +598,22 @@ async def finalize_subscription_payment(
             is_combo=result.get("is_combo", False),
             period_days=result.get("period_days", 30) or 30,
         )
-        
+
     except subscription_service.PaymentFinalizationError as e:
+        try:
+            from app.core import metrics as _metrics
+            _metrics.counter(_metrics.M.PAYMENT_INTENT_TOTAL).inc(
+                labels={"provider": payment_provider, "outcome": "failed"},
+            )
+        except Exception:
+            pass
         raise PaymentFinalizationError(f"Subscription payment finalization failed: {e}") from e
     except Exception as e:
+        try:
+            from app.core import metrics as _metrics
+            _metrics.counter(_metrics.M.PAYMENT_INTENT_TOTAL).inc(
+                labels={"provider": payment_provider, "outcome": "failed"},
+            )
+        except Exception:
+            pass
         raise PaymentFinalizationError(f"Payment finalization failed: {e}") from e

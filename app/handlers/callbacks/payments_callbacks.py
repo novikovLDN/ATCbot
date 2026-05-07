@@ -162,7 +162,7 @@ async def callback_topup_stars(callback: CallbackQuery):
         return
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -395,7 +395,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
     
     # STEP 6 — F3: RATE LIMITING (HUMAN & BOT SAFETY)
     # Rate limit payment initiation
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -789,7 +789,7 @@ async def callback_pay_card(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
 
     # Rate limiting
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -922,7 +922,7 @@ async def callback_pay_stars(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
 
     # Rate limiting
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -1054,7 +1054,7 @@ async def callback_pay_sbp(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
 
     # Rate limiting
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -1181,7 +1181,7 @@ async def callback_pay_crypto(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
 
     # Rate limiting
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -1314,7 +1314,7 @@ async def callback_pay_lava(callback: CallbackQuery, state: FSMContext):
     telegram_id = callback.from_user.id
 
     # Rate limiting
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -1443,7 +1443,7 @@ async def callback_topup_sbp(callback: CallbackQuery):
 
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -1526,7 +1526,7 @@ async def callback_topup_lava(callback: CallbackQuery):
 
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -1607,7 +1607,7 @@ async def callback_topup_card(callback: CallbackQuery):
         return
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)

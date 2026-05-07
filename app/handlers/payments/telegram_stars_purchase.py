@@ -306,7 +306,7 @@ async def process_stars_username(message: Message, state: FSMContext):
 async def _get_stars_fsm_data(callback: CallbackQuery, state: FSMContext):
     """Extract stars purchase data from FSM. Returns (username, stars, price, language) or None."""
     telegram_id = callback.from_user.id
-    is_allowed, rate_limit_msg = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_msg = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(

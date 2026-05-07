@@ -1,0 +1,65 @@
+# ──────────────────────────────────────────────────────────────
+# Security workflow — runs on every PR, every push to main/stage,
+# and daily on a schedule against the default branch.
+# Generated alongside docs/security/DEPENDENCY_SCANNING.md.
+# ──────────────────────────────────────────────────────────────
+name: Security
+
+on:
+  push:
+    branches: [main, stage]
+  pull_request:
+    branches: [main, stage]
+  schedule:
+    # 03:17 UTC every day — off-peak.
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pip-audit:
+    name: pip-audit (CVE scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pip-audit
+      # Strict mode: fail on any HIGH/CRITICAL CVE in production deps.
+      - name: pip-audit production deps
+        run: pip-audit -r requirements.txt --strict --desc
+
+  bandit:
+    name: bandit (static analysis)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install bandit
+      - name: Bandit scan (high+ severity)
+        run: bandit -r app/ database/ -ll -ii -x tests
+
+  semgrep:
+    name: semgrep (custom rules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep with ATCbot ruleset
+        uses: returntocorp/semgrep-action@v1
+        with:
+          # Default rulesets + project-specific rules in docs/security/.
+          # docs/security/DEPENDENCY_SCANNING.md lists them.
+          config: >-
+            p/security-audit
+            p/owasp-top-ten
+            p/python
+        continue-on-error: true

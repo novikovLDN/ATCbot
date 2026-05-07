@@ -124,7 +124,7 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
     language = await resolve_user_language(telegram_id)
 
     # STEP 6 — F3: RATE LIMITING (HUMAN & BOT SAFETY)
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "trial_activate")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "trial_activate")
     if not is_allowed:
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
         return

@@ -677,22 +677,35 @@ async def expire_trial_subscriptions(bot: Bot):
 
 
 async def run_trial_scheduler(bot: Bot):
-    """Основной цикл scheduler для trial-уведомлений
-    
+    """Основной цикл scheduler для trial-уведомлений.
+
     Запускается каждые 5 минут для проверки и отправки уведомлений.
-    
-    SAFE: Singleton guard предотвращает повторный запуск.
-    Если scheduler уже запущен, повторные вызовы игнорируются.
+
+    Singleton guard: at most one instance runs at a time. The flag is reset on
+    exit (cancellation, exception, or normal return) so a supervisor can
+    relaunch the scheduler after a crash without a process restart.
     """
     global _TRIAL_SCHEDULER_STARTED
 
-    # Singleton guard: предотвращаем повторный запуск (task-safe via lock)
+    # Singleton guard with reset-on-exit semantics.
     async with _TRIAL_SCHEDULER_LOCK:
         if _TRIAL_SCHEDULER_STARTED:
             logger.warning("Trial notifications scheduler already running, skipping duplicate start")
             return
         _TRIAL_SCHEDULER_STARTED = True
     logger.info("Trial notifications scheduler started")
+    try:
+        await _run_trial_scheduler_loop(bot)
+    finally:
+        async with _TRIAL_SCHEDULER_LOCK:
+            _TRIAL_SCHEDULER_STARTED = False
+        logger.info("Trial notifications scheduler stopped")
+
+
+async def _run_trial_scheduler_loop(bot: Bot):
+    """Inner loop. Extracted from run_trial_scheduler so the singleton guard
+    cleanup runs in finally even on KeyboardInterrupt / CancelledError.
+    """
     
     # Prevent worker burst at startup
     jitter_s = random.uniform(5, 60)

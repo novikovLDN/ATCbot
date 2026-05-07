@@ -251,7 +251,7 @@ async def callback_gift_pay_balance(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка с баланса."""
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -332,7 +332,7 @@ async def callback_gift_pay_card(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка картой через Telegram Payments."""
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -409,7 +409,7 @@ async def callback_gift_pay_stars(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка через Telegram Stars."""
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -482,7 +482,7 @@ async def callback_gift_pay_crypto(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка через CryptoBot (криптовалюта)."""
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)
@@ -565,7 +565,7 @@ async def callback_gift_pay_lava(callback: CallbackQuery, state: FSMContext):
     """Оплата подарка через Lava (карта)."""
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_message = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_message = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(rate_limit_message or i18n_get_text(language, "common.rate_limit_message"), show_alert=True)

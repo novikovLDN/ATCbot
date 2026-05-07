@@ -23,6 +23,11 @@ from app.utils.logging_helpers import (
 # Idempotency: skip if reminder sent within this window (container restart guard)
 REMINDER_IDEMPOTENCY_WINDOW = timedelta(minutes=30)
 
+# Module-level worker lock — prevents accidental overlap if a slow iteration
+# is still running when the next interval ticks (or two coroutines kick off the
+# task during recovery). Pairs with the per-task asyncio.wait_for timeout.
+_worker_lock = asyncio.Lock()
+
 logger = logging.getLogger(__name__)
 
 
@@ -234,8 +239,13 @@ async def reminders_task(bot: Bot):
         try:
             # H1 fix: Wrap iteration body with timeout
             async def _run_iteration():
-                await send_smart_reminders(bot)
-            
+                # Worker-level lock prevents iteration overlap.
+                if _worker_lock.locked():
+                    logger.warning("reminders: previous iteration still running; skipping this tick")
+                    return
+                async with _worker_lock:
+                    await send_smart_reminders(bot)
+
             try:
                 await asyncio.wait_for(_run_iteration(), timeout=120.0)
             except asyncio.TimeoutError:

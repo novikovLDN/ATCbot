@@ -374,7 +374,7 @@ async def message_steam_login(message: Message, state: FSMContext):
 async def _get_steam_fsm(callback: CallbackQuery, state: FSMContext) -> Optional[Tuple[int, str, int, str]]:
     """Returns (amount, login, price, language) or None on stale FSM."""
     telegram_id = callback.from_user.id
-    is_allowed, rate_limit_msg = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_msg = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(

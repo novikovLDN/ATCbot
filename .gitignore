@@ -52,3 +52,9 @@ venv.bak/
 # VPN keys (sensitive data)
 vpn_keys.txt
 
+
+# Coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

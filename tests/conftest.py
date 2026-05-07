@@ -1,21 +1,49 @@
 """
-Pytest configuration and shared fixtures for service layer tests.
+Shared pytest fixtures.
+
+The first thing this file does is set the environment variables that
+``config.py`` requires at import time. Without these, ``import config``
+calls ``sys.exit(1)`` and the test session never starts. CI passes the
+same vars via the workflow YAML; local runs use the defaults below.
+
+Adding a per-process fixture is not enough because ``config`` is imported
+during test collection, before any fixture runs. Hence: module-level
+side effects.
 """
-import pytest
+from __future__ import annotations
+
+import os
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+
+def _ensure_test_env() -> None:
+    os.environ.setdefault("APP_ENV", "local")
+    os.environ.setdefault("LOCAL_BOT_TOKEN", "0:test-token")
+    os.environ.setdefault("LOCAL_ADMIN_TELEGRAM_ID", "1")
+    # asyncpg URL is parsed but not connected to during pure-unit tests.
+    os.environ.setdefault(
+        "LOCAL_DATABASE_URL",
+        "postgresql://atcs:atcs@localhost:5432/atcs_test",
+    )
+    os.environ.setdefault("LOCAL_WEBHOOK_URL", "https://test.invalid/webhook")
+    os.environ.setdefault("LOCAL_WEBHOOK_SECRET", "test-secret")
+
+
+_ensure_test_env()
 
 
 @pytest.fixture
 def mock_datetime():
-    """Fixed datetime for deterministic tests"""
+    """Fixed datetime for deterministic tests."""
     return datetime(2024, 1, 15, 12, 0, 0)
 
 
 @pytest.fixture
 def mock_subscription_active(mock_datetime):
-    """Mock active subscription"""
     future = datetime(2024, 2, 15, 12, 0, 0)
     return {
         "telegram_id": 12345,
@@ -30,7 +58,6 @@ def mock_subscription_active(mock_datetime):
 
 @pytest.fixture
 def mock_subscription_expired(mock_datetime):
-    """Mock expired subscription"""
     past = datetime(2024, 1, 1, 12, 0, 0)
     return {
         "telegram_id": 12345,
@@ -45,7 +72,6 @@ def mock_subscription_expired(mock_datetime):
 
 @pytest.fixture
 def mock_subscription_pending():
-    """Mock subscription with pending activation"""
     future = datetime(2024, 2, 15, 12, 0, 0)
     return {
         "telegram_id": 12345,
@@ -60,7 +86,6 @@ def mock_subscription_pending():
 
 @pytest.fixture
 def mock_database():
-    """Mock database module"""
     db = MagicMock()
     db.get_user = AsyncMock()
     db.get_subscription = AsyncMock()
@@ -72,3 +97,30 @@ def mock_database():
     db.get_subscription_history = AsyncMock()
     db.check_and_disable_expired_subscription = AsyncMock()
     return db
+
+
+@pytest.fixture(autouse=True)
+def _reset_runtime_singletons():
+    """Wipe in-process singletons between tests so flaky cross-test state is gone.
+
+    Cleared:
+      - ``app.core.metrics`` registry (counters, gauges, histograms)
+      - ``app.core.worker_registry`` heartbeats
+      - ``app.core.rate_limit`` token bucket map
+    """
+    yield
+    try:
+        from app.core import metrics as _metrics
+        _metrics.get_registry().reset()
+    except Exception:
+        pass
+    try:
+        from app.core import worker_registry
+        worker_registry.reset()
+    except Exception:
+        pass
+    try:
+        from app.core import rate_limit as _rl
+        _rl._rate_limiter = None  # noqa: SLF001 — singleton reset for test isolation
+    except Exception:
+        pass

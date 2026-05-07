@@ -73,21 +73,27 @@ async def process_referral_registration(
     code_payload = referral_code[4:]
     referrer_telegram_id = None
 
-    # Try legacy format first (numeric telegram_id)
-    try:
-        maybe_id = int(code_payload)
-        # Verify this is actually a user, not a hash that happens to be numeric
-        legacy_user = await database.get_user(maybe_id)
-        if legacy_user:
-            referrer_telegram_id = maybe_id
-    except (ValueError, TypeError):
-        pass
+    # Primary: opaque referral_code lookup (non-enumerable).
+    referrer_by_code = await database.find_user_by_referral_code(code_payload)
+    if referrer_by_code:
+        referrer_telegram_id = referrer_by_code.get("telegram_id")
 
-    # Try opaque code lookup
-    if referrer_telegram_id is None:
-        referrer_by_code = await database.find_user_by_referral_code(code_payload)
-        if referrer_by_code:
-            referrer_telegram_id = referrer_by_code.get("telegram_id")
+    # Legacy `ref_<numeric_telegram_id>` lookup is gated behind an env flag.
+    # It was enumerable (anyone could craft a referral URL for an arbitrary
+    # user); kept off by default since 2026-05.
+    import os
+    if referrer_telegram_id is None and os.getenv("LEGACY_REFERRAL_LOOKUP_ENABLED", "").lower() in ("1", "true", "yes"):
+        try:
+            maybe_id = int(code_payload)
+            legacy_user = await database.get_user(maybe_id)
+            if legacy_user:
+                logger.warning(
+                    "REFERRAL_LEGACY_LOOKUP code=%s referrer=%s — DEPRECATED, disable LEGACY_REFERRAL_LOOKUP_ENABLED",
+                    code_payload, maybe_id,
+                )
+                referrer_telegram_id = maybe_id
+        except (ValueError, TypeError):
+            pass
 
     if referrer_telegram_id is None:
         return {
@@ -206,6 +212,11 @@ async def process_referral_registration(
             f"REFERRAL_REGISTERED [referrer={referrer_user_id}, referred={telegram_id}, "
             f"code={referral_code}, state=REGISTERED]"
         )
+        try:
+            from app.core import metrics as _metrics
+            _metrics.counter(_metrics.M.REFERRAL_REGISTERED_TOTAL).inc()
+        except Exception:
+            pass
         return {
             "success": True,
             "state": ReferralState.REGISTERED,
@@ -264,8 +275,17 @@ async def activate_referral(
             "referrer_id": None,
             "was_activated": False
         }
-    
+
     referrer_id = user.get("referrer_id")
+    try:
+        from app.core import metrics as _metrics
+        _metrics.counter(_metrics.M.REFERRAL_ACTIVATED_TOTAL).inc(
+            labels={"type": activation_type},
+        )
+        if activation_type == "trial":
+            _metrics.counter(_metrics.M.TRIAL_ACTIVATED_TOTAL).inc()
+    except Exception:
+        pass
     
     # Check if already activated (has first_paid_at)
     if conn is None:

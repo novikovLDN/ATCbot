@@ -19,6 +19,7 @@ import config
 import database
 from app.core.feature_flags import get_feature_flags
 from app.core.structured_logger import log_event
+from app.core import worker_registry
 from app.handlers import router as root_router
 import reminders
 import healthcheck
@@ -238,7 +239,21 @@ async def main():
     
     # Centralized list for graceful shutdown
     background_tasks = []
-    
+
+    # Register background workers for the admin observability dashboard.
+    # Expected intervals are documented in docs/runbooks and README; if a
+    # worker doesn't heartbeat within 2× this interval, the dashboard marks
+    # it stale.
+    worker_registry.register("reminders",            expected_interval_s=2700)   # 45 min
+    worker_registry.register("trial_notifications",  expected_interval_s=300)    # 5 min
+    worker_registry.register("activation_worker",    expected_interval_s=60)     # 1 min
+    worker_registry.register("auto_renewal",         expected_interval_s=600)    # 10 min
+    worker_registry.register("fast_expiry_cleanup",  expected_interval_s=60)     # 1 min
+    worker_registry.register("farm_notifications",   expected_interval_s=900)    # 15 min
+    worker_registry.register("traffic_monitor",      expected_interval_s=900)    # 15 min
+    worker_registry.register("site_sync_worker",     expected_interval_s=300)    # 5 min
+    worker_registry.register("health_check",         expected_interval_s=600)    # 10 min
+
     # Запуск фоновой задачи для напоминаний (только если БД готова)
     reminder_task = None
     if database.DB_READY:

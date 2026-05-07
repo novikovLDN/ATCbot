@@ -278,7 +278,7 @@ async def callback_premium_pay_card(callback: CallbackQuery, state: FSMContext):
     """Create pending purchase and send TG Payments invoice."""
     telegram_id = callback.from_user.id
 
-    is_allowed, rate_limit_msg = check_rate_limit(telegram_id, "payment_init")
+    is_allowed, rate_limit_msg = await check_rate_limit(telegram_id, "payment_init")
     if not is_allowed:
         language = await resolve_user_language(telegram_id)
         await callback.answer(

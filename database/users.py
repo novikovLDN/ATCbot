@@ -633,27 +633,23 @@ async def find_user_by_id_or_username(telegram_id: Optional[int] = None, usernam
 
 
 def generate_referral_code(telegram_id: int) -> str:
+    """Generate an opaque, non-deterministic referral code.
+
+    Format: 8 chars [A-Z2-9] (Crockford-style, no easily-confused chars).
+    Why non-deterministic:
+      A previous deterministic SHA-256 → base32[:6] mapping let anyone with a
+      Telegram ID compute the user's referral code (privacy / referral-theft
+      vector). Codes are now random; uniqueness is enforced by a UNIQUE
+      constraint at INSERT time (caller retries on conflict).
+
+    The ``telegram_id`` argument is kept for API compatibility but is no
+    longer used in the output.
     """
-    Генерирует детерминированный referral_code для пользователя
-    
-    Args:
-        telegram_id: Telegram ID пользователя
-    
-    Returns:
-        Строка из 6-8 символов (A-Z, 0-9)
-    """
-    # Используем хеш для детерминированности
-    hash_obj = hashlib.sha256(str(telegram_id).encode())
-    hash_bytes = hash_obj.digest()
-    
-    # Используем base32 для получения только букв и цифр
-    # Убираем padding и берем первые 6 символов
-    encoded = base64.b32encode(hash_bytes).decode('ascii').rstrip('=')
-    
-    # Берем первые 6 символов и приводим к верхнему регистру
-    code = encoded[:6].upper()
-    
-    return code
+    import secrets
+
+    _ = telegram_id  # kept for backward compatibility of the call signature
+    alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no I/L/O/0/1
+    return "".join(secrets.choice(alphabet) for _ in range(8))
 
 
 async def create_user(telegram_id: int, username: Optional[str] = None, language: str = "ru"):

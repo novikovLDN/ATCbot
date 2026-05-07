@@ -1,0 +1,43 @@
+# Coverage configuration. Sources: app/, database/, top-level workers/services.
+# Ratchet policy: see .coverage-baseline + .github/workflows/ci.yml.
+[run]
+branch = False
+source =
+    app
+    database
+    healthcheck
+    reminders
+    auto_renewal
+    activation_worker
+    trial_notifications
+    fast_expiry_cleanup
+    cryptobot_service
+    lava_service
+    platega_service
+    broadcast_service
+    admin_notifications
+    xray_sync
+    config
+    main
+    migrations
+omit =
+    tests/*
+    docs/*
+    load_tests/*
+    .github/*
+    scripts/*
+    systemd/*
+    validate_language_content.py
+    # legacy entry — being migrated to app/handlers/
+    handlers.py
+    vpn_utils.py
+
+[report]
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    \.\.\.

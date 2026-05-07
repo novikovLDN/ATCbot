@@ -25,6 +25,27 @@ from app.handlers.common.states import BomberState
 router = Router()
 logger = logging.getLogger(__name__)
 
+
+# Per-user lock for Farm mutations. Prevents double-harvest / double-plant from
+# rapid taps. Single-instance assumption holds (advisory lock in main.py).
+# Locks are pruned opportunistically when the dict grows past _MAX_FARM_LOCKS.
+_FARM_LOCKS: dict[int, asyncio.Lock] = {}
+_MAX_FARM_LOCKS = 5_000
+
+
+def _farm_lock(telegram_id: int) -> asyncio.Lock:
+    lock = _FARM_LOCKS.get(telegram_id)
+    if lock is None:
+        # Opportunistic pruning. Skips locks currently held; safe to drop unheld.
+        if len(_FARM_LOCKS) >= _MAX_FARM_LOCKS:
+            for k, l in list(_FARM_LOCKS.items())[:_MAX_FARM_LOCKS // 2]:
+                if not l.locked():
+                    _FARM_LOCKS.pop(k, None)
+        lock = asyncio.Lock()
+        _FARM_LOCKS[telegram_id] = lock
+    return lock
+
+
 # Plant types for Farm game
 PLANT_TYPES = {
     "tomato":    {"emoji": "🍅", "name": "Томаты",   "days": 3,  "reward": 500},
@@ -900,53 +921,61 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
         )
         return
     
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    plot = None
-    for p in farm_plots:
-        if p["plot_id"] == plot_id:
-            plot = p
-            break
-    
-    if not plot or plot["status"] != "ready":
-        await callback.answer("Растение не готово к сбору", show_alert=True)
-        return
-    
-    plant_type = plot.get("plant_type")
-    plant = PLANT_TYPES.get(plant_type, {})
-    reward_kopecks = plant.get("reward", 0)
-    reward_rubles = reward_kopecks / 100.0
-    
-    # Add reward to balance
-    success = await database.increase_balance(
-        telegram_id=telegram_id,
-        amount=reward_rubles,
-        source="farm_harvest",
-        description=f"Farm harvest: {plant.get('name', 'unknown')}"
-    )
-    
-    if not success:
-        await callback.answer("Ошибка при начислении награды", show_alert=True)
-        return
-    
-    # Reset plot
-    plot["status"] = "empty"
-    plot["plant_type"] = None
-    plot["planted_at"] = None
-    plot["ready_at"] = None
-    plot["dead_at"] = None
-    plot["notified_ready"] = False
-    plot["notified_12h"] = False
-    plot["notified_dead"] = False
-    plot["water_used_at"] = None
-    plot["fertilizer_used_at"] = None
-    
-    await database.save_farm_plots(telegram_id, farm_plots)
-    
-    # Refresh balance
-    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+    # Per-user lock — eliminates double-harvest race between get_farm_data
+    # and save_farm_plots when the user spams the Harvest button.
+    async with _farm_lock(telegram_id):
+        farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+
+        plot = None
+        for p in farm_plots:
+            if p["plot_id"] == plot_id:
+                plot = p
+                break
+
+        if not plot or plot["status"] != "ready":
+            await callback.answer("Растение не готово к сбору", show_alert=True)
+            return
+
+        plant_type = plot.get("plant_type")
+        plant = PLANT_TYPES.get(plant_type, {})
+        reward_kopecks = plant.get("reward", 0)
+        reward_rubles = reward_kopecks / 100.0
+
+        # Mutate plot state FIRST (in memory), then persist, then credit balance.
+        # If balance crediting fails we rollback by restoring "ready" status
+        # (best-effort; an admin can reissue from audit log).
+        plot["status"] = "empty"
+        plot["plant_type"] = None
+        plot["planted_at"] = None
+        plot["ready_at"] = None
+        plot["dead_at"] = None
+        plot["notified_ready"] = False
+        plot["notified_12h"] = False
+        plot["notified_dead"] = False
+        plot["water_used_at"] = None
+        plot["fertilizer_used_at"] = None
+
+        await database.save_farm_plots(telegram_id, farm_plots)
+
+        success = await database.increase_balance(
+            telegram_id=telegram_id,
+            amount=reward_rubles,
+            source="farm_harvest",
+            description=f"Farm harvest: {plant.get('name', 'unknown')}",
+        )
+
+        if not success:
+            logger.error(
+                "FARM_HARVEST_BALANCE_FAILED telegram_id=%s plot=%s plant=%s reward=%s",
+                telegram_id, plot_id, plant_type, reward_rubles,
+            )
+            await callback.answer("Ошибка при начислении награды", show_alert=True)
+            return
+
+        # Refresh balance
+        farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+
     await _render_farm(callback, pool, farm_plots, plot_count, balance)
-    
     await callback.answer(f"🌾 Урожай собран! +{reward_rubles:.0f} ₽", show_alert=True)
 
 

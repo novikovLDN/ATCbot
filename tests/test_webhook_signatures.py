@@ -206,15 +206,22 @@ class TestPlategaWebhookAuth:
         assert result["status"] == "unauthorized"
 
     @pytest.mark.asyncio
-    async def test_db_not_ready_returns_degraded(self):
+    async def test_db_not_ready_raises_transient(self):
+        """When DB isn't ready the service raises ``TransientPaymentError`` so
+        the webhook returns HTTP 500 and the provider retries.
+
+        (Previously this test asserted ``status == 'degraded'``; the contract
+        moved to exception-based signalling in the 2026-Q1 refactor.)
+        """
         db_mock = _make_mock_database(db_ready=False)
         svc = _load_platega_service(db_mock=db_mock)
         svc.database = db_mock
 
         headers = {"x-merchantid": FAKE_PLATEGA_MERCHANT_ID, "x-secret": FAKE_PLATEGA_SECRET}
         body = {"id": "txn-001", "status": "confirmed"}
-        result = await svc.process_webhook_data(headers, body, MagicMock())
-        assert result["status"] == "degraded"
+        from app.services.payments.confirmation import TransientPaymentError
+        with pytest.raises(TransientPaymentError):
+            await svc.process_webhook_data(headers, body, MagicMock())
 
     @pytest.mark.asyncio
     async def test_case_insensitive_headers(self):

@@ -84,15 +84,31 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Run tests
-        run: pytest tests/ --tb=short --junitxml=test-results.xml
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --tb=short \
+            --junitxml=test-results.xml \
+            --cov \
+            --cov-config=.coveragerc \
+            --cov-report=xml \
+            --cov-report=term
+
+      - name: Coverage ratchet gate
+        # Fails the build if measured coverage drops below .coverage-baseline.
+        # To raise the baseline intentionally, run:
+        #   python scripts/check_coverage_ratchet.py --bump
+        # and commit the updated .coverage-baseline.
+        run: python scripts/check_coverage_ratchet.py
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: test-results.xml
+          path: |
+            test-results.xml
+            coverage.xml
           retention-days: 7
 
   # ── 3. Security scan ───────────────────────────────────────

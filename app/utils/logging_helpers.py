@@ -170,6 +170,21 @@ def log_handler_exit(
         log_data["level"] = "INFO"
         logger.info(json.dumps(log_data))
 
+    # Handler outcome metrics for the admin dashboard.
+    try:
+        from app.core import metrics as _metrics
+
+        _metrics.counter(_metrics.M.HANDLER_TOTAL).inc(
+            labels={"handler": handler_name, "outcome": outcome},
+        )
+        if duration_ms is not None:
+            _metrics.histogram(_metrics.M.HANDLER_LATENCY_MS).observe(
+                float(duration_ms),
+                labels={"handler": handler_name},
+            )
+    except Exception:
+        pass
+
 
 def log_worker_iteration_start(
     worker_name: str,
@@ -210,6 +225,15 @@ def log_worker_iteration_start(
     # Emit as JSON with proper level field for external log aggregation
     log_data["level"] = "INFO"
     logger.info(json.dumps(log_data))
+
+    # Heartbeat into the worker registry for the admin observability dashboard.
+    try:
+        from app.core.worker_registry import mark_iteration_start
+        mark_iteration_start(worker_name)
+    except Exception:
+        # Never let observability hooks affect worker liveness.
+        pass
+
     return correlation_id
 
 
@@ -271,6 +295,28 @@ def log_worker_iteration_end(
     else:
         log_data["level"] = "INFO"
         logger.info(json.dumps(log_data))
+
+    # Update worker liveness registry + metrics for the admin dashboard.
+    try:
+        from app.core.worker_registry import mark_iteration_end
+        from app.core import metrics as _metrics
+
+        mark_iteration_end(
+            worker_name,
+            outcome=outcome,
+            items=int(items_processed or 0),
+            error=error_type,
+        )
+        _metrics.counter(_metrics.M.WORKER_ITERATION_TOTAL).inc(
+            labels={"worker": worker_name, "outcome": outcome},
+        )
+        if duration_ms is not None:
+            _metrics.histogram(_metrics.M.WORKER_ITERATION_LATENCY_MS).observe(
+                float(duration_ms),
+                labels={"worker": worker_name},
+            )
+    except Exception:
+        pass
 
 
 def classify_error(exception: Exception) -> str:
