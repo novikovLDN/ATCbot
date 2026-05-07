@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any
 
 import httpx
 import config
+from app.utils import http_client
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ async def _request(
     """Send request to Remnawave API and unwrap {response: ...} envelope."""
     url = f"{config.REMNAWAVE_API_URL}{path}"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with http_client.shared("remnawave", _TIMEOUT) as client:
             resp = await client.request(method, url, headers=_headers(), **kwargs)
 
         if resp.status_code == 404:

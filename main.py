@@ -681,6 +681,13 @@ async def main():
             finally:
                 instance_lock_conn = None
         
+        # Close shared httpx clients (connection pools)
+        try:
+            from app.utils import http_client as _http_client
+            await _http_client.close_all()
+        except Exception as e:
+            logger.debug(f"Error closing shared HTTP clients: {e}")
+
         # Close Redis client
         try:
             from app.utils.redis_client import close as redis_close

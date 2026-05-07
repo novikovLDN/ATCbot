@@ -10,6 +10,7 @@ Implements the sync protocol per TZ:
 
 All requests require X-Bot-Api-Key header.
 """
+import asyncio
 import logging
 from typing import Optional, Dict, Any, List
 
@@ -17,10 +18,11 @@ import httpx
 
 import config
 import database
+from app.utils import http_client
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT = 15.0  # seconds
+_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
 
 def is_enabled() -> bool:
@@ -42,7 +44,7 @@ async def _post(endpoint: str, data: dict) -> Optional[dict]:
         return None
     url = f"{config.SITE_API_URL.rstrip('/')}/{endpoint.lstrip('/')}"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with http_client.shared("site_sync", _TIMEOUT) as client:
             resp = await client.post(url, json=data, headers=_headers())
             if resp.status_code != 200:
                 logger.error("SITE_SYNC_ERROR: %s status=%d body=%s", endpoint, resp.status_code, resp.text[:300])
@@ -63,7 +65,7 @@ async def _get(endpoint: str, params: dict = None) -> Optional[dict]:
         return None
     url = f"{config.SITE_API_URL.rstrip('/')}/{endpoint.lstrip('/')}"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with http_client.shared("site_sync", _TIMEOUT) as client:
             resp = await client.get(url, params=params, headers=_headers())
             if resp.status_code != 200:
                 logger.error("SITE_SYNC_ERROR: %s status=%d body=%s", endpoint, resp.status_code, resp.text[:300])
@@ -246,5 +248,9 @@ async def periodic_sync(telegram_id: int):
     """
     if not is_enabled():
         return
-    await sync_balance(telegram_id)
-    await sync_referrals(telegram_id)
+    # Independent endpoints — run in parallel to halve user-facing latency.
+    await asyncio.gather(
+        sync_balance(telegram_id),
+        sync_referrals(telegram_id),
+        return_exceptions=True,
+    )

@@ -19,6 +19,13 @@ import httpx
 from aiogram import Bot
 from app.services.payments.confirmation import TransientPaymentError
 from app.utils.retry import retry_async
+from app.utils import http_client
+
+# Reduce timeout from 30s to 15s — Lava normally responds in <2s; longer
+# timeouts just make user-facing payment flows slow when the upstream
+# is degraded.
+_LAVA_CREATE_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+_LAVA_STATUS_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +103,7 @@ async def create_invoice(
         data["comment"] = comment[:255]
 
     async def _make_request():
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with http_client.shared("lava", _LAVA_CREATE_TIMEOUT) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/create",
                 headers=_headers(data),
@@ -158,7 +165,7 @@ async def check_invoice_status(invoice_id: str) -> Optional[Dict[str, Any]]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with http_client.shared("lava", _LAVA_STATUS_TIMEOUT) as client:
             response = await client.post(
                 f"{LAVA_API_URL}/invoice/status",
                 headers=_headers(data),

@@ -18,6 +18,10 @@ import httpx
 from aiogram import Bot
 from app.services.payments.confirmation import TransientPaymentError
 from app.utils.retry import retry_async
+from app.utils import http_client
+
+# Reduce timeout from 30s to 15s — CryptoBot normally responds quickly.
+_CRYPTOBOT_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +78,7 @@ async def create_invoice(
     }
 
     async def _make_request():
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with http_client.shared("cryptobot", _CRYPTOBOT_TIMEOUT) as client:
             response = await client.post(
                 f"{CRYPTOBOT_API_URL}/createInvoice",
                 headers=_get_headers(),

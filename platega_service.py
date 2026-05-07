@@ -16,6 +16,11 @@ import httpx
 from aiogram import Bot
 from app.services.payments.confirmation import TransientPaymentError
 from app.utils.retry import retry_async
+from app.utils import http_client
+
+# Reduce timeout from 30s to 15s — Platega normally responds in <2s; the
+# old 30s ceiling × 3 attempts could leave the user waiting ~90s.
+_PLATEGA_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +94,7 @@ async def create_transaction(
         request_body["failedUrl"] = failed_url
 
     async def _make_request():
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with http_client.shared("platega", _PLATEGA_TIMEOUT) as client:
             response = await client.post(
                 f"{PLATEGA_API_URL}/transaction/process",
                 headers=_get_headers(),

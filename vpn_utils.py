@@ -27,6 +27,7 @@ from typing import Dict, Optional, Tuple
 import weakref
 import config
 from app.utils.retry import retry_async
+from app.utils import http_client
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ async def check_xray_health() -> bool:
     
     try:
         headers = {"X-API-Key": config.XRAY_API_KEY}
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+        async with http_client.shared("vpn", VPN_HTTP_TIMEOUT) as client:
             response = await client.get(health_url, headers=headers)
             if response.status_code == 200:
                 logger.debug("XRAY health check: SUCCESS")
@@ -258,7 +259,7 @@ async def add_vless_user(
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
     async def _make_request():
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+        async with http_client.shared("vpn", VPN_HTTP_TIMEOUT) as client:
             logger.debug("vpn_api add_user: HTTP_REQUEST")
             response = await client.post(url, headers=headers, json=json_body)
             
@@ -393,7 +394,7 @@ async def upgrade_vless_user(uuid: str) -> Dict[str, str]:
     url = f"{api_url}/upgrade-to-plus/{uuid_clean}"
     headers = {"X-API-Key": config.XRAY_API_KEY}
     async def _make_request():
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+        async with http_client.shared("vpn", VPN_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=headers)
         if response.status_code in (401, 403):
             raise AuthError(f"Authentication error: status={response.status_code}")
@@ -449,7 +450,7 @@ async def remove_plus_inbound(uuid: str) -> bool:
     url = f"{api_url}/remove-plus/{uuid_clean}"
     headers = {"X-API-Key": config.XRAY_API_KEY}
     async def _make_request():
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+        async with http_client.shared("vpn", VPN_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=headers)
         if response.status_code in (401, 403):
             raise AuthError(f"Authentication error: status={response.status_code}")
@@ -580,7 +581,7 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     )
     
     try:
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+        async with http_client.shared("vpn", VPN_HTTP_TIMEOUT) as client:
             response = await client.post(url, headers=headers, json=json_body)
             if response.status_code == 404:
                 error_msg = f"Client not found in Xray: {uuid_clean[:8]}..."
@@ -674,7 +675,7 @@ async def remove_vless_user(uuid: str) -> None:
     
     # Use centralized retry utility for HTTP calls (only retries transient errors)
     async def _make_request():
-        async with httpx.AsyncClient(timeout=VPN_HTTP_TIMEOUT) as client:
+        async with http_client.shared("vpn", VPN_HTTP_TIMEOUT) as client:
             logger.debug("vpn_api remove_user: HTTP_REQUEST")
             response = await client.post(url, headers=headers)
             
