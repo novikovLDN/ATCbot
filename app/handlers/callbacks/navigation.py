@@ -1531,7 +1531,7 @@ _APPLE_TRY_RATE = 2.9   # RUB per 1 TRY
 
 _APPLE_NOMINALS = {
     "usa": [2, 6, 15, 20, 25, 30, 40, 50, 60],
-    "turkey": [100, 125, 150, 175, 200, 300, 500, 600],
+    "turkey": [100, 150, 200, 300, 500, 600],
 }
 _APPLE_CURRENCIES = {"usa": "$", "turkey": "TL"}
 _APPLE_RATES = {"usa": _APPLE_USD_RATE, "turkey": _APPLE_TRY_RATE}
