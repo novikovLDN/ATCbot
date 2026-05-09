@@ -87,7 +87,7 @@ async def _send_traffic_notification(
                 callback_data="buy_traffic",
             )],
         ])
-        await bot.send_message(telegram_id, text, reply_markup=kb)
+        await bot.send_message(telegram_id, text, reply_markup=kb, parse_mode="HTML")
         logger.info("TRAFFIC_NOTIFICATION_SENT: tg=%s flag=%s remaining=%d", telegram_id, flag_key, remaining_bytes)
     except Exception as e:
         logger.warning("TRAFFIC_NOTIFICATION_FAIL: tg=%s %s: %s", telegram_id, type(e).__name__, e)
