@@ -1526,11 +1526,11 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
 
 # ── Mini Shop ────────────────────────────────────────────────────
 
-_APPLE_USD_RATE = 93    # RUB per 1 USD
+_APPLE_USD_RATE = 101   # RUB per 1 USD
 _APPLE_TRY_RATE = 2.9   # RUB per 1 TRY
 
 _APPLE_NOMINALS = {
-    "usa": [2, 6, 15, 20, 25, 30, 40, 50, 60],
+    "usa": [2, 5, 10, 15, 20, 25, 50, 60, 70],
     "turkey": [100, 150, 200, 300, 500, 600],
 }
 _APPLE_CURRENCIES = {"usa": "$", "turkey": "TL"}
