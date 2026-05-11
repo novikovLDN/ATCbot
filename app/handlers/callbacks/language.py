@@ -5,7 +5,6 @@ import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
-import config
 import database
 from app.i18n import get_text as i18n_get_text
 from app.services.language_service import resolve_user_language
@@ -16,12 +15,7 @@ from app.handlers.common.keyboards import get_language_keyboard, get_main_menu_k
 language_router = Router()
 logger = logging.getLogger(__name__)
 
-import config as _cfg
-MAIN_PHOTO_FILE_ID = (
-    "AgACAgQAAxkBAAEyoahp3fnvRHMCD5foRXdnXO0HOWygrgACTA5rG1ik8VK4JmFF6VTnYAEAAwIAA3kAAzsE"
-    if _cfg.IS_PROD else
-    "AgACAgQAAxkBAAIfVmnd-cpk8g4zo39vumhaX4XENDtUAAJMDmsbWKTxUlPwG2HiC9EPAQADAgADeQADOwQ"
-)
+MAIN_PHOTO_FILE_ID = "AgACAgQAAxkBAAFOMRBqAiT8tSetwnphnHErhjNYGuF0bAAC0w5rGxcvEFAednRCde7x7AEAAwIAA3kAAzsE"
 
 
 @language_router.callback_query(F.data == "change_language")
