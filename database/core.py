@@ -653,6 +653,19 @@ async def init_db() -> bool:
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS vpn_key_plus TEXT")
         except Exception:
             pass
+
+        # Миграция 045: вторая Remnawave entity для премиум-тарифа (MainServer squad).
+        # remnawave_uuid остаётся для bypass-тарифа; remnawave_premium_uuid
+        # хранится для безлимитных основных серверов.
+        try:
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_premium_uuid TEXT")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS samopis_migrated_at TIMESTAMPTZ")
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_subscriptions_remnawave_premium_uuid "
+                "ON subscriptions(remnawave_premium_uuid) WHERE remnawave_premium_uuid IS NOT NULL"
+            )
+        except Exception:
+            pass
         
         # Миграция: добавляем поле balance в users (хранится в копейках как INTEGER)
         try:

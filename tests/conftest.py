@@ -1,6 +1,16 @@
 """
 Pytest configuration and shared fixtures for service layer tests.
 """
+import os
+# Ensure config.py can import in unit-test mode (required env vars stubbed).
+# Real CI sets these explicitly; this is a fallback for ad-hoc `pytest` runs.
+os.environ.setdefault("APP_ENV", "stage")
+os.environ.setdefault("STAGE_BOT_TOKEN", "test-bot-token")
+os.environ.setdefault("STAGE_DATABASE_URL", "postgresql://test:test@localhost/test")
+os.environ.setdefault("STAGE_ADMIN_TELEGRAM_ID", "1")
+os.environ.setdefault("STAGE_WEBHOOK_URL", "https://test.example/telegram/webhook")
+os.environ.setdefault("STAGE_WEBHOOK_SECRET", "test-secret")
+
 import pytest
 from datetime import datetime
 from typing import Dict, Any, Optional

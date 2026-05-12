@@ -57,6 +57,155 @@ async def clear_remnawave_uuid(telegram_id: int) -> None:
         )
 
 
+# ── Remnawave premium UUID (MainServer squad, migration 045) ──────────
+
+async def get_remnawave_premium_uuid(telegram_id: int) -> Optional[str]:
+    """Return the Remnawave UUID of the premium (MainServer) entity, if any."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT remnawave_premium_uuid FROM subscriptions "
+            "WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id,
+        )
+
+
+async def set_remnawave_premium_uuid(
+    telegram_id: int,
+    uuid: str,
+    *,
+    mark_migrated: bool = True,
+) -> None:
+    """Store the premium Remnawave UUID. Also stamps samopis_migrated_at by default."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        if mark_migrated:
+            await conn.execute(
+                "UPDATE subscriptions "
+                "SET remnawave_premium_uuid = $1, samopis_migrated_at = NOW() "
+                "WHERE telegram_id = $2 AND status = 'active'",
+                uuid, telegram_id,
+            )
+        else:
+            await conn.execute(
+                "UPDATE subscriptions SET remnawave_premium_uuid = $1 "
+                "WHERE telegram_id = $2 AND status = 'active'",
+                uuid, telegram_id,
+            )
+
+
+async def clear_remnawave_premium_uuid(telegram_id: int) -> None:
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_premium_uuid = NULL "
+            "WHERE telegram_id = $1",
+            telegram_id,
+        )
+
+
+async def get_subscription_by_premium_uuid(uuid: str) -> Optional[Dict[str, Any]]:
+    """Look up a subscription by its premium Remnawave UUID.
+
+    Used by the subscription-URL fallback endpoint to translate a legacy
+    samopis UUID (which the migration may have reused as the panel UUID)
+    into a Telegram-id / Remnawave-UUID pair.
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT telegram_id, remnawave_premium_uuid, remnawave_uuid, "
+            "       status, subscription_type, expires_at, samopis_migrated_at "
+            "FROM subscriptions WHERE remnawave_premium_uuid = $1",
+            uuid,
+        )
+        return dict(row) if row else None
+
+
+async def get_subscription_by_samopis_uuid(uuid: str) -> Optional[Dict[str, Any]]:
+    """Look up a subscription by its legacy samopis Xray UUID."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT telegram_id, uuid, remnawave_premium_uuid, remnawave_uuid, "
+            "       status, subscription_type, expires_at, samopis_migrated_at "
+            "FROM subscriptions WHERE uuid = $1",
+            uuid,
+        )
+        return dict(row) if row else None
+
+
+async def list_subscriptions_for_premium_migration(
+    *,
+    limit: Optional[int] = None,
+    telegram_id: Optional[int] = None,
+    include_already_migrated: bool = False,
+) -> List[Dict[str, Any]]:
+    """Return rows that the samopis→Remnawave-premium migration should process.
+
+    A candidate has:
+      - status = 'active'
+      - uuid (samopis Xray UUID) IS NOT NULL AND != ''
+      - expires_at > NOW()  (unexpired)
+      - subscription_type NOT IN ('trial')  (paid users only)
+    Unless `include_already_migrated` is True, rows where
+    `remnawave_premium_uuid` is already set are excluded so the script
+    can be safely resumed.
+    """
+    if not _core.DB_READY:
+        return []
+    pool = await get_pool()
+    if pool is None:
+        return []
+
+    clauses = [
+        "status = 'active'",
+        "uuid IS NOT NULL",
+        "uuid != ''",
+        "expires_at > NOW()",
+        "subscription_type IS DISTINCT FROM 'trial'",
+    ]
+    args: list = []
+    if not include_already_migrated:
+        clauses.append("(remnawave_premium_uuid IS NULL OR remnawave_premium_uuid = '')")
+    if telegram_id is not None:
+        args.append(telegram_id)
+        clauses.append(f"telegram_id = ${len(args)}")
+
+    query = (
+        "SELECT telegram_id, uuid, remnawave_uuid, remnawave_premium_uuid, "
+        "       subscription_type, expires_at, status, samopis_migrated_at "
+        "FROM subscriptions WHERE " + " AND ".join(clauses) +
+        " ORDER BY telegram_id"
+    )
+    if limit is not None and limit > 0:
+        query += f" LIMIT {int(limit)}"
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, *args)
+        return [dict(r) for r in rows]
+
+
 # ── Traffic notification flags ─────────────────────────────────────────
 
 async def get_traffic_notification_flags(telegram_id: int) -> Dict[str, bool]:

@@ -67,6 +67,44 @@ async def _request(
     return None
 
 
+async def _request_raw(
+    method: str,
+    path: str,
+    **kwargs,
+) -> Dict[str, Any]:
+    """Like _request, but always returns a structured envelope so the caller
+    can distinguish HTTP failure modes.
+
+    Returns:
+        {"ok": bool, "status": int, "body": parsed-json-or-text, "response": unwrapped-or-None}
+    """
+    url = f"{config.REMNAWAVE_API_URL}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.request(method, url, headers=_headers(), **kwargs)
+    except httpx.TimeoutException:
+        logger.error("REMNAWAVE_TIMEOUT: %s %s", method, path)
+        return {"ok": False, "status": 0, "body": None, "response": None, "error": "timeout"}
+    except Exception as e:
+        logger.error("REMNAWAVE_ERROR: %s %s %s: %s", method, path, type(e).__name__, e)
+        return {"ok": False, "status": 0, "body": None, "response": None, "error": str(e)}
+
+    try:
+        body: Any = resp.json()
+    except Exception:
+        body = resp.text
+
+    unwrapped = body["response"] if isinstance(body, dict) and "response" in body else body
+    ok = resp.status_code < 400
+    if not ok:
+        # Only log at warning level — caller decides whether it is fatal.
+        logger.warning(
+            "REMNAWAVE_HTTP_%s: %s %s body=%s",
+            resp.status_code, method, path, str(body)[:500],
+        )
+    return {"ok": ok, "status": resp.status_code, "body": body, "response": unwrapped}
+
+
 # ── User CRUD ──────────────────────────────────────────────────────────
 
 async def create_user(
@@ -75,20 +113,61 @@ async def create_user(
     traffic_limit_bytes: int,
     expire_at: str,
     device_limit: int = 3,
+    *,
+    uuid: Optional[str] = None,
+    squad_uuid: Optional[str] = None,
+    description: Optional[str] = None,
+    telegram_id: Optional[int] = None,
+    traffic_limit_strategy: str = "NO_RESET",
+    raw_response: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """POST /api/users — create a new Remnawave user."""
-    body = {
+    """POST /api/users — create a new Remnawave user.
+
+    Extra keyword args (added for the samopis→premium migration):
+      uuid                 — force the panel to use this full UUID for the new
+                             entity.  Used to keep legacy samopis subscription
+                             URLs working.  Some panel versions ignore the
+                             field and assign their own value; callers MUST
+                             read result['uuid'] to learn what was stored.
+      squad_uuid           — override config.REMNAWAVE_SQUAD_UUID (e.g. the
+                             "MainServer" squad for the premium tier).  Pass
+                             "" to skip the default-squad assignment entirely.
+      description          — passed through to Remnawave (e.g. "Imported from
+                             samopis vpnapi").
+      telegram_id          — passed through as `telegramId` for panel-side
+                             cross-reference.
+      traffic_limit_strategy — Remnawave reset strategy (default NO_RESET).
+      raw_response         — when True the caller wants the HTTP status code
+                             alongside the body to disambiguate 409/400
+                             responses (used by the migration script).
+    """
+    body: Dict[str, Any] = {
         "username": username,
         "shortUuid": short_uuid,
         "trafficLimitBytes": traffic_limit_bytes,
-        "trafficLimitStrategy": "NO_RESET",
+        "trafficLimitStrategy": traffic_limit_strategy,
         "status": "ACTIVE",
         "expireAt": expire_at,
         "deviceLimit": device_limit,
     }
-    # Include squad in creation body
-    if config.REMNAWAVE_SQUAD_UUID:
-        body["activeInternalSquads"] = [config.REMNAWAVE_SQUAD_UUID]
+    if uuid:
+        body["uuid"] = uuid
+    if description:
+        body["description"] = description
+    if telegram_id is not None:
+        body["telegramId"] = int(telegram_id)
+
+    # Squad assignment: explicit param wins, "" disables it, None falls back to
+    # the global default (existing bypass behaviour).
+    if squad_uuid is None:
+        effective_squad = config.REMNAWAVE_SQUAD_UUID
+    else:
+        effective_squad = squad_uuid
+    if effective_squad:
+        body["activeInternalSquads"] = [effective_squad]
+
+    if raw_response:
+        return await _request_raw("POST", "/api/users", json=body)
 
     result = await _request("POST", "/api/users", json=body)
     if result:
@@ -99,7 +178,7 @@ async def create_user(
         )
 
         # Also try dedicated squad endpoint (belt-and-suspenders)
-        if config.REMNAWAVE_SQUAD_UUID:
+        if effective_squad:
             user_uuid = result.get("uuid")
             if user_uuid:
                 squad_result = result.get("activeInternalSquads") or []
@@ -108,7 +187,7 @@ async def create_user(
                         "REMNAWAVE_SQUAD_NOT_IN_RESPONSE: user=%s, trying assign_user_to_squad",
                         user_uuid[:8],
                     )
-                    await assign_user_to_squad(user_uuid, config.REMNAWAVE_SQUAD_UUID)
+                    await assign_user_to_squad(user_uuid, effective_squad)
         else:
             logger.warning("REMNAWAVE_SQUAD_UUID not set — skipping squad assignment")
     else:

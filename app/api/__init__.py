@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api import telegram_webhook
 from app.api import payment_webhook
 from app.api import deeplink_redirect
+from app.api import subscription_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,16 @@ app.add_middleware(RequestSizeLimitMiddleware, max_size=1 * 1024 * 1024)
 app.include_router(telegram_webhook.router)
 app.include_router(payment_webhook.router)
 app.include_router(deeplink_redirect.router)
+
+# Subscription-URL fallback (samopis → Remnawave premium translation) —
+# mounted only when explicitly enabled to keep the production surface area small.
+try:
+    import config as _cfg
+    if getattr(_cfg, "SUBSCRIPTION_PROXY_ENABLED", False):
+        app.include_router(subscription_proxy.router)
+        logger.info("SUBSCRIPTION_PROXY_ENABLED — mounted /sub/{uuid} + /api/sub/{token}")
+except Exception:
+    logger.exception("subscription_proxy mount failed")
 
 
 @app.get("/health")

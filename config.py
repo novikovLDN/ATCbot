@@ -485,6 +485,48 @@ REMNAWAVE_SUB_BASE_URL = env("REMNAWAVE_SUB_BASE_URL", default="https://rmnw.atl
 # Internal squad UUID for assigning new users (e.g. "Clients" squad)
 REMNAWAVE_SQUAD_UUID = env("REMNAWAVE_SQUAD_UUID", default="")
 
+# ── samopis → Remnawave premium migration knobs (migration 045) ─────────
+# "MainServer" squad — premium tier (unlimited traffic on основные серверы).
+REMNAWAVE_MAIN_SQUAD_UUID = env("REMNAWAVE_MAIN_SQUAD_UUID", default="")
+
+# Whether the migration script and the new purchase flow should try to force
+# the legacy samopis UUID as the Remnawave entity's full UUID.  Keeps legacy
+# subscription URLs working when the panel honours the field.  Falls back to
+# panel-assigned UUID automatically on 400/409/422.
+def _envbool(name: str, default: bool = True) -> bool:
+    val = env(name, default="").strip().lower() if env(name, default="") else ""
+    if not val:
+        return default
+    return val in ("1", "true", "yes", "on")
+
+REMNAWAVE_PREMIUM_FORCE_UUID = _envbool("REMNAWAVE_PREMIUM_FORCE_UUID", True)
+
+# Username template for the premium entity. `{telegram_id}` and
+# `{existing_username}` are available substitutions.  Capped to 32 chars.
+REMNAWAVE_PREMIUM_USERNAME_PATTERN = env(
+    "REMNAWAVE_PREMIUM_USERNAME_PATTERN",
+    default="tg_{telegram_id}_premium",
+)
+
+# Device limit for the premium entity (per ТЗ Remnawave panel allows
+# separate device caps).  Defaults to 5.
+try:
+    REMNAWAVE_PREMIUM_DEVICE_LIMIT = int(env("REMNAWAVE_PREMIUM_DEVICE_LIMIT", default="5"))
+except (TypeError, ValueError):
+    REMNAWAVE_PREMIUM_DEVICE_LIMIT = 5
+
+# Master switch for the subscription-URL fallback FastAPI router
+# (app/api/subscription_proxy.py).  Default OFF — turn on per environment
+# once the public DNS for sub.atlassecure.ru points at this bot.
+SUBSCRIPTION_PROXY_ENABLED = _envbool("SUBSCRIPTION_PROXY_ENABLED", False)
+
+# Legacy samopis sub-URL base, used by the fallback endpoint to redirect
+# unmigrated users back to the old infrastructure during the grace period.
+LEGACY_SAMOPIS_SUB_BASE_URL = env(
+    "LEGACY_SAMOPIS_SUB_BASE_URL",
+    default="",
+).rstrip("/")
+
 # Redis for FSM storage
 REDIS_URL = env("REDIS_URL", default="")
 
