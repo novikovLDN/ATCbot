@@ -64,6 +64,24 @@ def _cfg_stub(**overrides):
     return cfg
 
 
+def _patch_api(cfg, *, find=None, create=None):
+    """Patch config + remnawave_api.find_user_by_username + create_user.
+
+    Returns the tuple of mocks so individual tests can introspect call counts.
+    """
+    if find is None:
+        find = AsyncMock(return_value=None)
+    if create is None:
+        create = AsyncMock()
+    return (
+        patch.object(remnawave_premium, "config", cfg),
+        patch.object(remnawave_premium.remnawave_api, "find_user_by_username", find),
+        patch.object(remnawave_premium.remnawave_api, "create_user", create),
+        find,
+        create,
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_premium_user_disabled_returns_failure():
     with patch.object(remnawave_premium, "config", _cfg_stub(REMNAWAVE_ENABLED=False)):
@@ -88,22 +106,24 @@ async def test_create_premium_user_happy_path_forced_uuid_accepted():
         },
         "body": None,
     }
-    api_mock = AsyncMock(return_value=panel_response)
-    with patch.object(remnawave_premium, "config", _cfg_stub()), \
-         patch.object(remnawave_premium.remnawave_api, "create_user", api_mock):
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(return_value=panel_response)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
         result = await remnawave_premium.create_premium_user_entity(
             42,
             requested_uuid=SAMPLE_UUID,
             expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
 
+    find_mock.assert_awaited_once_with("tg_42_premium")
     assert result.ok is True
     assert result.panel_uuid == SAMPLE_UUID
     assert result.forced_uuid_accepted is True
+    assert result.recovered is False
     assert result.subscription_url.endswith("/abc123")
-    api_mock.assert_called_once()
-    # The first call must include the forced uuid kwarg
-    kwargs = api_mock.call_args.kwargs
+    create_mock.assert_awaited_once()
+    kwargs = create_mock.call_args.kwargs
     assert kwargs["uuid"] == SAMPLE_UUID
     assert kwargs["squad_uuid"] == "main-squad-uuid"
     assert kwargs["traffic_limit_bytes"] == 0
@@ -113,7 +133,7 @@ async def test_create_premium_user_happy_path_forced_uuid_accepted():
 
 @pytest.mark.asyncio
 async def test_create_premium_user_falls_back_when_forced_uuid_rejected():
-    # First call returns 400 (forced uuid rejected), second call (without uuid) succeeds.
+    # 400 (forced uuid rejected), then second call (without uuid) succeeds.
     first_attempt = {"ok": False, "status": 400, "body": {"error": "bad uuid"}, "response": None}
     second_attempt = {
         "ok": True,
@@ -121,37 +141,39 @@ async def test_create_premium_user_falls_back_when_forced_uuid_rejected():
         "response": {"uuid": PANEL_UUID, "subscriptionUrl": "https://r/sub/x"},
         "body": None,
     }
-    api_mock = AsyncMock(side_effect=[first_attempt, second_attempt])
-    with patch.object(remnawave_premium, "config", _cfg_stub()), \
-         patch.object(remnawave_premium.remnawave_api, "create_user", api_mock):
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(side_effect=[first_attempt, second_attempt])
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
         result = await remnawave_premium.create_premium_user_entity(
             42,
             requested_uuid=SAMPLE_UUID,
             expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
 
-    assert api_mock.call_count == 2
-    # second call must NOT have the forced uuid
-    assert api_mock.call_args_list[0].kwargs["uuid"] == SAMPLE_UUID
-    assert api_mock.call_args_list[1].kwargs["uuid"] is None
+    assert create_mock.call_count == 2
+    assert create_mock.call_args_list[0].kwargs["uuid"] == SAMPLE_UUID
+    assert create_mock.call_args_list[1].kwargs["uuid"] is None
     assert result.ok is True
     assert result.panel_uuid == PANEL_UUID
     assert result.forced_uuid_accepted is False
+    assert result.recovered is False
 
 
 @pytest.mark.asyncio
 async def test_create_premium_user_does_not_retry_on_5xx():
     """Server errors are NOT considered uuid-related — surface to caller."""
     first_attempt = {"ok": False, "status": 503, "body": "panel down", "response": None}
-    api_mock = AsyncMock(return_value=first_attempt)
-    with patch.object(remnawave_premium, "config", _cfg_stub()), \
-         patch.object(remnawave_premium.remnawave_api, "create_user", api_mock):
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(return_value=first_attempt)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
         result = await remnawave_premium.create_premium_user_entity(
             42,
             requested_uuid=SAMPLE_UUID,
             expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
-    assert api_mock.call_count == 1
+    assert create_mock.call_count == 1
     assert result.ok is False
     assert result.status == 503
 
@@ -165,17 +187,19 @@ async def test_create_premium_user_skip_forced_uuid_when_disabled_in_config():
         "response": {"uuid": PANEL_UUID, "subscriptionUrl": "https://r/sub/x"},
         "body": None,
     }
-    api_mock = AsyncMock(return_value=panel_response)
-    with patch.object(remnawave_premium, "config", cfg), \
-         patch.object(remnawave_premium.remnawave_api, "create_user", api_mock):
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(return_value=panel_response)
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
         result = await remnawave_premium.create_premium_user_entity(
             42,
             requested_uuid=SAMPLE_UUID,
             expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
-    assert api_mock.call_args.kwargs["uuid"] is None  # not forced
+    assert create_mock.call_args.kwargs["uuid"] is None  # not forced
     assert result.ok is True
-    assert result.forced_uuid_accepted is False  # never forced → never accepted
+    assert result.forced_uuid_accepted is False
+    assert result.recovered is False
 
 
 @pytest.mark.asyncio
@@ -187,15 +211,169 @@ async def test_create_premium_user_handles_naive_datetime():
         "response": {"uuid": PANEL_UUID, "subscriptionUrl": "u"},
         "body": None,
     }
-    api_mock = AsyncMock(return_value=panel_response)
-    with patch.object(remnawave_premium, "config", cfg), \
-         patch.object(remnawave_premium.remnawave_api, "create_user", api_mock):
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(return_value=panel_response)
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
         await remnawave_premium.create_premium_user_entity(
             42,
             requested_uuid=SAMPLE_UUID,
             expire_at=datetime(2030, 1, 1),  # naive
         )
-    # expire_at must have been formatted to ISO Z
-    sent = api_mock.call_args.kwargs["expire_at"]
+    sent = create_mock.call_args.kwargs["expire_at"]
     assert sent.endswith("Z")
     assert "2030-01-01" in sent
+
+
+# ── Preflight + recovery paths (added in follow-up review) ────────────
+
+@pytest.mark.asyncio
+async def test_preflight_recovers_our_entity_without_posting():
+    """An entity with our description marker already exists → adopt it."""
+    existing = {
+        "uuid": PANEL_UUID,
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "description": "Imported from samopis vpnapi",
+        "subscriptionUrl": "https://r/sub/from-recovery",
+    }
+    find_mock = AsyncMock(return_value=existing)
+    create_mock = AsyncMock()
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is True
+    assert result.recovered is True
+    assert result.forced_uuid_accepted is False
+    assert result.panel_uuid == PANEL_UUID
+    assert result.subscription_url == "https://r/sub/from-recovery"
+    create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_preflight_refuses_when_username_owned_by_unrelated_user():
+    """Existing entity with different telegramId and no marker → refuse (no overwrite)."""
+    unrelated = {
+        "uuid": PANEL_UUID,
+        "username": "tg_42_premium",
+        "telegramId": 99,
+        "description": "manually created by admin",
+        "subscriptionUrl": "https://r/sub/x",
+    }
+    find_mock = AsyncMock(return_value=unrelated)
+    create_mock = AsyncMock()
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is False
+    assert result.error == "conflict_unrelated_user"
+    assert result.recovered is False
+    create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_409_triggers_username_lookup_and_recovers():
+    """Preflight saw nothing → POST → 409 (created by concurrent run) → adopt."""
+    first_call = {"ok": False, "status": 409, "body": "username taken", "response": None}
+    existing_after_race = {
+        "uuid": PANEL_UUID,
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "subscriptionUrl": "https://r/sub/race",
+    }
+    find_mock = AsyncMock(side_effect=[None, existing_after_race])  # first preflight, then 409-recovery
+    create_mock = AsyncMock(return_value=first_call)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert find_mock.await_count == 2
+    create_mock.assert_called_once()
+    assert result.ok is True
+    assert result.recovered is True
+    assert result.panel_uuid == PANEL_UUID
+
+
+@pytest.mark.asyncio
+async def test_post_409_with_unrelated_entity_fails_without_overwrite():
+    first_call = {"ok": False, "status": 409, "body": "username taken", "response": None}
+    unrelated = {
+        "uuid": PANEL_UUID,
+        "username": "tg_42_premium",
+        "telegramId": 7,
+        "description": "manual",
+    }
+    find_mock = AsyncMock(side_effect=[None, unrelated])
+    create_mock = AsyncMock(return_value=first_call)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is False
+    assert result.recovered is False
+    # Only the initial POST was made — no forced-uuid retry, because 409
+    # never falls into the 400/422 retry branch.
+    assert create_mock.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_preflight_exception_does_not_block_post():
+    """Transient panel error during preflight → fall through to POST as usual."""
+    find_mock = AsyncMock(side_effect=RuntimeError("panel timeout"))
+    panel_response = {
+        "ok": True, "status": 201,
+        "response": {"uuid": PANEL_UUID, "subscriptionUrl": "u"},
+        "body": None,
+    }
+    create_mock = AsyncMock(return_value=panel_response)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is True
+    assert result.recovered is False
+    create_mock.assert_called_once()
+
+
+# ── _is_our_entity unit checks ────────────────────────────────────────
+
+class TestIsOurEntity:
+    def test_matches_on_telegram_id_int(self):
+        assert remnawave_premium._is_our_entity({"telegramId": 42}, 42) is True
+
+    def test_matches_on_telegram_id_str(self):
+        assert remnawave_premium._is_our_entity({"telegramId": "42"}, 42) is True
+
+    def test_matches_on_snake_case_telegram_id(self):
+        assert remnawave_premium._is_our_entity({"telegram_id": 42}, 42) is True
+
+    def test_matches_on_description_marker(self):
+        assert remnawave_premium._is_our_entity(
+            {"description": "Imported from samopis vpnapi (2026-05-12)"}, 42,
+        ) is True
+
+    def test_rejects_unrelated_user(self):
+        assert remnawave_premium._is_our_entity(
+            {"telegramId": 99, "description": "manually added"}, 42,
+        ) is False
+
+    def test_rejects_non_dict_input(self):
+        assert remnawave_premium._is_our_entity(None, 42) is False
+        assert remnawave_premium._is_our_entity("nope", 42) is False

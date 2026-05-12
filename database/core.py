@@ -660,6 +660,9 @@ async def init_db() -> bool:
         try:
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_premium_uuid TEXT")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS samopis_migrated_at TIMESTAMPTZ")
+            # Миграция 046: кэш subscriptionUrl, чтобы fallback-роутер не
+            # дёргал панель на каждый /sub/{uuid} запрос.
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_premium_sub_url TEXT")
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_remnawave_premium_uuid "
                 "ON subscriptions(remnawave_premium_uuid) WHERE remnawave_premium_uuid IS NOT NULL"

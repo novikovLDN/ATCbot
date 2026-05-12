@@ -62,6 +62,38 @@ async def _resolve_remnawave_url(panel_uuid: str) -> Optional[str]:
     return url or None
 
 
+async def _redirect_target_for_subscription(sub: dict) -> Optional[str]:
+    """Return the Remnawave URL for a subscription row.
+
+    Uses subscriptions.remnawave_premium_sub_url as the cache.  If the cache
+    is empty (legacy rows migrated before column 046 existed), falls back
+    to GET /api/users/{uuid} and back-fills the column so the next request
+    is cache-hit.
+    """
+    cached = (sub.get("remnawave_premium_sub_url") or "").strip()
+    if cached:
+        return cached
+
+    panel_uuid = sub.get("remnawave_premium_uuid")
+    if not panel_uuid:
+        return None
+
+    target = await _resolve_remnawave_url(panel_uuid)
+    if not target:
+        return None
+
+    # Back-fill the cache. Best-effort: a DB hiccup here only means the next
+    # request will re-fetch — not user-visible.
+    try:
+        import database  # lazy
+        tg = sub.get("telegram_id")
+        if tg:
+            await database.set_remnawave_premium_sub_url(int(tg), target)
+    except Exception as e:
+        logger.warning("SUB_PROXY_BACKFILL_FAIL: uuid=%s %s", panel_uuid[:8], e)
+    return target
+
+
 async def _resolve(uuid: str) -> Optional[str]:
     """Return the target redirect URL for a legacy uuid/token, or None."""
     import database  # lazy — keeps unit tests asyncpg-free
@@ -73,7 +105,7 @@ async def _resolve(uuid: str) -> Optional[str]:
         logger.warning("SUB_PROXY_DB_PREMIUM_FAIL: uuid=%s %s", uuid[:8], e)
         sub = None
     if sub and sub.get("remnawave_premium_uuid"):
-        target = await _resolve_remnawave_url(sub["remnawave_premium_uuid"])
+        target = await _redirect_target_for_subscription(sub)
         if target:
             return target
 
@@ -86,9 +118,8 @@ async def _resolve(uuid: str) -> Optional[str]:
     if sub2:
         # If they happen to be migrated under a different column we still
         # have a Remnawave url to redirect to.
-        premium = sub2.get("remnawave_premium_uuid")
-        if premium:
-            target = await _resolve_remnawave_url(premium)
+        if sub2.get("remnawave_premium_uuid"):
+            target = await _redirect_target_for_subscription(sub2)
             if target:
                 return target
         # Otherwise fall back to the legacy samopis sub endpoint, if configured.

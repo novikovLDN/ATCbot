@@ -102,6 +102,63 @@ async def set_remnawave_premium_uuid(
             )
 
 
+async def set_remnawave_premium_uuid_and_url(
+    telegram_id: int,
+    uuid: str,
+    sub_url: Optional[str],
+    *,
+    mark_migrated: bool = True,
+) -> None:
+    """Atomically persist (uuid, subscription_url) for the premium entity.
+
+    Used by the migration script so the fallback router never has to call
+    Remnawave just to learn the URL — single UPDATE keeps the two columns
+    in sync.  sub_url may be None when the panel didn't return one yet;
+    callers should patch later via set_remnawave_premium_sub_url().
+    """
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        if mark_migrated:
+            await conn.execute(
+                "UPDATE subscriptions "
+                "SET remnawave_premium_uuid = $1, "
+                "    remnawave_premium_sub_url = $2, "
+                "    samopis_migrated_at = NOW() "
+                "WHERE telegram_id = $3 AND status = 'active'",
+                uuid, sub_url, telegram_id,
+            )
+        else:
+            await conn.execute(
+                "UPDATE subscriptions "
+                "SET remnawave_premium_uuid = $1, remnawave_premium_sub_url = $2 "
+                "WHERE telegram_id = $3 AND status = 'active'",
+                uuid, sub_url, telegram_id,
+            )
+
+
+async def set_remnawave_premium_sub_url(telegram_id: int, sub_url: str) -> None:
+    """Back-fill the cached subscriptionUrl for the premium entity.
+
+    Used by the fallback router on a cache miss (legacy rows migrated
+    before column 046 existed).
+    """
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_premium_sub_url = $1 "
+            "WHERE telegram_id = $2 AND status = 'active'",
+            sub_url, telegram_id,
+        )
+
+
 async def clear_remnawave_premium_uuid(telegram_id: int) -> None:
     if not _core.DB_READY:
         return
@@ -130,8 +187,8 @@ async def get_subscription_by_premium_uuid(uuid: str) -> Optional[Dict[str, Any]
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT telegram_id, remnawave_premium_uuid, remnawave_uuid, "
-            "       status, subscription_type, expires_at, samopis_migrated_at "
+            "SELECT telegram_id, remnawave_premium_uuid, remnawave_premium_sub_url, "
+            "       remnawave_uuid, status, subscription_type, expires_at, samopis_migrated_at "
             "FROM subscriptions WHERE remnawave_premium_uuid = $1",
             uuid,
         )
@@ -147,8 +204,8 @@ async def get_subscription_by_samopis_uuid(uuid: str) -> Optional[Dict[str, Any]
         return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT telegram_id, uuid, remnawave_premium_uuid, remnawave_uuid, "
-            "       status, subscription_type, expires_at, samopis_migrated_at "
+            "SELECT telegram_id, uuid, remnawave_premium_uuid, remnawave_premium_sub_url, "
+            "       remnawave_uuid, status, subscription_type, expires_at, samopis_migrated_at "
             "FROM subscriptions WHERE uuid = $1",
             uuid,
         )

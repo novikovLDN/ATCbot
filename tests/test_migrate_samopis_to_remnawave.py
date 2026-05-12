@@ -198,19 +198,49 @@ async def test_process_one_apply_persists_panel_uuid():
         subscription_url="https://r/sub/x",
         status=201,
         error=None,
+        recovered=False,
     )
     create_mock = AsyncMock(return_value=fake_result)
     persist_mock = AsyncMock()
     with patch.object(mod.remnawave_premium, "create_premium_user_entity", create_mock), \
          patch.object(mod, "database") as db_mock:
-        db_mock.set_remnawave_premium_uuid = persist_mock
+        db_mock.set_remnawave_premium_uuid_and_url = persist_mock
         out = await mod._process_one(_row(), apply=True, rate_limiter=rl)
 
     create_mock.assert_awaited_once()
-    persist_mock.assert_awaited_once_with(42, PANEL_UUID)
+    # Now uuid AND sub_url are persisted in a single call.
+    persist_mock.assert_awaited_once_with(42, PANEL_UUID, "https://r/sub/x")
     assert out.status == "ok"
+    assert out.recovered is False
     assert out.uuid_remnawave_premium == PANEL_UUID
     assert out.subscription_url == "https://r/sub/x"
+
+
+@pytest.mark.asyncio
+async def test_process_one_apply_records_recovered_status():
+    """Existing entity adopted via preflight → CSV status = 'recovered'."""
+    mod = _load()
+    rl = mod._RateLimiter(rps=1000)
+
+    fake_result = mod.remnawave_premium.PremiumCreateResult(
+        ok=True,
+        panel_uuid=PANEL_UUID,
+        forced_uuid_accepted=False,
+        subscription_url="https://r/sub/recovered",
+        status=200,
+        error=None,
+        recovered=True,
+    )
+    create_mock = AsyncMock(return_value=fake_result)
+    persist_mock = AsyncMock()
+    with patch.object(mod.remnawave_premium, "create_premium_user_entity", create_mock), \
+         patch.object(mod, "database") as db_mock:
+        db_mock.set_remnawave_premium_uuid_and_url = persist_mock
+        out = await mod._process_one(_row(), apply=True, rate_limiter=rl)
+
+    assert out.status == "recovered"
+    assert out.recovered is True
+    persist_mock.assert_awaited_once_with(42, PANEL_UUID, "https://r/sub/recovered")
 
 
 @pytest.mark.asyncio
@@ -225,12 +255,13 @@ async def test_process_one_apply_records_failure_without_db_write():
         subscription_url=None,
         status=400,
         error="bad-uuid",
+        recovered=False,
     )
     create_mock = AsyncMock(return_value=fake_result)
     persist_mock = AsyncMock()
     with patch.object(mod.remnawave_premium, "create_premium_user_entity", create_mock), \
          patch.object(mod, "database") as db_mock:
-        db_mock.set_remnawave_premium_uuid = persist_mock
+        db_mock.set_remnawave_premium_uuid_and_url = persist_mock
         out = await mod._process_one(_row(), apply=True, rate_limiter=rl)
 
     persist_mock.assert_not_awaited()
@@ -240,22 +271,89 @@ async def test_process_one_apply_records_failure_without_db_write():
 
 
 @pytest.mark.asyncio
+async def test_process_one_records_panel_uuid_on_conflict_unrelated_user():
+    """conflict_unrelated_user → log the panel uuid so the operator can investigate."""
+    mod = _load()
+    rl = mod._RateLimiter(rps=1000)
+
+    fake_result = mod.remnawave_premium.PremiumCreateResult(
+        ok=False,
+        panel_uuid="unrelated-uuid",
+        forced_uuid_accepted=False,
+        subscription_url=None,
+        status=409,
+        error="conflict_unrelated_user",
+        recovered=False,
+    )
+    create_mock = AsyncMock(return_value=fake_result)
+    persist_mock = AsyncMock()
+    with patch.object(mod.remnawave_premium, "create_premium_user_entity", create_mock), \
+         patch.object(mod, "database") as db_mock:
+        db_mock.set_remnawave_premium_uuid_and_url = persist_mock
+        out = await mod._process_one(_row(), apply=True, rate_limiter=rl)
+
+    assert out.status == "failed"
+    assert out.error == "conflict_unrelated_user"
+    assert out.uuid_remnawave_premium == "unrelated-uuid"
+    persist_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_process_one_apply_db_persist_error_marks_failure():
     mod = _load()
     rl = mod._RateLimiter(rps=1000)
 
     fake_result = mod.remnawave_premium.PremiumCreateResult(
         ok=True, panel_uuid=PANEL_UUID, forced_uuid_accepted=False,
-        subscription_url=None, status=201, error=None,
+        subscription_url=None, status=201, error=None, recovered=False,
     )
     create_mock = AsyncMock(return_value=fake_result)
     persist_mock = AsyncMock(side_effect=RuntimeError("db gone"))
     with patch.object(mod.remnawave_premium, "create_premium_user_entity", create_mock), \
          patch.object(mod, "database") as db_mock:
-        db_mock.set_remnawave_premium_uuid = persist_mock
+        db_mock.set_remnawave_premium_uuid_and_url = persist_mock
         out = await mod._process_one(_row(), apply=True, rate_limiter=rl)
 
     assert out.status == "failed"
     assert "db_persist_error" in (out.error or "")
     # The panel uuid is still recorded in the CSV so a follow-up run can recover
     assert out.uuid_remnawave_premium == PANEL_UUID
+
+
+# ── PID lock ──────────────────────────────────────────────────────────
+
+def test_pid_lock_aborts_when_alive_holder_exists(tmp_path: Path):
+    mod = _load()
+    import os
+    lock = tmp_path / "x.lock"
+    lock.write_text(str(os.getpid()))  # our own PID — definitely alive
+    with pytest.raises(mod.LockHeldError):
+        mod.acquire_pid_lock(lock)
+
+
+def test_pid_lock_clears_stale_pid(tmp_path: Path):
+    mod = _load()
+    lock = tmp_path / "x.lock"
+    # Highly-unlikely-to-exist PID (max int 32-bit-ish but realistically dead)
+    lock.write_text("2147483646")
+    mod.acquire_pid_lock(lock)
+    assert lock.exists()
+    import os
+    assert lock.read_text().strip() == str(os.getpid())
+
+
+def test_pid_lock_creates_when_missing(tmp_path: Path):
+    mod = _load()
+    lock = tmp_path / "nested" / "x.lock"
+    mod.acquire_pid_lock(lock)
+    import os
+    assert lock.read_text().strip() == str(os.getpid())
+
+
+def test_pid_lock_treats_malformed_file_as_stale(tmp_path: Path):
+    mod = _load()
+    lock = tmp_path / "x.lock"
+    lock.write_text("not-a-pid")
+    mod.acquire_pid_lock(lock)
+    import os
+    assert lock.read_text().strip() == str(os.getpid())

@@ -72,6 +72,9 @@ def build_premium_username(telegram_id: int, existing_username: Optional[str] = 
     return username[:32]
 
 
+DEFAULT_DESCRIPTION_MARKER = "Imported from samopis vpnapi"
+
+
 @dataclass(frozen=True)
 class PremiumCreateResult:
     """Outcome of a single create_premium_user_entity() call."""
@@ -82,6 +85,47 @@ class PremiumCreateResult:
     subscription_url: Optional[str]
     status: int                  # HTTP status from the panel (0 on transport error)
     error: Optional[str]
+    # True when we adopted an entity that already existed in the panel from
+    # a previous interrupted run (HTTP 409 or preflight hit).  Mutually
+    # exclusive with `forced_uuid_accepted`.
+    recovered: bool = False
+
+
+def _is_our_entity(user: dict, telegram_id: int) -> bool:
+    """Decide whether a panel entity originated from this bot's migration.
+
+    True if either:
+      - telegramId matches (Remnawave returns it as either `telegramId` or
+        `telegram_id` depending on version), OR
+      - description contains our import marker.
+    """
+    if not isinstance(user, dict):
+        return False
+    tg_field = user.get("telegramId")
+    if tg_field is None:
+        tg_field = user.get("telegram_id")
+    try:
+        if tg_field is not None and int(tg_field) == int(telegram_id):
+            return True
+    except (TypeError, ValueError):
+        pass
+    desc = (user.get("description") or "").lower()
+    if "samopis" in desc or "imported from samopis" in desc:
+        return True
+    return False
+
+
+def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResult:
+    """Build a `recovered=True` PremiumCreateResult from an already-existing entity."""
+    return PremiumCreateResult(
+        ok=True,
+        panel_uuid=user.get("uuid"),
+        forced_uuid_accepted=False,
+        subscription_url=user.get("subscriptionUrl") or None,
+        status=http_status,
+        error=None,
+        recovered=True,
+    )
 
 
 async def create_premium_user_entity(
@@ -90,14 +134,24 @@ async def create_premium_user_entity(
     requested_uuid: Optional[str],
     expire_at: datetime,
     existing_username: Optional[str] = None,
-    description: str = "Imported from samopis vpnapi",
+    description: str = DEFAULT_DESCRIPTION_MARKER,
 ) -> PremiumCreateResult:
-    """Create the premium Remnawave entity for a single user.
+    """Create (or recover) the premium Remnawave entity for a single user.
 
-    Tries to POST with the requested UUID.  If the panel rejects it
-    (HTTP 400/409/422), retries WITHOUT the UUID so the migration can
-    proceed regardless of how strict the panel is.  In both cases the
-    panel-assigned UUID is what the script should persist.
+    Resolution order:
+      0. Preflight — `find_user_by_username(username)`.  If the panel already
+         has an entity with this username from a previous interrupted run
+         and it looks like ours (telegramId or description match), adopt it
+         and return `recovered=True`.  If it exists but is unrelated, abort
+         with `error="conflict_unrelated_user"` — refuse to overwrite without
+         an explicit `--force-overwrite`.
+      1. POST /api/users with the forced UUID (if force_uuid is on and a
+         requested_uuid was supplied).
+      2. If the panel returns 409 (username conflict from a race) we run the
+         preflight logic again and recover the existing entity if it is ours.
+      3. If the panel returns 400/422 (forced UUID rejected) we retry the
+         POST without the uuid field; the panel-assigned UUID becomes the
+         persisted value.
     """
     if not config.REMNAWAVE_ENABLED:
         return PremiumCreateResult(False, None, False, None, 0, "remnawave_disabled")
@@ -124,7 +178,38 @@ async def create_premium_user_entity(
         config, "REMNAWAVE_PREMIUM_FORCE_UUID", True
     )
 
-    # First attempt — with forced uuid if requested
+    # ── 0) Preflight by username ──────────────────────────────────────
+    try:
+        existing = await remnawave_api.find_user_by_username(username)
+    except Exception as e:
+        logger.warning(
+            "REMNAWAVE_PREMIUM_PREFLIGHT_FAIL: tg=%s username=%s err=%s — proceeding to POST",
+            telegram_id, username, e,
+        )
+        existing = None
+
+    if existing:
+        if _is_our_entity(existing, telegram_id):
+            logger.info(
+                "REMNAWAVE_PREMIUM_RECOVERED_PREFLIGHT: tg=%s username=%s uuid=%s",
+                telegram_id, username, (existing.get("uuid") or "")[:8],
+            )
+            return _result_from_existing(existing, http_status=200)
+        logger.warning(
+            "REMNAWAVE_PREMIUM_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
+            telegram_id, username, existing.get("telegramId"),
+        )
+        return PremiumCreateResult(
+            ok=False,
+            panel_uuid=existing.get("uuid"),
+            forced_uuid_accepted=False,
+            subscription_url=None,
+            status=409,
+            error="conflict_unrelated_user",
+            recovered=False,
+        )
+
+    # ── 1) POST with forced UUID if available ─────────────────────────
     first_uuid = requested_uuid if force_uuid else None
     raw = await remnawave_api.create_user(uuid=first_uuid, **body_kwargs)
 
@@ -140,12 +225,35 @@ async def create_premium_user_entity(
             subscription_url=sub_url,
             status=int(raw.get("status") or 0),
             error=None,
+            recovered=False,
         )
 
-    # Retry without forced UUID only if forcing was attempted and the panel
-    # complained — otherwise the failure is unrelated to the UUID.
     first_status = int((raw or {}).get("status") or 0)
-    retryable = force_uuid and first_status in (400, 409, 422)
+
+    # ── 2) 409 from POST — race between preflight and POST: another run
+    #      may have created the entity in between.  Re-check by username
+    #      and adopt if it's ours.
+    if first_status == 409:
+        try:
+            existing = await remnawave_api.find_user_by_username(username)
+        except Exception as e:
+            logger.warning(
+                "REMNAWAVE_PREMIUM_409_RECOVERY_FAIL: tg=%s err=%s", telegram_id, e,
+            )
+            existing = None
+        if existing and _is_our_entity(existing, telegram_id):
+            logger.info(
+                "REMNAWAVE_PREMIUM_RECOVERED_POST409: tg=%s uuid=%s",
+                telegram_id, (existing.get("uuid") or "")[:8],
+            )
+            return _result_from_existing(existing, http_status=409)
+        # 409 not from a username race we own — fall through to the
+        # forced-UUID retry below (might be uuid conflict).
+
+    # ── 3) Forced-UUID rejection — retry without forced uuid.  We do NOT
+    #      retry on 409 unless the username turns out unrelated (handled
+    #      above); only 400/422 mean "uuid value not accepted".
+    retryable = force_uuid and first_status in (400, 422)
     if retryable:
         logger.warning(
             "REMNAWAVE_PREMIUM_FORCED_UUID_REJECTED: tg=%s requested=%s status=%s — retrying without uuid",
@@ -161,6 +269,7 @@ async def create_premium_user_entity(
                 subscription_url=response.get("subscriptionUrl"),
                 status=int(raw2.get("status") or 0),
                 error=None,
+                recovered=False,
             )
         raw = raw2
 
@@ -173,6 +282,7 @@ async def create_premium_user_entity(
         subscription_url=None,
         status=int((raw or {}).get("status") or 0),
         error=err_str,
+        recovered=False,
     )
 
 

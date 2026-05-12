@@ -181,6 +181,8 @@ from database.traffic import (  # noqa: F401
     clear_remnawave_uuid,
     get_remnawave_premium_uuid,
     set_remnawave_premium_uuid,
+    set_remnawave_premium_uuid_and_url,
+    set_remnawave_premium_sub_url,
     clear_remnawave_premium_uuid,
     get_subscription_by_premium_uuid,
     get_subscription_by_samopis_uuid,

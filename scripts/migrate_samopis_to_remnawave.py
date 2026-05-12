@@ -57,9 +57,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import csv
+import errno
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -119,10 +122,11 @@ CSV_FIELDS = [
     "timestamp",
     "telegram_id",
     "uuid_samopis",
-    "uuid_remnawave_bypass",  # the existing remnawave_uuid (bypass tier, may be NULL)
-    "uuid_remnawave_premium",  # the NEW UUID created by this script
+    "uuid_remnawave_bypass",   # the existing remnawave_uuid (bypass tier, may be NULL)
+    "uuid_remnawave_premium",  # the NEW UUID created or recovered by this script
     "forced_uuid_accepted",
-    "status",                  # ok | skipped | failed | dry-run
+    "recovered",               # True when the entity already existed in the panel
+    "status",                  # ok | recovered | failed | dry-run
     "http_status",
     "subscription_url",
     "error",
@@ -137,6 +141,7 @@ class LogRow:
     uuid_remnawave_bypass: Optional[str]
     uuid_remnawave_premium: Optional[str]
     forced_uuid_accepted: bool
+    recovered: bool
     status: str
     http_status: int
     subscription_url: Optional[str]
@@ -182,6 +187,70 @@ def _validate_apply_config() -> Optional[str]:
     return None
 
 
+# ── PID lock (single-writer guarantee for --apply) ─────────────────────
+
+class LockHeldError(RuntimeError):
+    """Raised when another instance of the script is already running."""
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Return True if process `pid` exists on this host."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The PID exists but is owned by another user — still alive.
+        return True
+    except OSError as e:
+        # ESRCH is "no such process"; anything else we treat as alive to be safe.
+        return e.errno != errno.ESRCH
+    return True
+
+
+def acquire_pid_lock(lock_path: Path) -> None:
+    """Refuse to run if another --apply instance is in progress.
+
+    Stale lock files (PID no longer alive) are removed automatically.  On
+    success the current PID is written and a cleanup hook is registered so
+    the file is removed on normal exit (including KeyboardInterrupt).
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if lock_path.exists():
+        try:
+            old_pid = int(lock_path.read_text().strip() or "0")
+        except (ValueError, OSError):
+            old_pid = 0
+        if old_pid and _pid_is_alive(old_pid):
+            raise LockHeldError(
+                f"another migration instance is running (PID {old_pid}); "
+                f"remove {lock_path} manually only if you are sure that process is dead"
+            )
+        # Stale lock — drop it.
+        logger.warning("Removing stale lock file %s (PID %s no longer alive)", lock_path, old_pid)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    lock_path.write_text(str(os.getpid()))
+
+    def _release() -> None:
+        try:
+            # Only remove the lock if it still belongs to us — otherwise
+            # another concurrent instance might have stolen it after we
+            # crashed and we don't want to delete its lock.
+            current = int(lock_path.read_text().strip() or "0")
+            if current == os.getpid():
+                lock_path.unlink(missing_ok=True)
+        except (FileNotFoundError, ValueError, OSError):
+            pass
+
+    atexit.register(_release)
+
+
 # ── Per-row processing ─────────────────────────────────────────────────
 
 async def _process_one(
@@ -202,6 +271,7 @@ async def _process_one(
         uuid_remnawave_bypass=bypass_uuid or None,
         uuid_remnawave_premium=None,
         forced_uuid_accepted=False,
+        recovered=False,
         status="dry-run",
         http_status=0,
         subscription_url=None,
@@ -236,11 +306,15 @@ async def _process_one(
         base.status = "failed"
         base.http_status = result.status
         base.error = result.error
+        base.uuid_remnawave_premium = result.panel_uuid  # may be set when error==conflict_unrelated_user
         return base
 
-    # Persist mapping
+    # Persist (uuid, sub_url) in one atomic UPDATE so the fallback router
+    # never needs to call the panel just to learn the subscription URL.
     try:
-        await database.set_remnawave_premium_uuid(tg, result.panel_uuid or "")
+        await database.set_remnawave_premium_uuid_and_url(
+            tg, result.panel_uuid or "", result.subscription_url
+        )
     except Exception as e:
         _jlog(logging.ERROR, "persist.failed", telegram_id=tg,
               panel_uuid=(result.panel_uuid or "")[:8], error=str(e))
@@ -249,28 +323,32 @@ async def _process_one(
         base.subscription_url = result.subscription_url
         base.http_status = result.status
         base.forced_uuid_accepted = result.forced_uuid_accepted
+        base.recovered = result.recovered
         base.error = f"db_persist_error: {type(e).__name__}: {e}"
         return base
 
-    _jlog(logging.INFO, "migrated",
-          telegram_id=tg,
-          uuid_samopis=samopis_uuid[:8] if samopis_uuid else None,
-          panel_uuid=(result.panel_uuid or "")[:8],
-          forced_uuid_accepted=result.forced_uuid_accepted,
-          subscription_url=result.subscription_url)
-
-    base.status = "ok"
+    base.status = "recovered" if result.recovered else "ok"
     base.uuid_remnawave_premium = result.panel_uuid
     base.subscription_url = result.subscription_url
     base.http_status = result.status
     base.forced_uuid_accepted = result.forced_uuid_accepted
+    base.recovered = result.recovered
+
+    _jlog(logging.INFO,
+          "migrated.recovered" if result.recovered else "migrated.created",
+          telegram_id=tg,
+          uuid_samopis=samopis_uuid[:8] if samopis_uuid else None,
+          panel_uuid=(result.panel_uuid or "")[:8],
+          forced_uuid_accepted=result.forced_uuid_accepted,
+          recovered=result.recovered,
+          subscription_url=result.subscription_url)
     return base
 
 
 # ── Main flow ──────────────────────────────────────────────────────────
 
 async def _run(args) -> int:
-    # Init DB (also runs pending migrations, including 045 if not yet applied)
+    # Init DB (also runs pending migrations, including 045/046 if not yet applied)
     await database.init_db()
     if not getattr(database, "DB_READY", False):
         logger.error("DB initialisation failed — aborting")
@@ -280,6 +358,14 @@ async def _run(args) -> int:
         problem = _validate_apply_config()
         if problem:
             logger.error("Refusing --apply: %s", problem)
+            return 1
+        # Single-writer guarantee — only one --apply instance at a time.
+        lock_path = Path(args.lock_file) if args.lock_file else Path(args.log_file + ".lock")
+        try:
+            acquire_pid_lock(lock_path)
+            logger.info("Acquired PID lock %s (pid=%s)", lock_path, os.getpid())
+        except LockHeldError as e:
+            logger.error("%s", e)
             return 1
 
     candidates: List[dict] = await database.list_subscriptions_for_premium_migration(
@@ -302,7 +388,7 @@ async def _run(args) -> int:
     log_path = Path(args.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    ok = skipped = failed = 0
+    ok = recovered = skipped = failed = 0
     with _CsvLog(log_path, dry_run=not args.apply) as csv_log:
         for idx, row in enumerate(candidates, start=1):
             try:
@@ -318,6 +404,7 @@ async def _run(args) -> int:
                     uuid_remnawave_bypass=row.get("remnawave_uuid"),
                     uuid_remnawave_premium=None,
                     forced_uuid_accepted=False,
+                    recovered=False,
                     status="failed",
                     http_status=0,
                     subscription_url=None,
@@ -327,17 +414,22 @@ async def _run(args) -> int:
             csv_log.write(out)
             if out.status == "ok":
                 ok += 1
+            elif out.status == "recovered":
+                recovered += 1
             elif out.status == "dry-run":
                 skipped += 1
             else:
                 failed += 1
 
             if idx % 50 == 0:
-                logger.info("Progress: %d/%d (ok=%d failed=%d)", idx, len(candidates), ok, failed)
+                logger.info(
+                    "Progress: %d/%d (ok=%d recovered=%d failed=%d)",
+                    idx, len(candidates), ok, recovered, failed,
+                )
 
     logger.info(
-        "Done. ok=%d failed=%d dry-run=%d total=%d. Log: %s",
-        ok, failed, skipped, len(candidates), log_path,
+        "Done. ok=%d recovered=%d failed=%d dry-run=%d total=%d. Log: %s",
+        ok, recovered, failed, skipped, len(candidates), log_path,
     )
     if failed > 0:
         return 2
@@ -378,6 +470,12 @@ def _parse_args() -> argparse.Namespace:
         "--log-file",
         default="migration_log.csv",
         help="Path to the per-row CSV log (default ./migration_log.csv)",
+    )
+    parser.add_argument(
+        "--lock-file",
+        default=None,
+        help="Path to the PID lock file (default: <log-file>.lock). "
+             "Ignored without --apply.",
     )
     parser.add_argument(
         "--include-already-migrated",
