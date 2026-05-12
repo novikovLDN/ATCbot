@@ -124,11 +124,16 @@ async def create_user(
     """POST /api/users — create a new Remnawave user.
 
     Extra keyword args (added for the samopis→premium migration):
-      uuid                 — force the panel to use this full UUID for the new
-                             entity.  Used to keep legacy samopis subscription
-                             URLs working.  Some panel versions ignore the
-                             field and assign their own value; callers MUST
-                             read result['uuid'] to learn what was stored.
+      uuid                 — VLESS UUID to force.  On Remnawave v2.7+ the
+                             panel separates entity into `uuid` (panel-internal,
+                             always panel-assigned) and `vlessUuid` (used in
+                             VLESS connection strings).  When this param is
+                             supplied the value is sent in the `vlessUuid`
+                             field so legacy samopis links keep working on the
+                             new inbounds.  Callers MUST read
+                             result['vlessUuid'] to learn whether the panel
+                             honoured the request and result['uuid'] for the
+                             internal identifier used by subsequent API calls.
       squad_uuid           — override config.REMNAWAVE_SQUAD_UUID (e.g. the
                              "MainServer" squad for the premium tier).  Pass
                              "" to skip the default-squad assignment entirely.
@@ -151,7 +156,10 @@ async def create_user(
         "deviceLimit": device_limit,
     }
     if uuid:
-        body["uuid"] = uuid
+        # Remnawave v2.7+ moved the connection UUID to `vlessUuid` —
+        # `uuid` is panel-assigned and cannot be overridden.  See module
+        # docstring on find_user_by_username.
+        body["vlessUuid"] = uuid
     if description:
         body["description"] = description
     if telegram_id is not None:
@@ -307,148 +315,43 @@ async def delete_user(uuid: str) -> Optional[Dict[str, Any]]:
 
 
 # ── Username search (preflight for the samopis migration) ──────────────
-
-# Module-level cache for the working strategy: once we know whether the
-# panel exposes /api/users/by-username/{name}, every subsequent call goes
-# straight to the right code path.  None = unknown, "by_username" or "list".
-_find_strategy: Optional[str] = None
-# Common Remnawave list endpoints accept either size+page or limit+offset.
-# We probe both on the first list call and cache the winner.
-_list_params_style: Optional[str] = None  # "size_page" | "limit_offset"
-
-
-def _extract_list_items(payload: Any) -> Optional[list]:
-    """Normalise a Remnawave list response to a flat list of user dicts."""
-    if payload is None:
-        return None
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        for key in ("items", "users", "data", "results"):
-            v = payload.get(key)
-            if isinstance(v, list):
-                return v
-        # Sometimes the panel wraps once more: {"response": {"users": [...]}}
-        inner = payload.get("response")
-        if inner is not None and inner is not payload:
-            return _extract_list_items(inner)
-    return None
-
-
-async def _find_by_username_dedicated(username: str) -> Dict[str, Any]:
-    """Try GET /api/users/by-username/{username}.
-
-    Returns one of:
-        {"hit": True,  "user": {...}}          — 200 with the entity
-        {"hit": False, "available": True}      — 404 (username free)
-        {"hit": False, "unsupported": True}    — 405 / wrong shape
-        {"hit": False, "error": "..."}         — transient / unknown
-    """
-    from urllib.parse import quote
-    path = f"/api/users/by-username/{quote(username, safe='')}"
-    raw = await _request_raw("GET", path)
-    status = raw.get("status") or 0
-    if status == 200 and isinstance(raw.get("response"), dict):
-        return {"hit": True, "user": raw["response"]}
-    if status == 404:
-        return {"hit": False, "available": True}
-    if status in (405, 501):
-        return {"hit": False, "unsupported": True}
-    # 400 with "endpoint not found"-style body is also treated as unsupported.
-    body_text = str(raw.get("body") or "").lower()
-    if status == 400 and ("not found" in body_text or "no such" in body_text or "route" in body_text):
-        return {"hit": False, "unsupported": True}
-    return {"hit": False, "error": f"http_{status}"}
-
-
-async def _find_by_username_via_list(username: str, *, page_size: int = 100) -> Optional[Dict[str, Any]]:
-    """Paginated fallback: GET /api/users with client-side filter on username.
-
-    Probes both `size+page` and `limit+offset` parameter styles on the first
-    call and caches whichever returns a usable list.  Returns the matching
-    user dict, or None if the username is free / endpoint never responded.
-    """
-    global _list_params_style
-
-    def _params(style: str, page_index: int) -> Dict[str, int]:
-        if style == "size_page":
-            # Most Remnawave deployments are 1-indexed for `page`.
-            return {"size": page_size, "page": page_index + 1}
-        # limit_offset
-        return {"limit": page_size, "offset": page_index * page_size}
-
-    styles_to_try = [_list_params_style] if _list_params_style else ["size_page", "limit_offset"]
-
-    for style in styles_to_try:
-        if not style:
-            continue
-        page_index = 0
-        while True:
-            raw = await _request_raw("GET", "/api/users", params=_params(style, page_index))
-            if not raw.get("ok"):
-                # Style probably wrong — break and try the next one.
-                break
-            items = _extract_list_items(raw.get("response"))
-            if items is None:
-                break  # unexpected shape, try next style
-            # First successful list response → remember the style
-            _list_params_style = style
-            if not items:
-                return None  # exhausted, username free
-            for u in items:
-                if isinstance(u, dict) and u.get("username") == username:
-                    return u
-            if len(items) < page_size:
-                return None  # last page, no match
-            page_index += 1
-            # Hard cap to keep a hung panel from looping forever.
-            if page_index > 1000:
-                logger.warning("REMNAWAVE_LIST_PAGE_OVERFLOW: bailing at page=%s", page_index)
-                return None
-    return None
+#
+# Remnawave v2.7.4 (this deployment) exposes a dedicated endpoint:
+#   GET /api/users/by-username/{username}
+#     → 200 + user entity   (username taken)
+#     → 404 + errorCode A063 ("User with specified params not found")
+# No pagination / list-fallback is needed.  If the dedicated endpoint
+# ever disappears in a future panel version the migration script will
+# fail loudly via the "unexpected_http_status" code path and we'll
+# know to add a fallback again.
 
 
 async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    """Return the user entity whose `username` matches, or None.
+    """Return the user entity whose `username` matches, or None if free.
 
-    Resolution order:
-      1. /api/users/by-username/{username}  (if the panel supports it)
-      2. paginated /api/users?size=…&page=… (or limit+offset) fallback
-
-    The picked strategy is cached at module level so subsequent calls skip
-    the probe.  None is returned both for "username free" and "transport
-    error" — callers that need to distinguish should call _request_raw
-    directly.
+    Confirmed working on Remnawave v2.7.4.  Returns None on any
+    non-200/404 status so that callers can decide whether to retry — the
+    raw HTTP status is logged at WARN level for diagnostics.
     """
-    global _find_strategy
     if not username:
         return None
-
-    if _find_strategy in (None, "by_username"):
-        outcome = await _find_by_username_dedicated(username)
-        if outcome.get("hit"):
-            if _find_strategy is None:
-                _find_strategy = "by_username"
-                logger.info("REMNAWAVE_FIND_STRATEGY: caching by_username (matched %s)", username)
-            return outcome.get("user")
-        if outcome.get("available"):
-            if _find_strategy is None:
-                _find_strategy = "by_username"
-                logger.info("REMNAWAVE_FIND_STRATEGY: caching by_username (404 ok)")
-            return None
-        if outcome.get("unsupported"):
-            logger.info("REMNAWAVE_FIND_STRATEGY: by_username unsupported, falling back to list")
-            _find_strategy = "list"
-        # transient/unknown error → don't pin a strategy, fall through to list
-
-    return await _find_by_username_via_list(username)
-
-
-def _reset_find_strategy_for_tests() -> None:
-    """Test helper: clear the cached probe results."""
-    global _find_strategy, _list_params_style
-    _find_strategy = None
-    _list_params_style = None
+    from urllib.parse import quote
+    path = f"/api/users/by-username/{quote(username, safe='')}"
+    raw = await _request_raw("GET", path)
+    status = int(raw.get("status") or 0)
+    if status == 200 and isinstance(raw.get("response"), dict):
+        return raw["response"]
+    if status == 404:
+        # errorCode A063 is the expected "no such user" body — username is free.
+        return None
+    # Anything else: transient or unexpected.  Don't claim the username is
+    # free (could be a transient panel hiccup); return None and let the
+    # caller decide whether to proceed with POST.
+    logger.warning(
+        "REMNAWAVE_FIND_UNEXPECTED_STATUS: username=%s status=%s body=%s",
+        username, status, str(raw.get("body") or "")[:200],
+    )
+    return None
 
 
 # ── Convenience ───────────────────────────────────────────────────────

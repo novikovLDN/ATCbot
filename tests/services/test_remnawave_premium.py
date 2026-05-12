@@ -101,7 +101,11 @@ async def test_create_premium_user_happy_path_forced_uuid_accepted():
         "ok": True,
         "status": 201,
         "response": {
-            "uuid": SAMPLE_UUID,  # panel honoured our request
+            # Remnawave v2.7+: `uuid` is panel-assigned, `vlessUuid` is the
+            # field that reflects our forced value.
+            "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "vlessUuid": SAMPLE_UUID,  # panel honoured our forced UUID
+            "shortUuid": "abc123",
             "subscriptionUrl": "https://rmnw.atlassecure.ru/api/sub/abc123",
         },
         "body": None,
@@ -118,17 +122,48 @@ async def test_create_premium_user_happy_path_forced_uuid_accepted():
 
     find_mock.assert_awaited_once_with("tg_42_premium")
     assert result.ok is True
-    assert result.panel_uuid == SAMPLE_UUID
-    assert result.forced_uuid_accepted is True
+    # panel_uuid is the INTERNAL panel id, not our forced value.
+    assert result.panel_uuid == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert result.forced_uuid_accepted is True  # vlessUuid matched
     assert result.recovered is False
+    assert result.short_uuid == "abc123"
     assert result.subscription_url.endswith("/abc123")
     create_mock.assert_awaited_once()
     kwargs = create_mock.call_args.kwargs
+    # remnawave_api.create_user takes `uuid` as the forced-vless-uuid param;
+    # the body field rename to `vlessUuid` happens inside create_user itself.
     assert kwargs["uuid"] == SAMPLE_UUID
     assert kwargs["squad_uuid"] == "main-squad-uuid"
     assert kwargs["traffic_limit_bytes"] == 0
     assert kwargs["telegram_id"] == 42
     assert kwargs["raw_response"] is True
+
+
+@pytest.mark.asyncio
+async def test_forced_uuid_accepted_is_false_when_panel_substitutes_value():
+    """Panel returns its own vlessUuid → forced_uuid_accepted is False."""
+    panel_response = {
+        "ok": True,
+        "status": 201,
+        "response": {
+            "uuid": "panel-internal",
+            "vlessUuid": "panel-generated-different-uuid",
+            "shortUuid": "xyz",
+            "subscriptionUrl": "u",
+        },
+    }
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(return_value=panel_response)
+    p_cfg, p_find, p_create, _, _ = _patch_api(_cfg_stub(), find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is True
+    assert result.forced_uuid_accepted is False
+    assert result.short_uuid == "xyz"
 
 
 @pytest.mark.asyncio
@@ -138,7 +173,12 @@ async def test_create_premium_user_falls_back_when_forced_uuid_rejected():
     second_attempt = {
         "ok": True,
         "status": 201,
-        "response": {"uuid": PANEL_UUID, "subscriptionUrl": "https://r/sub/x"},
+        "response": {
+            "uuid": PANEL_UUID,
+            "vlessUuid": "panel-fresh-vless",
+            "shortUuid": "xs",
+            "subscriptionUrl": "https://r/sub/x",
+        },
         "body": None,
     }
     find_mock = AsyncMock(return_value=None)
@@ -158,6 +198,7 @@ async def test_create_premium_user_falls_back_when_forced_uuid_rejected():
     assert result.panel_uuid == PANEL_UUID
     assert result.forced_uuid_accepted is False
     assert result.recovered is False
+    assert result.short_uuid == "xs"
 
 
 @pytest.mark.asyncio
@@ -184,7 +225,12 @@ async def test_create_premium_user_skip_forced_uuid_when_disabled_in_config():
     panel_response = {
         "ok": True,
         "status": 201,
-        "response": {"uuid": PANEL_UUID, "subscriptionUrl": "https://r/sub/x"},
+        "response": {
+            "uuid": PANEL_UUID,
+            "vlessUuid": "panel-vless",
+            "shortUuid": "shrt",
+            "subscriptionUrl": "https://r/sub/x",
+        },
         "body": None,
     }
     find_mock = AsyncMock(return_value=None)
@@ -200,6 +246,7 @@ async def test_create_premium_user_skip_forced_uuid_when_disabled_in_config():
     assert result.ok is True
     assert result.forced_uuid_accepted is False
     assert result.recovered is False
+    assert result.short_uuid == "shrt"
 
 
 @pytest.mark.asyncio
@@ -208,7 +255,7 @@ async def test_create_premium_user_handles_naive_datetime():
     panel_response = {
         "ok": True,
         "status": 201,
-        "response": {"uuid": PANEL_UUID, "subscriptionUrl": "u"},
+        "response": {"uuid": PANEL_UUID, "vlessUuid": "v", "shortUuid": "s", "subscriptionUrl": "u"},
         "body": None,
     }
     find_mock = AsyncMock(return_value=None)
@@ -232,6 +279,8 @@ async def test_preflight_recovers_our_entity_without_posting():
     """An entity with our description marker already exists → adopt it."""
     existing = {
         "uuid": PANEL_UUID,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "rec123",
         "username": "tg_42_premium",
         "telegramId": 42,
         "description": "Imported from samopis vpnapi",
@@ -251,6 +300,7 @@ async def test_preflight_recovers_our_entity_without_posting():
     assert result.forced_uuid_accepted is False
     assert result.panel_uuid == PANEL_UUID
     assert result.subscription_url == "https://r/sub/from-recovery"
+    assert result.short_uuid == "rec123"
     create_mock.assert_not_called()
 
 
@@ -285,6 +335,8 @@ async def test_post_409_triggers_username_lookup_and_recovers():
     first_call = {"ok": False, "status": 409, "body": "username taken", "response": None}
     existing_after_race = {
         "uuid": PANEL_UUID,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "racesh",
         "username": "tg_42_premium",
         "telegramId": 42,
         "subscriptionUrl": "https://r/sub/race",
@@ -336,7 +388,7 @@ async def test_preflight_exception_does_not_block_post():
     find_mock = AsyncMock(side_effect=RuntimeError("panel timeout"))
     panel_response = {
         "ok": True, "status": 201,
-        "response": {"uuid": PANEL_UUID, "subscriptionUrl": "u"},
+        "response": {"uuid": PANEL_UUID, "vlessUuid": "v", "shortUuid": "s", "subscriptionUrl": "u"},
         "body": None,
     }
     create_mock = AsyncMock(return_value=panel_response)

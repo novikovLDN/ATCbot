@@ -80,8 +80,10 @@ class PremiumCreateResult:
     """Outcome of a single create_premium_user_entity() call."""
 
     ok: bool
-    panel_uuid: Optional[str]    # uuid the panel actually assigned (None on failure)
-    forced_uuid_accepted: bool   # True if our `requested_uuid` was honoured
+    panel_uuid: Optional[str]    # panel-internal uuid (None on failure).
+                                 # Used for subsequent /api/users/{uuid} calls.
+    forced_uuid_accepted: bool   # True if our `requested_uuid` ended up in
+                                 # the panel's `vlessUuid` field.
     subscription_url: Optional[str]
     status: int                  # HTTP status from the panel (0 on transport error)
     error: Optional[str]
@@ -89,6 +91,9 @@ class PremiumCreateResult:
     # a previous interrupted run (HTTP 409 or preflight hit).  Mutually
     # exclusive with `forced_uuid_accepted`.
     recovered: bool = False
+    short_uuid: Optional[str] = None  # panel-assigned shortUuid (used to
+                                       # rebuild subscription URLs if the
+                                       # cached value goes stale).
 
 
 def _is_our_entity(user: dict, telegram_id: int) -> bool:
@@ -125,6 +130,7 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
         status=http_status,
         error=None,
         recovered=True,
+        short_uuid=user.get("shortUuid"),
     )
 
 
@@ -216,16 +222,18 @@ async def create_premium_user_entity(
     if raw and raw.get("ok"):
         response = raw.get("response") or {}
         panel_uuid = response.get("uuid")
-        sub_url = response.get("subscriptionUrl")
-        accepted = bool(force_uuid) and (panel_uuid == requested_uuid)
+        # Acceptance is decided by `vlessUuid` — `uuid` is always panel-assigned.
+        accepted_vless = response.get("vlessUuid")
+        accepted = bool(force_uuid) and (accepted_vless == requested_uuid)
         return PremiumCreateResult(
             ok=True,
             panel_uuid=panel_uuid,
             forced_uuid_accepted=accepted,
-            subscription_url=sub_url,
+            subscription_url=response.get("subscriptionUrl"),
             status=int(raw.get("status") or 0),
             error=None,
             recovered=False,
+            short_uuid=response.get("shortUuid"),
         )
 
     first_status = int((raw or {}).get("status") or 0)
@@ -270,6 +278,7 @@ async def create_premium_user_entity(
                 status=int(raw2.get("status") or 0),
                 error=None,
                 recovered=False,
+                short_uuid=response.get("shortUuid"),
             )
         raw = raw2
 

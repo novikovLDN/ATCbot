@@ -199,6 +199,7 @@ async def test_process_one_apply_persists_panel_uuid():
         status=201,
         error=None,
         recovered=False,
+        short_uuid="shrt123",
     )
     create_mock = AsyncMock(return_value=fake_result)
     persist_mock = AsyncMock()
@@ -208,8 +209,8 @@ async def test_process_one_apply_persists_panel_uuid():
         out = await mod._process_one(_row(), apply=True, rate_limiter=rl)
 
     create_mock.assert_awaited_once()
-    # Now uuid AND sub_url are persisted in a single call.
-    persist_mock.assert_awaited_once_with(42, PANEL_UUID, "https://r/sub/x")
+    # uuid + sub_url + short_uuid are persisted in a single atomic call.
+    persist_mock.assert_awaited_once_with(42, PANEL_UUID, "https://r/sub/x", short_uuid="shrt123")
     assert out.status == "ok"
     assert out.recovered is False
     assert out.uuid_remnawave_premium == PANEL_UUID
@@ -230,6 +231,7 @@ async def test_process_one_apply_records_recovered_status():
         status=200,
         error=None,
         recovered=True,
+        short_uuid="recsh",
     )
     create_mock = AsyncMock(return_value=fake_result)
     persist_mock = AsyncMock()
@@ -240,7 +242,7 @@ async def test_process_one_apply_records_recovered_status():
 
     assert out.status == "recovered"
     assert out.recovered is True
-    persist_mock.assert_awaited_once_with(42, PANEL_UUID, "https://r/sub/recovered")
+    persist_mock.assert_awaited_once_with(42, PANEL_UUID, "https://r/sub/recovered", short_uuid="recsh")
 
 
 @pytest.mark.asyncio

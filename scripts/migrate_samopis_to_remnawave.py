@@ -309,11 +309,16 @@ async def _process_one(
         base.uuid_remnawave_premium = result.panel_uuid  # may be set when error==conflict_unrelated_user
         return base
 
-    # Persist (uuid, sub_url) in one atomic UPDATE so the fallback router
-    # never needs to call the panel just to learn the subscription URL.
+    # Persist (uuid, sub_url, short_uuid) in one atomic UPDATE so the
+    # fallback router never needs to call the panel just to learn the
+    # subscription URL, and so we can rebuild URLs from shortUuid if the
+    # cached subscriptionUrl ever goes stale.
     try:
         await database.set_remnawave_premium_uuid_and_url(
-            tg, result.panel_uuid or "", result.subscription_url
+            tg,
+            result.panel_uuid or "",
+            result.subscription_url,
+            short_uuid=result.short_uuid,
         )
     except Exception as e:
         _jlog(logging.ERROR, "persist.failed", telegram_id=tg,

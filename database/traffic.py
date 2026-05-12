@@ -107,14 +107,16 @@ async def set_remnawave_premium_uuid_and_url(
     uuid: str,
     sub_url: Optional[str],
     *,
+    short_uuid: Optional[str] = None,
     mark_migrated: bool = True,
 ) -> None:
-    """Atomically persist (uuid, subscription_url) for the premium entity.
+    """Atomically persist (uuid, subscription_url, short_uuid) for the premium entity.
 
     Used by the migration script so the fallback router never has to call
-    Remnawave just to learn the URL — single UPDATE keeps the two columns
-    in sync.  sub_url may be None when the panel didn't return one yet;
-    callers should patch later via set_remnawave_premium_sub_url().
+    Remnawave just to learn the URL — single UPDATE keeps the columns in
+    sync.  Any of sub_url / short_uuid may be None when the panel didn't
+    return them; callers can patch sub_url later via
+    set_remnawave_premium_sub_url().
     """
     if not _core.DB_READY:
         return
@@ -127,16 +129,19 @@ async def set_remnawave_premium_uuid_and_url(
                 "UPDATE subscriptions "
                 "SET remnawave_premium_uuid = $1, "
                 "    remnawave_premium_sub_url = $2, "
+                "    remnawave_premium_short_uuid = $3, "
                 "    samopis_migrated_at = NOW() "
-                "WHERE telegram_id = $3 AND status = 'active'",
-                uuid, sub_url, telegram_id,
+                "WHERE telegram_id = $4 AND status = 'active'",
+                uuid, sub_url, short_uuid, telegram_id,
             )
         else:
             await conn.execute(
                 "UPDATE subscriptions "
-                "SET remnawave_premium_uuid = $1, remnawave_premium_sub_url = $2 "
-                "WHERE telegram_id = $3 AND status = 'active'",
-                uuid, sub_url, telegram_id,
+                "SET remnawave_premium_uuid = $1, "
+                "    remnawave_premium_sub_url = $2, "
+                "    remnawave_premium_short_uuid = $3 "
+                "WHERE telegram_id = $4 AND status = 'active'",
+                uuid, sub_url, short_uuid, telegram_id,
             )
 
 
