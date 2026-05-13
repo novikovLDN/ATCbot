@@ -389,3 +389,15 @@ def test_default_log_file_used_by_argparse_when_no_flag(monkeypatch, tmp_path):
         assert args.log_file == str(tmp_path / "migration_log.csv")
     finally:
         _sys.argv = saved_argv
+
+
+def test_default_lock_file_falls_back_to_tmp(monkeypatch):
+    mod = _load()
+    monkeypatch.delenv("MIGRATION_LOG_DIR", raising=False)
+    assert mod.default_lock_file() == "/tmp/migration.lock"
+
+
+def test_default_lock_file_honours_env_var(monkeypatch, tmp_path):
+    mod = _load()
+    monkeypatch.setenv("MIGRATION_LOG_DIR", str(tmp_path))
+    assert mod.default_lock_file() == str(tmp_path / "migration.lock")

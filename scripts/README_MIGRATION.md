@@ -78,7 +78,7 @@ python -m scripts.migrate_samopis_to_remnawave --apply --rate 3
 
 The script:
 
-- Acquires a PID lock at `<log-file>.lock` (or `--lock-file`) for `--apply`. A second `--apply` while the first is running aborts immediately. Stale locks from crashed runs are detected by `os.kill(pid, 0)` and cleared automatically.
+- Acquires a PID lock at `$MIGRATION_LOG_DIR/migration.lock` (default `/tmp/migration.lock`, override with `--lock-file`) for `--apply`. A second `--apply` while the first is running aborts immediately. Stale locks from crashed runs are detected by `os.kill(pid, 0)` and cleared automatically.
 - Selects every `subscriptions` row where `status='active'`, `uuid IS NOT NULL`, `expires_at > NOW()`, and `subscription_type != 'trial'`. Rows that already have `remnawave_premium_uuid` set are skipped automatically (resumable). `--include-already-migrated` bypasses the skip if you need a full re-run.
 - For each candidate, calls `remnawave_premium.create_premium_user_entity`, which:
   1. **Preflight** — calls `remnawave_api.find_user_by_username(tg_{tg_id}_premium)`. This is a single `GET /api/users/by-username/{name}` call on Remnawave v2.7.4; 200 means the username is taken, 404 (errorCode `A063`) means free. If the entity already exists and is ours (`telegramId` match OR description contains "samopis"), the script **adopts** it and returns `recovered=True` without POSTing.
@@ -130,6 +130,25 @@ pytest tests/services/test_remnawave_premium.py \
 ```
 
 Unit tests mock both the Remnawave HTTP client and the `database` module, so they don't need network or PostgreSQL access. Integration tests use `fastapi.testclient` against the proxy router.
+
+## Admin dashboard buttons
+
+`/admin` exposes six buttons next to the gift-link controls. All of them
+spawn the same script as the shell invocations above, so behaviour is
+identical:
+
+| Button | Subprocess args |
+| --- | --- |
+| 🔍 Dry Run 50 | `--limit 50` |
+| 🔎 Dry Run FULL | (no `--limit`) |
+| 🎯 Apply 1 (test) | `--apply --telegram-id <admin-input> --limit 1` (FSM-prompted) |
+| 🛠 Apply 10 | `--apply --limit 10` |
+| 🚨 Apply ALL | `--apply` (gated by a two-step "yes I'm sure" confirm) |
+| 📥 Download log | DM the cached `migration_log.csv` (auto-attached after every other action) |
+
+After every run the bot auto-attaches the freshly-written CSV as a
+Telegram document — the explicit Download button is the fallback for
+pulling the log later, after the run-result message has scrolled away.
 
 ## Operational runbook
 
