@@ -55,8 +55,6 @@ class TestRenderMigrationText:
         """Customer requirement: say 'основные' / 'безлимитные', NOT 'Premium'."""
         from app.services import migration_broadcast
         text = migration_broadcast.render_migration_text("https://rmnw/sub/x")
-        # Case-insensitive check, but allow the substring inside URLs
-        # because we don't render any premium-bearing URL here anyway.
         assert "premium" not in text.lower(), (
             "Word 'Premium' leaked into the visible broadcast body — "
             "customer requirement is 'основные' / 'безлимитные'."
@@ -69,16 +67,18 @@ class TestRenderMigrationText:
         assert "18.05.2026" in text  # explicit pin
 
     def test_mentions_tap_to_copy_hint(self):
+        """New copy: 'Нажми на свой ключ — скопируется сам'."""
         from app.services import migration_broadcast
         text = migration_broadcast.render_migration_text("https://rmnw/sub/x")
-        assert "нажмите один раз" in text.lower() or "тап" in text.lower()
+        lowered = text.lower()
+        assert "нажми на свой ключ" in lowered or "скопируется сам" in lowered
 
     def test_mentions_lte_bypass_unchanged(self):
         from app.services import migration_broadcast
         text = migration_broadcast.render_migration_text("https://rmnw/sub/x")
-        # The body must reassure users that bypass links are untouched.
+        # Body must reassure users that LTE-bypass links are untouched.
         assert "LTE" in text
-        assert "обходы" in text.lower()
+        assert "обход" in text.lower()
 
     def test_html_special_chars_in_url_are_escaped(self):
         from app.services import migration_broadcast
@@ -86,9 +86,31 @@ class TestRenderMigrationText:
         text = migration_broadcast.render_migration_text(url)
         # & must be escaped to &amp; in the rendered body
         assert "&amp;" in text
-        # but the original raw & should not appear unescaped inside the
-        # block (since we passed it through html.escape)
         assert "?a=1&amp;b=2" in text
+
+    def test_custom_emoji_markers_present_for_safe_send_to_convert(self):
+        """Body must include Telegram-Ads emoji markers so
+        safe_send_message's convert_tg_emoji rewrites them into
+        <tg-emoji> tags on delivery.  We don't pre-convert here — that
+        happens at send time, identical to the rest of the bot."""
+        from app.services import migration_broadcast
+        text = migration_broadcast.render_migration_text("https://rmnw/sub/x")
+        assert "(tg://emoji?id=" in text
+        # The rocket marker is the headline icon and should always be present.
+        assert "5188481279963715781" in text
+
+    def test_emoji_markers_survive_convert_tg_emoji(self):
+        """End-to-end: render the body, then run convert_tg_emoji (the
+        same function safe_send_message applies before delivery) and
+        verify the result contains real <tg-emoji> tags AND no leftover
+        Markdown-style markers."""
+        from app.services import migration_broadcast
+        from app.utils.telegram_safe import convert_tg_emoji
+        text = migration_broadcast.render_migration_text("https://rmnw/sub/x")
+        rendered = convert_tg_emoji(text)
+        assert '<tg-emoji emoji-id="5188481279963715781">' in rendered
+        # No leftover Markdown-style emoji markers
+        assert "(tg://emoji?id=" not in rendered
 
 
 # ── Happ deeplink + keyboard ──────────────────────────────────────────

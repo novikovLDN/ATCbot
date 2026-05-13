@@ -66,6 +66,12 @@ _TEST_PLACEHOLDER_URL = "https://rmnw.atlassecure.ru/api/sub/TEST_PLACEHOLDER"
 def render_migration_text(premium_subscription_url: str) -> str:
     """Build the HTML body for the migration notice.
 
+    The body uses Telegram-Ads-style custom emoji markup
+    `![<glyph>](tg://emoji?id=<id>)` — `app.utils.telegram_safe.
+    safe_send_message` runs `convert_tg_emoji` before delivery, which
+    rewrites those markers into `<tg-emoji emoji-id="...">…</tg-emoji>`
+    tags Telegram understands.
+
     The URL is wrapped in <blockquote><code>...</code></blockquote> so
     Telegram clients render it as a single-tap-to-copy block.  HTML-
     special chars in the URL are escaped just in case (real URLs are
@@ -74,33 +80,26 @@ def render_migration_text(premium_subscription_url: str) -> str:
     url = html.escape(premium_subscription_url or "", quote=False)
     cutoff = html.escape(MIGRATION_CUTOFF_DATE_STR, quote=False)
     return (
-        "🚀 <b>Atlas Secure обновился!</b>\n"
+        "![🚀](tg://emoji?id=5188481279963715781) <b>Atlas Secure стал лучше — обнови ссылку!</b>\n"
         "\n"
-        "Мы перевели основные серверы на новую инфраструктуру.\n"
+        "Перевели основные серверы на новую инфраструктуру — стало быстрее и стабильнее.\n"
         "\n"
-        "⚠️ <b>Обновить ссылку нужно только для основных (безлимитных) серверов.</b>\n"
+        "![⚠️](tg://emoji?id=5420323339723881652) <b>Только для основных (безлимитных) серверов.</b>\n"
+        "![🧩](tg://emoji?id=5265120027853481187) <i>LTE-обходы — ничего менять не нужно.</i>\n"
         "\n"
-        "🚧 LTE-обходы блокировок остаются на старых ссылках — работают корректно и стабильно, ничего менять не нужно.\n"
-        "\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━\n"
         "\n"
         "🔧 <b>Как обновить:</b>\n"
         "\n"
-        "<b>Способ 1 — автоматически:</b>\n"
-        "Нажмите кнопку «🔄 Обновить» ниже — приложение Happ откроется и подхватит новую ссылку само.\n"
+        "<b>Автоматически:</b> нажми <b>«🔄 Обновить»</b> ниже — готово.\n"
         "\n"
-        "<b>Способ 2 — вручную:</b>\n"
-        "\n"
-        "1. Ваш индивидуальный ключ <i>(нажмите один раз, чтобы скопировать)</i>:\n"
         f"<blockquote><code>{url}</code></blockquote>\n"
-        "2. Откройте Happ → нажмите «+» справа сверху → «Добавить из буфера обмена»\n"
-        "3. Старую подписку основных серверов можно удалить.\n"
         "\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
+        "![1️⃣](tg://emoji?id=5382322671679708881) Нажми на свой ключ — скопируется сам\n"
+        "![2️⃣](tg://emoji?id=5381990043642502553) Happ → <b>«+»</b> → <b>«Добавить из буфера обмена»</b>\n"
         "\n"
-        "⏳ Старые ссылки на основные серверы продолжат работать ещё 5 дней.\n"
-        "\n"
-        f"📅 Плановое отключение: <b>{cutoff}</b>"
+        "━━━━━━━━━━━━━━━━\n"
+        f"![⌛️](tg://emoji?id=5454415424319931791) <b>Старые ссылки отключим {cutoff} — не жди!</b> 👇"
     )
 
 
