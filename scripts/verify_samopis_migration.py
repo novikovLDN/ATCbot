@@ -91,6 +91,60 @@ async def _db_summary() -> dict:
     }
 
 
+async def _population_breakdown() -> dict:
+    """Show why "total candidates" is smaller than the full subscriptions
+    table: trial users / expired / non-active rows are excluded by design.
+
+    Returns a flat dict of named bucket counts so the operator can see
+    where every row in `subscriptions` lives.
+    """
+    pool = await database.get_pool()
+    async with pool.acquire() as conn:
+        total_rows = await conn.fetchval("SELECT COUNT(*) FROM subscriptions")
+        with_legacy = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE uuid IS NOT NULL AND uuid != ''"
+        )
+        active_paid_unexpired = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE uuid IS NOT NULL AND uuid != '' "
+            "  AND status = 'active' "
+            "  AND subscription_type IS DISTINCT FROM 'trial' "
+            "  AND expires_at > NOW()"
+        )
+        active_paid_expired = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE uuid IS NOT NULL AND uuid != '' "
+            "  AND status = 'active' "
+            "  AND subscription_type IS DISTINCT FROM 'trial' "
+            "  AND expires_at <= NOW()"
+        )
+        active_trial = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE uuid IS NOT NULL AND uuid != '' "
+            "  AND status = 'active' "
+            "  AND subscription_type = 'trial'"
+        )
+        inactive = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE uuid IS NOT NULL AND uuid != '' "
+            "  AND status IS DISTINCT FROM 'active'"
+        )
+        no_legacy_uuid = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE uuid IS NULL OR uuid = ''"
+        )
+    return {
+        "total_rows": int(total_rows or 0),
+        "with_legacy_uuid": int(with_legacy or 0),
+        "active_paid_unexpired": int(active_paid_unexpired or 0),
+        "active_paid_expired": int(active_paid_expired or 0),
+        "active_trial": int(active_trial or 0),
+        "inactive": int(inactive or 0),
+        "no_legacy_uuid": int(no_legacy_uuid or 0),
+    }
+
+
 async def _sample_migrated(limit: int) -> list[dict]:
     pool = await database.get_pool()
     async with pool.acquire() as conn:
@@ -196,6 +250,7 @@ async def _run(args) -> int:
         return 1
 
     summary = await _db_summary()
+    population = await _population_breakdown()
     total = summary["migrated"] + summary["pending"]
     pct = (summary["migrated"] / total * 100.0) if total else 0.0
 
@@ -211,6 +266,17 @@ async def _run(args) -> int:
     print(f"  With short_uuid cached:   {summary['with_short_uuid']:>6}")
     print(f"  Orphan rows:              {summary['orphans']:>6}  "
           "(migrated_at NOT NULL but uuid empty — should be 0)")
+    print()
+    # Why is "total candidates" smaller than the full subscriptions table?
+    # Show the breakdown so the operator sees where every row lives.
+    print("── Subscription population breakdown ──")
+    print(f"  All rows in subscriptions table:       {population['total_rows']:>6}")
+    print(f"  ├─ Without legacy samopis uuid:        {population['no_legacy_uuid']:>6}  (no migration needed)")
+    print(f"  └─ With legacy samopis uuid:           {population['with_legacy_uuid']:>6}")
+    print(f"     ├─ Active paid + unexpired:         {population['active_paid_unexpired']:>6}  ← migration target")
+    print(f"     ├─ Active paid + already expired:   {population['active_paid_expired']:>6}  (excluded by design)")
+    print(f"     ├─ Trial (any state):               {population['active_trial']:>6}  (excluded by design)")
+    print(f"     └─ Inactive (blocked/cancelled/…):  {population['inactive']:>6}  (excluded by design)")
     print()
 
     exit_code = 0

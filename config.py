@@ -396,7 +396,9 @@ SUB_BASE_URL = env("SUB_BASE_URL", default="https://atlassecure.ru").rstrip("/")
 # REMNAWAVE PANEL CONFIGURATION (Bypass / Traffic limits)
 # ====================================================================================
 REMNAWAVE_API_URL = env("REMNAWAVE_API_URL", default="").rstrip("/")
-REMNAWAVE_API_TOKEN = env("REMNAWAVE_API_TOKEN", default="")
+# Task 2 TZ uses `REMNAWAVE_TOKEN` as the canonical name; we honour both
+# spellings so an env-var rename isn't required to land the cut-over.
+REMNAWAVE_API_TOKEN = env("REMNAWAVE_API_TOKEN", default="") or env("REMNAWAVE_TOKEN", default="")
 REMNAWAVE_ENABLED = bool(REMNAWAVE_API_URL and REMNAWAVE_API_TOKEN)
 
 if REMNAWAVE_ENABLED:
@@ -482,8 +484,15 @@ TRAFFIC_NOTIFY_THRESHOLDS = [
 # Subscription link base for Remnawave bypass
 REMNAWAVE_SUB_BASE_URL = env("REMNAWAVE_SUB_BASE_URL", default="https://rmnw.atlassecure.ru/api/sub").rstrip("/")
 
-# Internal squad UUID for assigning new users (e.g. "Clients" squad)
-REMNAWAVE_SQUAD_UUID = env("REMNAWAVE_SQUAD_UUID", default="")
+# Internal squad UUID for assigning new users (e.g. "Clients" squad).
+# Task 2 TZ calls it `REMNAWAVE_CLIENTS_SQUAD_UUID`; both names point at
+# the same squad and either may be set.
+REMNAWAVE_SQUAD_UUID = (
+    env("REMNAWAVE_SQUAD_UUID", default="")
+    or env("REMNAWAVE_CLIENTS_SQUAD_UUID", default="")
+)
+# Alias kept for clarity in the new purchase flow code paths.
+REMNAWAVE_CLIENTS_SQUAD_UUID = REMNAWAVE_SQUAD_UUID
 
 # ── samopis → Remnawave premium migration knobs (migration 045) ─────────
 # "MainServer" squad — premium tier (unlimited traffic on основные серверы).
@@ -519,6 +528,39 @@ except (TypeError, ValueError):
 # (app/api/subscription_proxy.py).  Default OFF — turn on per environment
 # once the public DNS for sub.atlassecure.ru points at this bot.
 SUBSCRIPTION_PROXY_ENABLED = _envbool("SUBSCRIPTION_PROXY_ENABLED", False)
+
+# ── Task 2 cut-over: Remnawave-only purchase flow ──────────────────────
+# When ON, new purchases / trials / renewals provision a premium + bypass
+# entity in Remnawave instead of calling the legacy samopis xray API
+# (vpn_utils.add_vless_user).  Default OFF so a fresh deploy doesn't
+# change behaviour — flip per env when ready to cut over.
+PURCHASE_FLOW_REMNAWAVE = _envbool("PURCHASE_FLOW_REMNAWAVE", False)
+
+# Bypass username pattern.  TZ asks for `tg_{telegram_id}_bypass`, but the
+# existing ~2500 bypass entities in the panel are named just `{telegram_id}`.
+# Default keeps the existing pattern so we don't have to rename them; set
+# to `tg_{telegram_id}_bypass` on a fresh deployment.
+REMNAWAVE_BYPASS_USERNAME_PATTERN = env(
+    "REMNAWAVE_BYPASS_USERNAME_PATTERN",
+    default="{telegram_id}",
+)
+
+# Trial-specific bypass allowance (1 GB per TZ — premium is duration-limited,
+# bypass is byte-limited).
+try:
+    TRIAL_BYPASS_GB = int(env("TRIAL_BYPASS_GB", default="1"))
+except (TypeError, ValueError):
+    TRIAL_BYPASS_GB = 1
+
+# Bypass entity device limit (default 5; TZ matches premium=5/7).
+try:
+    REMNAWAVE_BYPASS_DEVICE_LIMIT = int(env("REMNAWAVE_BYPASS_DEVICE_LIMIT", default="5"))
+except (TypeError, ValueError):
+    REMNAWAVE_BYPASS_DEVICE_LIMIT = 5
+
+# Bypass far-future expireAt (TZ asks for 2099-12-31; bot historically uses
+# now+10 years which is functionally identical).  Configurable for tests.
+BYPASS_INFINITE_EXPIRE_ISO = env("BYPASS_INFINITE_EXPIRE", default="2099-12-31T23:59:59Z")
 
 # Legacy samopis sub-URL base, used by the fallback endpoint to redirect
 # unmigrated users back to the old infrastructure during the grace period.

@@ -145,6 +145,51 @@ async def set_remnawave_premium_uuid_and_url(
             )
 
 
+async def set_remnawave_bypass_cache(
+    telegram_id: int,
+    uuid: Optional[str],
+    sub_url: Optional[str],
+    short_uuid: Optional[str],
+) -> None:
+    """Persist (uuid, subscription_url, short_uuid) for the bypass entity.
+
+    Symmetric helper to set_remnawave_premium_uuid_and_url — keeps the
+    three bypass columns (remnawave_uuid, remnawave_bypass_sub_url,
+    remnawave_bypass_short_uuid) in sync from a single UPDATE so the
+    UI never has to round-trip to the panel just to learn the URL.
+    """
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions "
+            "SET remnawave_uuid = COALESCE($1, remnawave_uuid), "
+            "    remnawave_bypass_sub_url = COALESCE($2, remnawave_bypass_sub_url), "
+            "    remnawave_bypass_short_uuid = COALESCE($3, remnawave_bypass_short_uuid) "
+            "WHERE telegram_id = $4 AND status = 'active'",
+            uuid, sub_url, short_uuid, telegram_id,
+        )
+
+
+async def get_remnawave_bypass_cache(telegram_id: int) -> Optional[Dict[str, Any]]:
+    """Return (uuid, sub_url, short_uuid) for the bypass entity or None."""
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT remnawave_uuid, remnawave_bypass_sub_url, remnawave_bypass_short_uuid "
+            "FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
+            telegram_id,
+        )
+        return dict(row) if row else None
+
+
 async def set_remnawave_premium_sub_url(telegram_id: int, sub_url: str) -> None:
     """Back-fill the cached subscriptionUrl for the premium entity.
 

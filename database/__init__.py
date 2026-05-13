@@ -188,6 +188,8 @@ from database.traffic import (  # noqa: F401
     get_subscription_by_samopis_uuid,
     list_subscriptions_for_premium_migration,
     count_premium_migration_progress,
+    set_remnawave_bypass_cache,
+    get_remnawave_bypass_cache,
     get_traffic_notification_flags,
     set_traffic_notification_flag,
     reset_traffic_notification_flags,
