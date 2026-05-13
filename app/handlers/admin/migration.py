@@ -25,8 +25,10 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+import os
+
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, FSInputFile
 
 from app.handlers.admin.keyboards import get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
@@ -41,11 +43,20 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "migrate_samopis_to_remnawave.py"
 
+# Where the script writes migration_log.csv / *.lock.  Must match the
+# default in scripts/migrate_samopis_to_remnawave.py so the "download"
+# button picks up the file the dry-run produced.  Override at deploy
+# time via the MIGRATION_LOG_DIR env var (e.g. mount a persistent volume).
+_LOG_DIR = Path(os.environ.get("MIGRATION_LOG_DIR") or "/tmp")
+_LOG_FILE = _LOG_DIR / "migration_log.csv"
+
 # Telegram caps a message body at 4096 chars; we leave room for the
 # wrapper text + <pre> tags + a possible truncation marker.
 _MAX_OUTPUT_CHARS = 3500
 _HELP_TIMEOUT_SECONDS = 30
 _DRYRUN_TIMEOUT_SECONDS = 300  # dry-run hits the DB but never the panel
+# Telegram bot API caps documents at 50 MB; refuse-with-message if larger.
+_MAX_DOWNLOAD_BYTES = 49 * 1024 * 1024
 
 
 async def _run_script(args: Sequence[str], timeout: int) -> tuple[int, str, str]:
@@ -179,6 +190,78 @@ async def callback_migration_dryrun(callback: CallbackQuery):
         reply_markup=get_admin_back_keyboard("ru"),
         parse_mode="HTML",
     )
+
+
+@admin_migration_router.callback_query(F.data == "admin:migration_download")
+@admin_only
+async def callback_migration_download(callback: CallbackQuery):
+    """Send the migration_log.csv produced by the most recent run back to the admin.
+
+    The bot runs under a non-root user in Docker; /app is read-only, so
+    the script writes into MIGRATION_LOG_DIR (default /tmp).  This
+    handler reads the same path and sends the file as a Telegram
+    document.  When no log exists yet (button pressed before dry-run)
+    we surface a clear message instead of a generic error.
+    """
+    await callback.answer("📥 Sending log...")
+    if not _LOG_FILE.is_file():
+        await safe_edit_text(
+            callback.message,
+            (
+                "❌ <b>No migration log found</b>\n\n"
+                f"Expected at: <code>{html.escape(str(_LOG_FILE))}</code>\n"
+                "Run a dry-run (🔍 button) first to generate it."
+            ),
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+        return
+
+    size = _LOG_FILE.stat().st_size
+    if size > _MAX_DOWNLOAD_BYTES:
+        await safe_edit_text(
+            callback.message,
+            (
+                "❌ <b>Log file too large for Telegram</b>\n\n"
+                f"Path: <code>{html.escape(str(_LOG_FILE))}</code>\n"
+                f"Size: {size / 1024 / 1024:.1f} MB (max 50 MB)\n"
+                "Pull it manually from the host (scp / kubectl cp / "
+                "docker cp) and consider archiving older runs."
+            ),
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        document = FSInputFile(str(_LOG_FILE), filename="migration_log.csv")
+        await callback.bot.send_document(
+            callback.from_user.id,
+            document,
+            caption=(
+                f"📊 migration_log.csv ({size / 1024:.1f} KB)\n"
+                f"path: <code>{html.escape(str(_LOG_FILE))}</code>"
+            ),
+            parse_mode="HTML",
+        )
+        logger.info(
+            "ADMIN_MIGRATION_DOWNLOAD: tg=%s path=%s size=%s",
+            callback.from_user.id, _LOG_FILE, size,
+        )
+        await safe_edit_text(
+            callback.message,
+            f"✅ <b>migration_log.csv отправлен</b> ({size / 1024:.1f} KB)",
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.exception("ADMIN_MIGRATION_DOWNLOAD_FAIL: tg=%s", callback.from_user.id)
+        await safe_edit_text(
+            callback.message,
+            f"❌ <b>Send failed:</b>\n<pre>{html.escape(str(e))[:500]}</pre>",
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
 
 
 __all__ = ["admin_migration_router"]

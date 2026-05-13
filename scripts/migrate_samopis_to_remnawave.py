@@ -92,6 +92,23 @@ def _jlog(level: int, event: str, **fields) -> None:
     logger.log(level, json.dumps(payload, default=str, ensure_ascii=False))
 
 
+# ── Default writable paths ─────────────────────────────────────────────
+#
+# The bot runs as a non-root user in a Docker image where `/app` (cwd)
+# is read-only.  Writing the CSV log / PID lock into the working
+# directory blows up with EACCES.  Default into MIGRATION_LOG_DIR if
+# the operator set it, else `/tmp` which is writable on every Linux
+# host we deploy to.  Override via --log-file / --lock-file from the
+# shell when running outside Docker.
+
+def _default_log_dir() -> Path:
+    return Path(os.environ.get("MIGRATION_LOG_DIR") or "/tmp")
+
+
+def default_log_file() -> str:
+    return str(_default_log_dir() / "migration_log.csv")
+
+
 # ── Rate limiter ───────────────────────────────────────────────────────
 
 class _RateLimiter:
@@ -473,14 +490,19 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-file",
-        default="migration_log.csv",
-        help="Path to the per-row CSV log (default ./migration_log.csv)",
+        default=default_log_file(),
+        help=(
+            "Path to the per-row CSV log "
+            "(default $MIGRATION_LOG_DIR/migration_log.csv or "
+            "/tmp/migration_log.csv when unset — `/app` is read-only "
+            "in the Docker image)"
+        ),
     )
     parser.add_argument(
         "--lock-file",
         default=None,
-        help="Path to the PID lock file (default: <log-file>.lock). "
-             "Ignored without --apply.",
+        help="Path to the PID lock file (default: <log-file>.lock, "
+             "i.e. alongside the CSV in a writable dir). Ignored without --apply.",
     )
     parser.add_argument(
         "--include-already-migrated",

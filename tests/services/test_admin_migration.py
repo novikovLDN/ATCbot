@@ -132,3 +132,102 @@ def test_script_path_constants_point_at_repo():
     """
     assert migration._SCRIPT_PATH.name == "migrate_samopis_to_remnawave.py"
     assert migration._SCRIPT_PATH.parent.name == "scripts"
+
+
+def test_log_file_default_path_is_tmp_when_env_unset():
+    """The download button reads /tmp/migration_log.csv unless overridden.
+
+    Must match the default in scripts/migrate_samopis_to_remnawave.py
+    (default_log_file()) — if they drift, the dry-run button writes to
+    one location and the download button looks at another, which would
+    silently surface "No migration log found".
+    """
+    # Module is loaded at test collection; just confirm the constant is
+    # what we'd get from MIGRATION_LOG_DIR=unset.
+    import os as _os
+    if "MIGRATION_LOG_DIR" not in _os.environ:
+        assert str(migration._LOG_FILE) == "/tmp/migration_log.csv"
+    assert migration._LOG_FILE.name == "migration_log.csv"
+
+
+# ── Download handler — "no log yet" branch ─────────────────────────────
+
+class _FakeCallback:
+    """Minimal aiogram-CallbackQuery stand-in for handler unit tests."""
+
+    def __init__(self, tg_id: int = 1):
+        from types import SimpleNamespace
+        self.from_user = SimpleNamespace(id=tg_id)
+        self.message = object()  # opaque — handler must go through safe_edit_text
+        self.bot = SimpleNamespace()
+        self.bot.send_document = _AsyncRecorder()
+        self.answers: list = []
+
+    async def answer(self, text=None, show_alert=False, **kwargs):
+        self.answers.append((text, show_alert))
+
+
+class _AsyncRecorder:
+    """Callable async stub that records every invocation."""
+    def __init__(self, ret=None):
+        self.calls: list = []
+        self.ret = ret
+
+    async def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.ret
+
+
+@pytest.mark.asyncio
+async def test_download_handler_reports_when_no_log_exists(monkeypatch, tmp_path: Path):
+    """File missing → admin sees an actionable message, not a 500."""
+    monkeypatch.setattr(migration, "_LOG_FILE", tmp_path / "absent.csv")
+    edit_mock = _AsyncRecorder()
+    monkeypatch.setattr(migration, "safe_edit_text", edit_mock)
+    # Bypass @admin_only — call the underlying function directly via __wrapped__.
+    handler = migration.callback_migration_download.__wrapped__
+    cb = _FakeCallback()
+    await handler(cb)
+    # send_document must NOT be called when the file is absent
+    assert cb.bot.send_document.calls == []
+    assert edit_mock.calls, "expected safe_edit_text to be called"
+    rendered = edit_mock.calls[0][0][1]  # args = (message, text, ...)
+    assert "No migration log found" in rendered
+    assert "absent.csv" in rendered
+
+
+@pytest.mark.asyncio
+async def test_download_handler_refuses_oversized_file(monkeypatch, tmp_path: Path):
+    big = tmp_path / "migration_log.csv"
+    big.write_bytes(b"x" * 200)
+    monkeypatch.setattr(migration, "_LOG_FILE", big)
+    monkeypatch.setattr(migration, "_MAX_DOWNLOAD_BYTES", 100)  # force the refusal branch
+    edit_mock = _AsyncRecorder()
+    monkeypatch.setattr(migration, "safe_edit_text", edit_mock)
+    handler = migration.callback_migration_download.__wrapped__
+    cb = _FakeCallback()
+    await handler(cb)
+    assert cb.bot.send_document.calls == []
+    rendered = edit_mock.calls[0][0][1]
+    assert "too large" in rendered.lower()
+    assert "50 MB" in rendered
+
+
+@pytest.mark.asyncio
+async def test_download_handler_sends_document_when_file_present(monkeypatch, tmp_path: Path):
+    csv_path = tmp_path / "migration_log.csv"
+    csv_path.write_text("ts,tg,...\n2026-05-12,42,ok\n", encoding="utf-8")
+    monkeypatch.setattr(migration, "_LOG_FILE", csv_path)
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+
+    handler = migration.callback_migration_download.__wrapped__
+    cb = _FakeCallback(tg_id=12345)
+    await handler(cb)
+
+    assert len(cb.bot.send_document.calls) == 1
+    args, kwargs = cb.bot.send_document.calls[0]
+    # First positional arg is the recipient telegram id.
+    assert args[0] == 12345
+    # Second positional arg is the FSInputFile pointing at our temp file.
+    from aiogram.types import FSInputFile
+    assert isinstance(args[1], FSInputFile)

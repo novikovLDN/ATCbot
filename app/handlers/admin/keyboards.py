@@ -49,6 +49,9 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text="🛠 Migration: --help", callback_data="admin:migration_help"),
             InlineKeyboardButton(text="🔍 Migration: dry-run 10", callback_data="admin:migration_dryrun"),
         ],
+        [
+            InlineKeyboardButton(text="📥 Migration: download log", callback_data="admin:migration_download"),
+        ],
     ])
     return keyboard
 

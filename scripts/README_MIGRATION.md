@@ -87,7 +87,7 @@ The script:
   4. If the panel returns **409** (race with a parallel run), the script re-runs the username lookup and adopts the entity if it's ours.
   5. If the panel returns **400/422** (forced `vlessUuid` rejected), retries WITHOUT the forced UUID. The panel-assigned `vlessUuid` is what ends up in the VLESS link; legacy compat will only be preserved when the panel honoured the forced value (`forced_uuid_accepted=True` in the CSV log).
 - Persists `(telegram_id → panel uuid, subscriptionUrl, shortUuid)` atomically into `subscriptions.remnawave_premium_uuid` + `remnawave_premium_sub_url` (migration 046) + `remnawave_premium_short_uuid` (migration 047) and stamps `samopis_migrated_at = NOW()`.
-- Appends one row per user to `migration_log.csv` (configurable via `--log-file`):
+- Appends one row per user to `migration_log.csv` (configurable via `--log-file`). The default path is `$MIGRATION_LOG_DIR/migration_log.csv` if the env var is set, else `/tmp/migration_log.csv` — the Docker image runs the bot as non-root against a read-only `/app`, so writing the log into the working directory raises `PermissionError`. Mount a persistent volume and point `MIGRATION_LOG_DIR` at it if you want the log to survive container restarts. The dashboard's “📥 Migration: download log” button reads from the same path and sends the file back as a Telegram document.
 
 ```csv
 timestamp,telegram_id,uuid_samopis,uuid_remnawave_bypass,uuid_remnawave_premium,forced_uuid_accepted,recovered,status,http_status,subscription_url,error
