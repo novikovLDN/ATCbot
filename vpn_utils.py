@@ -152,11 +152,19 @@ async def add_vless_user(
     tariff: str = "basic",
 ) -> Dict[str, str]:
     """
-    Создать нового пользователя VLESS в Xray Core.
+    LEGACY samopis xray entry point.  Decommissioned by the Task-2
+    cut-over (config.PURCHASE_FLOW_REMNAWAVE=true).  Production
+    callers should be routed through app.services.purchase_flow
+    instead; this function stays in the tree to:
+      * preserve the no-op guard for residual recovery /
+        admin-reissue callsites (e.g. ensure_user_in_xray);
+      * allow emergency rollback by flipping the flag to false.
+
+    When the flag is ON: returns a stub success dict (uuid passes
+    through, urls are empty) so callers don't crash on a missing key.
+    When the flag is OFF: original samopis xray logic runs.
 
     INVARIANT: Must NEVER be called inside an active DB transaction (orphan UUID risk).
-    Callers that hold a DB transaction MUST use two-phase: call add_vless_user OUTSIDE the tx,
-    then pass the returned {uuid, vless_url, subscription_type} as pre_provisioned_uuid to grant_access.
 
     Вызывает POST /add-user на VPN API. Тело: {"uuid": uuid, "tariff": tariff}.
     - tariff "basic": API возвращает {"vless_link": "vless://...", "subscription": null}
@@ -183,12 +191,31 @@ async def add_vless_user(
         httpx.HTTPStatusError: При ошибках HTTP (4xx, 5xx)
         Exception: При других ошибках
     """
+    # Task-2 cut-over: samopis is decommissioned.  If a residual caller
+    # (admin reissue / ensure_user_in_xray recovery) lands here we return
+    # a stub success dict so it doesn't crash.  Real provisioning happens
+    # through app.services.purchase_flow.
+    if getattr(config, "PURCHASE_FLOW_REMNAWAVE", True):
+        logger.info(
+            "VPN_UTILS_ADD_NOOP: tg=%s — samopis decommissioned, "
+            "returning stub (use app.services.purchase_flow instead)",
+            telegram_id,
+        )
+        from uuid import uuid4
+        stub_uuid = uuid or str(uuid4())
+        return {
+            "uuid": stub_uuid,
+            "vless_url": "",
+            "vless_url_plus": None,
+            "subscription_type": tariff or "basic",
+        }
+
     # Проверяем feature flag
     if not config.VPN_PROVISIONING_ENABLED:
         error_msg = "VPN provisioning is disabled (VPN_PROVISIONING_ENABLED=false)"
         logger.warning(error_msg)
         raise ValueError(error_msg)
-    
+
     # Проверяем доступность VPN API
     if not config.VPN_ENABLED:
         error_msg = (
@@ -519,26 +546,30 @@ async def ensure_user_in_xray(telegram_id: int, uuid: Optional[str], subscriptio
 
 async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
     """
-    Обновить expiryTime существующего клиента в Xray Core.
-    
-    Вызывает POST /update-user на Xray API сервере.
-    Используется при продлении подписки — UUID остаётся, обновляется только срок.
-    
+    LEGACY samopis xray expiry-update.  Decommissioned by Task-2 cut-over.
+
+    When config.PURCHASE_FLOW_REMNAWAVE is true (the default) this is
+    a no-op — premium expireAt is updated via
+    app.services.remnawave_premium.renew_premium_user from the renewal
+    code path.  The function stays in the tree so residual callers
+    (auto_renewal recovery, admin reissue) don't crash.
+
     UUID is sent exactly as stored (no transformation).
-    
-    Args:
-        uuid: UUID пользователя для обновления
-        subscription_end: Новая дата окончания подписки
-    
-    Raises:
-        ValueError: Если конфигурация неверна
-        httpx.HTTPStatusError: При 404 (клиент не найден) или других HTTP ошибках
     """
+    # Task-2 cut-over: samopis is decommissioned.  No-op to keep residual
+    # callers (auto_renewal recovery / admin reissue) safe.
+    if getattr(config, "PURCHASE_FLOW_REMNAWAVE", True):
+        logger.info(
+            "VPN_UTILS_UPDATE_NOOP: uuid=%s — samopis decommissioned",
+            (uuid or "")[:8] + "...",
+        )
+        return None
+
     if not config.VPN_PROVISIONING_ENABLED:
         error_msg = "VPN provisioning is disabled (VPN_PROVISIONING_ENABLED=false)"
         logger.warning(error_msg)
         raise ValueError(error_msg)
-    
+
     if not config.VPN_ENABLED or not config.XRAY_API_URL or not config.XRAY_API_KEY:
         error_msg = "VPN API is not configured"
         logger.error(error_msg)
@@ -597,31 +628,28 @@ async def update_vless_user(uuid: str, subscription_end: datetime) -> None:
 
 async def remove_vless_user(uuid: str) -> None:
     """
-    Удалить пользователя VLESS из Xray Core.
-    
-    Вызывает POST /remove-user на Xray API сервере для удаления пользователя.
-    
-    UUID is sent exactly as stored (no transformation).
-    
-    Args:
-        uuid: UUID пользователя для удаления (str, raw 36-char UUID)
-    
-    Raises:
-        ValueError: Если XRAY_API_URL или XRAY_API_KEY не настроены, или uuid пустой
-        httpx.HTTPError: При ошибках сети
-        httpx.HTTPStatusError: При ошибках HTTP (4xx, 5xx)
-        Exception: При других ошибках
-    
-    Note:
-        Функция НЕ игнорирует ошибки. Если удаление не удалось,
-        будет выброшено исключение.
+    LEGACY samopis xray remove.  Decommissioned by Task-2 cut-over.
+
+    When config.PURCHASE_FLOW_REMNAWAVE is true this is a no-op.
+    Real cleanup of subscriptions happens via Remnawave panel deletes
+    (app.services.remnawave_premium.disable_premium_user / etc).
+    Kept in the tree so residual callers (trial cleanup, admin
+    revoke, tx-rollback orphan prevention) don't crash.
     """
+    # Task-2 cut-over: samopis decommissioned.  No-op for safety.
+    if getattr(config, "PURCHASE_FLOW_REMNAWAVE", True):
+        logger.info(
+            "VPN_UTILS_REMOVE_NOOP: uuid=%s — samopis decommissioned",
+            (uuid or "")[:8] + "...",
+        )
+        return None
+
     # Проверяем feature flag
     if not config.VPN_PROVISIONING_ENABLED:
         error_msg = "VPN provisioning is disabled (VPN_PROVISIONING_ENABLED=false)"
         logger.warning(error_msg)
         raise ValueError(error_msg)
-    
+
     # Проверяем доступность VPN API
     if not config.VPN_ENABLED:
         error_msg = (

@@ -30,8 +30,10 @@ this work adds a parallel premium entity per user.
 
 ## Task 2 cut-over (new purchases use Remnawave only)
 
-`config.PURCHASE_FLOW_REMNAWAVE=true` flips every new buy / trial /
-paid renewal from the legacy samopis `vpn_utils.add_vless_user` to
+`config.PURCHASE_FLOW_REMNAWAVE` defaults to **`true`** — the bot is
+fully on Remnawave and the legacy samopis xray master is no longer
+called from the create / renew / delete paths.  Every new buy /
+trial / paid renewal goes through
 `app/services/purchase_flow.provision_subscription`, which provisions:
 
   Premium entity → MainServer squad, `trafficLimitBytes=0`, `expireAt=subscription_end`
@@ -66,15 +68,20 @@ REMNAWAVE_BYPASS_USERNAME_PATTERN={telegram_id}      # keep existing naming
 ```
 
 Operator runbook for the cutover:
-1. Deploy this branch with `PURCHASE_FLOW_REMNAWAVE=false`.  Nothing
-   changes for users (legacy flow still active).
-2. On stage, set `PURCHASE_FLOW_REMNAWAVE=true`, redeploy.  Test trial
-   activation + one Basic + one Plus purchase.  Verify both URLs land
-   in the success message and connect via VLESS client.
-3. On prod, flip the flag the same way.  Watch
-   `PURCHASE_FLOW_DONE` / `PURCHASE_FLOW_LINKS_RENDER_FAIL` log lines.
-4. Rollback = flag back to `false` + restart.  Existing buyers are
-   safe — their entities stay in Remnawave panel.
+1. Deploy.  `PURCHASE_FLOW_REMNAWAVE` is true by default — samopis
+   xray master is bypassed for create / renew / delete.
+   `vpn_utils.add_vless_user` / `update_vless_user` /
+   `remove_vless_user` become no-ops (return stubs) so any residual
+   recovery / admin reissue caller doesn't crash on a decommissioned
+   service.
+2. Watch `PURCHASE_FLOW_DONE` / `LAZY_PROVISION_*` /
+   `VPN_UTILS_*_NOOP` log lines on the next few purchases / trials.
+   Every active user should end up with both Remnawave entities.
+3. Emergency rollback: set `PURCHASE_FLOW_REMNAWAVE=false` and
+   restart.  Legacy samopis path resumes; the same DB rows continue
+   to work because their `subscriptions.uuid` is reused as forced
+   `vlessUuid` on the Remnawave side and as the samopis xray UUID
+   on the legacy side.
 
 ## What is NOT in this change (follow-ups)
 
