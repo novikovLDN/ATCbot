@@ -67,6 +67,11 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text="🚨 Apply ALL", callback_data="admin:mig_apply_all"),
             InlineKeyboardButton(text="🧹 Clear stale lock", callback_data="admin:mig_clear_lock"),
         ],
+        # — Task 3: уведомление о миграции инфраструктуры (one-shot broadcast) —
+        [
+            InlineKeyboardButton(text="🧪 Test mig-notice", callback_data="admin:mig_bcast_test"),
+            InlineKeyboardButton(text="📢 Broadcast mig-notice", callback_data="admin:mig_bcast"),
+        ],
     ])
     return keyboard
 

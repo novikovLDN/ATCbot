@@ -30,8 +30,10 @@ this work adds a parallel premium entity per user.
 
 ## Task 2 cut-over (new purchases use Remnawave only)
 
-`config.PURCHASE_FLOW_REMNAWAVE=true` flips every new buy / trial /
-paid renewal from the legacy samopis `vpn_utils.add_vless_user` to
+`config.PURCHASE_FLOW_REMNAWAVE` defaults to **`true`** — the bot is
+fully on Remnawave and the legacy samopis xray master is no longer
+called from the create / renew / delete paths.  Every new buy /
+trial / paid renewal goes through
 `app/services/purchase_flow.provision_subscription`, which provisions:
 
   Premium entity → MainServer squad, `trafficLimitBytes=0`, `expireAt=subscription_end`
@@ -66,15 +68,58 @@ REMNAWAVE_BYPASS_USERNAME_PATTERN={telegram_id}      # keep existing naming
 ```
 
 Operator runbook for the cutover:
-1. Deploy this branch with `PURCHASE_FLOW_REMNAWAVE=false`.  Nothing
-   changes for users (legacy flow still active).
-2. On stage, set `PURCHASE_FLOW_REMNAWAVE=true`, redeploy.  Test trial
-   activation + one Basic + one Plus purchase.  Verify both URLs land
-   in the success message and connect via VLESS client.
-3. On prod, flip the flag the same way.  Watch
-   `PURCHASE_FLOW_DONE` / `PURCHASE_FLOW_LINKS_RENDER_FAIL` log lines.
-4. Rollback = flag back to `false` + restart.  Existing buyers are
-   safe — their entities stay in Remnawave panel.
+1. Deploy.  `PURCHASE_FLOW_REMNAWAVE` is true by default — samopis
+   xray master is bypassed for create / renew / delete.
+   `vpn_utils.add_vless_user` / `update_vless_user` /
+   `remove_vless_user` become no-ops (return stubs) so any residual
+   recovery / admin reissue caller doesn't crash on a decommissioned
+   service.
+2. Watch `PURCHASE_FLOW_DONE` / `LAZY_PROVISION_*` /
+   `VPN_UTILS_*_NOOP` log lines on the next few purchases / trials.
+   Every active user should end up with both Remnawave entities.
+3. Emergency rollback: set `PURCHASE_FLOW_REMNAWAVE=false` and
+   restart.  Legacy samopis path resumes; the same DB rows continue
+   to work because their `subscriptions.uuid` is reused as forced
+   `vlessUuid` on the Remnawave side and as the samopis xray UUID
+   on the legacy side.
+
+## Task 3: migration-notice broadcast
+
+After all users are migrated and have working Remnawave URLs, send a
+one-shot in-Telegram notice telling them their new individual key and
+how to update Happ.
+
+Dashboard exposes two buttons (next to the migration-script controls):
+
+| Button | What it does |
+| --- | --- |
+| 🧪 Test mig-notice | DMs the admin a preview of the body + keyboard, using the admin's own `remnawave_premium_sub_url` if available, else a `TEST_PLACEHOLDER` URL. |
+| 📢 Broadcast mig-notice | Two-step confirm → kicks off `app/services/migration_broadcast.run_migration_broadcast` as a background asyncio task.  Returns control to the admin immediately; final stats DM lands when done. |
+
+The message body uses HTML and embeds the user's URL in
+`<blockquote><code>…</code></blockquote>` for one-tap copy on Telegram
+clients.  The keyboard has 🔄 Обновить (HTTPS redirect to
+`{PUBLIC_BASE_URL}/open/happ?url=…` → opens the `happ://add/…`
+deeplink on the user's device) and 💬 Поддержка
+(`config.SUPPORT_URL`, defaults to `https://t.me/Atlas_SupportSecurity`).
+
+Idempotency: `subscriptions.migration_notice_sent_at` is stamped on
+successful delivery.  Subsequent broadcast runs skip stamped rows AND
+rows where `users.is_reachable = FALSE` (Telegram has reported the
+recipient as blocked / chat-not-found).
+
+Required schema: migration 049 adds
+`subscriptions.migration_notice_sent_at TIMESTAMPTZ` plus a partial
+index that keeps the candidate query fast.  Mirrored in `init_db`.
+
+Operator workflow:
+  1. Click 🧪 Test mig-notice → verify the body + keyboard look right
+     in your DM.  Specifically: the 🔄 Обновить button must open Happ
+     on tap (iOS / Android).
+  2. Click 📢 Broadcast mig-notice → confirm dialog shows the candidate
+     count → confirm → background broadcast runs.
+  3. Watch logs for `MIGRATION_BROADCAST_STARTED` /
+     `MIGRATION_BROADCAST_COMPLETED`.  Final stats DM lands when done.
 
 ## What is NOT in this change (follow-ups)
 

@@ -530,11 +530,12 @@ except (TypeError, ValueError):
 SUBSCRIPTION_PROXY_ENABLED = _envbool("SUBSCRIPTION_PROXY_ENABLED", False)
 
 # ── Task 2 cut-over: Remnawave-only purchase flow ──────────────────────
-# When ON, new purchases / trials / renewals provision a premium + bypass
-# entity in Remnawave instead of calling the legacy samopis xray API
-# (vpn_utils.add_vless_user).  Default OFF so a fresh deploy doesn't
-# change behaviour — flip per env when ready to cut over.
-PURCHASE_FLOW_REMNAWAVE = _envbool("PURCHASE_FLOW_REMNAWAVE", False)
+# Defaults to TRUE — the bot is fully on Remnawave now and the samopis
+# vpnapi master is decommissioned.  Flip to false ONLY for emergency
+# rollback (e.g. samopis temporarily reinstated); legacy
+# vpn_utils.add_vless_user / update / remove calls become no-ops while
+# this flag is on.
+PURCHASE_FLOW_REMNAWAVE = _envbool("PURCHASE_FLOW_REMNAWAVE", True)
 
 # Bypass username pattern.  TZ asks for `tg_{telegram_id}_bypass`, but the
 # existing ~2500 bypass entities in the panel are named just `{telegram_id}`.

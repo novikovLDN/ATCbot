@@ -889,14 +889,13 @@ async def callback_setup_platform(callback: CallbackQuery):
         from app.services.user_subscription_links import get_user_primary_subscription_url
         sub_url = await get_user_primary_subscription_url(telegram_id)
 
-    # Bypass key: available independently of main subscription
+    # Bypass key: available independently of main subscription.
+    # Goes through the helper so cache misses + missing entities
+    # auto-recover (lazy-provision creates the bypass entity if the
+    # user has an active subscription but no remnawave_uuid yet).
     if config.REMNAWAVE_ENABLED:
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or None
+        from app.services.user_subscription_links import get_user_bypass_url
+        bypass_url = await get_user_bypass_url(telegram_id)
 
     # Build text
     text = i18n_get_text(language, f"setup.combined_{platform}")
@@ -1040,14 +1039,13 @@ async def callback_setup_manual(callback: CallbackQuery):
         from app.services.user_subscription_links import get_user_primary_subscription_url
         sub_url = await get_user_primary_subscription_url(telegram_id)
 
-    # Bypass key: available independently of main subscription
+    # Bypass key: available independently of main subscription.
+    # Goes through the helper so cache misses + missing entities
+    # auto-recover (lazy-provision creates the bypass entity if the
+    # user has an active subscription but no remnawave_uuid yet).
     if config.REMNAWAVE_ENABLED:
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or None
+        from app.services.user_subscription_links import get_user_bypass_url
+        bypass_url = await get_user_bypass_url(telegram_id)
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 

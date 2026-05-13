@@ -1890,31 +1890,23 @@ async def grant_access(
                     await asyncio.sleep(delay)
 
                 try:
-                    # Task 2 cut-over: when PURCHASE_FLOW_REMNAWAVE is on we
-                    # provision two Remnawave entities (premium + bypass)
-                    # instead of dialling the legacy samopis xray master.
+                    # Task 2 cut-over: the bot is fully on Remnawave.  We
+                    # provision two entities (premium + bypass) and never
+                    # dial the legacy samopis xray master.
                     # provision_subscription returns the SAME shape as
-                    # vpn_utils.add_vless_user so the surrounding code path
-                    # (DB INSERT, retry loop, audit logging) is unchanged.
-                    if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False):
-                        from app.services import purchase_flow
-                        _is_trial = (source == "trial")
-                        _period_days = max(1, int(duration.total_seconds() // 86400))
-                        vless_result = await purchase_flow.provision_subscription(
-                            telegram_id,
-                            tariff=tariff or "basic",
-                            subscription_end=subscription_end,
-                            period_days=_period_days,
-                            is_trial=_is_trial,
-                        )
-                    else:
-                        # VPN API call - config.VPN_ENABLED already checked above
-                        vless_result = await vpn_utils.add_vless_user(
-                            telegram_id=telegram_id,
-                            subscription_end=subscription_end,
-                            uuid=new_uuid,
-                            tariff=tariff,
-                        )
+                    # vpn_utils.add_vless_user used to so the surrounding
+                    # code path (DB INSERT, retry loop, audit logging) is
+                    # unchanged.
+                    from app.services import purchase_flow
+                    _is_trial = (source == "trial")
+                    _period_days = max(1, int(duration.total_seconds() // 86400))
+                    vless_result = await purchase_flow.provision_subscription(
+                        telegram_id,
+                        tariff=tariff or "basic",
+                        subscription_end=subscription_end,
+                        period_days=_period_days,
+                        is_trial=_is_trial,
+                    )
                     vless_url = vless_result.get("vless_url")
                     vless_url_plus = vless_result.get("vless_url_plus")
                     uuid_from_api = vless_result.get("uuid")
@@ -4214,32 +4206,25 @@ async def finalize_purchase(
                     or exp <= now_pre
                     or not sub.get("uuid")
                 )
-            if is_new_issuance and (config.VPN_ENABLED or getattr(config, "PURCHASE_FLOW_REMNAWAVE", False)):
+            if is_new_issuance:
                 try:
                     duration_pre = timedelta(days=period_days)
                     subscription_end_pre = now_pre + duration_pre
                     new_uuid_pre = _generate_subscription_uuid()
-                    if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False):
-                        # Task 2 cut-over: provision premium + bypass entities
-                        # in Remnawave instead of calling samopis xray master.
-                        # Same return shape so the rest of the pre-provision
-                        # path (uuid_to_cleanup_on_failure, pre_provisioned_uuid
-                        # dict) is unchanged.
-                        from app.services import purchase_flow
-                        vless_result = await purchase_flow.provision_subscription(
-                            telegram_id,
-                            tariff=tariff_type or "basic",
-                            subscription_end=subscription_end_pre,
-                            period_days=period_days,
-                            is_trial=False,  # finalize_purchase is paid flow only
-                        )
-                    else:
-                        vless_result = await vpn_utils.add_vless_user(
-                            telegram_id=telegram_id,
-                            subscription_end=subscription_end_pre,
-                            uuid=new_uuid_pre,
-                            tariff=tariff_type or "basic",
-                        )
+                    # Task 2 cut-over: always provision premium + bypass
+                    # entities in Remnawave; samopis xray master is no
+                    # longer called from the create path.  Return shape
+                    # matches the historical add_vless_user contract so
+                    # the rest of finalize_purchase (uuid_to_cleanup_on_failure,
+                    # pre_provisioned_uuid dict) is unchanged.
+                    from app.services import purchase_flow
+                    vless_result = await purchase_flow.provision_subscription(
+                        telegram_id,
+                        tariff=tariff_type or "basic",
+                        subscription_end=subscription_end_pre,
+                        period_days=period_days,
+                        is_trial=False,  # finalize_purchase is paid flow only
+                    )
                     pre_provisioned_uuid = {
                         "uuid": vless_result["uuid"].strip(),
                         "vless_url": vless_result["vless_url"],
