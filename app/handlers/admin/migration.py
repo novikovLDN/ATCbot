@@ -54,6 +54,12 @@ _SCRIPT_PATH = _REPO_ROOT / "scripts" / "migrate_samopis_to_remnawave.py"
 # default in scripts/migrate_samopis_to_remnawave.py.
 _LOG_DIR = Path(os.environ.get("MIGRATION_LOG_DIR") or "/tmp")
 _LOG_FILE = _LOG_DIR / "migration_log.csv"
+_LOCK_FILE = _LOG_DIR / "migration.lock"
+# Substring we look for in /proc/{pid}/cmdline to verify a held lock is
+# actually owned by a live migration script (defends against PID reuse
+# inside Docker after a killed run).  Must match _LOCK_CMDLINE_MARKER in
+# scripts/migrate_samopis_to_remnawave.py.
+_LOCK_CMDLINE_MARKER = "migrate_samopis_to_remnawave"
 
 
 # ── Limits ─────────────────────────────────────────────────────────────
@@ -73,7 +79,12 @@ _TIMEOUT_DRYRUN_LIMITED = 5 * 60      # --limit 50
 _TIMEOUT_DRYRUN_FULL = 30 * 60        # ~4200 candidates, DB-only
 _TIMEOUT_APPLY_SINGLE = 2 * 60        # one row
 _TIMEOUT_APPLY_LIMITED = 10 * 60      # --apply --limit 10
-_TIMEOUT_APPLY_FULL = 90 * 60         # full cutover
+# Observed throughput on the panel is ~50 rows/min (preflight GET +
+# create POST + DB write per row, sequential per slot).  Sizing batched
+# apply timeouts ≈ rows/50 × 1.5 safety:
+_TIMEOUT_APPLY_500 = 20 * 60          # --apply --limit 500
+_TIMEOUT_APPLY_1000 = 35 * 60         # --apply --limit 1000
+_TIMEOUT_APPLY_FULL = 120 * 60        # full cutover (4k+ rows; +safety)
 
 
 # ── Subprocess plumbing ────────────────────────────────────────────────
@@ -298,6 +309,38 @@ async def callback_apply_10(callback: CallbackQuery):
     )
 
 
+@admin_migration_router.callback_query(F.data == "admin:mig_apply500")
+@admin_only
+async def callback_apply_500(callback: CallbackQuery):
+    await _run_and_report(
+        callback,
+        title="--apply --limit 500",
+        args=["--apply", "--limit", "500"],
+        timeout=_TIMEOUT_APPLY_500,
+        placeholder_text=(
+            "⏳ <i>Apply on first 500 candidates…</i>\n"
+            "<b>WRITES to Remnawave + DB.</b>\n"
+            "ETA ~10 min at ~50 rows/min."
+        ),
+    )
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_apply1000")
+@admin_only
+async def callback_apply_1000(callback: CallbackQuery):
+    await _run_and_report(
+        callback,
+        title="--apply --limit 1000",
+        args=["--apply", "--limit", "1000"],
+        timeout=_TIMEOUT_APPLY_1000,
+        placeholder_text=(
+            "⏳ <i>Apply on first 1000 candidates…</i>\n"
+            "<b>WRITES to Remnawave + DB.</b>\n"
+            "ETA ~20 min at ~50 rows/min — не закрывай вкладку."
+        ),
+    )
+
+
 # ── Apply 1 (test) — FSM: ask for telegram_id ──────────────────────────
 
 @admin_migration_router.callback_query(F.data == "admin:mig_apply1_input")
@@ -486,6 +529,257 @@ async def callback_migration_download(callback: CallbackQuery):
             reply_markup=get_admin_back_keyboard("ru"),
             parse_mode="HTML",
         )
+
+
+# ── Migration status ───────────────────────────────────────────────────
+
+def _read_lock_state() -> dict:
+    """Inspect /tmp/migration.lock — returns {present, pid, alive, our_script}."""
+    if not _LOCK_FILE.exists():
+        return {"present": False, "pid": None, "alive": False, "our_script": False}
+    try:
+        raw = _LOCK_FILE.read_text(errors="replace").strip()
+        pid = int(raw)
+    except (ValueError, OSError):
+        return {"present": True, "pid": None, "alive": False, "our_script": False}
+
+    # Mirrors scripts/migrate_samopis_to_remnawave.py:_pid_is_alive logic
+    # so the dashboard's view matches the script's own decision.
+    alive = False
+    our = False
+    try:
+        os.kill(pid, 0)
+        alive = True
+        proc_cmdline = Path(f"/proc/{pid}/cmdline")
+        if proc_cmdline.exists():
+            try:
+                blob = proc_cmdline.read_text(errors="replace")
+                our = _LOCK_CMDLINE_MARKER in blob
+            except OSError:
+                our = True  # can't read; conservative
+        else:
+            our = True  # /proc unavailable — fall back to PID-only
+    except ProcessLookupError:
+        alive = False
+    except PermissionError:
+        alive = True
+        our = True  # other-user; can't introspect
+    except OSError:
+        alive = True
+    return {"present": True, "pid": pid, "alive": alive, "our_script": our}
+
+
+def _read_csv_summary() -> dict:
+    """Quick stats over /tmp/migration_log.csv: row count, size, last status."""
+    if not _LOG_FILE.exists():
+        return {"present": False, "rows": 0, "bytes": 0, "last_line": ""}
+    try:
+        size = _LOG_FILE.stat().st_size
+        # Cheap row count; CSV may be huge so iterate without loading.
+        rows = 0
+        last_line = ""
+        with _LOG_FILE.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                rows += 1
+                if line.strip():
+                    last_line = line.rstrip("\n")
+        # First line is the header — don't count it as a data row.
+        rows = max(0, rows - 1)
+    except OSError as e:
+        return {"present": True, "rows": 0, "bytes": 0, "last_line": f"<read error: {e}>"}
+    return {"present": True, "rows": rows, "bytes": size, "last_line": last_line}
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_status")
+@admin_only
+async def callback_migration_status(callback: CallbackQuery):
+    """Render a dashboard snapshot: DB counters + lock state + CSV state."""
+    await callback.answer("📊 Loading status...")
+
+    # DB counts (lazy import to keep tests asyncpg-free).
+    try:
+        import database
+        progress = await database.count_premium_migration_progress()
+    except Exception as e:
+        logger.exception("MIG_STATUS_DB_FAIL")
+        progress = {
+            "migrated": 0,
+            "remaining_candidates": 0,
+            "total_active_paid": 0,
+            "_error": str(e),
+        }
+
+    lock = _read_lock_state()
+    csv_state = _read_csv_summary()
+
+    migrated = progress.get("migrated", 0)
+    remaining = progress.get("remaining_candidates", 0)
+    total = progress.get("total_active_paid", 0)
+    pct = (migrated / total * 100.0) if total else 0.0
+
+    # Lock-state line
+    if not lock["present"]:
+        lock_line = "🟢 free (no lock file)"
+    elif lock["alive"] and lock["our_script"]:
+        lock_line = f"🔴 held by live migration (PID {lock['pid']})"
+    elif lock["alive"] and not lock["our_script"]:
+        lock_line = (
+            f"⚠️ stale (PID {lock['pid']} alive but unrelated process — "
+            "auto-clears on next run, or use 🧹 Clear lock)"
+        )
+    else:
+        lock_line = f"⚠️ stale (PID {lock['pid']} dead — auto-clears on next run)"
+
+    # CSV stats line
+    if not csv_state["present"]:
+        csv_line = "no log file yet"
+    else:
+        size_kb = csv_state["bytes"] / 1024
+        csv_line = f"{csv_state['rows']} data rows, {size_kb:.1f} KB"
+
+    text = (
+        "📊 <b>Migration status</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Progress:</b> {migrated}/{total} ({pct:.1f}%)\n"
+        f"<b>Remaining candidates:</b> {remaining}\n"
+        f"<b>Lock:</b> <code>{html.escape(str(_LOCK_FILE))}</code>\n"
+        f"  → {lock_line}\n"
+        f"<b>CSV:</b> <code>{html.escape(str(_LOG_FILE))}</code>\n"
+        f"  → {csv_line}\n"
+    )
+    if csv_state.get("last_line"):
+        text += f"\n<i>Last CSV row:</i>\n<pre>{html.escape(csv_state['last_line'])[:600]}</pre>"
+    if "_error" in progress:
+        text += f"\n\n⚠️ DB query failed: <code>{html.escape(progress['_error'])[:200]}</code>"
+
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
+
+
+# ── Clear stale lock (manual override) ────────────────────────────────
+
+def _clear_lock_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧹 Удалить lock-файл", callback_data="admin:mig_clear_lock_yes")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:mig_clear_lock_no")],
+    ])
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_clear_lock")
+@admin_only
+async def callback_clear_lock_prompt(callback: CallbackQuery, state: FSMContext):
+    """Show what's in the lock file + confirm before unlinking."""
+    lock = _read_lock_state()
+    await state.set_state(AdminMigrationApply.confirm_clear_lock)
+
+    if not lock["present"]:
+        await state.clear()
+        await safe_edit_text(
+            callback.message,
+            (
+                "🟢 <b>No lock file present</b>\n\n"
+                f"Path: <code>{html.escape(str(_LOCK_FILE))}</code>\n"
+                "Nothing to clear."
+            ),
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    if lock["alive"] and lock["our_script"]:
+        warning = (
+            "🔴 <b>WARNING:</b> the holder is a LIVE migration script "
+            f"(PID {lock['pid']}, cmdline matches our marker).\n"
+            "Removing this lock will let a second run start in parallel "
+            "and may corrupt the migration log / panel state.\n"
+            "Only proceed if you are 100% sure the run is wedged."
+        )
+    elif lock["alive"]:
+        warning = (
+            f"⚠️ PID {lock['pid']} is alive but the cmdline does NOT match "
+            "our migration script — almost certainly safe to clear "
+            "(container PID reuse after a previous kill)."
+        )
+    else:
+        warning = f"⚠️ PID {lock['pid']} is no longer alive — safe to clear."
+
+    text = (
+        "🧹 <b>Clear stale lock?</b>\n\n"
+        f"Path: <code>{html.escape(str(_LOCK_FILE))}</code>\n"
+        f"Stored PID: <code>{lock['pid']}</code>\n\n"
+        f"{warning}"
+    )
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=_clear_lock_confirm_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_clear_lock_no")
+@admin_only
+async def callback_clear_lock_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await safe_edit_text(
+        callback.message,
+        "❌ <i>Lock not touched.</i>",
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
+    await callback.answer("Cancelled")
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_clear_lock_yes")
+@admin_only
+async def callback_clear_lock_confirm(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    if not _LOCK_FILE.exists():
+        await safe_edit_text(
+            callback.message,
+            "🟢 <i>Lock already gone.</i>",
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+    try:
+        prior = _LOCK_FILE.read_text(errors="replace").strip()
+    except OSError:
+        prior = "?"
+    try:
+        _LOCK_FILE.unlink()
+    except OSError as e:
+        logger.exception("MIG_CLEAR_LOCK_FAIL: tg=%s", callback.from_user.id)
+        await safe_edit_text(
+            callback.message,
+            f"❌ <b>Unlink failed:</b> <pre>{html.escape(str(e))[:300]}</pre>",
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+    logger.warning(
+        "ADMIN_MIGRATION_CLEAR_LOCK: tg=%s removed lock holding PID=%s",
+        callback.from_user.id, prior,
+    )
+    await safe_edit_text(
+        callback.message,
+        (
+            "✅ <b>Lock cleared.</b>\n\n"
+            f"Removed: <code>{html.escape(str(_LOCK_FILE))}</code>\n"
+            f"Was held by PID: <code>{html.escape(prior)}</code>"
+        ),
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
+    await callback.answer("Cleared")
 
 
 __all__ = ["admin_migration_router"]

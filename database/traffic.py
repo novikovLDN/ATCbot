@@ -217,6 +217,47 @@ async def get_subscription_by_samopis_uuid(uuid: str) -> Optional[Dict[str, Any]
         return dict(row) if row else None
 
 
+async def count_premium_migration_progress() -> Dict[str, int]:
+    """Snapshot of where the samopis→Remnawave premium migration stands.
+
+    Returns dict with three counters:
+      migrated              — rows that already have remnawave_premium_uuid
+                              set (samopis_migrated_at NOT NULL).
+      remaining_candidates  — rows still eligible for migration (matches
+                              the SQL of list_subscriptions_for_premium_migration).
+      total_active_paid     — migrated + remaining (total denominator the
+                              admin progress UI shows).
+    All counters return 0 if the DB pool isn't ready.
+    """
+    if not _core.DB_READY:
+        return {"migrated": 0, "remaining_candidates": 0, "total_active_paid": 0}
+    pool = await get_pool()
+    if pool is None:
+        return {"migrated": 0, "remaining_candidates": 0, "total_active_paid": 0}
+
+    async with pool.acquire() as conn:
+        migrated = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE remnawave_premium_uuid IS NOT NULL "
+            "  AND remnawave_premium_uuid != '' "
+            "  AND samopis_migrated_at IS NOT NULL"
+        )
+        remaining = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE status = 'active' "
+            "  AND uuid IS NOT NULL "
+            "  AND uuid != '' "
+            "  AND expires_at > NOW() "
+            "  AND subscription_type IS DISTINCT FROM 'trial' "
+            "  AND (remnawave_premium_uuid IS NULL OR remnawave_premium_uuid = '')"
+        )
+    return {
+        "migrated": int(migrated or 0),
+        "remaining_candidates": int(remaining or 0),
+        "total_active_paid": int((migrated or 0) + (remaining or 0)),
+    }
+
+
 async def list_subscriptions_for_premium_migration(
     *,
     limit: Optional[int] = None,

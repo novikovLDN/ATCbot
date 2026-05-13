@@ -178,3 +178,4 @@ class AdminMigrationApply(StatesGroup):
     """Admin dashboard: samopis→Remnawave premium migration."""
     waiting_for_telegram_id = State()  # Apply 1 (test) — admin types target tg id
     confirm_apply_all = State()        # Apply ALL — explicit "yes I'm sure" gate
+    confirm_clear_lock = State()       # Clear stale lock — confirm before unlink

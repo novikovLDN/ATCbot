@@ -401,3 +401,68 @@ def test_default_lock_file_honours_env_var(monkeypatch, tmp_path):
     mod = _load()
     monkeypatch.setenv("MIGRATION_LOG_DIR", str(tmp_path))
     assert mod.default_lock_file() == str(tmp_path / "migration.lock")
+
+
+# ── _pid_is_alive cmdline-marker hardening ─────────────────────────────
+
+def test_pid_is_alive_returns_false_for_nonexistent_pid():
+    mod = _load()
+    # PID 1 is typically alive on Linux; pick something almost certainly dead.
+    assert mod._pid_is_alive(2_147_483_646) is False
+
+
+def test_pid_is_alive_zero_or_negative_short_circuits():
+    mod = _load()
+    assert mod._pid_is_alive(0) is False
+    assert mod._pid_is_alive(-1) is False
+
+
+def test_pid_is_alive_self_with_marker_present(monkeypatch):
+    """Live PID + cmdline contains marker → True (the script itself)."""
+    mod = _load()
+    import os
+    # The current test process's cmdline almost certainly does NOT contain
+    # 'migrate_samopis_to_remnawave', so a custom marker is needed to
+    # exercise the success path deterministically.
+    assert mod._pid_is_alive(os.getpid(), cmdline_marker="python") is True
+
+
+def test_pid_is_alive_self_without_marker_returns_false(monkeypatch):
+    """Live PID + cmdline missing marker → treated as STALE (PID-reuse defence)."""
+    mod = _load()
+    import os
+    assert mod._pid_is_alive(
+        os.getpid(),
+        cmdline_marker="this-marker-does-not-appear-anywhere-12345",
+    ) is False
+
+
+def test_pid_is_alive_falls_back_when_proc_missing(monkeypatch):
+    """On hosts without /proc (macOS dev) we trust kill(0) — return True."""
+    mod = _load()
+    import os, pathlib
+
+    real_exists = pathlib.Path.exists
+
+    def fake_exists(self):
+        if str(self).startswith("/proc/"):
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(pathlib.Path, "exists", fake_exists)
+    # Marker unset doesn't matter — the cmdline check is skipped entirely.
+    assert mod._pid_is_alive(os.getpid()) is True
+
+
+def test_acquire_pid_lock_clears_stale_when_pid_reused(monkeypatch, tmp_path):
+    """PID 31 (alive but unrelated process) → lock auto-cleared on acquire."""
+    mod = _load()
+    lock = tmp_path / "x.lock"
+    lock.write_text("31")  # an already-existing live PID in the test runner
+
+    # Force _pid_is_alive to return False (mimicking cmdline mismatch)
+    monkeypatch.setattr(mod, "_pid_is_alive", lambda pid, **kw: False)
+
+    mod.acquire_pid_lock(lock)
+    import os
+    assert lock.read_text().strip() == str(os.getpid())
