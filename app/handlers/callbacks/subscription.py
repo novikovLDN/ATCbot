@@ -222,8 +222,8 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
         expires_str = subscription_end.strftime("%d.%m.%Y")
         from html import escape as html_escape
-        from vpn_utils import build_sub_url
-        sub_url = build_sub_url(telegram_id)
+        from app.services.user_subscription_links import get_user_primary_subscription_url
+        sub_url = await get_user_primary_subscription_url(telegram_id)
         success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, sub_url=html_escape(sub_url))
         try:
             if _degradation_notice:
