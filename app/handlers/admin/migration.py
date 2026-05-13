@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 # __file__ is /…/app/handlers/admin/migration.py — repo root is three parents up.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT_PATH = _REPO_ROOT / "scripts" / "migrate_samopis_to_remnawave.py"
+_VERIFY_SCRIPT_PATH = _REPO_ROOT / "scripts" / "verify_samopis_migration.py"
 
 # Single source of truth for "where the script writes" — must match the
 # default in scripts/migrate_samopis_to_remnawave.py.
@@ -775,6 +776,74 @@ def _read_csv_summary() -> dict:
     except OSError as e:
         return {"present": True, "rows": 0, "bytes": 0, "last_line": f"<read error: {e}>"}
     return {"present": True, "rows": rows, "bytes": size, "last_line": last_line}
+
+
+# ── Verify migration (read-only) ──────────────────────────────────────
+
+_TIMEOUT_VERIFY = 5 * 60  # DB counters + ≤20-entity panel probe
+
+
+async def _run_verify_script(args: Sequence[str]) -> tuple[int, str, str]:
+    """Spawn scripts/verify_samopis_migration.py with the given CLI args.
+
+    Read-only — no panel writes, no DB writes — so we don't need the
+    streaming-progress machinery used by --apply runs.
+    """
+    if not _VERIFY_SCRIPT_PATH.is_file():
+        return 127, "", (
+            f"verify script not found at {_VERIFY_SCRIPT_PATH}\n"
+            "deployment check: .dockerignore must keep "
+            "scripts/verify_samopis_migration.py in the image."
+        )
+    cmd = [sys.executable, "-u", str(_VERIFY_SCRIPT_PATH), *args]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(_REPO_ROOT),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception as e:
+        return 1, "", f"failed to spawn: {type(e).__name__}: {e}"
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_VERIFY)
+    except asyncio.TimeoutError:
+        proc.kill()
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=5)
+        except Exception:
+            pass
+        return 124, "", f"⏱ TIMEOUT after {_TIMEOUT_VERIFY}s"
+    rc = proc.returncode if proc.returncode is not None else -1
+    return rc, stdout_b.decode("utf-8", errors="replace"), stderr_b.decode("utf-8", errors="replace")
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_verify")
+@admin_only
+async def callback_verify(callback: CallbackQuery):
+    """Run verify_samopis_migration.py (read-only) and report back."""
+    await callback.answer("⏳ Verifying...")
+    await safe_edit_text(
+        callback.message,
+        "⏳ <i>Running <code>verify_samopis_migration.py --check-panel</code>…</i>\n"
+        "(read-only: counts buckets in DB and probes ≤20 entities in the Remnawave panel)",
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
+    rc, stdout, stderr = await _run_verify_script(["--check-panel"])
+    # The verify script prints to STDOUT; format using the same renderer
+    # so admins see a familiar layout.
+    text = _format_output("verify_samopis_migration --check-panel", rc, stdout, stderr)
+    logger.info(
+        "ADMIN_MIGRATION_VERIFY: tg=%s rc=%s stdout_len=%s stderr_len=%s",
+        callback.from_user.id, rc, len(stdout), len(stderr),
+    )
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
 
 
 @admin_migration_router.callback_query(F.data == "admin:mig_status")

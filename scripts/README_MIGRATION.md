@@ -13,6 +13,7 @@ this work adds a parallel premium entity per user.
 
 | File | Purpose |
 | --- | --- |
+| `scripts/verify_samopis_migration.py` | read-only consistency check (DB buckets + optional panel probe) |
 | `migrations/045_add_remnawave_premium_uuid.sql` | adds `subscriptions.remnawave_premium_uuid`, `subscriptions.samopis_migrated_at`, partial index |
 | `migrations/046_add_remnawave_premium_sub_url.sql` | adds `subscriptions.remnawave_premium_sub_url` (panel URL cache) |
 | `migrations/047_add_remnawave_premium_short_uuid.sql` | adds `subscriptions.remnawave_premium_short_uuid` (panel `shortUuid` cache) |
@@ -140,6 +141,7 @@ identical:
 | Button | Subprocess args / behaviour |
 | --- | --- |
 | 📊 Status | DB snapshot: migrated / remaining counts, lock state, CSV size + tail row |
+| 🔬 Verify | Read-only consistency check: DB counters, orphan rows, cache coverage, samples — and `GET /api/users/{uuid}` on a sample of migrated entities to verify they still exist in the panel with the right status/squad/description |
 | 📥 Download log | DM the cached `migration_log.csv` (auto-attached after every other action) |
 | 🔍 Dry Run 50 | `--limit 50` |
 | 🔎 Dry Run FULL | (no `--limit`) |

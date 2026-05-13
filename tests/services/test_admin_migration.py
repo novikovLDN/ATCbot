@@ -651,6 +651,69 @@ async def test_apply_1000_dispatches_correct_args(monkeypatch):
     assert timeout >= 30 * 60
 
 
+# ── Verify (read-only) ─────────────────────────────────────────────────
+
+def test_verify_script_path_constants():
+    """_VERIFY_SCRIPT_PATH must point at the real verify script."""
+    assert migration._VERIFY_SCRIPT_PATH.name == "verify_samopis_migration.py"
+    assert migration._VERIFY_SCRIPT_PATH.parent.name == "scripts"
+
+
+@pytest.mark.asyncio
+async def test_run_verify_script_returns_preflight_error_when_missing(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(migration, "_VERIFY_SCRIPT_PATH", tmp_path / "absent.py")
+    rc, out, err = await migration._run_verify_script(["--check-panel"])
+    assert rc == 127
+    assert out == ""
+    assert "verify script not found" in err
+    assert ".dockerignore" in err
+
+
+@pytest.mark.asyncio
+async def test_run_verify_script_captures_output(tmp_path: Path, monkeypatch):
+    inline = tmp_path / "fake_verify.py"
+    inline.write_text(textwrap.dedent("""
+        import sys
+        sys.stdout.write("Migrated: 4035/4035 (100.0%)\\n")
+        sys.stdout.write("All clean.\\n")
+        sys.exit(0)
+    """))
+    monkeypatch.setattr(migration, "_VERIFY_SCRIPT_PATH", inline)
+    rc, out, err = await migration._run_verify_script(["--check-panel"])
+    assert rc == 0
+    assert "4035/4035" in out
+    assert "All clean" in out
+
+
+@pytest.mark.asyncio
+async def test_run_verify_script_forwards_args(tmp_path: Path, monkeypatch):
+    inline = tmp_path / "argv.py"
+    inline.write_text(textwrap.dedent("""
+        import sys
+        sys.stdout.write("|".join(sys.argv[1:]))
+    """))
+    monkeypatch.setattr(migration, "_VERIFY_SCRIPT_PATH", inline)
+    rc, out, _ = await migration._run_verify_script(["--check-panel", "--panel-sample", "20"])
+    assert rc == 0
+    assert out == "--check-panel|--panel-sample|20"
+
+
+@pytest.mark.asyncio
+async def test_verify_handler_invokes_check_panel_by_default(monkeypatch):
+    captured: list = []
+
+    async def fake_runner(args):
+        captured.append(list(args))
+        return 0, "summary", ""
+
+    monkeypatch.setattr(migration, "_run_verify_script", fake_runner)
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+    handler = migration.callback_verify.__wrapped__
+    cb = _FakeCallback()
+    await handler(cb)
+    assert captured == [["--check-panel"]]
+
+
 # ── Migration status ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
