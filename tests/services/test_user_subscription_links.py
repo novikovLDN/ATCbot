@@ -223,6 +223,190 @@ async def test_primary_url_falls_back_to_legacy_when_no_premium(monkeypatch):
     _patch_db(monkeypatch, rows=[None, None])
     with _patch_config(), \
          patch.object(user_subscription_links, "_legacy_sub_url",
+                      MagicMock(return_value="https://atlassecure.ru/api/sub/legacy")), \
+         patch.object(user_subscription_links, "_try_lazy_provision_premium",
+                      AsyncMock(return_value=False)):
+        url = await user_subscription_links.get_user_primary_subscription_url(42)
+    assert url == "https://atlassecure.ru/api/sub/legacy"
+
+
+# ── Lazy provisioning ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_primary_url_lazy_provisions_when_no_premium_entity(monkeypatch):
+    """User without premium entity → orchestrator runs → premium URL returned."""
+    # First lookup returns no premium uuid → falls through to lazy provision.
+    # After lazy provision the second lookup returns the freshly-cached URL.
+    _patch_db(monkeypatch, rows=[
+        None, None,                                      # 1st premium-url lookup (no rows)
+        _Row(remnawave_premium_uuid="new", remnawave_premium_sub_url="https://rmnw/sub/new"),
+        # 2nd lookup after provisioning — fed by the second pool.acquire()
+    ])
+    lazy_mock = AsyncMock(return_value=True)
+    with _patch_config(), \
+         patch.object(user_subscription_links, "_try_lazy_provision_premium", lazy_mock), \
+         patch.object(user_subscription_links, "_legacy_sub_url",
+                      MagicMock(return_value="https://atlassecure.ru/api/sub/legacy")):
+        url = await user_subscription_links.get_user_primary_subscription_url(42)
+    lazy_mock.assert_awaited_once_with(42)
+    assert url == "https://rmnw/sub/new"
+
+
+@pytest.mark.asyncio
+async def test_primary_url_returns_legacy_when_lazy_provision_returns_false(monkeypatch):
+    _patch_db(monkeypatch, rows=[None, None, None, None])
+    with _patch_config(), \
+         patch.object(user_subscription_links, "_try_lazy_provision_premium",
+                      AsyncMock(return_value=False)), \
+         patch.object(user_subscription_links, "_legacy_sub_url",
                       MagicMock(return_value="https://atlassecure.ru/api/sub/legacy")):
         url = await user_subscription_links.get_user_primary_subscription_url(42)
     assert url == "https://atlassecure.ru/api/sub/legacy"
+
+
+@pytest.mark.asyncio
+async def test_lazy_provision_skips_when_remnawave_disabled(monkeypatch):
+    db = SimpleNamespace(get_subscription_any=AsyncMock())
+    monkeypatch.setitem(sys.modules, "database", db)
+    with _patch_config(enabled=False):
+        result = await user_subscription_links._try_lazy_provision_premium(42)
+    assert result is False
+    db.get_subscription_any.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lazy_provision_skips_when_no_main_squad_configured(monkeypatch):
+    cfg = SimpleNamespace(REMNAWAVE_ENABLED=True, REMNAWAVE_MAIN_SQUAD_UUID="")
+    db = SimpleNamespace(get_subscription_any=AsyncMock())
+    monkeypatch.setitem(sys.modules, "database", db)
+    with patch.object(user_subscription_links, "config", cfg):
+        result = await user_subscription_links._try_lazy_provision_premium(42)
+    assert result is False
+    db.get_subscription_any.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lazy_provision_skips_when_user_already_has_premium(monkeypatch):
+    """If user got premium uuid between cache miss and our look-up we
+    must not duplicate it."""
+    cfg = SimpleNamespace(REMNAWAVE_ENABLED=True, REMNAWAVE_MAIN_SQUAD_UUID="main-sq")
+    db = SimpleNamespace(
+        get_subscription_any=AsyncMock(return_value={
+            "telegram_id": 42,
+            "uuid": "samopis-uuid",
+            "remnawave_premium_uuid": "already-have-uuid",
+            "status": "active",
+            "expires_at": None,
+        }),
+    )
+    monkeypatch.setitem(sys.modules, "database", db)
+    create_mock = AsyncMock()
+    with patch.object(user_subscription_links, "config", cfg), \
+         patch("app.services.remnawave_premium.create_premium_user_entity", create_mock):
+        result = await user_subscription_links._try_lazy_provision_premium(42)
+    assert result is False
+    create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lazy_provision_skips_for_expired_subscription(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    cfg = SimpleNamespace(REMNAWAVE_ENABLED=True, REMNAWAVE_MAIN_SQUAD_UUID="main-sq")
+    db = SimpleNamespace(
+        get_subscription_any=AsyncMock(return_value={
+            "telegram_id": 42,
+            "uuid": "samopis-uuid",
+            "remnawave_premium_uuid": None,
+            "status": "expired",
+            "expires_at": datetime.now(timezone.utc) - timedelta(days=1),
+        }),
+    )
+    monkeypatch.setitem(sys.modules, "database", db)
+    create_mock = AsyncMock()
+    with patch.object(user_subscription_links, "config", cfg), \
+         patch("app.services.remnawave_premium.create_premium_user_entity", create_mock):
+        result = await user_subscription_links._try_lazy_provision_premium(42)
+    assert result is False
+    create_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lazy_provision_creates_premium_with_forced_legacy_uuid(monkeypatch):
+    """Active subscription with legacy uuid + no premium → create and persist."""
+    from datetime import datetime, timezone, timedelta
+    cfg = SimpleNamespace(REMNAWAVE_ENABLED=True, REMNAWAVE_MAIN_SQUAD_UUID="main-sq")
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    persist_mock = AsyncMock()
+    db = SimpleNamespace(
+        get_subscription_any=AsyncMock(return_value={
+            "telegram_id": 42,
+            "uuid": "samopis-uuid-xyz",
+            "remnawave_premium_uuid": None,
+            "status": "active",
+            "expires_at": future,
+        }),
+        set_remnawave_premium_uuid_and_url=persist_mock,
+    )
+    monkeypatch.setitem(sys.modules, "database", db)
+
+    from app.services import remnawave_premium
+    create_result = remnawave_premium.PremiumCreateResult(
+        ok=True, panel_uuid="panel-prem", forced_uuid_accepted=True,
+        subscription_url="https://rmnw/sub/new", status=201,
+        error=None, recovered=False, short_uuid="new_s",
+    )
+    create_mock = AsyncMock(return_value=create_result)
+
+    # Reset the module-level lazy lock so test reruns don't see a stale lock.
+    user_subscription_links._lazy_provision_locks.clear()
+
+    with patch.object(user_subscription_links, "config", cfg), \
+         patch("app.services.remnawave_premium.create_premium_user_entity", create_mock):
+        result = await user_subscription_links._try_lazy_provision_premium(42)
+
+    assert result is True
+    create_mock.assert_awaited_once()
+    kwargs = create_mock.call_args.kwargs
+    assert kwargs["requested_uuid"] == "samopis-uuid-xyz"
+    assert kwargs["expire_at"] == future
+    persist_mock.assert_awaited_once_with(42, "panel-prem", "https://rmnw/sub/new", short_uuid="new_s")
+
+
+@pytest.mark.asyncio
+async def test_lazy_provision_works_without_legacy_uuid(monkeypatch):
+    """Trial/new user without samopis uuid still gets a premium entity
+    (panel assigns a fresh UUID since forced uuid is None)."""
+    from datetime import datetime, timezone, timedelta
+    cfg = SimpleNamespace(REMNAWAVE_ENABLED=True, REMNAWAVE_MAIN_SQUAD_UUID="main-sq")
+    future = datetime.now(timezone.utc) + timedelta(days=3)
+    persist_mock = AsyncMock()
+    db = SimpleNamespace(
+        get_subscription_any=AsyncMock(return_value={
+            "telegram_id": 42,
+            "uuid": None,
+            "remnawave_premium_uuid": None,
+            "status": "active",
+            "expires_at": future,
+        }),
+        set_remnawave_premium_uuid_and_url=persist_mock,
+    )
+    monkeypatch.setitem(sys.modules, "database", db)
+
+    from app.services import remnawave_premium
+    create_result = remnawave_premium.PremiumCreateResult(
+        ok=True, panel_uuid="panel-fresh", forced_uuid_accepted=False,
+        subscription_url="https://rmnw/sub/fresh", status=201,
+        error=None, recovered=False, short_uuid="fresh_s",
+    )
+    create_mock = AsyncMock(return_value=create_result)
+
+    user_subscription_links._lazy_provision_locks.clear()
+
+    with patch.object(user_subscription_links, "config", cfg), \
+         patch("app.services.remnawave_premium.create_premium_user_entity", create_mock):
+        result = await user_subscription_links._try_lazy_provision_premium(42)
+
+    assert result is True
+    # requested_uuid should be None when user has no legacy samopis uuid.
+    assert create_mock.call_args.kwargs["requested_uuid"] is None
+    persist_mock.assert_awaited_once_with(42, "panel-fresh", "https://rmnw/sub/fresh", short_uuid="fresh_s")
