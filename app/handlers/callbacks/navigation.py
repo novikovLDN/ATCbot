@@ -475,8 +475,8 @@ async def callback_get_sub_key(callback: CallbackQuery):
         return
 
     language = await resolve_user_language(telegram_id)
-    from vpn_utils import build_sub_url
-    sub_url = build_sub_url(telegram_id)
+    from app.services.user_subscription_links import get_user_primary_subscription_url
+    sub_url = await get_user_primary_subscription_url(telegram_id)
 
     text = i18n_get_text(language, "get_key.instruction_text",
         "📖 <b>Инструкция по подключению</b>\n\n"
@@ -703,8 +703,8 @@ async def callback_setup_step2(callback: CallbackQuery):
     sub_url = ""
     bypass_url = ""
     if subscription:
-        from vpn_utils import build_sub_url
-        sub_url = build_sub_url(telegram_id)
+        from app.services.user_subscription_links import get_user_primary_subscription_url
+        sub_url = await get_user_primary_subscription_url(telegram_id)
 
     # Bypass key: available independently of main subscription
     if config.REMNAWAVE_ENABLED:
@@ -886,8 +886,8 @@ async def callback_setup_platform(callback: CallbackQuery):
     sub_url = None
     bypass_url = None
     if subscription:
-        from vpn_utils import build_sub_url
-        sub_url = build_sub_url(telegram_id)
+        from app.services.user_subscription_links import get_user_primary_subscription_url
+        sub_url = await get_user_primary_subscription_url(telegram_id)
 
     # Bypass key: available independently of main subscription
     if config.REMNAWAVE_ENABLED:
@@ -1037,8 +1037,8 @@ async def callback_setup_manual(callback: CallbackQuery):
     sub_url = None
     bypass_url = None
     if subscription:
-        from vpn_utils import build_sub_url
-        sub_url = build_sub_url(telegram_id)
+        from app.services.user_subscription_links import get_user_primary_subscription_url
+        sub_url = await get_user_primary_subscription_url(telegram_id)
 
     # Bypass key: available independently of main subscription
     if config.REMNAWAVE_ENABLED:
@@ -1189,8 +1189,8 @@ async def callback_setup_qr_standard(callback: CallbackQuery):
 
     subscription = await database.get_subscription(telegram_id)
     if subscription:
-        from vpn_utils import build_sub_url
-        sub_url = build_sub_url(telegram_id)
+        from app.services.user_subscription_links import get_user_primary_subscription_url
+        sub_url = await get_user_primary_subscription_url(telegram_id)
     else:
         sub_url = None
 
