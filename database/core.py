@@ -666,6 +666,11 @@ async def init_db() -> bool:
             # Миграция 047: кэш shortUuid для пересборки sub URL при
             # необходимости (Remnawave v2.7+ разделил uuid / vlessUuid / shortUuid).
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_premium_short_uuid TEXT")
+            # Миграция 048: симметричный кэш sub_url / short_uuid для bypass-entity
+            # (нужно после Task 2 cut-over чтобы UI мог отдавать обе ссылки без
+            # лишних round-trip'ов к панели).
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_bypass_sub_url TEXT")
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_bypass_short_uuid TEXT")
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_remnawave_premium_uuid "
                 "ON subscriptions(remnawave_premium_uuid) WHERE remnawave_premium_uuid IS NOT NULL"

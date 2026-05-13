@@ -690,6 +690,31 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     text = f"🎉 Добро пожаловать в Atlas Secure!\n🏢 Тариф: Business\n📅 До: {expires_str}"
                 else:
                     text = i18n_get_text(language, "payment.success_welcome_basic", date=expires_str)
+        # Task 2 cut-over: when PURCHASE_FLOW_REMNAWAVE is on the bot has
+        # already provisioned the premium + bypass entities in Remnawave;
+        # surface both subscription URLs directly in the success text so
+        # the buyer sees them without an extra tap.
+        if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False):
+            try:
+                sub_row = await database.get_subscription_any(telegram_id)
+                premium_url = (sub_row or {}).get("vpn_key") or ""
+                bypass_url = (sub_row or {}).get("vpn_key_plus") or ""
+                links_block_parts = []
+                if premium_url:
+                    links_block_parts.append(
+                        f"🌍 <b>Premium</b> (основные серверы):\n<code>{premium_url}</code>"
+                    )
+                if bypass_url:
+                    links_block_parts.append(
+                        f"🚧 <b>Bypass</b> (обходы LTE):\n<code>{bypass_url}</code>"
+                    )
+                if links_block_parts:
+                    text = text + "\n\n" + "\n\n".join(links_block_parts)
+            except Exception as e:
+                logger.warning(
+                    "PURCHASE_FLOW_LINKS_RENDER_FAIL user=%s err=%s", telegram_id, e,
+                )
+
         # ИДЕМПОТЕНТНОСТЬ: mark-before-send pattern
         try:
             sent = await database.mark_payment_notification_sent(payment_id)

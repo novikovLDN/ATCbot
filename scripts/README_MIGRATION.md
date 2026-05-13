@@ -28,9 +28,57 @@ this work adds a parallel premium entity per user.
 | `tests/test_migrate_samopis_to_remnawave.py` | unit tests for rate limiter, CSV log, validation, per-row processing, PID lock |
 | `tests/integration/test_subscription_proxy.py` | route tests for cache hit / cache miss / fallback / 404 |
 
+## Task 2 cut-over (new purchases use Remnawave only)
+
+`config.PURCHASE_FLOW_REMNAWAVE=true` flips every new buy / trial /
+paid renewal from the legacy samopis `vpn_utils.add_vless_user` to
+`app/services/purchase_flow.provision_subscription`, which provisions:
+
+  Premium entity → MainServer squad, `trafficLimitBytes=0`, `expireAt=subscription_end`
+  Bypass entity  → Clients squad,    far-future `expireAt`, byte-limited per tariff
+
+Tariff → bypass GB mapping (used for the bypass entity only; premium is
+duration-bound):
+
+| Tariff | Bypass cap |
+| --- | --- |
+| `basic` / `plus` | 10 GB (config.TRAFFIC_LIMITS) |
+| `combo_basic` / `combo_plus` | per `COMBO_TARIFFS[tariff][period_days]["gb"]` |
+| trial (any source) | `TRIAL_BYPASS_GB` GB (default 1) |
+
+Renewal: PATCH expireAt on premium, ACCUMULATE bypass traffic (never reset).
+
+Un-migrated legacy user buying for the first time after cut-over:
+`provision_subscription` finds the samopis `subscriptions.uuid` and uses
+it as the forced `vlessUuid` for the new premium entity, so the legacy
+VLESS link the user has saved keeps working.
+
+Required env when enabling:
+
+```env
+PURCHASE_FLOW_REMNAWAVE=true
+REMNAWAVE_API_URL=https://rmnw.atlassecure.ru
+REMNAWAVE_API_TOKEN=<token>                          # or REMNAWAVE_TOKEN
+REMNAWAVE_MAIN_SQUAD_UUID=<MainServer squad uuid>
+REMNAWAVE_SQUAD_UUID=<Clients squad uuid>            # or REMNAWAVE_CLIENTS_SQUAD_UUID
+TRIAL_BYPASS_GB=1                                    # optional, default 1
+REMNAWAVE_BYPASS_USERNAME_PATTERN={telegram_id}      # keep existing naming
+```
+
+Operator runbook for the cutover:
+1. Deploy this branch with `PURCHASE_FLOW_REMNAWAVE=false`.  Nothing
+   changes for users (legacy flow still active).
+2. On stage, set `PURCHASE_FLOW_REMNAWAVE=true`, redeploy.  Test trial
+   activation + one Basic + one Plus purchase.  Verify both URLs land
+   in the success message and connect via VLESS client.
+3. On prod, flip the flag the same way.  Watch
+   `PURCHASE_FLOW_DONE` / `PURCHASE_FLOW_LINKS_RENDER_FAIL` log lines.
+4. Rollback = flag back to `false` + restart.  Existing buyers are
+   safe — their entities stay in Remnawave panel.
+
 ## What is NOT in this change (follow-ups)
 
-- Bot-side cutover at purchase time (handlers.py / `database.subscriptions.grant_access`) so new premium buyers automatically get a Remnawave-premium entity instead of a samopis xray inbound. The plumbing is ready (`remnawave_premium.create_premium_user_entity`); the call site change is intentionally deferred so this PR stays reviewable.
+- Existing un-migrated legacy buyers' first renewal after cut-over works (forced uuid path), but bulk back-fill via the migration script is still recommended to populate `remnawave_premium_uuid` + caches for everyone proactively.
 - DNS / Cloudflare changes for `sub.atlassecure.ru`.
 - Decommissioning steps for vpnapi master.
 - Filling in `REMNAWAVE_MAIN_SQUAD_UUID` for stage/prod — required for `--apply`.
