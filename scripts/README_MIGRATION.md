@@ -137,14 +137,36 @@ Unit tests mock both the Remnawave HTTP client and the `database` module, so the
 spawn the same script as the shell invocations above, so behaviour is
 identical:
 
-| Button | Subprocess args |
+| Button | Subprocess args / behaviour |
 | --- | --- |
+| 📊 Status | DB snapshot: migrated / remaining counts, lock state, CSV size + tail row |
+| 📥 Download log | DM the cached `migration_log.csv` (auto-attached after every other action) |
 | 🔍 Dry Run 50 | `--limit 50` |
 | 🔎 Dry Run FULL | (no `--limit`) |
 | 🎯 Apply 1 (test) | `--apply --telegram-id <admin-input> --limit 1` (FSM-prompted) |
 | 🛠 Apply 10 | `--apply --limit 10` |
-| 🚨 Apply ALL | `--apply` (gated by a two-step "yes I'm sure" confirm) |
-| 📥 Download log | DM the cached `migration_log.csv` (auto-attached after every other action) |
+| 🔢 Apply 500 | `--apply --limit 500` (~10 min at observed ~50 rows/min) |
+| 🔢 Apply 1000 | `--apply --limit 1000` (~20 min) |
+| 🚨 Apply ALL | `--apply` (gated by a two-step "yes I'm sure" confirm; 120 min timeout) |
+| 🧹 Clear stale lock | Manual override — unlinks `/tmp/migration.lock` after a confirm dialog |
+
+### Lock-file ownership and PID reuse
+
+Inside Docker the bot itself runs at PID 1 and the migration script
+gets a low PID (e.g. 31).  When a run is killed by the subprocess
+timeout the lock file stays behind with the dead PID — but Linux
+recycles low PIDs aggressively, so a bare `os.kill(pid, 0)` check on
+the next attempt may report "alive" even though the original migration
+is gone (the slot now holds a uvicorn worker, redis client, etc.).
+
+Both the script (`_pid_is_alive`) and the dashboard's status/clear-lock
+helpers therefore verify the live PID's `/proc/{pid}/cmdline` contains
+the substring `migrate_samopis_to_remnawave` before refusing to start.
+A live but unrelated process is treated as a stale lock and cleared
+automatically.  When the auto-detection cannot decide (or the operator
+just wants to force-clear), the **🧹 Clear stale lock** button does so
+after a confirm dialog that surfaces the current holder's PID and
+liveness.
 
 After every run the bot auto-attaches the freshly-written CSV as a
 Telegram document — the explicit Download button is the fallback for

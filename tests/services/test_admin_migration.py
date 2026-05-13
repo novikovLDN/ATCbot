@@ -381,3 +381,261 @@ async def test_apply_all_yes_runs_with_apply_no_limit(monkeypatch):
     assert len(captured) == 1
     args, _ = captured[0]
     assert args == ["--apply"]
+
+
+# ── Apply 500 / Apply 1000 dispatch ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_apply_500_dispatches_correct_args(monkeypatch):
+    captured: list = []
+
+    async def fake_run_script(args, timeout):
+        captured.append((list(args), timeout))
+        return 0, "summary", ""
+
+    monkeypatch.setattr(migration, "_run_script", fake_run_script)
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+    monkeypatch.setattr(migration, "_send_csv_if_available", _AsyncRecorder(ret=None))
+
+    handler = migration.callback_apply_500.__wrapped__
+    cb = _FakeCallback()
+    await handler(cb)
+
+    assert len(captured) == 1
+    args, timeout = captured[0]
+    assert args == ["--apply", "--limit", "500"]
+    # Sized for ~50 rows/min × 1.5 safety = 15+ minutes
+    assert timeout >= 15 * 60
+
+
+@pytest.mark.asyncio
+async def test_apply_1000_dispatches_correct_args(monkeypatch):
+    captured: list = []
+
+    async def fake_run_script(args, timeout):
+        captured.append((list(args), timeout))
+        return 0, "summary", ""
+
+    monkeypatch.setattr(migration, "_run_script", fake_run_script)
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+    monkeypatch.setattr(migration, "_send_csv_if_available", _AsyncRecorder(ret=None))
+
+    handler = migration.callback_apply_1000.__wrapped__
+    cb = _FakeCallback()
+    await handler(cb)
+
+    assert len(captured) == 1
+    args, timeout = captured[0]
+    assert args == ["--apply", "--limit", "1000"]
+    assert timeout >= 30 * 60
+
+
+# ── Migration status ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_status_handler_renders_progress(monkeypatch, tmp_path: Path):
+    """DB returns counts → message contains progress percentage."""
+    monkeypatch.setattr(migration, "_LOG_FILE", tmp_path / "absent.csv")
+    monkeypatch.setattr(migration, "_LOCK_FILE", tmp_path / "absent.lock")
+
+    # Stub the lazy database import to return canned counts.
+    fake_db = SimpleNamespace(
+        count_premium_migration_progress=_AsyncRecorder(
+            ret={"migrated": 235, "remaining_candidates": 3800, "total_active_paid": 4035}
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "database", fake_db)
+
+    edit_mock = _AsyncRecorder()
+    monkeypatch.setattr(migration, "safe_edit_text", edit_mock)
+
+    handler = migration.callback_migration_status.__wrapped__
+    cb = _FakeCallback()
+    await handler(cb)
+
+    assert len(edit_mock.calls) == 1
+    rendered = edit_mock.calls[0][0][1]
+    assert "235/4035" in rendered
+    assert "3800" in rendered
+    assert "5.8%" in rendered  # 235/4035 ≈ 5.82
+    assert "no lock file" in rendered
+    assert "no log file yet" in rendered
+
+
+@pytest.mark.asyncio
+async def test_status_handler_recognises_held_lock(monkeypatch, tmp_path: Path):
+    """Lock file present + alive PID matching marker → 'held by live migration'."""
+    lock = tmp_path / "migration.lock"
+    lock.write_text(str(os.getpid()))
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    monkeypatch.setattr(migration, "_LOG_FILE", tmp_path / "absent.csv")
+    # Cmdline of the test process won't contain the real marker — supply
+    # a substring that DOES appear in any python invocation.
+    monkeypatch.setattr(migration, "_LOCK_CMDLINE_MARKER", "python")
+
+    fake_db = SimpleNamespace(
+        count_premium_migration_progress=_AsyncRecorder(
+            ret={"migrated": 0, "remaining_candidates": 0, "total_active_paid": 0}
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "database", fake_db)
+    edit_mock = _AsyncRecorder()
+    monkeypatch.setattr(migration, "safe_edit_text", edit_mock)
+
+    handler = migration.callback_migration_status.__wrapped__
+    await handler(_FakeCallback())
+
+    rendered = edit_mock.calls[0][0][1]
+    # When marker matches AND PID alive → "held by live migration"
+    assert "held by live migration" in rendered or "stale" not in rendered.split("Lock:")[1].split("CSV:")[0]
+
+
+@pytest.mark.asyncio
+async def test_status_handler_reports_pid_reuse_as_stale(monkeypatch, tmp_path: Path):
+    """Lock has live PID whose cmdline doesn't match → 'stale (PID … unrelated)'."""
+    lock = tmp_path / "migration.lock"
+    lock.write_text(str(os.getpid()))
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    monkeypatch.setattr(migration, "_LOG_FILE", tmp_path / "absent.csv")
+    monkeypatch.setattr(migration, "_LOCK_CMDLINE_MARKER", "this-marker-does-not-exist-anywhere-987654")
+
+    fake_db = SimpleNamespace(
+        count_premium_migration_progress=_AsyncRecorder(
+            ret={"migrated": 0, "remaining_candidates": 0, "total_active_paid": 0}
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "database", fake_db)
+    edit_mock = _AsyncRecorder()
+    monkeypatch.setattr(migration, "safe_edit_text", edit_mock)
+
+    handler = migration.callback_migration_status.__wrapped__
+    await handler(_FakeCallback())
+
+    rendered = edit_mock.calls[0][0][1]
+    assert "stale" in rendered.lower()
+    assert "unrelated process" in rendered or "PID reuse" in rendered.lower() or "Clear lock" in rendered
+
+
+# ── Clear stale lock flow ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_clear_lock_prompt_no_lock_clears_state(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(migration, "_LOCK_FILE", tmp_path / "absent.lock")
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+    handler = migration.callback_clear_lock_prompt.__wrapped__
+    cb = _FakeCallback()
+    state = _FakeFSMContext()
+    await handler(cb, state)
+    # No lock to confirm against → state cleared, no FSM hold-up.
+    assert state.cleared is True
+
+
+@pytest.mark.asyncio
+async def test_clear_lock_prompt_warns_when_holder_alive(monkeypatch, tmp_path: Path):
+    lock = tmp_path / "migration.lock"
+    lock.write_text(str(os.getpid()))
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    monkeypatch.setattr(migration, "_LOCK_CMDLINE_MARKER", "python")  # matches test runner
+    edit_mock = _AsyncRecorder()
+    monkeypatch.setattr(migration, "safe_edit_text", edit_mock)
+
+    handler = migration.callback_clear_lock_prompt.__wrapped__
+    cb = _FakeCallback()
+    state = _FakeFSMContext()
+    await handler(cb, state)
+    rendered = edit_mock.calls[0][0][1]
+    assert "WARNING" in rendered
+    assert state.state == migration.AdminMigrationApply.confirm_clear_lock
+
+
+@pytest.mark.asyncio
+async def test_clear_lock_yes_unlinks_file(monkeypatch, tmp_path: Path):
+    lock = tmp_path / "migration.lock"
+    lock.write_text("31")
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+
+    handler = migration.callback_clear_lock_confirm.__wrapped__
+    cb = _FakeCallback()
+    state = _FakeFSMContext()
+    await handler(cb, state)
+    assert not lock.exists()
+    assert state.cleared is True
+
+
+@pytest.mark.asyncio
+async def test_clear_lock_no_keeps_file(monkeypatch, tmp_path: Path):
+    lock = tmp_path / "migration.lock"
+    lock.write_text("31")
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+
+    handler = migration.callback_clear_lock_cancel.__wrapped__
+    cb = _FakeCallback()
+    state = _FakeFSMContext()
+    await handler(cb, state)
+    assert lock.exists()  # untouched on cancel
+    assert lock.read_text() == "31"
+    assert state.cleared is True
+
+
+# ── Lock-state introspection ──────────────────────────────────────────
+
+def test_read_lock_state_no_file(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(migration, "_LOCK_FILE", tmp_path / "absent.lock")
+    out = migration._read_lock_state()
+    assert out["present"] is False
+    assert out["pid"] is None
+    assert out["alive"] is False
+
+
+def test_read_lock_state_malformed_file(monkeypatch, tmp_path: Path):
+    lock = tmp_path / "migration.lock"
+    lock.write_text("not-an-int")
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    out = migration._read_lock_state()
+    assert out["present"] is True
+    assert out["pid"] is None
+    assert out["alive"] is False
+
+
+def test_read_lock_state_dead_pid(monkeypatch, tmp_path: Path):
+    lock = tmp_path / "migration.lock"
+    lock.write_text("2147483646")  # almost certainly dead
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    out = migration._read_lock_state()
+    assert out["present"] is True
+    assert out["pid"] == 2147483646
+    assert out["alive"] is False
+
+
+def test_read_lock_state_pid_reused_by_unrelated_process(monkeypatch, tmp_path: Path):
+    """Live PID + cmdline doesn't match marker → alive=True, our_script=False."""
+    lock = tmp_path / "migration.lock"
+    lock.write_text(str(os.getpid()))
+    monkeypatch.setattr(migration, "_LOCK_FILE", lock)
+    monkeypatch.setattr(migration, "_LOCK_CMDLINE_MARKER", "no-such-marker-xyz-987")
+    out = migration._read_lock_state()
+    assert out["present"] is True
+    assert out["pid"] == os.getpid()
+    assert out["alive"] is True
+    assert out["our_script"] is False
+
+
+# ── CSV summary ───────────────────────────────────────────────────────
+
+def test_read_csv_summary_no_file(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(migration, "_LOG_FILE", tmp_path / "absent.csv")
+    out = migration._read_csv_summary()
+    assert out["present"] is False
+    assert out["rows"] == 0
+
+
+def test_read_csv_summary_counts_data_rows_excluding_header(monkeypatch, tmp_path: Path):
+    csv = tmp_path / "migration_log.csv"
+    csv.write_text("ts,tg,uuid\n2026,1,a\n2026,2,b\n2026,3,c\n")
+    monkeypatch.setattr(migration, "_LOG_FILE", csv)
+    out = migration._read_csv_summary()
+    assert out["present"] is True
+    assert out["rows"] == 3
+    assert "2026,3,c" in out["last_line"]

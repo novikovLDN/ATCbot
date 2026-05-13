@@ -220,8 +220,26 @@ class LockHeldError(RuntimeError):
     """Raised when another instance of the script is already running."""
 
 
-def _pid_is_alive(pid: int) -> bool:
-    """Return True if process `pid` exists on this host."""
+# Substring we look for in /proc/{pid}/cmdline to confirm a live PID is
+# actually our migration script and not some other process that inherited
+# the same PID after a crash.  Container PIDs are reused aggressively;
+# without this check a dead lock file holding PID 31 can hand-off the
+# refusal to whatever process (uvicorn worker, redis client, …) takes
+# slot 31 next.
+_LOCK_CMDLINE_MARKER = "migrate_samopis_to_remnawave"
+
+
+def _pid_is_alive(pid: int, *, cmdline_marker: str = _LOCK_CMDLINE_MARKER) -> bool:
+    """Return True if `pid` is alive AND looks like our migration script.
+
+    Two-stage check:
+      1. `os.kill(pid, 0)` — process table existence.
+      2. `/proc/{pid}/cmdline` — verify the live process is actually our
+         script (defends against PID reuse inside Docker).
+
+    On hosts without /proc (macOS dev) we trust the kill(0) result and
+    skip the cmdline check.
+    """
     if pid <= 0:
         return False
     try:
@@ -229,12 +247,40 @@ def _pid_is_alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        # The PID exists but is owned by another user — still alive.
+        # The PID exists but is owned by another user — assume alive
+        # (we cannot verify cmdline either, but at least signal that
+        # there is *something* using that slot).
         return True
     except OSError as e:
-        # ESRCH is "no such process"; anything else we treat as alive to be safe.
+        # ESRCH is "no such process"; anything else we treat as alive
+        # to be safe.
         return e.errno != errno.ESRCH
-    return True
+
+    # PID is alive — verify it's our script via /proc/{pid}/cmdline.
+    proc_cmdline = Path(f"/proc/{pid}/cmdline")
+    try:
+        if not proc_cmdline.exists():
+            # /proc unavailable (macOS dev) — fall back to PID-only check.
+            return True
+    except OSError:
+        return True
+    try:
+        cmd_blob = proc_cmdline.read_text(errors="replace")
+    except FileNotFoundError:
+        # Race: process exited between kill(0) and read.
+        return False
+    except OSError:
+        # Permission etc. — fall back to "alive" to be safe.
+        return True
+
+    if cmdline_marker in cmd_blob:
+        return True
+    # PID was reused by an unrelated process — treat as stale.
+    logger.warning(
+        "Lock PID %s is alive but cmdline does not match marker %r — treating lock as stale",
+        pid, cmdline_marker,
+    )
+    return False
 
 
 def acquire_pid_lock(lock_path: Path) -> None:
