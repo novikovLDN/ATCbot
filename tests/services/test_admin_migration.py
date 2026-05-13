@@ -109,13 +109,19 @@ async def test_run_script_forwards_args(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_script_handles_missing_script(tmp_path: Path, monkeypatch):
-    """Non-existent script → Python exits 2 with FileNotFoundError on stderr."""
+async def test_run_script_preflight_actionable_message_when_missing(tmp_path: Path, monkeypatch):
+    """Missing script → rc=127 with a deployment-actionable error.
+
+    Hardens against the prod failure mode where scripts/ is excluded
+    from the Docker image via .dockerignore and python returns an opaque
+    "can't open file" message that doesn't tell the operator what to do.
+    """
     monkeypatch.setattr(migration, "_SCRIPT_PATH", tmp_path / "does-not-exist.py")
     rc, out, err = await migration._run_script([], timeout=10)
-    # Python's "can't open file" returns exit code 2 with a message on stderr.
-    assert rc != 0
-    assert "does-not-exist" in err or "No such file" in err or err  # at least some signal
+    assert rc == 127
+    assert out == ""
+    assert "script not found" in err
+    assert ".dockerignore" in err  # operator-facing fix instruction
 
 
 def test_script_path_constants_point_at_repo():

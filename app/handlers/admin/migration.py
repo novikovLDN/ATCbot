@@ -55,6 +55,17 @@ async def _run_script(args: Sequence[str], timeout: int) -> tuple[int, str, str]
     non-zero return code with the timeout marker in stderr so the admin
     can see what happened.
     """
+    # Preflight: catch the most common deployment misconfiguration
+    # (scripts/ excluded by .dockerignore) up-front with an actionable
+    # message instead of an opaque "can't open file" from python itself.
+    if not _SCRIPT_PATH.is_file():
+        return 127, "", (
+            f"script not found at {_SCRIPT_PATH}\n"
+            "deployment check: ensure .dockerignore does NOT exclude "
+            "scripts/migrate_samopis_to_remnawave.py from the image, "
+            "then redeploy."
+        )
+
     cmd = [sys.executable, "-u", str(_SCRIPT_PATH), *args]
     try:
         proc = await asyncio.create_subprocess_exec(
