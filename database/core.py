@@ -671,6 +671,10 @@ async def init_db() -> bool:
             # лишних round-trip'ов к панели).
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_bypass_sub_url TEXT")
             await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS remnawave_bypass_short_uuid TEXT")
+            # Миграция 049: маркер для одноразовой рассылки уведомления о
+            # миграции инфраструктуры (Task 3).  Background-сендер фильтрует
+            # по этому полю чтобы не задвоить.
+            await conn.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS migration_notice_sent_at TIMESTAMPTZ")
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_subscriptions_remnawave_premium_uuid "
                 "ON subscriptions(remnawave_premium_uuid) WHERE remnawave_premium_uuid IS NOT NULL"

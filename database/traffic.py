@@ -262,6 +262,80 @@ async def get_subscription_by_samopis_uuid(uuid: str) -> Optional[Dict[str, Any]
         return dict(row) if row else None
 
 
+async def count_migration_broadcast_candidates() -> int:
+    """How many active premium users still need the migration notice."""
+    if not _core.DB_READY:
+        return 0
+    pool = await get_pool()
+    if pool is None:
+        return 0
+    async with pool.acquire() as conn:
+        n = await conn.fetchval(
+            "SELECT COUNT(*) FROM subscriptions "
+            "WHERE status = 'active' "
+            "  AND remnawave_premium_uuid IS NOT NULL "
+            "  AND remnawave_premium_uuid != '' "
+            "  AND remnawave_premium_sub_url IS NOT NULL "
+            "  AND remnawave_premium_sub_url != '' "
+            "  AND migration_notice_sent_at IS NULL"
+        )
+    return int(n or 0)
+
+
+async def list_migration_broadcast_candidates(
+    *, limit: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Return the (telegram_id, premium_sub_url) pairs that still need the
+    migration notice.  Skips users without a cached sub_url since we
+    need the URL to put in the message body — the lazy-provision path
+    in user_subscription_links back-fills that on demand for everyone
+    else.
+
+    Honors users.is_reachable: rows marked unreachable from previous
+    broadcasts are excluded so we don't re-attempt and burn Telegram
+    rate-limit budget.
+    """
+    if not _core.DB_READY:
+        return []
+    pool = await get_pool()
+    if pool is None:
+        return []
+
+    query = (
+        "SELECT s.telegram_id, s.remnawave_premium_sub_url AS premium_url "
+        "FROM subscriptions s "
+        "LEFT JOIN users u ON u.telegram_id = s.telegram_id "
+        "WHERE s.status = 'active' "
+        "  AND s.remnawave_premium_uuid IS NOT NULL "
+        "  AND s.remnawave_premium_uuid != '' "
+        "  AND s.remnawave_premium_sub_url IS NOT NULL "
+        "  AND s.remnawave_premium_sub_url != '' "
+        "  AND s.migration_notice_sent_at IS NULL "
+        "  AND COALESCE(u.is_reachable, TRUE) = TRUE "
+        "ORDER BY s.telegram_id"
+    )
+    if limit is not None and limit > 0:
+        query += f" LIMIT {int(limit)}"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query)
+        return [dict(r) for r in rows]
+
+
+async def mark_migration_notice_sent(telegram_id: int) -> None:
+    """Stamp the timestamp so future runs skip this user."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET migration_notice_sent_at = NOW() "
+            "WHERE telegram_id = $1",
+            telegram_id,
+        )
+
+
 async def count_premium_migration_progress() -> Dict[str, int]:
     """Snapshot of where the samopis→Remnawave premium migration stands.
 

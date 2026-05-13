@@ -1038,4 +1038,134 @@ async def callback_clear_lock_confirm(callback: CallbackQuery, state: FSMContext
     await callback.answer("Cleared")
 
 
+# ── Task 3: migration-notice broadcast ──────────────────────────────────
+
+def _broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Да, разослать всем", callback_data="admin:mig_bcast_confirm_yes")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:mig_bcast_confirm_no")],
+    ])
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_bcast_test")
+@admin_only
+async def callback_broadcast_test(callback: CallbackQuery):
+    """Send the migration notice to the admin only (preview / smoke test)."""
+    await callback.answer("⏳ Sending preview to your DM...")
+    try:
+        from app.services import migration_broadcast
+        ok = await migration_broadcast.send_test_notice_to_admin(callback.bot, callback.from_user.id)
+    except Exception as e:
+        logger.exception("ADMIN_MIG_BCAST_TEST_FAIL")
+        await safe_edit_text(
+            callback.message,
+            f"❌ <b>Test send failed:</b>\n<pre>{html.escape(str(e))[:500]}</pre>",
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+        return
+    text = (
+        "🧪 <b>Test migration notice sent</b>\n\n"
+        "Check your DM with the bot — verify the layout, that the key is "
+        "tap-to-copy, and that the 🔄 button opens Happ."
+        if ok
+        else "❌ <b>Could not deliver to your DM.</b>\n"
+             "Make sure you've started a chat with this bot at least once."
+    )
+    await safe_edit_text(
+        callback.message,
+        text,
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_bcast")
+@admin_only
+async def callback_broadcast_prompt(callback: CallbackQuery, state: FSMContext):
+    """First step: show the candidate count and ask for explicit confirm."""
+    try:
+        import database
+        candidates = await database.count_migration_broadcast_candidates()
+    except Exception as e:
+        logger.exception("ADMIN_MIG_BCAST_COUNT_FAIL")
+        candidates = -1
+
+    if candidates == 0:
+        await state.clear()
+        await safe_edit_text(
+            callback.message,
+            (
+                "🟢 <b>Нет адресатов</b>\n\n"
+                "Все юзеры с активной премиум-подпиской уже получили уведомление "
+                "о миграции (поле <code>migration_notice_sent_at</code> заполнено)."
+            ),
+            reply_markup=get_admin_back_keyboard("ru"),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    cnt_str = "<i>unknown</i>" if candidates < 0 else f"<b>{candidates}</b>"
+    await state.set_state(AdminMigrationApply.confirm_broadcast)
+    await safe_edit_text(
+        callback.message,
+        (
+            "📢 <b>Migration notice broadcast</b>\n\n"
+            f"Будет отправлено {cnt_str} активным юзерам с премиумом, у которых ещё "
+            "не стоит флаг <code>migration_notice_sent_at</code> и "
+            "<code>users.is_reachable = TRUE</code>.\n\n"
+            "Действие необратимо для рассылки — повторный запуск пропустит "
+            "уже доставленных адресатов.\n\n"
+            "Подтверди старт?"
+        ),
+        reply_markup=_broadcast_confirm_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_bcast_confirm_no")
+@admin_only
+async def callback_broadcast_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await safe_edit_text(
+        callback.message,
+        "❌ <i>Broadcast cancelled.</i>",
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
+    await callback.answer("Cancelled")
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_bcast_confirm_yes")
+@admin_only
+async def callback_broadcast_run(callback: CallbackQuery, state: FSMContext):
+    """Confirmed: kick off the broadcast as a background task and ack
+    the admin immediately.  The broadcast itself DMs the admin a stats
+    summary on completion."""
+    await state.clear()
+    await safe_edit_text(
+        callback.message,
+        (
+            "🚀 <b>Broadcast запущен в фоне.</b>\n\n"
+            "Отчёт о результатах придёт в этот чат когда отработает. "
+            "Можно закрыть экран — задача продолжит выполняться."
+        ),
+        reply_markup=get_admin_back_keyboard("ru"),
+        parse_mode="HTML",
+    )
+    await callback.answer("Started")
+    try:
+        from app.services import migration_broadcast
+        asyncio.create_task(
+            migration_broadcast.run_migration_broadcast(
+                callback.bot, callback.from_user.id, notify_admin_on_complete=True,
+            )
+        )
+        logger.info("ADMIN_MIG_BCAST_KICKED_OFF: tg=%s", callback.from_user.id)
+    except Exception:
+        logger.exception("ADMIN_MIG_BCAST_KICK_FAIL")
+
+
 __all__ = ["admin_migration_router"]
