@@ -78,7 +78,7 @@ python -m scripts.migrate_samopis_to_remnawave --apply --rate 3
 
 The script:
 
-- Acquires a PID lock at `<log-file>.lock` (or `--lock-file`) for `--apply`. A second `--apply` while the first is running aborts immediately. Stale locks from crashed runs are detected by `os.kill(pid, 0)` and cleared automatically.
+- Acquires a PID lock at `$MIGRATION_LOG_DIR/migration.lock` (default `/tmp/migration.lock`, override with `--lock-file`) for `--apply`. A second `--apply` while the first is running aborts immediately. Stale locks from crashed runs are detected by `os.kill(pid, 0)` and cleared automatically.
 - Selects every `subscriptions` row where `status='active'`, `uuid IS NOT NULL`, `expires_at > NOW()`, and `subscription_type != 'trial'`. Rows that already have `remnawave_premium_uuid` set are skipped automatically (resumable). `--include-already-migrated` bypasses the skip if you need a full re-run.
 - For each candidate, calls `remnawave_premium.create_premium_user_entity`, which:
   1. **Preflight** — calls `remnawave_api.find_user_by_username(tg_{tg_id}_premium)`. This is a single `GET /api/users/by-username/{name}` call on Remnawave v2.7.4; 200 means the username is taken, 404 (errorCode `A063`) means free. If the entity already exists and is ours (`telegramId` match OR description contains "samopis"), the script **adopts** it and returns `recovered=True` without POSTing.
@@ -87,7 +87,7 @@ The script:
   4. If the panel returns **409** (race with a parallel run), the script re-runs the username lookup and adopts the entity if it's ours.
   5. If the panel returns **400/422** (forced `vlessUuid` rejected), retries WITHOUT the forced UUID. The panel-assigned `vlessUuid` is what ends up in the VLESS link; legacy compat will only be preserved when the panel honoured the forced value (`forced_uuid_accepted=True` in the CSV log).
 - Persists `(telegram_id → panel uuid, subscriptionUrl, shortUuid)` atomically into `subscriptions.remnawave_premium_uuid` + `remnawave_premium_sub_url` (migration 046) + `remnawave_premium_short_uuid` (migration 047) and stamps `samopis_migrated_at = NOW()`.
-- Appends one row per user to `migration_log.csv` (configurable via `--log-file`):
+- Appends one row per user to `migration_log.csv` (configurable via `--log-file`). The default path is `$MIGRATION_LOG_DIR/migration_log.csv` if the env var is set, else `/tmp/migration_log.csv` — the Docker image runs the bot as non-root against a read-only `/app`, so writing the log into the working directory raises `PermissionError`. Mount a persistent volume and point `MIGRATION_LOG_DIR` at it if you want the log to survive container restarts. The dashboard's “📥 Migration: download log” button reads from the same path and sends the file back as a Telegram document.
 
 ```csv
 timestamp,telegram_id,uuid_samopis,uuid_remnawave_bypass,uuid_remnawave_premium,forced_uuid_accepted,recovered,status,http_status,subscription_url,error
@@ -130,6 +130,25 @@ pytest tests/services/test_remnawave_premium.py \
 ```
 
 Unit tests mock both the Remnawave HTTP client and the `database` module, so they don't need network or PostgreSQL access. Integration tests use `fastapi.testclient` against the proxy router.
+
+## Admin dashboard buttons
+
+`/admin` exposes six buttons next to the gift-link controls. All of them
+spawn the same script as the shell invocations above, so behaviour is
+identical:
+
+| Button | Subprocess args |
+| --- | --- |
+| 🔍 Dry Run 50 | `--limit 50` |
+| 🔎 Dry Run FULL | (no `--limit`) |
+| 🎯 Apply 1 (test) | `--apply --telegram-id <admin-input> --limit 1` (FSM-prompted) |
+| 🛠 Apply 10 | `--apply --limit 10` |
+| 🚨 Apply ALL | `--apply` (gated by a two-step "yes I'm sure" confirm) |
+| 📥 Download log | DM the cached `migration_log.csv` (auto-attached after every other action) |
+
+After every run the bot auto-attaches the freshly-written CSV as a
+Telegram document — the explicit Download button is the fallback for
+pulling the log later, after the run-result message has scrolled away.
 
 ## Operational runbook
 

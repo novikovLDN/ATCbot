@@ -359,3 +359,45 @@ def test_pid_lock_treats_malformed_file_as_stale(tmp_path: Path):
     mod.acquire_pid_lock(lock)
     import os
     assert lock.read_text().strip() == str(os.getpid())
+
+
+# ── Default log path resolution ───────────────────────────────────────
+
+def test_default_log_file_falls_back_to_tmp(monkeypatch):
+    mod = _load()
+    monkeypatch.delenv("MIGRATION_LOG_DIR", raising=False)
+    assert mod.default_log_file() == "/tmp/migration_log.csv"
+
+
+def test_default_log_file_honours_env_var(monkeypatch, tmp_path):
+    mod = _load()
+    monkeypatch.setenv("MIGRATION_LOG_DIR", str(tmp_path))
+    assert mod.default_log_file() == str(tmp_path / "migration_log.csv")
+
+
+def test_default_log_file_used_by_argparse_when_no_flag(monkeypatch, tmp_path):
+    """`--log-file` left unset → argparse picks up the env-driven default."""
+    mod = _load()
+    monkeypatch.setenv("MIGRATION_LOG_DIR", str(tmp_path))
+    # Re-import would be ideal, but argparse reads the default at parse time
+    # via a callable evaluated when _parse_args runs.  Stub argv and assert.
+    import sys as _sys
+    saved_argv = _sys.argv
+    try:
+        _sys.argv = ["migrate_samopis_to_remnawave.py"]
+        args = mod._parse_args()
+        assert args.log_file == str(tmp_path / "migration_log.csv")
+    finally:
+        _sys.argv = saved_argv
+
+
+def test_default_lock_file_falls_back_to_tmp(monkeypatch):
+    mod = _load()
+    monkeypatch.delenv("MIGRATION_LOG_DIR", raising=False)
+    assert mod.default_lock_file() == "/tmp/migration.lock"
+
+
+def test_default_lock_file_honours_env_var(monkeypatch, tmp_path):
+    mod = _load()
+    monkeypatch.setenv("MIGRATION_LOG_DIR", str(tmp_path))
+    assert mod.default_lock_file() == str(tmp_path / "migration.lock")

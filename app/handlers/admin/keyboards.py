@@ -46,8 +46,16 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
         # — Миграция samopis → Remnawave (Task 1 из ТЗ) —
         [
-            InlineKeyboardButton(text="🛠 Migration: --help", callback_data="admin:migration_help"),
-            InlineKeyboardButton(text="🔍 Migration: dry-run 10", callback_data="admin:migration_dryrun"),
+            InlineKeyboardButton(text="🔍 Dry Run 50", callback_data="admin:mig_dryrun50"),
+            InlineKeyboardButton(text="🔎 Dry Run FULL", callback_data="admin:mig_dryrun_full"),
+        ],
+        [
+            InlineKeyboardButton(text="🎯 Apply 1 (test)", callback_data="admin:mig_apply1_input"),
+            InlineKeyboardButton(text="🛠 Apply 10", callback_data="admin:mig_apply10"),
+        ],
+        [
+            InlineKeyboardButton(text="🚨 Apply ALL", callback_data="admin:mig_apply_all"),
+            InlineKeyboardButton(text="📥 Download log", callback_data="admin:migration_download"),
         ],
     ])
     return keyboard
