@@ -52,6 +52,204 @@ class _FakeCallback:
         self.answers.append((text, show_alert))
 
 
+# ── _parse_event_line ──────────────────────────────────────────────────
+
+class TestParseEventLine:
+    def test_plain_json_line(self):
+        out = migration._parse_event_line('{"event": "migrated.created", "telegram_id": 42}')
+        assert out == {"event": "migrated.created", "telegram_id": 42}
+
+    def test_formatted_log_line(self):
+        line = '2026-05-13 12:34:56 INFO samopis_migration — {"event": "migrated.created", "tg": 7}'
+        out = migration._parse_event_line(line)
+        assert out is not None
+        assert out["event"] == "migrated.created"
+        assert out["tg"] == 7
+
+    def test_plain_text_log_returns_none(self):
+        """Non-JSON log lines (e.g. 'Progress: 50/4000') are not events."""
+        assert migration._parse_event_line(
+            "2026-05-13 12:34:56 INFO samopis_migration — Progress: 50/4000 (ok=50 failed=0)"
+        ) is None
+
+    def test_empty_line_returns_none(self):
+        assert migration._parse_event_line("") is None
+        assert migration._parse_event_line("   ") is None
+
+    def test_malformed_json_returns_none(self):
+        assert migration._parse_event_line('{"event": "...') is None
+        assert migration._parse_event_line(
+            '2026-05-13 12:34:56 INFO samopis_migration — {"bad json'
+        ) is None
+
+    def test_non_dict_json_returns_none(self):
+        """A bare array or scalar at the top level isn't a usable event."""
+        assert migration._parse_event_line("[1, 2, 3]") is None
+        assert migration._parse_event_line('"just a string"') is None
+
+
+# ── _send_progress_notification ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_send_progress_notification_uses_db_counts(monkeypatch):
+    fake_db = SimpleNamespace(
+        count_premium_migration_progress=_AsyncRecorder(
+            ret={"migrated": 735, "remaining_candidates": 3300, "total_active_paid": 4035}
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "database", fake_db)
+
+    send_mock = _AsyncRecorder()
+    bot = SimpleNamespace(send_message=send_mock)
+    await migration._send_progress_notification(
+        bot, chat_id=12345, title="Apply ALL", in_run_count=500,
+    )
+
+    assert len(send_mock.calls) == 1
+    args, kwargs = send_mock.calls[0]
+    assert args[0] == 12345  # chat_id
+    body = args[1]
+    assert "500" in body  # in_run_count
+    assert "735" in body  # migrated
+    assert "3300" in body  # remaining
+    assert "18.2%" in body  # 735/4035
+    assert "Apply ALL" in body
+    assert kwargs.get("parse_mode") == "HTML"
+
+
+@pytest.mark.asyncio
+async def test_send_progress_notification_db_failure_still_sends(monkeypatch):
+    """DB unavailable → notification still goes out (sans live counts)."""
+    fake_db = SimpleNamespace(
+        count_premium_migration_progress=_AsyncRecorder(),
+    )
+
+    async def _explode():
+        raise RuntimeError("db gone")
+
+    fake_db.count_premium_migration_progress = _explode
+    monkeypatch.setitem(sys.modules, "database", fake_db)
+
+    send_mock = _AsyncRecorder()
+    bot = SimpleNamespace(send_message=send_mock)
+    await migration._send_progress_notification(
+        bot, chat_id=1, title="t", in_run_count=500,
+    )
+    assert len(send_mock.calls) == 1
+    body = send_mock.calls[0][0][1]
+    assert "500" in body
+
+
+@pytest.mark.asyncio
+async def test_send_progress_notification_send_failure_is_swallowed(monkeypatch):
+    """Bot send failure must NOT propagate — progress is purely observational."""
+    fake_db = SimpleNamespace(
+        count_premium_migration_progress=_AsyncRecorder(
+            ret={"migrated": 0, "remaining_candidates": 0, "total_active_paid": 0}
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "database", fake_db)
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("network")
+
+    bot = SimpleNamespace(send_message=_boom)
+    # Must not raise.
+    await migration._send_progress_notification(bot, chat_id=1, title="t", in_run_count=1)
+
+
+# ── _run_script streaming progress ─────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_run_script_streams_progress_every_n_rows(tmp_path: Path, monkeypatch):
+    """Inline subprocess emits 7 events; with notify_every=3 → 2 callbacks (3 and 6)."""
+    inline = tmp_path / "stream.py"
+    inline.write_text(textwrap.dedent("""
+        import json, sys
+        for i in range(7):
+            msg = json.dumps({"event": "migrated.created", "telegram_id": i})
+            sys.stderr.write(f"2026-05-13 12:00:00 INFO samopis_migration — {msg}\\n")
+            sys.stderr.flush()
+    """))
+    monkeypatch.setattr(migration, "_SCRIPT_PATH", inline)
+
+    # Stub the DB-aware notifier with a plain counter so we can assert
+    # invocation count without spinning up an asyncpg pool.
+    notify_calls: list[int] = []
+
+    async def fake_notify(bot, chat_id, *, title, in_run_count):
+        notify_calls.append(in_run_count)
+
+    monkeypatch.setattr(migration, "_send_progress_notification", fake_notify)
+
+    rc, out, err = await migration._run_script(
+        [],
+        timeout=10,
+        bot=SimpleNamespace(send_message=_AsyncRecorder()),
+        chat_id=1,
+        progress_title="test",
+        notify_every=3,
+    )
+    assert rc == 0
+    # 7 events, notify_every=3 → callbacks at 3 and 6.
+    assert notify_calls == [3, 6]
+    # All 7 stderr lines captured in the final blob.
+    assert err.count("migrated.created") == 7
+
+
+@pytest.mark.asyncio
+async def test_run_script_streaming_path_ignores_non_event_lines(tmp_path: Path, monkeypatch):
+    """Plain Progress/log lines must not bump the counter."""
+    inline = tmp_path / "mix.py"
+    inline.write_text(textwrap.dedent("""
+        import sys
+        sys.stderr.write("2026-05-13 12:00:00 INFO samopis_migration — Progress: 50/4000\\n")
+        sys.stderr.write("2026-05-13 12:00:01 INFO samopis_migration — boring line\\n")
+        sys.stderr.flush()
+    """))
+    monkeypatch.setattr(migration, "_SCRIPT_PATH", inline)
+    notify_calls: list[int] = []
+
+    async def fake_notify(*a, **kw):
+        notify_calls.append(kw.get("in_run_count", 0))
+
+    monkeypatch.setattr(migration, "_send_progress_notification", fake_notify)
+    rc, _out, _err = await migration._run_script(
+        [],
+        timeout=10,
+        bot=SimpleNamespace(send_message=_AsyncRecorder()),
+        chat_id=1,
+        progress_title="t",
+        notify_every=1,
+    )
+    assert rc == 0
+    assert notify_calls == []  # nothing was an event
+
+
+@pytest.mark.asyncio
+async def test_run_script_streaming_disabled_when_bot_missing(tmp_path: Path, monkeypatch):
+    """No bot/chat_id → legacy communicate() path, no progress callbacks."""
+    inline = tmp_path / "stream.py"
+    inline.write_text(textwrap.dedent("""
+        import json, sys
+        for i in range(3):
+            msg = json.dumps({"event": "migrated.created"})
+            sys.stderr.write(f"2026-05-13 12:00:00 INFO samopis_migration — {msg}\\n")
+            sys.stderr.flush()
+    """))
+    monkeypatch.setattr(migration, "_SCRIPT_PATH", inline)
+    notify_calls: list[int] = []
+
+    async def fake_notify(*a, **kw):
+        notify_calls.append(kw.get("in_run_count", 0))
+
+    monkeypatch.setattr(migration, "_send_progress_notification", fake_notify)
+    rc, _out, err = await migration._run_script([], timeout=10)  # no bot, no chat_id
+    assert rc == 0
+    assert notify_calls == []
+    assert err.count("migrated.created") == 3
+
+
 # ── _format_output ─────────────────────────────────────────────────────
 
 class TestFormatOutput:
@@ -316,7 +514,7 @@ async def test_apply1_message_handler_dispatches_subprocess_with_correct_args(
     # Stub _run_script to capture the args and short-circuit the spawn.
     captured: list = []
 
-    async def fake_run_script(args, timeout):
+    async def fake_run_script(args, timeout, **kw):
         captured.append((list(args), timeout))
         return 0, "Done. ok=1 recovered=0 failed=0", ""
 
@@ -364,7 +562,7 @@ async def test_apply_all_cancel_clears_state(monkeypatch):
 async def test_apply_all_yes_runs_with_apply_no_limit(monkeypatch):
     captured: list = []
 
-    async def fake_run_script(args, timeout):
+    async def fake_run_script(args, timeout, **kw):
         captured.append((list(args), timeout))
         return 0, "summary", ""
 
@@ -383,13 +581,36 @@ async def test_apply_all_yes_runs_with_apply_no_limit(monkeypatch):
     assert args == ["--apply"]
 
 
-# ── Apply 500 / Apply 1000 dispatch ───────────────────────────────────
+# ── Apply 100 / 500 / 1000 dispatch ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_apply_100_dispatches_correct_args(monkeypatch):
+    captured: list = []
+
+    async def fake_run_script(args, timeout, **kw):
+        captured.append((list(args), timeout))
+        return 0, "summary", ""
+
+    monkeypatch.setattr(migration, "_run_script", fake_run_script)
+    monkeypatch.setattr(migration, "safe_edit_text", _AsyncRecorder())
+    monkeypatch.setattr(migration, "_send_csv_if_available", _AsyncRecorder(ret=None))
+
+    handler = migration.callback_apply_100.__wrapped__
+    cb = _FakeCallback()
+    await handler(cb)
+
+    assert len(captured) == 1
+    args, timeout = captured[0]
+    assert args == ["--apply", "--limit", "100"]
+    # Sized for ~50 rows/min × 1.5 safety = 3+ minutes
+    assert timeout >= 3 * 60
+
 
 @pytest.mark.asyncio
 async def test_apply_500_dispatches_correct_args(monkeypatch):
     captured: list = []
 
-    async def fake_run_script(args, timeout):
+    async def fake_run_script(args, timeout, **kw):
         captured.append((list(args), timeout))
         return 0, "summary", ""
 
@@ -412,7 +633,7 @@ async def test_apply_500_dispatches_correct_args(monkeypatch):
 async def test_apply_1000_dispatches_correct_args(monkeypatch):
     captured: list = []
 
-    async def fake_run_script(args, timeout):
+    async def fake_run_script(args, timeout, **kw):
         captured.append((list(args), timeout))
         return 0, "summary", ""
 
