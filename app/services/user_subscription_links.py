@@ -39,9 +39,17 @@ def _legacy_sub_url(telegram_id: int) -> str:
 
 
 async def get_user_premium_url(telegram_id: int) -> Optional[str]:
-    """Return the cached Remnawave premium subscription URL or None.
+    """Return the Remnawave premium subscription URL for the user, or None.
 
-    None means "no migrated/provisioned premium entity in DB" — caller
+    Resolution order:
+      1. cached `remnawave_premium_sub_url` column (status='active' row).
+      2. cached `remnawave_premium_sub_url` column ignoring status filter
+         (rare: status was != 'active' at the moment the cache was written
+         and the column never got populated for that row).
+      3. live GET /api/users/{remnawave_premium_uuid} via the panel,
+         followed by best-effort back-fill of the cache so the next
+         request is fast.
+    None means "no migrated/provisioned premium entity at all" — caller
     should fall back to the legacy URL.
     """
     if not getattr(config, "REMNAWAVE_ENABLED", False):
@@ -52,12 +60,51 @@ async def get_user_premium_url(telegram_id: int) -> Optional[str]:
         if pool is None:
             return None
         async with pool.acquire() as conn:
-            url = await conn.fetchval(
-                "SELECT remnawave_premium_sub_url FROM subscriptions "
-                "WHERE telegram_id = $1 AND status = 'active'",
+            # Step 1: cache hit on the active row.
+            row = await conn.fetchrow(
+                "SELECT remnawave_premium_uuid, remnawave_premium_sub_url "
+                "FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
                 telegram_id,
             )
-        return (url or "").strip() or None
+            # Step 2: any row (status-agnostic) — covers users whose
+            # subscription was inactive when the cache was first written.
+            if not row:
+                row = await conn.fetchrow(
+                    "SELECT remnawave_premium_uuid, remnawave_premium_sub_url "
+                    "FROM subscriptions WHERE telegram_id = $1 "
+                    "ORDER BY (status='active') DESC, expires_at DESC NULLS LAST LIMIT 1",
+                    telegram_id,
+                )
+        if not row:
+            return None
+        cached_raw = row["remnawave_premium_sub_url"]
+        cached = cached_raw.strip() if cached_raw else ""
+        if cached:
+            return cached
+
+        # Step 3: panel fallback.  We have the entity uuid but the URL
+        # column was never populated (e.g. row migrated before column 046
+        # existed, or written when status wasn't active).  One round-trip
+        # to fix it forever.
+        panel_uuid_raw = row["remnawave_premium_uuid"]
+        panel_uuid = panel_uuid_raw.strip() if panel_uuid_raw else ""
+        if not panel_uuid:
+            return None
+        try:
+            from app.services import remnawave_api
+            entity = await remnawave_api.get_user(panel_uuid)
+        except Exception as e:
+            logger.warning("USER_PREMIUM_PANEL_FALLBACK_FAIL: tg=%s %s", telegram_id, e)
+            return None
+        url = ((entity or {}).get("subscriptionUrl") or "").strip() or None
+        if not url:
+            return None
+        # Best-effort cache write so the next call is fast.
+        try:
+            await database.set_remnawave_premium_sub_url(telegram_id, url)
+        except Exception as e:
+            logger.warning("USER_PREMIUM_BACKFILL_FAIL: tg=%s %s", telegram_id, e)
+        return url
     except Exception as e:
         logger.warning("USER_PREMIUM_URL_LOOKUP_FAIL: tg=%s %s", telegram_id, e)
         return None
