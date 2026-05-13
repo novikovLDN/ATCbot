@@ -26,11 +26,12 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Awaitable, Callable, Optional, Sequence
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -82,15 +83,117 @@ _TIMEOUT_APPLY_LIMITED = 10 * 60      # --apply --limit 10
 # Observed throughput on the panel is ~50 rows/min (preflight GET +
 # create POST + DB write per row, sequential per slot).  Sizing batched
 # apply timeouts ≈ rows/50 × 1.5 safety:
+_TIMEOUT_APPLY_100 = 5 * 60           # --apply --limit 100
 _TIMEOUT_APPLY_500 = 20 * 60          # --apply --limit 500
 _TIMEOUT_APPLY_1000 = 35 * 60         # --apply --limit 1000
-_TIMEOUT_APPLY_FULL = 120 * 60        # full cutover (4k+ rows; +safety)
+_TIMEOUT_APPLY_FULL = 180 * 60        # full cutover (4k+ rows; generous)
+
+# Streaming progress: send a Telegram DM every N migrated rows so the
+# operator sees forward motion during long --apply runs without having
+# to refresh Status manually.  Set to 0 to disable.
+_PROGRESS_NOTIFY_EVERY = 500
 
 
 # ── Subprocess plumbing ────────────────────────────────────────────────
 
-async def _run_script(args: Sequence[str], timeout: int) -> tuple[int, str, str]:
+# Event names emitted by scripts/migrate_samopis_to_remnawave.py via _jlog
+# that count toward "row processed" progress.  Failure events (create.failed,
+# persist.failed, process_one.crash, create.exception) also count toward
+# progress so the operator sees forward motion even when rows fail — the
+# CSV is the source of truth for success/failure breakdowns.
+_PROGRESS_EVENTS: set[str] = {
+    "migrated.created",
+    "migrated.recovered",
+    "create.failed",
+    "persist.failed",
+    "create.exception",
+    "process_one.crash",
+}
+
+
+def _parse_event_line(line: str) -> Optional[dict]:
+    """Extract a JSON `event` payload from a script log line, or return None.
+
+    The script formats stderr lines as
+        "<asctime> <LEVEL> samopis_migration — <json>"
+    so we split on the dash separator and parse the trailing JSON.  Plain
+    JSON lines (no log prefix) are also accepted to keep the parser
+    independent of the logging.basicConfig format.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    candidate = line
+    if not candidate.startswith("{"):
+        parts = line.split(" — ", 1)
+        if len(parts) != 2:
+            return None
+        candidate = parts[1].strip()
+        if not candidate.startswith("{"):
+            return None
+    try:
+        obj = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+async def _send_progress_notification(
+    bot,
+    chat_id: int,
+    *,
+    title: str,
+    in_run_count: int,
+) -> None:
+    """DM the admin with a progress snapshot.
+
+    Pulls fresh totals from DB (`count_premium_migration_progress`) so the
+    "remaining" number reflects the live state, not just the in-process
+    counter.  All failures are swallowed and logged — progress is purely
+    observational and must never break the main subprocess flow.
+    """
+    body = (
+        f"🔄 <b>{html.escape(title)}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"This run: <b>{in_run_count}</b> processed"
+    )
+    try:
+        import database  # lazy — keeps unit tests asyncpg-free
+        progress = await database.count_premium_migration_progress()
+        migrated = progress.get("migrated", 0)
+        remaining = progress.get("remaining_candidates", 0)
+        total = progress.get("total_active_paid", 0)
+        pct = (migrated / total * 100.0) if total else 0.0
+        body = (
+            f"🔄 <b>{html.escape(title)}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"This run: <b>{in_run_count}</b> processed\n"
+            f"DB total migrated: <b>{migrated}</b> / {total} ({pct:.1f}%)\n"
+            f"Remaining candidates: <b>{remaining}</b>"
+        )
+    except Exception as e:
+        logger.warning("MIG_PROGRESS_DB_FAIL: %s", e)
+    try:
+        await bot.send_message(chat_id, body, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("MIG_PROGRESS_NOTIFY_FAIL: %s", e)
+
+
+async def _run_script(
+    args: Sequence[str],
+    timeout: int,
+    *,
+    bot=None,
+    chat_id: Optional[int] = None,
+    progress_title: Optional[str] = None,
+    notify_every: int = _PROGRESS_NOTIFY_EVERY,
+) -> tuple[int, str, str]:
     """Run the migration script with the given args. Returns (rc, stdout, stderr).
+
+    When `bot` + `chat_id` are supplied, stderr is streamed line-by-line
+    and a Telegram DM is dispatched every `notify_every` processed rows
+    so the operator sees forward motion during long --apply runs.  When
+    they're None the helper behaves as before (`communicate()` semantics).
 
     Times out cleanly and never raises — failures are surfaced as a
     non-zero return code with a marker in stderr so the admin can see
@@ -119,20 +222,82 @@ async def _run_script(args: Sequence[str], timeout: int) -> tuple[int, str, str]
     except Exception as e:
         return 1, "", f"failed to spawn: {type(e).__name__}: {e}"
 
+    streaming = bot is not None and chat_id is not None and notify_every > 0
+    if not streaming:
+        # Legacy path — preserved for callers that don't want streaming
+        # (and for the existing _run_script tests that assert
+        # communicate() semantics).
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            try:
+                await asyncio.wait_for(proc.communicate(), timeout=5)
+            except Exception:
+                pass
+            return 124, "", f"⏱ TIMEOUT after {timeout}s — process killed"
+        rc = proc.returncode if proc.returncode is not None else -1
+        return rc, stdout_b.decode("utf-8", errors="replace"), stderr_b.decode("utf-8", errors="replace")
+
+    # Streaming path: count processed rows from stderr JSON events and
+    # DM the admin every `notify_every` rows.
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    rows_processed = 0
+    last_notify_at = 0
+    title = progress_title or "migration"
+
+    async def _consume_stdout() -> None:
+        async for raw in proc.stdout:
+            stdout_chunks.append(raw.decode("utf-8", errors="replace"))
+
+    async def _consume_stderr() -> None:
+        nonlocal rows_processed, last_notify_at
+        async for raw in proc.stderr:
+            line = raw.decode("utf-8", errors="replace")
+            stderr_chunks.append(line)
+            event = _parse_event_line(line)
+            if not event:
+                continue
+            if event.get("event") not in _PROGRESS_EVENTS:
+                continue
+            rows_processed += 1
+            if rows_processed - last_notify_at >= notify_every:
+                last_notify_at = rows_processed
+                await _send_progress_notification(
+                    bot, chat_id,
+                    title=title,
+                    in_run_count=rows_processed,
+                )
+
+    out_task = asyncio.create_task(_consume_stdout())
+    err_task = asyncio.create_task(_consume_stderr())
+
     try:
-        stdout_b, stderr_b = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+        rc = proc.returncode if proc.returncode is not None else -1
     except asyncio.TimeoutError:
         proc.kill()
         try:
-            await asyncio.wait_for(proc.communicate(), timeout=5)
+            await asyncio.wait_for(proc.wait(), timeout=5)
         except Exception:
             pass
-        return 124, "", f"⏱ TIMEOUT after {timeout}s — process killed"
+        stderr_chunks.append(f"\n⏱ TIMEOUT after {timeout}s — process killed\n")
+        rc = 124
 
-    rc = proc.returncode if proc.returncode is not None else -1
-    return rc, stdout_b.decode("utf-8", errors="replace"), stderr_b.decode("utf-8", errors="replace")
+    # Drain the stream tasks so we capture the final lines.
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(out_task, err_task, return_exceptions=True),
+            timeout=10,
+        )
+    except asyncio.TimeoutError:
+        out_task.cancel()
+        err_task.cancel()
+
+    return rc, "".join(stdout_chunks), "".join(stderr_chunks)
 
 
 def _format_output(title: str, rc: int, stdout: str, stderr: str) -> str:
@@ -239,7 +404,13 @@ async def _run_and_report(
         parse_mode="HTML",
     )
 
-    rc, stdout, stderr = await _run_script(args, timeout=timeout)
+    rc, stdout, stderr = await _run_script(
+        args,
+        timeout=timeout,
+        bot=callback.bot,
+        chat_id=callback.from_user.id,
+        progress_title=title,
+    )
     text = _format_output(title, rc, stdout, stderr)
 
     csv_note = await _send_csv_if_available(
@@ -305,6 +476,22 @@ async def callback_apply_10(callback: CallbackQuery):
         placeholder_text=(
             "⏳ <i>Apply on first 10 candidates…</i>\n"
             "<b>WRITES to Remnawave + DB.</b>"
+        ),
+    )
+
+
+@admin_migration_router.callback_query(F.data == "admin:mig_apply100")
+@admin_only
+async def callback_apply_100(callback: CallbackQuery):
+    await _run_and_report(
+        callback,
+        title="--apply --limit 100",
+        args=["--apply", "--limit", "100"],
+        timeout=_TIMEOUT_APPLY_100,
+        placeholder_text=(
+            "⏳ <i>Apply on first 100 candidates…</i>\n"
+            "<b>WRITES to Remnawave + DB.</b>\n"
+            "ETA ~2 min at ~50 rows/min."
         ),
     )
 

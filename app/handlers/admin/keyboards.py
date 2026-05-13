@@ -54,8 +54,9 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
             InlineKeyboardButton(text="🔎 Dry Run FULL", callback_data="admin:mig_dryrun_full"),
         ],
         [
-            InlineKeyboardButton(text="🎯 Apply 1 (test)", callback_data="admin:mig_apply1_input"),
+            InlineKeyboardButton(text="🎯 Apply 1", callback_data="admin:mig_apply1_input"),
             InlineKeyboardButton(text="🛠 Apply 10", callback_data="admin:mig_apply10"),
+            InlineKeyboardButton(text="🛠 Apply 100", callback_data="admin:mig_apply100"),
         ],
         [
             InlineKeyboardButton(text="🔢 Apply 500", callback_data="admin:mig_apply500"),

@@ -145,9 +145,10 @@ identical:
 | 🔎 Dry Run FULL | (no `--limit`) |
 | 🎯 Apply 1 (test) | `--apply --telegram-id <admin-input> --limit 1` (FSM-prompted) |
 | 🛠 Apply 10 | `--apply --limit 10` |
+| 🛠 Apply 100 | `--apply --limit 100` (~2 min) |
 | 🔢 Apply 500 | `--apply --limit 500` (~10 min at observed ~50 rows/min) |
 | 🔢 Apply 1000 | `--apply --limit 1000` (~20 min) |
-| 🚨 Apply ALL | `--apply` (gated by a two-step "yes I'm sure" confirm; 120 min timeout) |
+| 🚨 Apply ALL | `--apply` (gated by a two-step "yes I'm sure" confirm; 180 min timeout) |
 | 🧹 Clear stale lock | Manual override — unlinks `/tmp/migration.lock` after a confirm dialog |
 
 ### Lock-file ownership and PID reuse
@@ -171,6 +172,26 @@ liveness.
 After every run the bot auto-attaches the freshly-written CSV as a
 Telegram document — the explicit Download button is the fallback for
 pulling the log later, after the run-result message has scrolled away.
+
+### Streaming progress
+
+`_run_script` parses each stderr line for JSON `event` payloads
+(`migrated.created`, `migrated.recovered`, `create.failed`, …) and DMs
+the operator every **500** processed rows with a snapshot that includes
+live DB counts:
+
+```
+🔄 --apply (FULL)
+━━━━━━━━━━━━━━━━━━━
+This run: 500 processed
+DB total migrated: 735 / 4035 (18.2%)
+Remaining candidates: 3300
+```
+
+So a full Apply ALL on ~4k rows produces ~8 progress messages over
+~80 min and the operator never has to refresh Status manually.  The
+interval is `_PROGRESS_NOTIFY_EVERY` in
+`app/handlers/admin/migration.py` — set to 0 to disable.
 
 ## Operational runbook
 
