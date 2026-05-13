@@ -38,9 +38,9 @@ apply_*_patch.py
 
 # Scripts (dev/migration tools, mostly not needed at runtime)
 scripts/
-# Exception: this one is launched from the admin dashboard
-# (app/handlers/admin/migration.py) and must be present in the image.
+# Exceptions: scripts launched from the admin dashboard must be in the image.
 !scripts/migrate_samopis_to_remnawave.py
+!scripts/verify_samopis_migration.py
 
 # Audit reports
 *_AUDIT.md

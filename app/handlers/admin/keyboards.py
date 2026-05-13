@@ -47,6 +47,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         # — Миграция samopis → Remnawave (Task 1 из ТЗ) —
         [
             InlineKeyboardButton(text="📊 Status", callback_data="admin:mig_status"),
+            InlineKeyboardButton(text="🔬 Verify", callback_data="admin:mig_verify"),
             InlineKeyboardButton(text="📥 Download log", callback_data="admin:migration_download"),
         ],
         [
