@@ -382,6 +382,11 @@ _HAPP_CRYPTO_ENDPOINTS = (
 )
 
 _happ_crypto_endpoint_cache: Optional[str] = None
+# Once we've confirmed every documented + alternative in-panel path
+# is missing on this deployment (all return 404), skip them on
+# subsequent calls and go straight to the external crypto.happ.su
+# fallback.  Saves 4 wasted requests per user-visible URL render.
+_happ_crypto_panel_unavailable: bool = False
 
 
 def _extract_happ_crypto_link(payload: Any) -> Optional[str]:
@@ -446,19 +451,24 @@ async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]
         which endpoint won and what shape the panel returned, without
         leaking the plain URL or the encrypted payload.
     """
-    global _happ_crypto_endpoint_cache
+    global _happ_crypto_endpoint_cache, _happ_crypto_panel_unavailable
     if not plain_subscription_url:
         return None
 
     body = {"data": plain_subscription_url}
     paths_to_try: list[str]
-    if _happ_crypto_endpoint_cache:
+    if _happ_crypto_panel_unavailable:
+        # Past calls already proved no in-panel path exists — skip
+        # straight to the external fallback.
+        paths_to_try = []
+    elif _happ_crypto_endpoint_cache:
         paths_to_try = [_happ_crypto_endpoint_cache]
     else:
         paths_to_try = list(_HAPP_CRYPTO_ENDPOINTS)
 
     last_status: Optional[int] = None
     last_response_keys: Optional[list[str]] = None
+    all_paths_were_404 = bool(paths_to_try)
 
     for path in paths_to_try:
         raw = await _request_raw("POST", path, json=body)
@@ -468,6 +478,10 @@ async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]
             # Path missing — try the next one in the list.  Skip silently;
             # _request_raw already warning-logged the 404 body.
             continue
+        # If anything other than 404 came back, the panel is responsive
+        # to this path; revoke the "panel-unavailable" optimization so
+        # we keep probing on future calls.
+        all_paths_were_404 = False
         if not raw.get("ok"):
             # Real panel error (5xx / auth / etc.) — bail with a single
             # error log so the operator can see what shape came back.
@@ -499,18 +513,89 @@ async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]
             path, status, last_response_keys, str(raw.get("body") or "")[:300],
         )
 
-    # All paths exhausted without producing a usable link.
+    # Latch the optimization: if EVERY in-panel path responded 404 on
+    # this call, mark the panel as unavailable so subsequent calls skip
+    # the probe entirely (saves 4 wasted HTTP requests per render on a
+    # bot processing thousands of users).  The flag clears on process
+    # restart, so a panel upgrade later won't be missed forever.
+    if all_paths_were_404 and not _happ_crypto_panel_unavailable:
+        _happ_crypto_panel_unavailable = True
+        logger.info(
+            "REMNAWAVE_HAPP_CRYPTO_PANEL_LATCHED_UNAVAILABLE: every in-panel path "
+            "returned 404 on this build — skipping probe on subsequent calls"
+        )
+
+    # All Remnawave paths exhausted — confirmed on Remnawave v2.7.4
+    # logs that none of the in-panel paths exist.  Fall back to the
+    # public Happ encrypt API (TZ Task 4 Variant B):
+    #     POST https://crypto.happ.su/api-v2.php  body={"url": "..."}
+    # The service is operated by Happ and is what their client SDK
+    # ships with — no auth, no rate limit beyond reasonable, returns
+    # a happ://crypto/... link encrypted against the client's
+    # locally-shipped public key.
+    fallback = await _encrypt_via_happ_su(plain_subscription_url)
+    if fallback:
+        return fallback
+
     logger.warning(
         "REMNAWAVE_HAPP_CRYPTO_UNAVAILABLE: last_status=%s last_keys=%s — "
-        "user will be served the plain URL as fallback",
+        "panel + crypto.happ.su both failed, user will see plain URL",
         last_status, last_response_keys,
     )
     return None
 
 
+async def _encrypt_via_happ_su(plain_subscription_url: str) -> Optional[str]:
+    """Variant B from Task 4 TZ — external Happ-operated encrypt API.
+
+    Used as a fallback when Remnawave's in-panel encrypt endpoint is
+    unavailable (confirmed missing on the v2.7.4 deployment).  Always
+    returns either a happ://crypto/... link or None on any failure;
+    never raises.
+    """
+    url = "https://crypto.happ.su/api-v2.php"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, json={"url": plain_subscription_url})
+    except httpx.TimeoutException:
+        logger.warning("HAPP_SU_TIMEOUT: external encrypt API did not respond in time")
+        return None
+    except Exception as e:
+        logger.warning("HAPP_SU_ERROR: %s: %s", type(e).__name__, e)
+        return None
+
+    if resp.status_code >= 400:
+        logger.warning(
+            "HAPP_SU_HTTP_%s: body=%s",
+            resp.status_code, resp.text[:300],
+        )
+        return None
+
+    # Parse — happ.su returns either a JSON object or a raw string with
+    # the link.  Reuse the tolerant extractor.
+    try:
+        body: Any = resp.json()
+    except Exception:
+        body = resp.text
+    link = _extract_happ_crypto_link(body)
+    if link:
+        logger.info(
+            "HAPP_SU_ENCRYPTED: encrypt succeeded via external fallback "
+            "(response_type=%s)",
+            type(body).__name__,
+        )
+        return link
+    logger.warning(
+        "HAPP_SU_UNEXPECTED_SHAPE: response_type=%s body=%s",
+        type(body).__name__, str(body)[:300],
+    )
+    return None
+
+
 def _reset_happ_crypto_endpoint_cache_for_tests() -> None:
-    global _happ_crypto_endpoint_cache
+    global _happ_crypto_endpoint_cache, _happ_crypto_panel_unavailable
     _happ_crypto_endpoint_cache = None
+    _happ_crypto_panel_unavailable = False
 
 
 async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
