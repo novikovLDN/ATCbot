@@ -829,7 +829,7 @@ async def callback_traffic_pay_balance(callback: CallbackQuery):
             telegram_id=telegram_id,
             amount=-price,
             transaction_type="traffic_purchase",
-            description=f"Покупка {gb} ГБ трафика обхода",
+            description=f"Покупка {gb} ГБ трафика локального доступа",
         )
     except Exception as e:
         logger.error("TRAFFIC_PURCHASE_BALANCE_ERROR: tg=%s %s", telegram_id, e)

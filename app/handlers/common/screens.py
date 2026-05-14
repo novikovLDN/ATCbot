@@ -435,11 +435,11 @@ async def show_profile(message_or_query, language: str):
                     sub_url = traffic.get("subscriptionUrl", "")
                     happ_url = traffic.get("happ_url", "")
 
-                    text += f"\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n"
+                    text += f"\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Доступ</b> 🇷🇺\n\n"
                     text += f"<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {_fmt(used)} / {_fmt(limit_bytes)}\n"
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
-                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
+                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ доступа</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
                         if happ_url:
                             text += f"\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>"
 
@@ -454,7 +454,7 @@ async def show_profile(message_or_query, language: str):
                         traffic_limit_override=override,
                     )
                 )
-                text += "\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n⏳ Настраиваем... Зайдите через несколько секунд."
+                text += "\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Доступ</b> 🇷🇺\n\n⏳ Настраиваем... Зайдите через несколько секунд."
 
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
@@ -515,8 +515,8 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         f"💎 <b>Выберите тариф</b>\n\n"
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
-        f"<blockquote>Трафик обхода включён · от 269 ₽/мес</blockquote>"
+        f"🚀 <b>Комбо</b> — VPN + доступ 🇷🇺 в одном пакете\n"
+        f"<blockquote>Трафик локального доступа включён · от 269 ₽/мес</blockquote>"
     )
 
     # Получаем текущую подписку для динамических кнопок
@@ -527,12 +527,12 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     if is_bypass_only_sub:
         # Bypass-only: show special header
         text = (
-            f"🌐 <b>У вас активен обход блокировок</b>\n\n"
+            f"🌐 <b>У вас активен доступ 🇷🇺</b>\n\n"
             f"Для основной подписки выберите тариф:\n\n"
             f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
             f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-            f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
-            f"<blockquote>Трафик обхода включён · от 269 ₽/мес</blockquote>"
+            f"🚀 <b>Комбо</b> — VPN + доступ 🇷🇺 в одном пакете\n"
+            f"<blockquote>Трафик локального доступа включён · от 269 ₽/мес</blockquote>"
         )
 
     if current_tariff == "basic":
@@ -559,7 +559,7 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             callback_data="tariff:plus"
         )],
         [InlineKeyboardButton(
-            text="🚀 Комбо (VPN + обход)",
+            text="🚀 Комбо (VPN + доступ 🇷🇺)",
             callback_data="buy_combo"
         )],
         [InlineKeyboardButton(
