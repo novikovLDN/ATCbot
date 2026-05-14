@@ -477,6 +477,27 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
 
     has_photo = getattr(message, "photo", None) and len(message.photo) > 0
     if has_photo:
+        # Every safe_edit_text caller renders a TEXT screen — none want a
+        # photo to linger.  When the current message is a photo (e.g. the
+        # user came from the main menu / profile / connect photo screens),
+        # editing the caption would keep the photo attached, which is
+        # visually wrong.  Delete the photo message and send a fresh text
+        # message instead, so photo→text transitions are clean.
+        chat_id = getattr(getattr(message, "chat", None), "id", None) or (
+            getattr(getattr(message, "from_user", None), "id", None)
+            if getattr(message, "from_user", None) else None
+        )
+        if bot is not None and chat_id:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            try:
+                await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+            except Exception as e:
+                logger.warning(f"safe_edit_text: photo→text resend failed chat_id={chat_id}: {e}")
+            return
+        # No bot handle available — best effort: edit the caption in place.
         try:
             await message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
             return
@@ -486,11 +507,6 @@ async def safe_edit_text(message: Message, text: str, reply_markup: InlineKeyboa
                 logger.debug(f"Caption not modified (expected): {e}")
                 return
             if any(k in err for k in ["message to edit not found", "message can't be edited", "chat not found", "message is inaccessible"]):
-                if bot is not None:
-                    chat_id = getattr(getattr(message, "chat", None), "id", None) or (getattr(getattr(message, "from_user", None), "id", None) if getattr(message, "from_user", None) else None)
-                    if chat_id:
-                        await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-                        logger.info(f"Photo message inaccessible, sent new message instead: chat_id={chat_id}")
                 return
             raise
 

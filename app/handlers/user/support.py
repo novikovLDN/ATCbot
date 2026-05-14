@@ -18,10 +18,15 @@ from app.services.language_service import resolve_user_language
 user_router = Router()
 logger = logging.getLogger(__name__)
 
+# Support screen photo.  file_id is bot-specific (uploaded via the prod
+# bot); on send failure we degrade to a plain text message so /help
+# never breaks.
+SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFOS6RqBZnLNfSlXv_jvcyVPoUlHNGdwQACog1rGyLfMFCCfQnI4woaSAEAAwIAA3kAAzsE"
+
 
 @user_router.message(Command("help"))
 async def cmd_help(message: Message, bot: Bot):
-    """Обработчик команды /help — прямая ссылка на поддержку"""
+    """Обработчик команды /help — экран поддержки с фото."""
     if message.chat.type != "private":
         return
     if not await ensure_db_ready_message(message):
@@ -33,11 +38,20 @@ async def cmd_help(message: Message, bot: Bot):
             url="https://t.me/Atlas_SupportSecurity"
         )],
     ])
-    await message.answer(
-        i18n_get_text(language, "main.support_text", "support_text"),
-        reply_markup=keyboard,
-        parse_mode="HTML",
-    )
+    text = i18n_get_text(language, "main.support_text", "support_text")
+    # /help is always a fresh message in reply to a typed command — no
+    # screen-transition concern.  Send photo + caption; fall back to a
+    # plain text message if the file_id can't be used.
+    try:
+        await message.answer_photo(
+            SUPPORT_PHOTO_FILE_ID,
+            caption=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning("SUPPORT_PHOTO_FALLBACK_TEXT user=%s err=%s", message.from_user.id, e)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @user_router.message(Command("instruction"))

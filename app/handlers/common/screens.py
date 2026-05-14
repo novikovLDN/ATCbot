@@ -31,6 +31,63 @@ from app.utils.date_utils import format_date_ru
 
 logger = logging.getLogger(__name__)
 
+# ── Screen photos ──────────────────────────────────────────────────────
+# file_ids are bot-specific (a file_id uploaded via one bot token won't
+# resolve on another).  These were uploaded via the production bot;
+# `_send_screen_photo` falls back to a plain text message on ANY
+# send_photo failure (stale id / wrong bot / caption too long), so a
+# bad file_id never breaks a screen — it just degrades to text.
+PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFOS6BqBZmZmsUxWWhPKN1LC-AU4QtquAACoQ1rGyLfMFDUA7gTeeEv6AEAAwIAA3kAAzsE"
+
+# Telegram caps photo captions at 1024 chars (vs 4096 for plain text).
+# The profile screen with the bypass-traffic section + keys can exceed
+# that, so when the caption is too long we send a plain text message
+# instead of erroring out.
+_TG_CAPTION_LIMIT = 1024
+
+
+async def _send_screen_photo(
+    bot,
+    chat_id: int,
+    photo_file_id: str,
+    caption: str,
+    reply_markup=None,
+    parse_mode: str = "HTML",
+):
+    """Send a photo-with-caption screen, degrading gracefully:
+
+      * caption longer than the Telegram caption limit → send as a plain
+        text message (no photo) so the user still gets the full screen;
+      * send_photo fails for any other reason (stale file_id, wrong bot
+        token on stage, network) → fall back to a plain text message.
+
+    Never raises — always returns the sent Message or None.
+    """
+    if caption and len(caption) > _TG_CAPTION_LIMIT:
+        # Too long to be a caption — text-only render.
+        return await bot.send_message(
+            chat_id=chat_id, text=caption,
+            reply_markup=reply_markup, parse_mode=parse_mode,
+        )
+    try:
+        return await bot.send_photo(
+            chat_id=chat_id, photo=photo_file_id, caption=caption,
+            reply_markup=reply_markup, parse_mode=parse_mode,
+        )
+    except Exception as e:
+        logger.warning(
+            "SCREEN_PHOTO_FALLBACK_TEXT chat=%s err=%s", chat_id, e,
+        )
+        try:
+            return await bot.send_message(
+                chat_id=chat_id, text=caption,
+                reply_markup=reply_markup, parse_mode=parse_mode,
+            )
+        except Exception as e2:
+            logger.error("SCREEN_PHOTO_FALLBACK_TEXT_FAILED chat=%s err=%s", chat_id, e2)
+            return None
+
+
 
 async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
     """О сервисе. Reusable for callback and /info command."""
@@ -192,28 +249,40 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
 
 
 async def show_profile(message_or_query, language: str):
-    """Показать профиль пользователя (обновленная версия с балансом)"""
+    """Показать профиль пользователя (фото-экран с балансом и трафиком).
+
+    The profile is a PHOTO screen.  Whatever the current message is
+    (photo, text, or a fresh /profile command), we delete it (when it's
+    a callback) and send a fresh photo message via `_send_screen_photo`,
+    which degrades to plain text if the caption is too long or the
+    file_id is unusable.  This delete+resend pattern makes navigation
+    to/from the profile screen safe regardless of the previous screen's
+    type.
+    """
     telegram_id = None
     send_func = None
 
     try:
         if isinstance(message_or_query, Message):
             telegram_id = message_or_query.from_user.id
-            send_func = message_or_query.answer
+            chat_id = message_or_query.chat.id
+            bot = message_or_query.bot
         else:
             telegram_id = message_or_query.from_user.id
-            # If current message is a photo, can't edit_text — delete and send new
-            has_photo = getattr(message_or_query.message, "photo", None) and len(message_or_query.message.photo) > 0
-            if has_photo:
-                try:
-                    await message_or_query.message.delete()
-                except Exception:
-                    pass
-                send_func = lambda text, **kw: message_or_query.bot.send_message(
-                    chat_id=telegram_id, text=text, **kw,
-                )
-            else:
-                send_func = message_or_query.message.edit_text
+            chat_id = message_or_query.message.chat.id
+            bot = message_or_query.bot
+            # Drop the previous screen's message (any type) before sending
+            # the fresh profile photo.
+            try:
+                await message_or_query.message.delete()
+            except Exception:
+                pass
+
+        async def send_func(text, reply_markup=None, parse_mode="HTML"):
+            return await _send_screen_photo(
+                bot, chat_id, PROFILE_PHOTO_FILE_ID, text,
+                reply_markup=reply_markup, parse_mode=parse_mode,
+            )
     except AttributeError as e:
         logger.error(f"Invalid message_or_query type in show_profile: {type(message_or_query)}, error: {e}")
         raise
