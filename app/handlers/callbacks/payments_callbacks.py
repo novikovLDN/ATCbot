@@ -693,8 +693,10 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # Task 2 cut-over: when PURCHASE_FLOW_REMNAWAVE is on the bot has
         # already provisioned the premium + bypass entities in Remnawave;
         # surface both subscription URLs directly in the success text so
-        # the buyer sees them without an extra tap.
-        if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False):
+        # the buyer sees them without an extra tap.  Skip on renewal —
+        # the connection links don't change, so the renewal message is a
+        # plain confirmation without the key block.
+        if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False) and not is_renewal:
             try:
                 sub_row = await database.get_subscription_any(telegram_id)
                 premium_url = (sub_row or {}).get("vpn_key") or ""
