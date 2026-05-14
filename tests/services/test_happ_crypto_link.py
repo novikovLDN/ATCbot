@@ -113,9 +113,38 @@ async def test_encrypt_happ_crypto_returns_none_when_no_link_in_any_path():
     """Every documented + fallback path responds 200 with garbage — None."""
     from app.services import remnawave_api
     req_mock = AsyncMock(return_value=_raw(200, response={"foo": "bar"}))
-    with patch.object(remnawave_api, "_request_raw", req_mock):
+    happ_su_mock = AsyncMock(return_value=None)
+    with patch.object(remnawave_api, "_request_raw", req_mock), \
+         patch.object(remnawave_api, "_encrypt_via_happ_su", happ_su_mock):
         out = await remnawave_api.encrypt_happ_crypto_link("https://rmnw/sub/X")
     assert out is None
+
+
+@pytest.mark.asyncio
+async def test_encrypt_happ_crypto_falls_back_to_happ_su_when_all_panel_paths_404():
+    """v2.7.4 deployment: all in-panel paths 404 — external happ.su API
+    is consulted as a last resort.  This is the actual production path
+    until the panel ever ships the in-panel endpoint."""
+    from app.services import remnawave_api
+    req_mock = AsyncMock(return_value=_raw(404, body="not found"))
+    happ_su_mock = AsyncMock(return_value="happ://crypto/from-happ-su")
+    with patch.object(remnawave_api, "_request_raw", req_mock), \
+         patch.object(remnawave_api, "_encrypt_via_happ_su", happ_su_mock):
+        out = await remnawave_api.encrypt_happ_crypto_link("https://rmnw/sub/X")
+    assert out == "happ://crypto/from-happ-su"
+    happ_su_mock.assert_awaited_once_with("https://rmnw/sub/X")
+
+
+@pytest.mark.asyncio
+async def test_encrypt_happ_crypto_returns_none_when_both_panel_and_happ_su_fail():
+    from app.services import remnawave_api
+    req_mock = AsyncMock(return_value=_raw(404, body="not found"))
+    happ_su_mock = AsyncMock(return_value=None)
+    with patch.object(remnawave_api, "_request_raw", req_mock), \
+         patch.object(remnawave_api, "_encrypt_via_happ_su", happ_su_mock):
+        out = await remnawave_api.encrypt_happ_crypto_link("https://rmnw/sub/X")
+    assert out is None
+    happ_su_mock.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -126,6 +155,88 @@ async def test_encrypt_happ_crypto_returns_none_for_empty_input():
         out = await remnawave_api.encrypt_happ_crypto_link("")
     assert out is None
     req_mock.assert_not_called()
+
+
+# ── _encrypt_via_happ_su (external fallback) ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_happ_su_returns_link_from_json_response(monkeypatch):
+    from app.services import remnawave_api
+
+    class _Resp:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"url": "happ://crypto/from-external"}
+
+    class _Client:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_e): return None
+        async def post(self, *_a, **_kw): return _Resp()
+
+    monkeypatch.setattr(remnawave_api.httpx, "AsyncClient", _Client)
+    out = await remnawave_api._encrypt_via_happ_su("https://rmnw/sub/X")
+    assert out == "happ://crypto/from-external"
+
+
+@pytest.mark.asyncio
+async def test_happ_su_returns_link_from_raw_text_response(monkeypatch):
+    """Some endpoints return the link as plain text (no JSON wrapper)."""
+    from app.services import remnawave_api
+
+    class _Resp:
+        status_code = 200
+        text = "happ://crypto/plain-text-response"
+        def json(self):
+            raise ValueError("not json")
+
+    class _Client:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_e): return None
+        async def post(self, *_a, **_kw): return _Resp()
+
+    monkeypatch.setattr(remnawave_api.httpx, "AsyncClient", _Client)
+    out = await remnawave_api._encrypt_via_happ_su("https://rmnw/sub/X")
+    assert out == "happ://crypto/plain-text-response"
+
+
+@pytest.mark.asyncio
+async def test_happ_su_returns_none_on_5xx(monkeypatch):
+    from app.services import remnawave_api
+
+    class _Resp:
+        status_code = 500
+        text = "server error"
+        def json(self):
+            raise ValueError("not json")
+
+    class _Client:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_e): return None
+        async def post(self, *_a, **_kw): return _Resp()
+
+    monkeypatch.setattr(remnawave_api.httpx, "AsyncClient", _Client)
+    out = await remnawave_api._encrypt_via_happ_su("https://rmnw/sub/X")
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_happ_su_returns_none_on_timeout(monkeypatch):
+    from app.services import remnawave_api
+
+    class _Client:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_e): return None
+        async def post(self, *_a, **_kw):
+            raise remnawave_api.httpx.TimeoutException("slow")
+
+    monkeypatch.setattr(remnawave_api.httpx, "AsyncClient", _Client)
+    out = await remnawave_api._encrypt_via_happ_su("https://rmnw/sub/X")
+    assert out is None
 
 
 # ── _extract_happ_crypto_link helper ──────────────────────────────────

@@ -499,11 +499,69 @@ async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]
             path, status, last_response_keys, str(raw.get("body") or "")[:300],
         )
 
-    # All paths exhausted without producing a usable link.
+    # All Remnawave paths exhausted — confirmed on Remnawave v2.7.4
+    # logs that none of the in-panel paths exist.  Fall back to the
+    # public Happ encrypt API (TZ Task 4 Variant B):
+    #     POST https://crypto.happ.su/api-v2.php  body={"url": "..."}
+    # The service is operated by Happ and is what their client SDK
+    # ships with — no auth, no rate limit beyond reasonable, returns
+    # a happ://crypto/... link encrypted against the client's
+    # locally-shipped public key.
+    fallback = await _encrypt_via_happ_su(plain_subscription_url)
+    if fallback:
+        return fallback
+
     logger.warning(
         "REMNAWAVE_HAPP_CRYPTO_UNAVAILABLE: last_status=%s last_keys=%s — "
-        "user will be served the plain URL as fallback",
+        "panel + crypto.happ.su both failed, user will see plain URL",
         last_status, last_response_keys,
+    )
+    return None
+
+
+async def _encrypt_via_happ_su(plain_subscription_url: str) -> Optional[str]:
+    """Variant B from Task 4 TZ — external Happ-operated encrypt API.
+
+    Used as a fallback when Remnawave's in-panel encrypt endpoint is
+    unavailable (confirmed missing on the v2.7.4 deployment).  Always
+    returns either a happ://crypto/... link or None on any failure;
+    never raises.
+    """
+    url = "https://crypto.happ.su/api-v2.php"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, json={"url": plain_subscription_url})
+    except httpx.TimeoutException:
+        logger.warning("HAPP_SU_TIMEOUT: external encrypt API did not respond in time")
+        return None
+    except Exception as e:
+        logger.warning("HAPP_SU_ERROR: %s: %s", type(e).__name__, e)
+        return None
+
+    if resp.status_code >= 400:
+        logger.warning(
+            "HAPP_SU_HTTP_%s: body=%s",
+            resp.status_code, resp.text[:300],
+        )
+        return None
+
+    # Parse — happ.su returns either a JSON object or a raw string with
+    # the link.  Reuse the tolerant extractor.
+    try:
+        body: Any = resp.json()
+    except Exception:
+        body = resp.text
+    link = _extract_happ_crypto_link(body)
+    if link:
+        logger.info(
+            "HAPP_SU_ENCRYPTED: encrypt succeeded via external fallback "
+            "(response_type=%s)",
+            type(body).__name__,
+        )
+        return link
+    logger.warning(
+        "HAPP_SU_UNEXPECTED_SHAPE: response_type=%s body=%s",
+        type(body).__name__, str(body)[:300],
     )
     return None
 
