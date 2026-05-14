@@ -66,22 +66,16 @@ _TEST_PLACEHOLDER_URL = "https://rmnw.atlassecure.ru/api/sub/TEST_PLACEHOLDER"
 def render_migration_text(premium_subscription_url: str) -> str:
     """Build the HTML body for the migration notice.
 
-    `premium_subscription_url` is the value that ends up inside the
-    `<blockquote><code>…</code></blockquote>` block the user copies —
-    so this should be the **displayable** form (Happ Crypto Link when
-    available, plain Remnawave URL as fallback).  The Happ deeplink
-    button is built separately by `build_happ_deeplink` against the
-    plain URL because the bot's `/open/happ` redirect endpoint expects
-    a plain URL.
-
     The body uses Telegram-Ads-style custom emoji markup
     `![<glyph>](tg://emoji?id=<id>)` — `app.utils.telegram_safe.
     safe_send_message` runs `convert_tg_emoji` before delivery, which
     rewrites those markers into `<tg-emoji emoji-id="...">…</tg-emoji>`
     tags Telegram understands.
 
-    HTML-special chars in the URL are escaped just in case (real URLs
-    are safe, but defence in depth).
+    The URL is wrapped in <blockquote><code>...</code></blockquote> so
+    Telegram clients render it as a single-tap-to-copy block.  HTML-
+    special chars in the URL are escaped just in case (real URLs are
+    safe, but defence in depth).
     """
     url = html.escape(premium_subscription_url or "", quote=False)
     cutoff = html.escape(MIGRATION_CUTOFF_DATE_STR, quote=False)
@@ -156,22 +150,11 @@ def build_migration_keyboard(premium_subscription_url: str) -> InlineKeyboardMar
     return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
-def render_for_user(
-    premium_subscription_url: str,
-    *,
-    button_subscription_url: Optional[str] = None,
-) -> tuple[str, InlineKeyboardMarkup]:
-    """Convenience wrapper that returns (text, keyboard) in one call.
-
-    `premium_subscription_url` is the **displayable** form embedded in
-    the `<code>...</code>` block (crypto link if available).
-    `button_subscription_url` is the **plain** URL used to build the
-    🔄 Обновить deeplink — falls back to `premium_subscription_url`
-    when not supplied so callers that don't care still work.
-    """
+def render_for_user(premium_subscription_url: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Convenience wrapper that returns (text, keyboard) in one call."""
     return (
         render_migration_text(premium_subscription_url),
-        build_migration_keyboard(button_subscription_url or premium_subscription_url),
+        build_migration_keyboard(premium_subscription_url),
     )
 
 
@@ -181,26 +164,15 @@ async def send_migration_notice(
     bot,
     telegram_id: int,
     premium_subscription_url: str,
-    *,
-    button_subscription_url: Optional[str] = None,
 ) -> bool:
     """Send one notice to one user.  Returns True on delivered, False
     on any handled failure (Forbidden / blocked / unknown).  Never raises.
-
-    `premium_subscription_url` is the displayable URL (crypto link
-    when available); `button_subscription_url` is the plain URL used
-    for the 🔄 Обновить deeplink.  When only one URL is supplied it
-    is used for both — preserves the pre-Task-4 contract for callers
-    that haven't been updated.
 
     Caller is responsible for marking
     `subscriptions.migration_notice_sent_at` on True so we don't double-
     send on re-runs.
     """
-    text, keyboard = render_for_user(
-        premium_subscription_url,
-        button_subscription_url=button_subscription_url,
-    )
+    text, keyboard = render_for_user(premium_subscription_url)
     result = await safe_send_message(
         bot,
         telegram_id,
@@ -217,33 +189,27 @@ async def send_migration_notice(
 async def send_test_notice_to_admin(bot, admin_telegram_id: int) -> bool:
     """Send a single rendered notice to the admin themselves.
 
-    Uses the admin's own crypto link (encrypted on demand if not
-    cached yet) for the visible `<code>` block, and the plain
-    Remnawave URL for the 🔄 Обновить deeplink button.  Falls back
-    to a clearly-fake TEST_PLACEHOLDER URL when the admin has no
-    premium entity (so the rendering is still smoke-testable on a
-    brand-new admin account).
+    Uses the admin's own remnawave_premium_sub_url if they have one;
+    falls back to a clearly-fake placeholder URL otherwise (so the
+    rendering is still testable for a brand-new admin account).
     """
-    plain_url = _TEST_PLACEHOLDER_URL
-    display_url = _TEST_PLACEHOLDER_URL
+    premium_url = _TEST_PLACEHOLDER_URL
     try:
-        from app.services.user_subscription_links import (
-            get_user_premium_url,
-            get_user_premium_displayable_url,
-        )
-        live_plain = await get_user_premium_url(admin_telegram_id)
-        if live_plain:
-            plain_url = live_plain
-            display_url = await get_user_premium_displayable_url(admin_telegram_id)
+        import database
+        pool = await database.get_pool()
+        if pool is not None:
+            async with pool.acquire() as conn:
+                cached = await conn.fetchval(
+                    "SELECT remnawave_premium_sub_url FROM subscriptions "
+                    "WHERE telegram_id = $1 AND status = 'active'",
+                    admin_telegram_id,
+                )
+            if cached:
+                premium_url = cached
     except Exception as e:
-        logger.warning("MIGRATION_TEST_LOOKUP_FAIL: tg=%s %s", admin_telegram_id, e)
+        logger.warning("MIGRATION_TEST_DB_FAIL: tg=%s %s", admin_telegram_id, e)
 
-    return await send_migration_notice(
-        bot,
-        admin_telegram_id,
-        display_url,
-        button_subscription_url=plain_url,
-    )
+    return await send_migration_notice(bot, admin_telegram_id, premium_url)
 
 
 # ── Full broadcast ────────────────────────────────────────────────────
@@ -287,29 +253,14 @@ async def run_migration_broadcast(
 
     async def _send_one(row: dict) -> None:
         tg = int(row["telegram_id"])
-        plain_url = (row.get("premium_url") or "").strip()
-        if not plain_url:
+        url = (row.get("premium_url") or "").strip()
+        if not url:
             async with counters_lock:
                 counters["skipped"] += 1
             return
         async with semaphore:
-            # Resolve the Happ Crypto Link for the user-visible block.
-            # Falls back to the plain URL on any encrypt failure so the
-            # message still ships — never block a broadcast on a panel
-            # hiccup.
             try:
-                from app.services.user_subscription_links import (
-                    get_user_premium_displayable_url,
-                )
-                display_url = await get_user_premium_displayable_url(tg)
-                if not display_url:
-                    display_url = plain_url
-            except Exception:
-                display_url = plain_url
-            try:
-                ok = await send_migration_notice(
-                    bot, tg, display_url, button_subscription_url=plain_url,
-                )
+                ok = await send_migration_notice(bot, tg, url)
             except Exception:
                 logger.exception("MIGRATION_BROADCAST_SEND_ERROR: tg=%s", tg)
                 async with counters_lock:
