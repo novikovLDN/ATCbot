@@ -91,7 +91,7 @@ def render_migration_text(premium_subscription_url: str) -> str:
         "\n"
         "🔧 <b>Как обновить:</b>\n"
         "\n"
-        "<b>Автоматически:</b> нажми <b>«🔄 Обновить»</b> ниже — готово.\n"
+        "<b>Автоматически:</b> нажми <b>«🔄 Обновить»</b> ниже → нажми «Открыть Happ» → готово.\n"
         "\n"
         f"<blockquote><code>{url}</code></blockquote>\n"
         "\n"
