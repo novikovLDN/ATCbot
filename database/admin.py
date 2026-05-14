@@ -985,14 +985,11 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
-            await vpn_utils.ensure_user_in_xray(
-                telegram_id=sync_info["telegram_id"],
-                uuid=sync_info["uuid"],
-                subscription_end=sync_info["subscription_end"]
-            )
+            from app.services import purchase_flow
+            await purchase_flow.sync_renewal_to_remnawave(sync_info)
         except Exception as e:
             logger.critical(
-                "RENEWAL_XRAY_SYNC_FAILED",
+                "RENEWAL_REMNAWAVE_SYNC_FAILED",
                 extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
             )
     return ret_val
@@ -1263,14 +1260,11 @@ async def finalize_balance_purchase(
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
             sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
             try:
-                await vpn_utils.ensure_user_in_xray(
-                    telegram_id=sync_info["telegram_id"],
-                    uuid=sync_info["uuid"],
-                    subscription_end=sync_info["subscription_end"]
-                )
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
                 logger.critical(
-                    "RENEWAL_XRAY_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         return ret_val
@@ -1628,14 +1622,11 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
-            await vpn_utils.ensure_user_in_xray(
-                telegram_id=sync_info["telegram_id"],
-                uuid=sync_info["uuid"],
-                subscription_end=sync_info["subscription_end"]
-            )
+            from app.services import purchase_flow
+            await purchase_flow.sync_renewal_to_remnawave(sync_info)
         except Exception as e:
             logger.critical(
-                "RENEWAL_XRAY_SYNC_FAILED",
+                "RENEWAL_REMNAWAVE_SYNC_FAILED",
                 extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
             )
     return ret_val

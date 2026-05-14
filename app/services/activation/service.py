@@ -393,26 +393,30 @@ async def _attempt_activation_no_conn_hold(
     tariff = (subscription_row.get("subscription_type") or "basic").strip().lower()
     if tariff not in config.VALID_SUBSCRIPTION_TYPES:
         tariff = "basic"
-    new_uuid = database._generate_subscription_uuid()
+    # Task 2 cut-over: provision via Remnawave (premium + bypass) instead of
+    # the legacy samopis xray master.  The pending subscription was created
+    # moments ago, so remaining-duration ≈ the original period — good enough
+    # for the bypass traffic-limit lookup.
+    _now = datetime.now(timezone.utc)
+    _period_days = max(1, int((subscription_end - _now).total_seconds() // 86400))
     try:
-        vless_result = await vpn_utils.add_vless_user(
-            telegram_id=telegram_id,
-            subscription_end=subscription_end,
-            uuid=new_uuid,
+        from app.services import purchase_flow
+        vless_result = await purchase_flow.provision_subscription(
+            telegram_id,
             tariff=tariff,
+            subscription_end=subscription_end,
+            period_days=_period_days,
+            is_trial=(tariff == "trial"),
         )
         vless_url = vless_result.get("vless_url")
         vless_url_plus = vless_result.get("vless_url_plus")
-        uuid_from_api = vless_result.get("uuid")
-        if not uuid_from_api:
-            raise VPNActivationError("Xray API returned empty UUID")
-        new_uuid = uuid_from_api
+        new_uuid = vless_result.get("uuid")
+        if not new_uuid:
+            raise VPNActivationError("Remnawave provisioning returned empty UUID")
     except Exception as e:
-        raise VPNActivationError(f"VPN API call failed: {e}") from e
-    if not new_uuid:
-        raise VPNActivationError("VPN API returned empty UUID")
+        raise VPNActivationError(f"VPN provisioning failed: {e}") from e
     if not vless_url:
-        raise VPNActivationError("VPN API returned empty vless_url")
+        raise VPNActivationError("Remnawave provisioning returned empty subscription URL")
     logger.info(
         "ACTIVATION_PHASE1_UUID_CREATED",
         extra={"subscription_id": subscription_id, "uuid": new_uuid[:8] + "..."}

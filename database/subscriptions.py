@@ -1160,28 +1160,38 @@ async def reissue_vpn_key_atomic(
             if reissue_tariff not in config.VALID_SUBSCRIPTION_TYPES:
                 reissue_tariff = "basic"
 
-            # PHASE 1 (outside DB transaction): add_vless_user
-            new_uuid = _generate_subscription_uuid()
-            vless_result = await vpn_utils.add_vless_user(
-                telegram_id=telegram_id,
-                subscription_end=expires_at,
-                uuid=new_uuid,
-                tariff=reissue_tariff,
+            # PHASE 1 (outside DB transaction): reissue the premium entity.
+            # Task 2 cut-over: delete the user's current Remnawave premium
+            # entity and create a fresh one — the old subscription URL and
+            # connection UUID stop working, exactly like the legacy
+            # add_vless_user + remove-old-uuid flow did.
+            from app.services import remnawave_premium
+            import uuid as _uuid_lib
+            new_uuid = str(_uuid_lib.uuid4())
+            reissue_result = await remnawave_premium.reissue_premium_user_entity(
+                telegram_id,
+                requested_uuid=new_uuid,
+                expire_at=expires_at,
+                description=f"Premium reissued via bot ({reissue_tariff})",
             )
-            new_vpn_key = vless_result.get("vless_url")
-            uuid_from_api = vless_result.get("uuid")
-            if not uuid_from_api:
-                raise RuntimeError("Xray API returned empty UUID")
-            new_uuid = uuid_from_api
+            if not reissue_result.ok:
+                raise RuntimeError(
+                    f"Remnawave premium reissue failed: status={reissue_result.status} "
+                    f"error={reissue_result.error}"
+                )
+            new_vpn_key = reissue_result.subscription_url
             if not new_vpn_key:
-                raise RuntimeError("Xray API returned empty vless_url")
+                raise RuntimeError("Remnawave reissue returned empty subscription URL")
+            uuid_from_api = new_uuid
 
             logger.info(
                 "REISSUE_TWO_PHASE_ACTIVATION",
                 extra={"user": telegram_id, "new_uuid": new_uuid[:8] + "...", "phase": "phase1_complete"}
             )
 
-            uuid_to_cleanup_on_failure = new_uuid
+            # On Phase-2 failure we delete the freshly-created panel entity
+            # (its panel UUID, not a samopis uuid).
+            uuid_to_cleanup_on_failure = reissue_result.panel_uuid
 
             try:
                 async with conn.transaction():
@@ -1193,12 +1203,20 @@ async def reissue_vpn_key_atomic(
                     )
                     if not sub_check:
                         raise Exception("Subscription no longer active")
-                    new_subscription_type = (vless_result.get("subscription_type") or reissue_tariff).strip().lower()
+                    new_subscription_type = reissue_tariff
                     if new_subscription_type not in config.VALID_SUBSCRIPTION_TYPES:
                         new_subscription_type = "basic"
                     await conn.execute(
-                        "UPDATE subscriptions SET uuid = $1, vpn_key = $2, subscription_type = $4 WHERE telegram_id = $3",
-                        new_uuid, new_vpn_key, telegram_id, new_subscription_type
+                        """UPDATE subscriptions
+                           SET uuid = $1, vpn_key = $2, subscription_type = $4,
+                               remnawave_premium_uuid = $5,
+                               remnawave_premium_sub_url = $6,
+                               remnawave_premium_short_uuid = $7
+                           WHERE telegram_id = $3""",
+                        new_uuid, new_vpn_key, telegram_id, new_subscription_type,
+                        reissue_result.panel_uuid,
+                        reissue_result.subscription_url,
+                        reissue_result.short_uuid,
                     )
                     await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, now, expires_at, "manual_reissue")
                     old_key_preview = f"{old_vpn_key[:20]}..." if old_vpn_key and len(old_vpn_key) > 20 else (old_vpn_key or "N/A")
@@ -1206,38 +1224,38 @@ async def reissue_vpn_key_atomic(
                     details = f"User {telegram_id}, Old key: {old_key_preview}, New key: {new_key_preview}, Expires: {expires_at.isoformat()}"
                     await _log_audit_event_atomic(conn, "admin_reissue", admin_telegram_id, telegram_id, details)
             except Exception as tx_err:
+                # Phase 2 (DB) failed — the fresh premium entity created in
+                # Phase 1 is now orphaned in Remnawave; delete it.
                 try:
-                    await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
+                    from app.services import remnawave_api
+                    if uuid_to_cleanup_on_failure:
+                        await remnawave_api.delete_user(uuid_to_cleanup_on_failure)
                     logger.critical(
-                        f"ORPHAN_PREVENTED uuid={uuid_to_cleanup_on_failure[:8]}... reason=reissue_phase2_failed "
+                        f"ORPHAN_PREVENTED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... reason=reissue_phase2_failed "
                         f"user={telegram_id} error={tx_err}"
                     )
                 except Exception as remove_err:
                     logger.critical(
-                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_to_cleanup_on_failure[:8]}... "
+                        f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={(uuid_to_cleanup_on_failure or '')[:8]}... "
                         f"reason={remove_err} user={telegram_id}"
                     )
                 logger.exception(f"Error in reissue_vpn_key_atomic for user {telegram_id}, transaction rolled back")
                 raise
 
+            # The old premium entity was already deleted in Phase 1 by
+            # reissue_premium_user_entity — no separate teardown needed here.
             if old_uuid:
                 try:
-                    await vpn_utils.remove_vless_user(old_uuid)
-                    old_uuid_preview = f"{old_uuid[:8]}..." if len(old_uuid) > 8 else "***"
-                    logger.info(f"VPN key reissue [action=remove_old, user={telegram_id}, old_uuid={old_uuid_preview}]")
-                    try:
-                        await _log_vpn_lifecycle_audit_async(
-                            action="vpn_remove_user",
-                            telegram_id=telegram_id,
-                            uuid=old_uuid,
-                            source="admin_reissue",
-                            result="success",
-                            details=f"Old UUID removed after reissue, expires_at={expires_at.isoformat()}"
-                        )
-                    except Exception:
-                        pass
-                except Exception as e:
-                    logger.warning(f"Failed to remove old UUID for user {telegram_id}: {e}")
+                    await _log_vpn_lifecycle_audit_async(
+                        action="vpn_remove_user",
+                        telegram_id=telegram_id,
+                        uuid=old_uuid,
+                        source="admin_reissue",
+                        result="success",
+                        details=f"Old premium entity deleted during reissue, expires_at={expires_at.isoformat()}"
+                    )
+                except Exception:
+                    pass
 
             new_uuid_preview = f"{new_uuid[:8]}..." if len(new_uuid) > 8 else "***"
             logger.info(
@@ -1658,27 +1676,30 @@ async def grant_access(
                     "action": "renewal",  # Явно указываем тип операции
                     "subscription_type": incoming_tariff,
                 }
+                # Task 2 cut-over: renewal extends the Remnawave entities
+                # (premium expireAt + bypass top-up) instead of syncing to
+                # the legacy samopis xray master.
+                _renewal_period_days = max(1, int(duration.total_seconds() // 86400))
                 if _caller_holds_transaction:
-                    # B1: Caller holds tx — ensure_user_in_xray MUST run post-commit. Defer to caller.
+                    # provision_subscription opens its own connections — it
+                    # MUST run post-commit, never inside the caller's tx.
                     result_dict["renewal_xray_sync_after_commit"] = {
                         "telegram_id": telegram_id,
                         "uuid": uuid,
-                        "subscription_end": subscription_end
+                        "subscription_end": subscription_end,
+                        "tariff": incoming_tariff,
+                        "period_days": _renewal_period_days,
                     }
                     return result_dict
-                # Standalone: no transaction held — safe to call ensure_user_in_xray here.
-                try:
-                    await vpn_utils.ensure_user_in_xray(
-                        telegram_id=telegram_id,
-                        uuid=uuid,
-                        subscription_end=subscription_end,
-                        tariff=incoming_tariff,
-                    )
-                except Exception as e:
-                    logger.critical(
-                        "RENEWAL_XRAY_SYNC_FAILED",
-                        extra={"telegram_id": telegram_id, "uuid": uuid[:8] + "...", "error": str(e)[:200]}
-                    )
+                # Standalone: no transaction held — safe to sync inline.
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave({
+                    "telegram_id": telegram_id,
+                    "uuid": uuid,
+                    "subscription_end": subscription_end,
+                    "tariff": incoming_tariff,
+                    "period_days": _renewal_period_days,
+                })
                 return result_dict
         
         # =====================================================================
@@ -2418,14 +2439,11 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
             sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
             try:
-                await vpn_utils.ensure_user_in_xray(
-                    telegram_id=sync_info["telegram_id"],
-                    uuid=sync_info["uuid"],
-                    subscription_end=sync_info["subscription_end"]
-                )
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
                 logger.critical(
-                    "RENEWAL_XRAY_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         return ret_val
@@ -4722,14 +4740,11 @@ async def finalize_purchase(
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
             sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
             try:
-                await vpn_utils.ensure_user_in_xray(
-                    telegram_id=sync_info["telegram_id"],
-                    uuid=sync_info["uuid"],
-                    subscription_end=sync_info["subscription_end"]
-                )
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
                 logger.critical(
-                    "RENEWAL_XRAY_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         if ret_val is not None:

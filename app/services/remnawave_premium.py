@@ -344,6 +344,72 @@ async def disable_premium_user(telegram_id: int) -> bool:
         return False
 
 
+async def reissue_premium_user_entity(
+    telegram_id: int,
+    *,
+    requested_uuid: str,
+    expire_at: datetime,
+    existing_username: Optional[str] = None,
+    description: str = "Premium reissued via bot",
+) -> PremiumCreateResult:
+    """True key reissue: delete the user's current premium entity and
+    create a fresh one.
+
+    The old connection UUID / subscription URL stop working and a brand-new
+    entity (new shortUuid → new subscriptionUrl) is issued — the Remnawave
+    equivalent of the legacy "add new vless user + remove old uuid" flow.
+
+    Because Remnawave keys entities by a deterministic username
+    (`tg_{id}_premium`), the old entity MUST be deleted before the new one
+    can be created.  If `create_premium_user_entity` ends up *adopting* an
+    existing entity (recovered=True) it means the delete did not take
+    effect — that is reported as a failure (`error="reissue_no_rotation"`)
+    so the caller rolls back and the admin can retry.
+    """
+    if not config.REMNAWAVE_ENABLED:
+        return PremiumCreateResult(False, None, False, None, 0, "remnawave_disabled")
+
+    import database  # lazy — keeps unit tests asyncpg-free
+
+    old_panel_uuid = await database.get_remnawave_premium_uuid(telegram_id)
+    if _is_valid_full_uuid(old_panel_uuid):
+        try:
+            deleted = await remnawave_api.delete_user(old_panel_uuid)
+            logger.info(
+                "REMNAWAVE_PREMIUM_REISSUE_DELETE: tg=%s old_uuid=%s result=%s",
+                telegram_id, old_panel_uuid[:8],
+                "ok" if deleted is not None else "not_found_or_failed",
+            )
+        except Exception as e:
+            logger.warning(
+                "REMNAWAVE_PREMIUM_REISSUE_DELETE_ERROR: tg=%s uuid=%s %s",
+                telegram_id, old_panel_uuid[:8], e,
+            )
+
+    result = await create_premium_user_entity(
+        telegram_id,
+        requested_uuid=requested_uuid,
+        expire_at=expire_at,
+        existing_username=existing_username,
+        description=description,
+    )
+    if result.ok and result.recovered:
+        logger.error(
+            "REMNAWAVE_PREMIUM_REISSUE_NO_ROTATION: tg=%s adopted uuid=%s — delete did not take effect",
+            telegram_id, (result.panel_uuid or "")[:8],
+        )
+        return PremiumCreateResult(
+            ok=False,
+            panel_uuid=result.panel_uuid,
+            forced_uuid_accepted=False,
+            subscription_url=None,
+            status=result.status,
+            error="reissue_no_rotation",
+            recovered=False,
+        )
+    return result
+
+
 async def get_premium_subscription_url(telegram_id: int) -> Optional[str]:
     """Return the panel-issued subscription URL for the premium entity, or None."""
     if not config.REMNAWAVE_ENABLED:
@@ -368,5 +434,6 @@ __all__ = [
     "create_premium_user_entity",
     "renew_premium_user",
     "disable_premium_user",
+    "reissue_premium_user_entity",
     "get_premium_subscription_url",
 ]
