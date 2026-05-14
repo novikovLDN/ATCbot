@@ -293,6 +293,20 @@ class TestExtractHelper:
         from app.services.remnawave_api import _extract_happ_crypto_link
         assert _extract_happ_crypto_link({"encryptedLink": "happ://crypto/a"}) == "happ://crypto/a"
 
+    def test_accepts_versioned_crypt5_scheme(self):
+        """crypto.happ.su returns happ://crypt5/... — a versioned scheme.
+        Regression test for the bug where the strict happ://crypto/ check
+        rejected valid links from the external API."""
+        from app.services.remnawave_api import _extract_happ_crypto_link
+        link = "happ://crypt5/neirilze8bklpf928u10zBC2dh/3TBGXqkNTKOu"
+        assert _extract_happ_crypto_link({"encrypted_link": link}) == link
+
+    def test_accepts_arbitrary_crypt_version(self):
+        from app.services.remnawave_api import _extract_happ_crypto_link
+        # Future-proofing: happ://crypt6/, happ://crypt9/, etc.
+        assert _extract_happ_crypto_link({"link": "happ://crypt6/xyz"}) == "happ://crypt6/xyz"
+        assert _extract_happ_crypto_link("happ://crypt9/abc") == "happ://crypt9/abc"
+
     def test_case_insensitive_field_match(self):
         from app.services.remnawave_api import _extract_happ_crypto_link
         # Some panels camelCase, some PascalCase
@@ -307,15 +321,48 @@ class TestExtractHelper:
         from app.services.remnawave_api import _extract_happ_crypto_link
         assert _extract_happ_crypto_link("happ://crypto/raw") == "happ://crypto/raw"
 
+    def test_substring_fallback_finds_crypt5(self):
+        from app.services.remnawave_api import _extract_happ_crypto_link
+        payload = {"weird_field": "  happ://crypt5/from-substring  "}
+        assert _extract_happ_crypto_link(payload) == "happ://crypt5/from-substring"
+
     def test_rejects_non_crypto_strings(self):
         from app.services.remnawave_api import _extract_happ_crypto_link
         assert _extract_happ_crypto_link({"link": "https://example.com"}) is None
         assert _extract_happ_crypto_link("https://something") is None
+        # happ://add/ is the *plain* deeplink, NOT a crypto link
+        assert _extract_happ_crypto_link("happ://add/https://rmnw/sub/x") is None
 
     def test_rejects_none_and_unexpected_types(self):
         from app.services.remnawave_api import _extract_happ_crypto_link
         assert _extract_happ_crypto_link(None) is None
         assert _extract_happ_crypto_link(["happ://crypto/x"]) is None  # lists aren't dicts
+
+
+@pytest.mark.asyncio
+async def test_happ_su_real_response_shape_from_prod_logs(monkeypatch):
+    """Exact response shape captured from production logs on 2026-05-14:
+    {'encrypted_link': 'happ://crypt5/...'}.  This is what the previous
+    build wrongly rejected with HAPP_SU_UNEXPECTED_SHAPE."""
+    from app.services import remnawave_api
+
+    real_link = "happ://crypt5/neirilze8bklpf928u10zBC2dh/3TBGXqkNTKOu/tgwPUOmaf0m5Ba8"
+
+    class _Resp:
+        status_code = 200
+        text = ""
+        def json(self):
+            return {"encrypted_link": real_link}
+
+    class _Client:
+        def __init__(self, *_a, **_kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_e): return None
+        async def post(self, *_a, **_kw): return _Resp()
+
+    monkeypatch.setattr(remnawave_api.httpx, "AsyncClient", _Client)
+    out = await remnawave_api._encrypt_via_happ_su("https://rmnw/sub/X")
+    assert out == real_link
 
 
 # ── get_user_premium_happ_crypto_link ────────────────────────────────

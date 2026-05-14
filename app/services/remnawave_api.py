@@ -389,17 +389,33 @@ _happ_crypto_endpoint_cache: Optional[str] = None
 _happ_crypto_panel_unavailable: bool = False
 
 
+# Happ crypto deeplinks use a *versioned* scheme.  The Task-4 TZ
+# documented `happ://crypto/...`, but the live crypto.happ.su API
+# actually returns `happ://crypt5/...` (version 5).  Accept any
+# `happ://crypt*` prefix so we don't reject valid links from future
+# scheme versions.
+_HAPP_CRYPTO_SCHEME_PREFIX = "happ://crypt"
+
+
+def _is_happ_crypto_link(s: Any) -> bool:
+    """True when `s` looks like a Happ crypto deeplink (any version)."""
+    return isinstance(s, str) and s.strip().startswith(_HAPP_CRYPTO_SCHEME_PREFIX)
+
+
 def _extract_happ_crypto_link(payload: Any) -> Optional[str]:
-    """Pull a `happ://crypto/...` value out of a panel response no matter
-    where the field lives.  Walks the dict for known keys first, then
-    falls back to a substring search on any string value.
+    """Pull a `happ://crypt*` value out of a panel / API response no
+    matter where the field lives.  Walks the dict for known keys first,
+    then falls back to a substring search on any string value.
+
+    Accepts every versioned scheme (`happ://crypto/`, `happ://crypt5/`,
+    …) — see `_HAPP_CRYPTO_SCHEME_PREFIX`.
     """
     if payload is None:
         return None
     if isinstance(payload, str):
-        # Some panels return the raw link.
+        # Some endpoints return the raw link with no JSON envelope.
         stripped = payload.strip()
-        return stripped if stripped.startswith("happ://crypto/") else None
+        return stripped if _is_happ_crypto_link(stripped) else None
     if not isinstance(payload, dict):
         return None
     # 1) Known field names — case-insensitive match on keys.
@@ -408,7 +424,7 @@ def _extract_happ_crypto_link(payload: Any) -> Optional[str]:
         v = lower_map.get(field.lower())
         if isinstance(v, str):
             stripped = v.strip()
-            if stripped.startswith("happ://crypto/"):
+            if _is_happ_crypto_link(stripped):
                 return stripped
     # 2) Nested `response` wrapper (defence in depth — _request usually
     #    unwraps this already, but some endpoints double-wrap).
@@ -419,10 +435,10 @@ def _extract_happ_crypto_link(payload: Any) -> Optional[str]:
     # 3) Substring search across all string values.  Last resort but
     #    catches arbitrary field names we haven't enumerated.
     for v in payload.values():
-        if isinstance(v, str) and "happ://crypto/" in v:
+        if isinstance(v, str) and _HAPP_CRYPTO_SCHEME_PREFIX in v:
             # Trim everything before the scheme + everything after the
-            # first whitespace, just in case the panel padded the field.
-            idx = v.find("happ://crypto/")
+            # first whitespace, just in case the field was padded.
+            idx = v.find(_HAPP_CRYPTO_SCHEME_PREFIX)
             tail = v[idx:].split()[0]
             return tail
     return None
