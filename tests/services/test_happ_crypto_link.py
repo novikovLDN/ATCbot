@@ -148,6 +148,53 @@ async def test_encrypt_happ_crypto_returns_none_when_both_panel_and_happ_su_fail
 
 
 @pytest.mark.asyncio
+async def test_encrypt_happ_crypto_skips_panel_probe_after_latch():
+    """After every in-panel path 404s once, subsequent calls don't
+    re-probe — they jump straight to the external happ.su fallback.
+    Saves ~4 wasted requests per render on a bot serving thousands."""
+    from app.services import remnawave_api
+    req_mock = AsyncMock(return_value=_raw(404, body="not found"))
+    happ_su_mock = AsyncMock(return_value="happ://crypto/from-external")
+    with patch.object(remnawave_api, "_request_raw", req_mock), \
+         patch.object(remnawave_api, "_encrypt_via_happ_su", happ_su_mock):
+        # First call probes all paths + falls back to happ.su.
+        out1 = await remnawave_api.encrypt_happ_crypto_link("https://rmnw/sub/A")
+        assert out1 == "happ://crypto/from-external"
+        first_call_count = req_mock.await_count
+        assert first_call_count >= 4  # tried at least the 4 alternative paths
+
+        # Second call: NO panel probes, happ.su immediately.
+        req_mock.reset_mock()
+        out2 = await remnawave_api.encrypt_happ_crypto_link("https://rmnw/sub/B")
+        assert out2 == "happ://crypto/from-external"
+        assert req_mock.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_encrypt_happ_crypto_unlatches_when_panel_responds_non_404():
+    """If a non-404 ever comes back from the panel (e.g. it was
+    upgraded later), the latch must NOT bypass it — we want to use
+    the in-panel path going forward."""
+    from app.services import remnawave_api
+
+    # First call: all 404 → latch closes.
+    req_mock = AsyncMock(return_value=_raw(404, body="not found"))
+    happ_su_mock = AsyncMock(return_value="happ://crypto/external")
+    with patch.object(remnawave_api, "_request_raw", req_mock), \
+         patch.object(remnawave_api, "_encrypt_via_happ_su", happ_su_mock):
+        await remnawave_api.encrypt_happ_crypto_link("https://rmnw/sub/X")
+        # Latch is now closed; reset and simulate operator manually
+        # unlatching (panel upgraded, want to try again).
+        remnawave_api._reset_happ_crypto_endpoint_cache_for_tests()
+
+        # Now the panel responds 200 on the documented path.
+        req_mock.reset_mock(side_effect=True)
+        req_mock.return_value = _raw(200, response={"encryptedLink": "happ://crypto/from-panel"})
+        out = await remnawave_api.encrypt_happ_crypto_link("https://rmnw/sub/X")
+    assert out == "happ://crypto/from-panel"
+
+
+@pytest.mark.asyncio
 async def test_encrypt_happ_crypto_returns_none_for_empty_input():
     from app.services import remnawave_api
     req_mock = AsyncMock()

@@ -382,6 +382,11 @@ _HAPP_CRYPTO_ENDPOINTS = (
 )
 
 _happ_crypto_endpoint_cache: Optional[str] = None
+# Once we've confirmed every documented + alternative in-panel path
+# is missing on this deployment (all return 404), skip them on
+# subsequent calls and go straight to the external crypto.happ.su
+# fallback.  Saves 4 wasted requests per user-visible URL render.
+_happ_crypto_panel_unavailable: bool = False
 
 
 def _extract_happ_crypto_link(payload: Any) -> Optional[str]:
@@ -446,19 +451,24 @@ async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]
         which endpoint won and what shape the panel returned, without
         leaking the plain URL or the encrypted payload.
     """
-    global _happ_crypto_endpoint_cache
+    global _happ_crypto_endpoint_cache, _happ_crypto_panel_unavailable
     if not plain_subscription_url:
         return None
 
     body = {"data": plain_subscription_url}
     paths_to_try: list[str]
-    if _happ_crypto_endpoint_cache:
+    if _happ_crypto_panel_unavailable:
+        # Past calls already proved no in-panel path exists — skip
+        # straight to the external fallback.
+        paths_to_try = []
+    elif _happ_crypto_endpoint_cache:
         paths_to_try = [_happ_crypto_endpoint_cache]
     else:
         paths_to_try = list(_HAPP_CRYPTO_ENDPOINTS)
 
     last_status: Optional[int] = None
     last_response_keys: Optional[list[str]] = None
+    all_paths_were_404 = bool(paths_to_try)
 
     for path in paths_to_try:
         raw = await _request_raw("POST", path, json=body)
@@ -468,6 +478,10 @@ async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]
             # Path missing — try the next one in the list.  Skip silently;
             # _request_raw already warning-logged the 404 body.
             continue
+        # If anything other than 404 came back, the panel is responsive
+        # to this path; revoke the "panel-unavailable" optimization so
+        # we keep probing on future calls.
+        all_paths_were_404 = False
         if not raw.get("ok"):
             # Real panel error (5xx / auth / etc.) — bail with a single
             # error log so the operator can see what shape came back.
@@ -497,6 +511,18 @@ async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]
         logger.warning(
             "REMNAWAVE_HAPP_CRYPTO_UNEXPECTED_SHAPE: path=%s status=%s response_keys=%s body=%s",
             path, status, last_response_keys, str(raw.get("body") or "")[:300],
+        )
+
+    # Latch the optimization: if EVERY in-panel path responded 404 on
+    # this call, mark the panel as unavailable so subsequent calls skip
+    # the probe entirely (saves 4 wasted HTTP requests per render on a
+    # bot processing thousands of users).  The flag clears on process
+    # restart, so a panel upgrade later won't be missed forever.
+    if all_paths_were_404 and not _happ_crypto_panel_unavailable:
+        _happ_crypto_panel_unavailable = True
+        logger.info(
+            "REMNAWAVE_HAPP_CRYPTO_PANEL_LATCHED_UNAVAILABLE: every in-panel path "
+            "returned 404 on this build — skipping probe on subsequent calls"
         )
 
     # All Remnawave paths exhausted — confirmed on Remnawave v2.7.4
@@ -567,8 +593,9 @@ async def _encrypt_via_happ_su(plain_subscription_url: str) -> Optional[str]:
 
 
 def _reset_happ_crypto_endpoint_cache_for_tests() -> None:
-    global _happ_crypto_endpoint_cache
+    global _happ_crypto_endpoint_cache, _happ_crypto_panel_unavailable
     _happ_crypto_endpoint_cache = None
+    _happ_crypto_panel_unavailable = False
 
 
 async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
