@@ -2239,15 +2239,20 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
             )
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                new_uuid_pre = _generate_subscription_uuid()
-                vless_result = await vpn_utils.add_vless_user(
-                    telegram_id=telegram_id,
+                # Task 2 cut-over: provision via Remnawave (premium + bypass)
+                # instead of the legacy samopis xray master.
+                from app.services import purchase_flow
+                vless_result = await purchase_flow.provision_subscription(
+                    telegram_id,
+                    tariff="basic",
                     subscription_end=subscription_end_pre,
-                    uuid=new_uuid_pre
+                    period_days=days,
+                    is_trial=False,
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
                     "vless_url": vless_result["vless_url"],
+                    "vless_url_plus": vless_result.get("vless_url_plus"),
                     "subscription_type": vless_result.get("subscription_type") or "basic",
                 }
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
@@ -2257,7 +2262,7 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 )
             except Exception as phase1_err:
                 logger.warning(
-                    f"approve_payment_atomic: Phase 1 add_vless_user failed: payment_id={payment_id}, error={phase1_err}"
+                    f"approve_payment_atomic: Phase 1 provisioning failed: payment_id={payment_id}, error={phase1_err}"
                 )
                 pre_provisioned_uuid = None
                 uuid_to_cleanup_on_failure = None
