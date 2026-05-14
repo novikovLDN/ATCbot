@@ -324,71 +324,6 @@ async def get_user_bypass_url(telegram_id: int) -> Optional[str]:
     return None
 
 
-async def get_user_premium_happ_crypto_link(telegram_id: int) -> Optional[str]:
-    """Return a Happ Crypto Link (`happ://crypto/...`) for the user's
-    premium subscription URL, or None when one cannot be obtained.
-
-    Resolution order:
-      1. cached `remnawave_premium_happ_crypto_link` column.
-      2. live `POST /api/system/encrypt-happ-crypto-link` against the
-         user's current plain URL — caches the result on success.
-
-    `None` means: encrypt API returned malformed / errored, or the user
-    has no premium entity at all.  Callers that want a guaranteed
-    user-visible string should use `get_user_premium_displayable_url`,
-    which falls back to the plain URL.
-    """
-    if not getattr(config, "REMNAWAVE_ENABLED", False):
-        return None
-    try:
-        import database
-        cached = await database.get_remnawave_premium_happ_crypto_link(telegram_id)
-        if cached:
-            return cached
-
-        plain = await get_user_premium_url(telegram_id)
-        if not plain:
-            return None
-        try:
-            from app.services import remnawave_api
-            crypto = await remnawave_api.encrypt_happ_crypto_link(plain)
-        except Exception as e:
-            logger.warning("USER_HAPP_CRYPTO_ENCRYPT_FAIL: tg=%s %s", telegram_id, e)
-            return None
-        if not crypto:
-            return None
-        try:
-            await database.set_remnawave_premium_happ_crypto_link(telegram_id, crypto)
-        except Exception as e:
-            logger.warning("USER_HAPP_CRYPTO_PERSIST_FAIL: tg=%s %s", telegram_id, e)
-        return crypto
-    except Exception as e:
-        logger.warning("USER_HAPP_CRYPTO_LOOKUP_FAIL: tg=%s %s", telegram_id, e)
-        return None
-
-
-async def get_user_premium_displayable_url(telegram_id: int) -> str:
-    """The URL the bot should put inside <code>...</code> blocks the user
-    can copy / forward.
-
-    Prefers the Happ Crypto Link (`happ://crypto/...`) so the
-    underlying subscription endpoint is never exposed in chat; falls
-    back to the plain Remnawave URL when the encrypt API is
-    unreachable or the user has no premium entity yet.
-
-    Always returns a non-empty string — caller doesn't need a None check.
-
-    Important: this is the USER-FACING form intended for copy-paste
-    into Happ.  Button-URL builders (auto-setup deeplinks, QR codes,
-    "Add to V2RayTun") MUST keep using `get_user_primary_subscription_url`
-    because they need the plain URL.
-    """
-    crypto = await get_user_premium_happ_crypto_link(telegram_id)
-    if crypto:
-        return crypto
-    return await get_user_primary_subscription_url(telegram_id)
-
-
 async def get_user_primary_subscription_url(telegram_id: int) -> str:
     """Return the URL the bot's "Подключиться" / copy-key buttons should
     point at for this user.
@@ -420,6 +355,4 @@ __all__ = [
     "get_user_premium_url",
     "get_user_bypass_url",
     "get_user_primary_subscription_url",
-    "get_user_premium_happ_crypto_link",
-    "get_user_premium_displayable_url",
 ]
