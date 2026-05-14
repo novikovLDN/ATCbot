@@ -694,19 +694,26 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
         # already provisioned the premium + bypass entities in Remnawave;
         # surface both subscription URLs directly in the success text so
         # the buyer sees them without an extra tap.
+        #
+        # Task 4: the premium <code> block now hands out the Happ Crypto
+        # Link (encrypted, never exposes the panel sub URL in chat).
+        # Bypass stays plain (Task 4 explicitly excludes bypass).
         if getattr(config, "PURCHASE_FLOW_REMNAWAVE", False):
             try:
-                sub_row = await database.get_subscription_any(telegram_id)
-                premium_url = (sub_row or {}).get("vpn_key") or ""
-                bypass_url = (sub_row or {}).get("vpn_key_plus") or ""
+                from app.services.user_subscription_links import (
+                    get_user_premium_displayable_url,
+                    get_user_bypass_url,
+                )
+                premium_url = await get_user_premium_displayable_url(telegram_id)
+                bypass_url = await get_user_bypass_url(telegram_id) or ""
                 links_block_parts = []
                 if premium_url:
                     links_block_parts.append(
-                        f"🌍 <b>Premium</b> (основные серверы):\n<code>{premium_url}</code>"
+                        f"🌍 <b>Основные серверы:</b>\n<code>{premium_url}</code>"
                     )
                 if bypass_url:
                     links_block_parts.append(
-                        f"🚧 <b>Bypass</b> (обходы LTE):\n<code>{bypass_url}</code>"
+                        f"🚧 <b>Обходы LTE:</b>\n<code>{bypass_url}</code>"
                     )
                 if links_block_parts:
                     text = text + "\n\n" + "\n\n".join(links_block_parts)

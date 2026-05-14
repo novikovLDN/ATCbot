@@ -102,6 +102,60 @@ async def set_remnawave_premium_uuid(
             )
 
 
+async def get_remnawave_premium_happ_crypto_link(telegram_id: int) -> Optional[str]:
+    """Return the cached Happ Crypto Link for the premium entity, or None.
+
+    Migration 050: the bot generates `happ://crypto/<...>` via
+    `remnawave_api.encrypt_happ_crypto_link` and caches it here.  The
+    cache is invalidated whenever the underlying
+    `remnawave_premium_sub_url` is rewritten (see
+    set_remnawave_premium_uuid_and_url below).
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+    async with pool.acquire() as conn:
+        url = await conn.fetchval(
+            "SELECT remnawave_premium_happ_crypto_link FROM subscriptions "
+            "WHERE telegram_id = $1 "
+            "ORDER BY (status='active') DESC, expires_at DESC NULLS LAST LIMIT 1",
+            telegram_id,
+        )
+    return (url or "").strip() or None
+
+
+async def set_remnawave_premium_happ_crypto_link(telegram_id: int, link: str) -> None:
+    """Persist the freshly-generated Happ Crypto Link for the user."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_premium_happ_crypto_link = $1 "
+            "WHERE telegram_id = $2 AND status = 'active'",
+            link, telegram_id,
+        )
+
+
+async def clear_remnawave_premium_happ_crypto_link(telegram_id: int) -> None:
+    """Drop the cached crypto link — used when the underlying sub URL rotates."""
+    if not _core.DB_READY:
+        return
+    pool = await get_pool()
+    if pool is None:
+        return
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET remnawave_premium_happ_crypto_link = NULL "
+            "WHERE telegram_id = $1",
+            telegram_id,
+        )
+
+
 async def set_remnawave_premium_uuid_and_url(
     telegram_id: int,
     uuid: str,
@@ -124,12 +178,16 @@ async def set_remnawave_premium_uuid_and_url(
     if pool is None:
         return
     async with pool.acquire() as conn:
+        # The Happ Crypto Link is a function of remnawave_premium_sub_url,
+        # so any sub_url rewrite must drop the crypto cache too — the next
+        # render will re-encrypt against the fresh value.
         if mark_migrated:
             await conn.execute(
                 "UPDATE subscriptions "
                 "SET remnawave_premium_uuid = $1, "
                 "    remnawave_premium_sub_url = $2, "
                 "    remnawave_premium_short_uuid = $3, "
+                "    remnawave_premium_happ_crypto_link = NULL, "
                 "    samopis_migrated_at = NOW() "
                 "WHERE telegram_id = $4 AND status = 'active'",
                 uuid, sub_url, short_uuid, telegram_id,
@@ -139,7 +197,8 @@ async def set_remnawave_premium_uuid_and_url(
                 "UPDATE subscriptions "
                 "SET remnawave_premium_uuid = $1, "
                 "    remnawave_premium_sub_url = $2, "
-                "    remnawave_premium_short_uuid = $3 "
+                "    remnawave_premium_short_uuid = $3, "
+                "    remnawave_premium_happ_crypto_link = NULL "
                 "WHERE telegram_id = $4 AND status = 'active'",
                 uuid, sub_url, short_uuid, telegram_id,
             )

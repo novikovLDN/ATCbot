@@ -222,8 +222,12 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
 
         expires_str = subscription_end.strftime("%d.%m.%Y")
         from html import escape as html_escape
-        from app.services.user_subscription_links import get_user_primary_subscription_url
-        sub_url = await get_user_primary_subscription_url(telegram_id)
+        # Task 4: the URL surfaced in the trial-success message is the
+        # Happ Crypto Link when available, plain URL otherwise.  The
+        # template renders this value inside a copy-friendly block, so
+        # it's a text-display site (no button URL builder consumes it).
+        from app.services.user_subscription_links import get_user_premium_displayable_url
+        sub_url = await get_user_premium_displayable_url(telegram_id)
         success_text = i18n_get_text(language, "trial.activated", expires_date=expires_str, sub_url=html_escape(sub_url))
         try:
             if _degradation_notice:

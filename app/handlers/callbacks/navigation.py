@@ -475,8 +475,12 @@ async def callback_get_sub_key(callback: CallbackQuery):
         return
 
     language = await resolve_user_language(telegram_id)
-    from app.services.user_subscription_links import get_user_primary_subscription_url
-    sub_url = await get_user_primary_subscription_url(telegram_id)
+    # Task 4: the user-visible <code> block hands out the Happ Crypto
+    # Link when available, falling back to the plain Remnawave URL.
+    # Buttons elsewhere in the flow still get the plain URL via
+    # get_user_primary_subscription_url.
+    from app.services.user_subscription_links import get_user_premium_displayable_url
+    sub_url = await get_user_premium_displayable_url(telegram_id)
 
     text = i18n_get_text(language, "get_key.instruction_text",
         "📖 <b>Инструкция по подключению</b>\n\n"
@@ -1036,8 +1040,12 @@ async def callback_setup_manual(callback: CallbackQuery):
     sub_url = None
     bypass_url = None
     if subscription:
-        from app.services.user_subscription_links import get_user_primary_subscription_url
-        sub_url = await get_user_primary_subscription_url(telegram_id)
+        # Task 4: manual-install screen is text-only (no auto-setup
+        # button uses this value), so we surface the Happ Crypto Link
+        # in the <code> block for safer copy-paste.  Bypass stays on
+        # the plain URL (Task 4 explicitly excludes bypass).
+        from app.services.user_subscription_links import get_user_premium_displayable_url
+        sub_url = await get_user_premium_displayable_url(telegram_id)
 
     # Bypass key: available independently of main subscription.
     # Goes through the helper so cache misses + missing entities
