@@ -356,35 +356,161 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 
 # ── Convenience ───────────────────────────────────────────────────────
 
-async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]:
-    """POST /api/system/encrypt-happ-crypto-link — server-side RSA-encrypt
-    the plain subscription URL into a `happ://crypto/...` deeplink.
+# Possible field names the panel may use for the encrypted link in its
+# response.  Documented (TZ Task 4): `encryptedLink`.  Defensive list
+# covers the natural variations seen on minor v2.7 versions / forks.
+_HAPP_CRYPTO_LINK_FIELDS = (
+    "encryptedLink",
+    "encrypted_link",
+    "cryptoLink",
+    "crypto_link",
+    "happLink",
+    "happ_link",
+    "link",
+    "data",
+    "url",
+)
 
-    Returns the encrypted link on success, None on any failure / panel
-    error / malformed response.  Callers fall back to the plain URL.
+# Endpoint paths to try in order.  v2.7.4 was documented at the first
+# path; the rest are observed in panel forks / older versions.  The
+# winning path is cached at module level so retries don't redo the probe.
+_HAPP_CRYPTO_ENDPOINTS = (
+    "/api/system/encrypt-happ-crypto-link",
+    "/api/system/happ-crypto-link",
+    "/api/system/encrypt-link",
+    "/api/users/encrypt-happ-link",
+)
 
-    The endpoint is documented on Remnawave v2.7+:
-        body:     {"data": "<plain_url>"}
-        response: {"response": {"encryptedLink": "happ://crypto/..."}}
+_happ_crypto_endpoint_cache: Optional[str] = None
+
+
+def _extract_happ_crypto_link(payload: Any) -> Optional[str]:
+    """Pull a `happ://crypto/...` value out of a panel response no matter
+    where the field lives.  Walks the dict for known keys first, then
+    falls back to a substring search on any string value.
     """
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        # Some panels return the raw link.
+        stripped = payload.strip()
+        return stripped if stripped.startswith("happ://crypto/") else None
+    if not isinstance(payload, dict):
+        return None
+    # 1) Known field names — case-insensitive match on keys.
+    lower_map = {str(k).lower(): v for k, v in payload.items()}
+    for field in _HAPP_CRYPTO_LINK_FIELDS:
+        v = lower_map.get(field.lower())
+        if isinstance(v, str):
+            stripped = v.strip()
+            if stripped.startswith("happ://crypto/"):
+                return stripped
+    # 2) Nested `response` wrapper (defence in depth — _request usually
+    #    unwraps this already, but some endpoints double-wrap).
+    if isinstance(payload.get("response"), (dict, str)):
+        nested = _extract_happ_crypto_link(payload["response"])
+        if nested:
+            return nested
+    # 3) Substring search across all string values.  Last resort but
+    #    catches arbitrary field names we haven't enumerated.
+    for v in payload.values():
+        if isinstance(v, str) and "happ://crypto/" in v:
+            # Trim everything before the scheme + everything after the
+            # first whitespace, just in case the panel padded the field.
+            idx = v.find("happ://crypto/")
+            tail = v[idx:].split()[0]
+            return tail
+    return None
+
+
+async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]:
+    """Encrypt a plain Remnawave subscription URL into a `happ://crypto/...`
+    deeplink via the panel.
+
+    Returns the encrypted link on success, None on any failure /
+    malformed response.  Callers fall back to the plain URL.
+
+    Implementation details:
+      * Tries the documented endpoint first
+        (`/api/system/encrypt-happ-crypto-link` on v2.7+).
+      * If the first call 404s we transparently try a small list of
+        alternative paths observed on minor versions / forks.  The
+        winning path is cached at module level so subsequent calls go
+        straight to it.
+      * The response parser is intentionally lenient: looks for the
+        link under several possible field names (`encryptedLink`,
+        `cryptoLink`, `link`, `data`, …) and finally falls back to a
+        substring search.  This protects against schema drift between
+        panel versions.
+      * Logs a one-line summary every call so operators can see
+        which endpoint won and what shape the panel returned, without
+        leaking the plain URL or the encrypted payload.
+    """
+    global _happ_crypto_endpoint_cache
     if not plain_subscription_url:
         return None
-    response = await _request(
-        "POST",
-        "/api/system/encrypt-happ-crypto-link",
-        json={"data": plain_subscription_url},
-    )
-    if not isinstance(response, dict):
-        return None
-    link = (response.get("encryptedLink") or "").strip()
-    if not link.startswith("happ://crypto/"):
-        # Defensive: log + reject anything that doesn't look like the
-        # documented shape.  Caller will fall back to plain URL.
+
+    body = {"data": plain_subscription_url}
+    paths_to_try: list[str]
+    if _happ_crypto_endpoint_cache:
+        paths_to_try = [_happ_crypto_endpoint_cache]
+    else:
+        paths_to_try = list(_HAPP_CRYPTO_ENDPOINTS)
+
+    last_status: Optional[int] = None
+    last_response_keys: Optional[list[str]] = None
+
+    for path in paths_to_try:
+        raw = await _request_raw("POST", path, json=body)
+        status = int(raw.get("status") or 0)
+        last_status = status
+        if status == 404:
+            # Path missing — try the next one in the list.  Skip silently;
+            # _request_raw already warning-logged the 404 body.
+            continue
+        if not raw.get("ok"):
+            # Real panel error (5xx / auth / etc.) — bail with a single
+            # error log so the operator can see what shape came back.
+            logger.error(
+                "REMNAWAVE_HAPP_CRYPTO_PANEL_ERROR: path=%s status=%s body=%s",
+                path, status, str(raw.get("body") or "")[:300],
+            )
+            return None
+
+        response = raw.get("response")
+        if isinstance(response, dict):
+            last_response_keys = sorted(response.keys())
+        link = _extract_happ_crypto_link(response)
+        if link:
+            # Cache the working path for subsequent calls.
+            if _happ_crypto_endpoint_cache != path:
+                _happ_crypto_endpoint_cache = path
+                logger.info(
+                    "REMNAWAVE_HAPP_CRYPTO_ENDPOINT_CACHED: path=%s response_keys=%s",
+                    path, last_response_keys,
+                )
+            return link
+
+        # 200 OK but no recognisable link in the body — log and try the
+        # next path.  This is the case where the panel returns a
+        # different schema we haven't covered.
         logger.warning(
-            "REMNAWAVE_HAPP_CRYPTO_UNEXPECTED: response did not contain happ://crypto/ link"
+            "REMNAWAVE_HAPP_CRYPTO_UNEXPECTED_SHAPE: path=%s status=%s response_keys=%s body=%s",
+            path, status, last_response_keys, str(raw.get("body") or "")[:300],
         )
-        return None
-    return link
+
+    # All paths exhausted without producing a usable link.
+    logger.warning(
+        "REMNAWAVE_HAPP_CRYPTO_UNAVAILABLE: last_status=%s last_keys=%s — "
+        "user will be served the plain URL as fallback",
+        last_status, last_response_keys,
+    )
+    return None
+
+
+def _reset_happ_crypto_endpoint_cache_for_tests() -> None:
+    global _happ_crypto_endpoint_cache
+    _happ_crypto_endpoint_cache = None
 
 
 async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
