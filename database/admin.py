@@ -894,12 +894,17 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
             tariff_normalized = "basic"
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                new_uuid_pre = _generate_subscription_uuid()
-                vless_result = await vpn_utils.add_vless_user(
-                    telegram_id=telegram_id,
-                    subscription_end=subscription_end_pre,
-                    uuid=new_uuid_pre,
+                # Task 2 cut-over: provision premium + bypass entities in
+                # Remnawave instead of the legacy samopis xray master.
+                # provision_subscription returns the same dict shape
+                # add_vless_user did, so Phase 2 (grant_access) is unchanged.
+                from app.services import purchase_flow
+                vless_result = await purchase_flow.provision_subscription(
+                    telegram_id,
                     tariff=tariff_normalized,
+                    subscription_end=subscription_end_pre,
+                    period_days=days,
+                    is_trial=False,
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
@@ -915,7 +920,7 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 )
             except Exception as phase1_err:
                 logger.warning(
-                    f"admin_grant_access_atomic: Phase 1 add_vless_user failed: user={telegram_id}, error={phase1_err}"
+                    f"admin_grant_access_atomic: Phase 1 provisioning failed: user={telegram_id}, error={phase1_err}"
                 )
                 pre_provisioned_uuid = None
                 uuid_to_cleanup_on_failure = None
@@ -980,14 +985,11 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
-            await vpn_utils.ensure_user_in_xray(
-                telegram_id=sync_info["telegram_id"],
-                uuid=sync_info["uuid"],
-                subscription_end=sync_info["subscription_end"]
-            )
+            from app.services import purchase_flow
+            await purchase_flow.sync_renewal_to_remnawave(sync_info)
         except Exception as e:
             logger.critical(
-                "RENEWAL_XRAY_SYNC_FAILED",
+                "RENEWAL_REMNAWAVE_SYNC_FAILED",
                 extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
             )
     return ret_val
@@ -1065,27 +1067,33 @@ async def finalize_balance_purchase(
             )
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                new_uuid_pre = _generate_subscription_uuid()
-                tariff_for_api = config.tariff_for_vpn_api((tariff_type or "basic").strip().lower())
-                vless_result = await vpn_utils.add_vless_user(
-                    telegram_id=telegram_id,
+                # Task 2 cut-over: provision premium + bypass entities in
+                # Remnawave; the legacy samopis xray master is no longer
+                # called from the balance-purchase path.  Return shape
+                # matches add_vless_user so Phase 2 (grant_access) is unchanged.
+                from app.services import purchase_flow
+                tariff_norm = (tariff_type or "basic").strip().lower()
+                vless_result = await purchase_flow.provision_subscription(
+                    telegram_id,
+                    tariff=tariff_norm,
                     subscription_end=subscription_end_pre,
-                    uuid=new_uuid_pre,
-                    tariff=tariff_for_api,
+                    period_days=period_days,
+                    is_trial=False,
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
                     "vless_url": vless_result["vless_url"],
-                    "subscription_type": vless_result.get("subscription_type") or tariff_for_api,
+                    "vless_url_plus": vless_result.get("vless_url_plus"),
+                    "subscription_type": vless_result.get("subscription_type") or tariff_norm,
                 }
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(
                     f"finalize_balance_purchase: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                    f"uuid={uuid_to_cleanup_on_failure[:8]}..., tariff={tariff_for_api}]"
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}..., tariff={tariff_norm}]"
                 )
             except Exception as phase1_err:
                 logger.warning(
-                    f"finalize_balance_purchase: Phase 1 add_vless_user failed: user={telegram_id}, error={phase1_err}"
+                    f"finalize_balance_purchase: Phase 1 provisioning failed: user={telegram_id}, error={phase1_err}"
                 )
                 pre_provisioned_uuid = None
                 uuid_to_cleanup_on_failure = None
@@ -1252,14 +1260,11 @@ async def finalize_balance_purchase(
         if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
             sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
             try:
-                await vpn_utils.ensure_user_in_xray(
-                    telegram_id=sync_info["telegram_id"],
-                    uuid=sync_info["uuid"],
-                    subscription_end=sync_info["subscription_end"]
-                )
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
                 logger.critical(
-                    "RENEWAL_XRAY_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
         return ret_val
@@ -1526,15 +1531,22 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
             )
         if is_new_issuance and config.VPN_ENABLED:
             try:
-                new_uuid_pre = _generate_subscription_uuid()
-                vless_result = await vpn_utils.add_vless_user(
-                    telegram_id=telegram_id,
+                # Task 2 cut-over: provision via Remnawave (premium + bypass)
+                # instead of the legacy samopis xray master.  Minutes-grants
+                # are a short admin/test issuance — period_days is rounded up
+                # to at least 1 for the bypass traffic-limit lookup.
+                from app.services import purchase_flow
+                vless_result = await purchase_flow.provision_subscription(
+                    telegram_id,
+                    tariff="basic",
                     subscription_end=subscription_end_pre,
-                    uuid=new_uuid_pre
+                    period_days=max(1, minutes // 1440),
+                    is_trial=False,
                 )
                 pre_provisioned_uuid = {
                     "uuid": vless_result["uuid"].strip(),
-                    "vless_url": vless_result["vless_url"]
+                    "vless_url": vless_result["vless_url"],
+                    "vless_url_plus": vless_result.get("vless_url_plus"),
                 }
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(
@@ -1543,7 +1555,7 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                 )
             except Exception as phase1_err:
                 logger.warning(
-                    f"admin_grant_access_minutes_atomic: Phase 1 add_vless_user failed: user={telegram_id}, error={phase1_err}"
+                    f"admin_grant_access_minutes_atomic: Phase 1 provisioning failed: user={telegram_id}, error={phase1_err}"
                 )
                 pre_provisioned_uuid = None
                 uuid_to_cleanup_on_failure = None
@@ -1610,14 +1622,11 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("renewal_xray_sync_after_commit"):
         sync_info = grant_result_for_removal["renewal_xray_sync_after_commit"]
         try:
-            await vpn_utils.ensure_user_in_xray(
-                telegram_id=sync_info["telegram_id"],
-                uuid=sync_info["uuid"],
-                subscription_end=sync_info["subscription_end"]
-            )
+            from app.services import purchase_flow
+            await purchase_flow.sync_renewal_to_remnawave(sync_info)
         except Exception as e:
             logger.critical(
-                "RENEWAL_XRAY_SYNC_FAILED",
+                "RENEWAL_REMNAWAVE_SYNC_FAILED",
                 extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
             )
     return ret_val
@@ -2500,13 +2509,16 @@ async def activate_gift_subscription(gift_code: str, activated_by: int) -> Dict[
                 needs_new_issuance = False
 
         if needs_new_issuance:
-            new_uuid = _generate_subscription_uuid()
             subscription_end = now + duration
-            vless_result = await vpn_utils.add_vless_user(
-                telegram_id=activated_by,
-                subscription_end=subscription_end,
-                uuid=new_uuid,
+            # Task 2 cut-over: provision premium + bypass entities in
+            # Remnawave instead of the legacy samopis xray master.
+            from app.services import purchase_flow
+            vless_result = await purchase_flow.provision_subscription(
+                activated_by,
                 tariff=tariff,
+                subscription_end=subscription_end,
+                period_days=period_days,
+                is_trial=False,
             )
             pre_provisioned = {
                 "uuid": vless_result["uuid"],

@@ -265,4 +265,33 @@ async def provision_subscription(
     }
 
 
-__all__ = ["provision_subscription"]
+async def sync_renewal_to_remnawave(sync_info: dict) -> None:
+    """Post-commit renewal sync — extend the user's Remnawave entities.
+
+    Called after a renewal DB commit (grant_access STEP 2 — extending an
+    already-active subscription).  Renews the premium entity's expireAt
+    and tops up the bypass entity; `provision_subscription` is idempotent
+    and handles both, and also creates the entities if the user somehow
+    has none yet (a legacy un-migrated subscriber renewing for the first
+    time after the cut-over).
+
+    `sync_info` is the `renewal_xray_sync_after_commit` payload built by
+    grant_access: telegram_id, subscription_end, tariff, period_days.
+    Never raises — logs on failure.
+    """
+    try:
+        await provision_subscription(
+            sync_info["telegram_id"],
+            tariff=sync_info.get("tariff") or "basic",
+            subscription_end=sync_info["subscription_end"],
+            period_days=int(sync_info.get("period_days") or 30),
+            is_trial=False,
+        )
+    except Exception as e:
+        logger.critical(
+            "RENEWAL_REMNAWAVE_SYNC_FAILED tg=%s err=%s",
+            sync_info.get("telegram_id"), e,
+        )
+
+
+__all__ = ["provision_subscription", "sync_renewal_to_remnawave"]
