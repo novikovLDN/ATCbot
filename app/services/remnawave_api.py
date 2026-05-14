@@ -356,6 +356,37 @@ async def find_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 
 # ── Convenience ───────────────────────────────────────────────────────
 
+async def encrypt_happ_crypto_link(plain_subscription_url: str) -> Optional[str]:
+    """POST /api/system/encrypt-happ-crypto-link — server-side RSA-encrypt
+    the plain subscription URL into a `happ://crypto/...` deeplink.
+
+    Returns the encrypted link on success, None on any failure / panel
+    error / malformed response.  Callers fall back to the plain URL.
+
+    The endpoint is documented on Remnawave v2.7+:
+        body:     {"data": "<plain_url>"}
+        response: {"response": {"encryptedLink": "happ://crypto/..."}}
+    """
+    if not plain_subscription_url:
+        return None
+    response = await _request(
+        "POST",
+        "/api/system/encrypt-happ-crypto-link",
+        json={"data": plain_subscription_url},
+    )
+    if not isinstance(response, dict):
+        return None
+    link = (response.get("encryptedLink") or "").strip()
+    if not link.startswith("happ://crypto/"):
+        # Defensive: log + reject anything that doesn't look like the
+        # documented shape.  Caller will fall back to plain URL.
+        logger.warning(
+            "REMNAWAVE_HAPP_CRYPTO_UNEXPECTED: response did not contain happ://crypto/ link"
+        )
+        return None
+    return link
+
+
 async def get_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
     """Return traffic info including subscriptionUrl and happ_url, or None."""
     user = await get_user(uuid)
