@@ -440,8 +440,6 @@ async def show_profile(message_or_query, language: str):
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
                         text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
-                        if happ_url:
-                            text += f"\n\n📲 <b>Альтернативный ключ для Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
