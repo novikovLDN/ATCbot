@@ -524,6 +524,17 @@ try:
 except (TypeError, ValueError):
     REMNAWAVE_PREMIUM_DEVICE_LIMIT = 5
 
+# Task 6: External Squad UUID for premium users.  When set, every premium
+# entity (POST on create, PATCH on adoption + renewal) carries this value
+# in `externalSquadUuid`, which makes Remnawave override the subscription
+# Template to "Unlimited" (RU split-routing + SDK/SMTP/mining blocklists).
+# Bypass entities are NOT assigned this field — they stay on the Default
+# Template.  Left unset (empty string → None) the bot silently skips the
+# field, so existing local/dev environments keep working unchanged.
+REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID = env(
+    "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", default=""
+) or None
+
 # Master switch for the subscription-URL fallback FastAPI router
 # (app/api/subscription_proxy.py).  Default OFF — turn on per environment
 # once the public DNS for sub.atlassecure.ru points at this bot.

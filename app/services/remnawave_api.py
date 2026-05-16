@@ -119,6 +119,7 @@ async def create_user(
     description: Optional[str] = None,
     telegram_id: Optional[int] = None,
     traffic_limit_strategy: str = "NO_RESET",
+    external_squad_uuid: Optional[str] = None,
     raw_response: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """POST /api/users — create a new Remnawave user.
@@ -142,6 +143,11 @@ async def create_user(
       telegram_id          — passed through as `telegramId` for panel-side
                              cross-reference.
       traffic_limit_strategy — Remnawave reset strategy (default NO_RESET).
+      external_squad_uuid  — Task 6: when set, sent as `externalSquadUuid`
+                             so Remnawave overrides the subscription
+                             Template (used for the premium "Unlimited"
+                             template with SDK/SMTP/mining blocklists).
+                             None → field omitted (default for bypass).
       raw_response         — when True the caller wants the HTTP status code
                              alongside the body to disambiguate 409/400
                              responses (used by the migration script).
@@ -164,6 +170,8 @@ async def create_user(
         body["description"] = description
     if telegram_id is not None:
         body["telegramId"] = int(telegram_id)
+    if external_squad_uuid:
+        body["externalSquadUuid"] = external_squad_uuid
 
     # Squad assignment: explicit param wins, "" disables it, None falls back to
     # the global default (existing bypass behaviour).

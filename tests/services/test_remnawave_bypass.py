@@ -130,6 +130,10 @@ async def test_create_bypass_happy_path():
     assert kwargs["traffic_limit_bytes"] == 10 * 1024**3
     assert kwargs["expire_at"] == "2099-12-31T23:59:59Z"
     assert kwargs["telegram_id"] == 42
+    # Task 6: bypass entities must NEVER carry externalSquadUuid — they
+    # stay on the Default subscription Template (the "Unlimited" template
+    # is premium-only).
+    assert "external_squad_uuid" not in kwargs or kwargs["external_squad_uuid"] is None
     assert result.ok is True
     assert result.panel_uuid == PANEL_UUID
     assert result.subscription_url.endswith("/short123")
