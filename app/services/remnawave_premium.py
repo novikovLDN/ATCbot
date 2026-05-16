@@ -134,6 +134,32 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
     )
 
 
+async def _ensure_premium_external_squad(panel_uuid: Optional[str], existing: dict) -> None:
+    """Task 6: PATCH `externalSquadUuid` on an adopted premium entity if it
+    doesn't already match the configured value.  Idempotent — skipped when
+    the config var is unset or the value is already correct.  Never raises;
+    a PATCH failure is logged at WARN and the adoption proceeds (the next
+    renewal will retry via `renew_premium_user`).
+    """
+    target = getattr(config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None) or None
+    if not target or not panel_uuid:
+        return
+    current = (existing or {}).get("externalSquadUuid")
+    if current == target:
+        return
+    try:
+        await remnawave_api.update_user(panel_uuid, externalSquadUuid=target)
+        logger.info(
+            "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_PATCHED: uuid=%s squad=%s (was=%s)",
+            panel_uuid[:8], target, current,
+        )
+    except Exception as e:
+        logger.warning(
+            "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_PATCH_FAIL: uuid=%s err=%s",
+            panel_uuid[:8], e,
+        )
+
+
 async def create_premium_user_entity(
     telegram_id: int,
     *,
@@ -167,6 +193,14 @@ async def create_premium_user_entity(
     username = build_premium_username(telegram_id, existing_username)
     device_limit = getattr(config, "REMNAWAVE_PREMIUM_DEVICE_LIMIT", 5)
 
+    # Task 6: stamp every premium entity with the external squad uuid so
+    # Remnawave overrides the subscription Template to "Unlimited" (RU
+    # split-routing + SDK/SMTP/mining blocklists).  Skipped when unset
+    # (local/dev environments without the config).
+    external_squad_uuid = getattr(
+        config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None,
+    ) or None
+
     body_kwargs = dict(
         username=username,
         short_uuid=short_uuid,
@@ -177,6 +211,7 @@ async def create_premium_user_entity(
         description=description,
         telegram_id=telegram_id,
         traffic_limit_strategy="NO_RESET",
+        external_squad_uuid=external_squad_uuid,
         raw_response=True,
     )
 
@@ -200,7 +235,9 @@ async def create_premium_user_entity(
                 "REMNAWAVE_PREMIUM_RECOVERED_PREFLIGHT: tg=%s username=%s uuid=%s",
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
-            return _result_from_existing(existing, http_status=200)
+            result = _result_from_existing(existing, http_status=200)
+            await _ensure_premium_external_squad(result.panel_uuid, existing)
+            return result
         logger.warning(
             "REMNAWAVE_PREMIUM_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
             telegram_id, username, existing.get("telegramId"),
@@ -225,6 +262,11 @@ async def create_premium_user_entity(
         # Acceptance is decided by `vlessUuid` — `uuid` is always panel-assigned.
         accepted_vless = response.get("vlessUuid")
         accepted = bool(force_uuid) and (accepted_vless == requested_uuid)
+        if external_squad_uuid:
+            logger.info(
+                "REMNAWAVE_PREMIUM_CREATED_WITH_EXT_SQUAD: tg=%s uuid=%s squad=%s",
+                telegram_id, (panel_uuid or "")[:8], external_squad_uuid[:8],
+            )
         return PremiumCreateResult(
             ok=True,
             panel_uuid=panel_uuid,
@@ -254,7 +296,9 @@ async def create_premium_user_entity(
                 "REMNAWAVE_PREMIUM_RECOVERED_POST409: tg=%s uuid=%s",
                 telegram_id, (existing.get("uuid") or "")[:8],
             )
-            return _result_from_existing(existing, http_status=409)
+            result = _result_from_existing(existing, http_status=409)
+            await _ensure_premium_external_squad(result.panel_uuid, existing)
+            return result
         # 409 not from a username race we own — fall through to the
         # forced-UUID retry below (might be uuid conflict).
 
@@ -298,7 +342,14 @@ async def create_premium_user_entity(
 # ── Lifecycle (called by handlers AFTER cutover — wired up in a follow-up) ─
 
 async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
-    """Patch expireAt on the premium entity. Returns True on success."""
+    """Patch expireAt on the premium entity. Returns True on success.
+
+    Task 6: when `REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID` is configured the
+    same PATCH also stamps `externalSquadUuid` on the entity.  Idempotent
+    (same value re-applied is a no-op) — this doubles as the safety net
+    that retroactively repairs premium entities created before the Task 6
+    rollout or where the create-time stamp was lost.
+    """
     if not config.REMNAWAVE_ENABLED:
         return False
     import database  # lazy — keeps unit tests asyncpg-free
@@ -306,15 +357,21 @@ async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
         rmn_uuid = await database.get_remnawave_premium_uuid(telegram_id)
         if not _is_valid_full_uuid(rmn_uuid):
             return False
-        result = await remnawave_api.update_user(
-            rmn_uuid,
-            expireAt=_iso_z(new_expire_at),
-            status="ACTIVE",
-        )
+        update_fields = {
+            "expireAt": _iso_z(new_expire_at),
+            "status": "ACTIVE",
+        }
+        external_squad_uuid = getattr(
+            config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None,
+        ) or None
+        if external_squad_uuid:
+            update_fields["externalSquadUuid"] = external_squad_uuid
+        result = await remnawave_api.update_user(rmn_uuid, **update_fields)
         if result is not None:
             logger.info(
-                "REMNAWAVE_PREMIUM_RENEWED: tg=%s uuid=%s new_expire=%s",
+                "REMNAWAVE_PREMIUM_RENEWED: tg=%s uuid=%s new_expire=%s ext_squad=%s",
                 telegram_id, rmn_uuid[:8], _iso_z(new_expire_at),
+                (external_squad_uuid or "")[:8] or "—",
             )
             return True
         return False

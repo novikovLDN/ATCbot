@@ -429,3 +429,246 @@ class TestIsOurEntity:
     def test_rejects_non_dict_input(self):
         assert remnawave_premium._is_our_entity(None, 42) is False
         assert remnawave_premium._is_our_entity("nope", 42) is False
+
+
+# ── Task 6: externalSquadUuid on premium entities ─────────────────────
+
+EXT_SQUAD_UUID = "894f4c66-a725-4a24-b0ba-f6ca2b6b5a79"
+
+
+@pytest.mark.asyncio
+async def test_create_premium_passes_external_squad_uuid_when_configured():
+    """Task 6: POST forwards REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID
+    to remnawave_api.create_user as the `external_squad_uuid` kwarg."""
+    cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
+    panel_response = {
+        "ok": True, "status": 201,
+        "response": {"uuid": PANEL_UUID, "vlessUuid": SAMPLE_UUID,
+                     "shortUuid": "s", "subscriptionUrl": "u"},
+        "body": None,
+    }
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(return_value=panel_response)
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is True
+    assert create_mock.call_args.kwargs["external_squad_uuid"] == EXT_SQUAD_UUID
+
+
+@pytest.mark.asyncio
+async def test_create_premium_omits_external_squad_uuid_when_unset():
+    """When the env var is unset, create_user gets external_squad_uuid=None
+    and the body field is omitted entirely (verified in api tests)."""
+    cfg = _cfg_stub()  # no REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID
+    panel_response = {
+        "ok": True, "status": 201,
+        "response": {"uuid": PANEL_UUID, "vlessUuid": SAMPLE_UUID,
+                     "shortUuid": "s", "subscriptionUrl": "u"},
+        "body": None,
+    }
+    find_mock = AsyncMock(return_value=None)
+    create_mock = AsyncMock(return_value=panel_response)
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create:
+        await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert create_mock.call_args.kwargs["external_squad_uuid"] is None
+
+
+@pytest.mark.asyncio
+async def test_preflight_adoption_patches_external_squad_when_missing():
+    """Adopting an existing entity that lacks externalSquadUuid → PATCH it."""
+    cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
+    existing = {
+        "uuid": PANEL_UUID,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "rec",
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "subscriptionUrl": "https://r/sub/from-recovery",
+        # externalSquadUuid intentionally missing
+    }
+    find_mock = AsyncMock(return_value=existing)
+    create_mock = AsyncMock()
+    update_mock = AsyncMock(return_value={"ok": True})
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create, patch.object(
+        remnawave_premium.remnawave_api, "update_user", update_mock,
+    ):
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.recovered is True
+    create_mock.assert_not_called()
+    update_mock.assert_awaited_once_with(PANEL_UUID, externalSquadUuid=EXT_SQUAD_UUID)
+
+
+@pytest.mark.asyncio
+async def test_preflight_adoption_skips_patch_when_external_squad_matches():
+    """Adopted entity already has the right externalSquadUuid → no PATCH."""
+    cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
+    existing = {
+        "uuid": PANEL_UUID,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "rec",
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "subscriptionUrl": "https://r/sub/from-recovery",
+        "externalSquadUuid": EXT_SQUAD_UUID,
+    }
+    find_mock = AsyncMock(return_value=existing)
+    create_mock = AsyncMock()
+    update_mock = AsyncMock(return_value={"ok": True})
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create, patch.object(
+        remnawave_premium.remnawave_api, "update_user", update_mock,
+    ):
+        await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    update_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_preflight_adoption_skips_patch_when_unset():
+    """No config var → never PATCH externalSquadUuid on adoption."""
+    cfg = _cfg_stub()
+    existing = {
+        "uuid": PANEL_UUID,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "rec",
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "subscriptionUrl": "u",
+    }
+    find_mock = AsyncMock(return_value=existing)
+    create_mock = AsyncMock()
+    update_mock = AsyncMock(return_value={"ok": True})
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create, patch.object(
+        remnawave_premium.remnawave_api, "update_user", update_mock,
+    ):
+        await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    update_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post409_adoption_patches_external_squad_when_missing():
+    """409 recovery adoption path also stamps externalSquadUuid."""
+    cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
+    first_call = {"ok": False, "status": 409, "body": "username taken", "response": None}
+    existing_after_race = {
+        "uuid": PANEL_UUID,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "racesh",
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "subscriptionUrl": "https://r/sub/race",
+    }
+    find_mock = AsyncMock(side_effect=[None, existing_after_race])
+    create_mock = AsyncMock(return_value=first_call)
+    update_mock = AsyncMock(return_value={"ok": True})
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create, patch.object(
+        remnawave_premium.remnawave_api, "update_user", update_mock,
+    ):
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.recovered is True
+    update_mock.assert_awaited_once_with(PANEL_UUID, externalSquadUuid=EXT_SQUAD_UUID)
+
+
+@pytest.mark.asyncio
+async def test_adoption_patch_failure_does_not_break_recovery():
+    """If the PATCH itself raises, adoption still succeeds (next renewal retries)."""
+    cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
+    existing = {
+        "uuid": PANEL_UUID,
+        "vlessUuid": SAMPLE_UUID,
+        "shortUuid": "rec",
+        "username": "tg_42_premium",
+        "telegramId": 42,
+        "subscriptionUrl": "u",
+    }
+    find_mock = AsyncMock(return_value=existing)
+    create_mock = AsyncMock()
+    update_mock = AsyncMock(side_effect=RuntimeError("panel down"))
+    p_cfg, p_find, p_create, _, _ = _patch_api(cfg, find=find_mock, create=create_mock)
+    with p_cfg, p_find, p_create, patch.object(
+        remnawave_premium.remnawave_api, "update_user", update_mock,
+    ):
+        result = await remnawave_premium.create_premium_user_entity(
+            42,
+            requested_uuid=SAMPLE_UUID,
+            expire_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+    assert result.ok is True
+    assert result.recovered is True
+
+
+# ── renew_premium_user: externalSquadUuid safety net ──────────────────
+
+@pytest.mark.asyncio
+async def test_renew_premium_user_includes_external_squad_uuid_when_set():
+    """Renewal PATCH carries externalSquadUuid alongside expireAt (idempotent stamp)."""
+    cfg = _cfg_stub(REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID=EXT_SQUAD_UUID)
+    update_mock = AsyncMock(return_value={"ok": True})
+    db_mock = type("DB", (), {})()
+
+    async def fake_get_uuid(tg):
+        return PANEL_UUID
+    db_mock.get_remnawave_premium_uuid = fake_get_uuid
+
+    with patch.object(remnawave_premium, "config", cfg), \
+         patch.object(remnawave_premium.remnawave_api, "update_user", update_mock), \
+         patch.dict("sys.modules", {"database": db_mock}):
+        ok = await remnawave_premium.renew_premium_user(
+            42, datetime(2030, 6, 1, tzinfo=timezone.utc),
+        )
+    assert ok is True
+    update_mock.assert_awaited_once()
+    sent_uuid = update_mock.call_args.args[0]
+    sent_fields = update_mock.call_args.kwargs
+    assert sent_uuid == PANEL_UUID
+    assert sent_fields["expireAt"].endswith("Z")
+    assert sent_fields["status"] == "ACTIVE"
+    assert sent_fields["externalSquadUuid"] == EXT_SQUAD_UUID
+
+
+@pytest.mark.asyncio
+async def test_renew_premium_user_omits_external_squad_uuid_when_unset():
+    """Without the config var the PATCH carries only expireAt + status."""
+    cfg = _cfg_stub()
+    update_mock = AsyncMock(return_value={"ok": True})
+    db_mock = type("DB", (), {})()
+
+    async def fake_get_uuid(tg):
+        return PANEL_UUID
+    db_mock.get_remnawave_premium_uuid = fake_get_uuid
+
+    with patch.object(remnawave_premium, "config", cfg), \
+         patch.object(remnawave_premium.remnawave_api, "update_user", update_mock), \
+         patch.dict("sys.modules", {"database": db_mock}):
+        await remnawave_premium.renew_premium_user(
+            42, datetime(2030, 6, 1, tzinfo=timezone.utc),
+        )
+    assert "externalSquadUuid" not in update_mock.call_args.kwargs
