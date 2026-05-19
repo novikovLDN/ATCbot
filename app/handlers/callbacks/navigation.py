@@ -1555,6 +1555,7 @@ async def callback_mini_shop(callback: CallbackQuery):
         [InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="stars_buy")],
         [InlineKeyboardButton(text="🍎 Пополнить Apple ID", callback_data="apple_region")],
         [InlineKeyboardButton(text="🎮 Пополнить Steam", callback_data="steam:disclaimer")],
+        [InlineKeyboardButton(text="🧠 Claude Pro/Max (скоро)", callback_data="claude_coming_soon")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
 
@@ -1569,6 +1570,13 @@ async def callback_mini_shop(callback: CallbackQuery):
         )
     else:
         await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "claude_coming_soon")
+async def callback_claude_coming_soon(callback: CallbackQuery):
+    """Claude Pro/Max — placeholder until launch."""
+    language = await resolve_user_language(callback.from_user.id)
+    await callback.answer(i18n_get_text(language, "shop.claude_coming_soon"), show_alert=True)
 
 
 @router.callback_query(F.data == "apple_region")
