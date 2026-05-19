@@ -134,30 +134,62 @@ def _result_from_existing(user: dict, *, http_status: int) -> PremiumCreateResul
     )
 
 
-async def _ensure_premium_external_squad(panel_uuid: Optional[str], existing: dict) -> None:
-    """Task 6: PATCH `externalSquadUuid` on an adopted premium entity if it
-    doesn't already match the configured value.  Idempotent — skipped when
-    the config var is unset or the value is already correct.  Never raises;
-    a PATCH failure is logged at WARN and the adoption proceeds (the next
-    renewal will retry via `renew_premium_user`).
+async def _ensure_premium_entity_state(
+    panel_uuid: Optional[str],
+    existing: dict,
+    expire_at: datetime,
+) -> bool:
+    """After adopting a premium entity, PATCH expireAt + status (+ Task 6
+    externalSquadUuid when configured) so the panel state reflects the
+    caller's intent.  Idempotent — re-applying the same value is a no-op
+    for the panel.
+
+    Why this exists: `provision_subscription` falls into the adoption
+    path either when the DB has no `remnawave_premium_uuid` (legacy /
+    interrupted state) or when the renewal PATCH failed and we retried
+    via create-then-adopt.  Without this helper the adopted entity keeps
+    its STALE expireAt — the user pays, DB advances, but the panel
+    silently retains the old expiry → the key dies on the OLD date.
+
+    Returns True on success, False on failure.  On failure logs CRITICAL:
+    the user has paid but the panel state is now out-of-sync with DB and
+    requires manual repair (re-trigger sync or admin PATCH).  Never
+    raises — the adoption itself still succeeds.
     """
-    target = getattr(config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None) or None
-    if not target or not panel_uuid:
-        return
-    current = (existing or {}).get("externalSquadUuid")
-    if current == target:
-        return
+    if not panel_uuid:
+        return False
+    update_fields: dict = {
+        "expireAt": _iso_z(expire_at),
+        "status": "ACTIVE",
+    }
+    target_squad = getattr(
+        config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None,
+    ) or None
+    if target_squad:
+        update_fields["externalSquadUuid"] = target_squad
     try:
-        await remnawave_api.update_user(panel_uuid, externalSquadUuid=target)
-        logger.info(
-            "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_PATCHED: uuid=%s squad=%s (was=%s)",
-            panel_uuid[:8], target, current,
+        result = await remnawave_api.update_user(panel_uuid, **update_fields)
+        if result is not None:
+            logger.info(
+                "REMNAWAVE_PREMIUM_ADOPTED_PATCHED: uuid=%s expire=%s ext_squad=%s",
+                panel_uuid[:8], update_fields["expireAt"],
+                (target_squad or "")[:8] or "—",
+            )
+            return True
+        logger.critical(
+            "REMNAWAVE_PREMIUM_ADOPTED_PATCH_FAIL: uuid=%s expire=%s — "
+            "entity adopted but expireAt NOT extended; user paid but "
+            "panel state is stale, requires manual repair",
+            panel_uuid[:8], update_fields["expireAt"],
         )
+        return False
     except Exception as e:
-        logger.warning(
-            "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_PATCH_FAIL: uuid=%s err=%s",
+        logger.critical(
+            "REMNAWAVE_PREMIUM_ADOPTED_PATCH_ERROR: uuid=%s err=%s — "
+            "entity adopted but expireAt NOT extended",
             panel_uuid[:8], e,
         )
+        return False
 
 
 async def create_premium_user_entity(
@@ -236,7 +268,7 @@ async def create_premium_user_entity(
                 telegram_id, username, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=200)
-            await _ensure_premium_external_squad(result.panel_uuid, existing)
+            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
             return result
         logger.warning(
             "REMNAWAVE_PREMIUM_USERNAME_TAKEN_UNRELATED: tg=%s username=%s existing_tg=%s",
@@ -297,7 +329,7 @@ async def create_premium_user_entity(
                 telegram_id, (existing.get("uuid") or "")[:8],
             )
             result = _result_from_existing(existing, http_status=409)
-            await _ensure_premium_external_squad(result.panel_uuid, existing)
+            await _ensure_premium_entity_state(result.panel_uuid, existing, expire_at)
             return result
         # 409 not from a username race we own — fall through to the
         # forced-UUID retry below (might be uuid conflict).
@@ -344,6 +376,10 @@ async def create_premium_user_entity(
 async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
     """Patch expireAt on the premium entity. Returns True on success.
 
+    Retries the PATCH up to 3 times with 1s/2s backoff so a transient
+    panel hiccup (500, timeout, brief 4xx) doesn't drop the user into
+    the create-fallback path with a stale expireAt.
+
     Task 6: when `REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID` is configured the
     same PATCH also stamps `externalSquadUuid` on the entity.  Idempotent
     (same value re-applied is a no-op) — this doubles as the safety net
@@ -366,14 +402,37 @@ async def renew_premium_user(telegram_id: int, new_expire_at: datetime) -> bool:
         ) or None
         if external_squad_uuid:
             update_fields["externalSquadUuid"] = external_squad_uuid
-        result = await remnawave_api.update_user(rmn_uuid, **update_fields)
-        if result is not None:
-            logger.info(
-                "REMNAWAVE_PREMIUM_RENEWED: tg=%s uuid=%s new_expire=%s ext_squad=%s",
-                telegram_id, rmn_uuid[:8], _iso_z(new_expire_at),
-                (external_squad_uuid or "")[:8] or "—",
+
+        MAX_ATTEMPTS = 3
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                result = await remnawave_api.update_user(rmn_uuid, **update_fields)
+            except Exception as e:
+                logger.warning(
+                    "REMNAWAVE_PREMIUM_RENEW_EXCEPTION: tg=%s uuid=%s attempt=%d/%d %s: %s",
+                    telegram_id, rmn_uuid[:8], attempt, MAX_ATTEMPTS,
+                    type(e).__name__, e,
+                )
+                result = None
+            if result is not None:
+                logger.info(
+                    "REMNAWAVE_PREMIUM_RENEWED: tg=%s uuid=%s new_expire=%s ext_squad=%s attempt=%d",
+                    telegram_id, rmn_uuid[:8], _iso_z(new_expire_at),
+                    (external_squad_uuid or "")[:8] or "—", attempt,
+                )
+                return True
+            logger.warning(
+                "REMNAWAVE_PREMIUM_RENEW_FAILED_ATTEMPT: tg=%s uuid=%s attempt=%d/%d",
+                telegram_id, rmn_uuid[:8], attempt, MAX_ATTEMPTS,
             )
-            return True
+            if attempt < MAX_ATTEMPTS:
+                await asyncio.sleep(float(attempt))  # 1s, then 2s
+        logger.critical(
+            "REMNAWAVE_PREMIUM_RENEW_EXHAUSTED: tg=%s uuid=%s new_expire=%s — "
+            "%d attempts failed; falling back to adopt-and-patch via "
+            "create_premium_user_entity",
+            telegram_id, rmn_uuid[:8], _iso_z(new_expire_at), MAX_ATTEMPTS,
+        )
         return False
     except Exception as e:
         logger.error("REMNAWAVE_PREMIUM_RENEW_ERROR: tg=%s %s: %s", telegram_id, type(e).__name__, e)
