@@ -178,10 +178,8 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
         buttons.append([
-            InlineKeyboardButton(
-                text="❓ Помощь",
-                url="https://t.me/Atlas_SupportSecurity"
-            ),
+            InlineKeyboardButton(text="🛍 Магазин", callback_data="mini_shop"),
+            InlineKeyboardButton(text="❓ Помощь", url="https://t.me/Atlas_SupportSecurity"),
         ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
