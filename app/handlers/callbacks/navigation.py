@@ -1579,6 +1579,64 @@ async def callback_claude_coming_soon(callback: CallbackQuery):
     await callback.answer(i18n_get_text(language, "shop.claude_coming_soon"), show_alert=True)
 
 
+@router.callback_query(F.data == "menu_help")
+async def callback_menu_help(callback: CallbackQuery):
+    """Help menu — FAQ, instructions, direct support."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "help.menu_title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📖 Ответы на частые вопросы", callback_data="faq")],
+        [InlineKeyboardButton(text="📲 Инструкции по сервису", callback_data="connect_instruction")],
+        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "faq")
+async def callback_faq(callback: CallbackQuery):
+    """FAQ — top 5 questions."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "help.faq_title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, f"help.faq_q{n}"), callback_data=f"faq:{n}")]
+        for n in range(1, 6)
+    ] + [
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("faq:"))
+async def callback_faq_answer(callback: CallbackQuery):
+    """FAQ — individual answer."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    try:
+        n = int(callback.data.split(":", 1)[1])
+        if n < 1 or n > 5:
+            return
+    except (ValueError, IndexError):
+        return
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, f"help.faq_a{n}")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="faq")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
 @router.callback_query(F.data == "apple_region")
 async def callback_apple_region(callback: CallbackQuery):
     """Apple ID — region selection."""
