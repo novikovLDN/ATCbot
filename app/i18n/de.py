@@ -802,7 +802,7 @@ LANG = {
     'traffic.buy_subscription': "📈 Abo kaufen",
     'traffic.buy_traffic_btn': "💳 Traffic kaufen",
     'traffic.back_to_traffic': "📊 Zum Traffic",
-    'traffic.buy_title': "📦 <b>Traffic kaufen</b> 🇷🇺\n\nWird zum aktuellen Guthaben hinzugefügt.\n\n<blockquote>📊 Geschätzter Verbrauch:\n├ 15 GB — ~1 Woche\n├ 50 GB — ~3 Wochen\n├ 75 GB — ~1 Monat\n├ 100 GB — ~1,5 Monate\n├ 150 GB — ~2,5 Monate\n└ 200 GB — ~3 Monate</blockquote>\n\n💡 Text und Fotos — wenig. Video und Reels — mehr.",
+    'traffic.buy_title': "📦 <b>Traffic kaufen</b> 🇷🇺\n\nWird zum aktuellen Guthaben hinzugefügt.\n\n♾ <b>Traffic verfällt nicht</b>\nKaufe GB und nutze sie, wann du willst.\nKeine „Monatslimits“ — du zahlst nur, was du tatsächlich verbrauchst.\n\n<blockquote>📊 Geschätzter Verbrauch:\n├ 15 GB — ~1 Woche\n├ 50 GB — ~3 Wochen\n├ 75 GB — ~1 Monat\n├ 100 GB — ~1,5 Monate\n├ 150 GB — ~2,5 Monate\n└ 200 GB — ~3 Monate</blockquote>\n\n💎 Je größer das Paket — desto günstiger pro GB",
     'traffic.buy_title_extended': "🌐 <b>Mehr Volumen 🇷🇺</b>\n\nWird zum aktuellen Guthaben hinzugefügt.\n\n<blockquote>📊 Geschätzter Verbrauch:\n├ 300 GB — ~5 Monate\n├ 600 GB — ~10 Monate\n├ 1 200 GB — ~1,5 Jahre\n├ 2 200 GB — ~3 Pers. pro Jahr\n├ 5 000 GB — ~7 Pers. pro Jahr\n└ 8 000 GB — ~11 Pers. pro Jahr</blockquote>",
     'traffic.confirm_purchase': "💳 <b>Zahlung: {gb} GB — {price} ₽</b>\n\n💰 Ihr Guthaben: {balance} ₽",
     'traffic.pay_balance': "💰 Vom Guthaben bezahlen ({price} ₽)",
