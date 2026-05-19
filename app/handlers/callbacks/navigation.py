@@ -1350,6 +1350,8 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
     else:
         text += "\n\nВыберите период:"
 
+    from app.handlers.payments.callbacks import _period_badge
+
     buttons = []
     period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
     for period_days, info in tariff.items():
@@ -1360,6 +1362,9 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
             btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=final_price)
         else:
             btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=base_price)
+        badge = _period_badge(period_days)
+        if badge:
+            btn_text = f"{btn_text} {badge}"
         buttons.append([InlineKeyboardButton(
             text=btn_text,
             callback_data=f"combo_period:{combo_type}:{period_days}",

@@ -43,6 +43,15 @@ _TARIFF_META = {
     "combo_plus":  {"icon": "🚀", "name": "Комбо Plus",  "desc_key": "combo.tariff_plus"},
 }
 
+
+def _period_badge(period_days: int) -> str:
+    """Emotional badge for period buttons: ⭐ for 3 mo (popular), 🔥 for 12+ mo (best deal)."""
+    if period_days == 90:
+        return "⭐"
+    if period_days >= 365:
+        return "🔥"
+    return ""
+
 def _current_tariff_key(sub) -> str:
     """Determine effective tariff key including combo flag."""
     if not sub:
@@ -250,15 +259,8 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
                 else:
                     period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
 
-            months = max(1, period_days // 30)
             price_int = int(final_price_rubles)
-
-            # Badge: ⭐ for 3 months, 🔥 for 12 months
-            badge = ""
-            if months == 3:
-                badge = "⭐"
-            elif months >= 12:
-                badge = "🔥"
+            badge = _period_badge(period_days)
 
             if has_discount:
                 if badge:
@@ -471,16 +473,20 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
         # Traffic GB for this period
         traffic_gb = config.TRAFFIC_LIMITS_GB.get(tariff_type, {}).get(period_days, 0)
 
+        badge = _period_badge(period_days)
+
         # Формируем текст кнопки с зачеркнутой ценой (если есть скидка)
         if has_discount:
+            key = "buy.button_price_discount_badge" if badge else "buy.button_price_discount"
             button_text = i18n_get_text(
-                language, "buy.button_price_discount",
-                base=int(base_price_rubles), final=int(final_price_rubles), period=period_text, gb=traffic_gb
+                language, key,
+                base=int(base_price_rubles), final=int(final_price_rubles), period=period_text, gb=traffic_gb, badge=badge,
             )
         else:
+            key = "buy.button_price_badge" if badge else "buy.button_price"
             button_text = i18n_get_text(
-                language, "buy.button_price",
-                price=int(final_price_rubles), period=period_text, gb=traffic_gb
+                language, key,
+                price=int(final_price_rubles), period=period_text, gb=traffic_gb, badge=badge,
             )
 
         # КРИТИЧНО: callback_data БЕЗ purchase_id - только tariff и period
@@ -851,7 +857,10 @@ async def callback_biz_country_selected(callback: CallbackQuery, state: FSMConte
             else:
                 period_text = i18n_get_text(language, "buy.period_5_plus", months=months)
 
+        badge = _period_badge(period_days)
         button_text = f"{price:,} ₽ — {period_text}".replace(",", " ")
+        if badge:
+            button_text = f"{button_text} {badge}"
         buttons.append([InlineKeyboardButton(
             text=button_text,
             callback_data=f"period:{tariff_type}:{period_days}"

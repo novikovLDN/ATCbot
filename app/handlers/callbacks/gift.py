@@ -132,11 +132,16 @@ async def callback_gift_tariff(callback: CallbackQuery, state: FSMContext):
 
     text = i18n_get_text(language, "gift.choose_period", tariff_name=tariff_name)
 
+    from app.handlers.payments.callbacks import _period_badge
+
     buttons = []
     for period_days in sorted(tariff_prices.keys()):
         price = tariff_prices[period_days]["price"]
         period_text = _period_display(period_days)
+        badge = _period_badge(period_days)
         btn_text = f"{period_text} — {price} ₽"
+        if badge:
+            btn_text = f"{btn_text} {badge}"
         buttons.append([InlineKeyboardButton(
             text=btn_text,
             callback_data=f"gift_period:{period_days}"
