@@ -823,7 +823,7 @@ LANG = {
     'traffic.buy_subscription': "📈 Buy Subscription",
     'traffic.buy_traffic_btn': "💳 Buy Traffic",
     'traffic.back_to_traffic': "📊 Back to Traffic",
-    'traffic.buy_title': "📦 <b>Buy Traffic</b> 🇷🇺\n\nAdded to your current balance.\n\n♾ <b>Traffic never expires</b>\nBuy GBs and use them whenever you want.\nNo \"monthly limits\" — pay only for what you actually use.\n\n<blockquote>📊 Estimated usage:\n├ 15 GB — ~1 week\n├ 50 GB — ~3 weeks\n├ 75 GB — ~1 month\n├ 100 GB — ~1.5 months\n├ 150 GB — ~2.5 months\n└ 200 GB — ~3 months</blockquote>\n\n💎 The bigger the pack — the cheaper per GB",
+    'traffic.buy_title': "📦 <b>Buy Traffic</b> 🇷🇺\n\nAdded to your current balance.\n\n🪙 <b>The pack is your personal GB balance</b>\nIt doesn't expire and isn't tied to a subscription —\nit only depletes when you actually use it.\n\n✨ Get just what you need — and use it at your own pace.\nWhen it runs out, top up whenever it's convenient 🤍\n\n<blockquote>📊 Estimated usage:\n├ 15 GB — ~1 week\n├ 50 GB — ~3 weeks\n├ 75 GB — ~1 month\n├ 100 GB — ~1.5 months\n├ 150 GB — ~2.5 months\n└ 200 GB — ~3 months</blockquote>\n\n💎 The bigger the pack — the cheaper per GB",
     'traffic.buy_title_extended': "🌐 <b>More Volume</b> 🇷🇺\n\nAdded to your current balance.\n\n<blockquote>📊 Estimated usage:\n├ 300 GB — ~5 months\n├ 600 GB — ~10 months\n├ 1,200 GB — ~1.5 years\n├ 2,200 GB — ~3 people for a year\n├ 5,000 GB — ~7 people for a year\n└ 8,000 GB — ~11 people for a year</blockquote>",
     'traffic.confirm_purchase': "💳 <b>Payment: {gb} GB — {price} ₽</b>\n\n💰 Your balance: {balance} ₽",
     'traffic.pay_balance': "💰 Pay from balance ({price} ₽)",

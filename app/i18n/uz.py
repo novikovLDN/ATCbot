@@ -802,7 +802,7 @@ LANG = {
     'traffic.buy_subscription': "📈 Obuna sotib olish",
     'traffic.buy_traffic_btn': "💳 Trafik sotib olish",
     'traffic.back_to_traffic': "📊 Trafikka qaytish",
-    'traffic.buy_title': "📦 <b>Trafik sotib olish</b> 🇷🇺\n\nJoriy qoldiqqa qo'shiladi.\n\n♾ <b>Trafik muddatsiz</b>\nGB sotib oling — qachon xohlasangiz sarflang.\n«Oylik limit» yo'q — faqat sarflagan trafigingiz uchun to'laysiz.\n\n<blockquote>📊 Taxminiy sarflanish:\n├ 15 GB — ~1 hafta\n├ 50 GB — ~3 hafta\n├ 75 GB — ~1 oy\n├ 100 GB — ~1.5 oy\n├ 150 GB — ~2.5 oy\n└ 200 GB — ~3 oy</blockquote>\n\n💎 Paket qancha katta bo'lsa — har bir GB shuncha arzon",
+    'traffic.buy_title': "📦 <b>Trafik sotib olish</b> 🇷🇺\n\nJoriy qoldiqqa qo'shiladi.\n\n🪙 <b>Paket — bu sizning shaxsiy GB zahirangiz</b>\nMuddati tugamaydi va obunaga bog'liq emas —\nfaqat haqiqatan foydalanganingizda sarflanadi.\n\n✨ Kerakli miqdorda oling — o'z sur'atingizda foydalaning.\nTugaganida — qachon qulay bo'lsa to'ldiring 🤍\n\n<blockquote>📊 Taxminiy sarflanish:\n├ 15 GB — ~1 hafta\n├ 50 GB — ~3 hafta\n├ 75 GB — ~1 oy\n├ 100 GB — ~1.5 oy\n├ 150 GB — ~2.5 oy\n└ 200 GB — ~3 oy</blockquote>\n\n💎 Paket qancha katta bo'lsa — har bir GB shuncha arzon",
     'traffic.buy_title_extended': "🌐 <b>Ko'proq hajm 🇷🇺</b>\n\nJoriy qoldiqqa qo'shiladi.\n\n<blockquote>📊 Taxminiy sarflanish:\n├ 300 GB — ~5 oy\n├ 600 GB — ~10 oy\n├ 1 200 GB — ~1.5 yil\n├ 2 200 GB — ~3 kishi yiliga\n├ 5 000 GB — ~7 kishi yiliga\n└ 8 000 GB — ~11 kishi yiliga</blockquote>",
     'traffic.confirm_purchase': "💳 <b>To'lov: {gb} GB — {price} ₽</b>\n\n💰 Balansingiz: {balance} ₽",
     'traffic.pay_balance': "💰 Balansdan to'lash ({price} ₽)",
