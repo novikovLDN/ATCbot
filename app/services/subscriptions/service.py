@@ -39,7 +39,8 @@ async def calculate_price(
     tariff: str,
     period_days: int,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    base_price_override_rubles: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Calculate final price for a subscription with all discounts applied.
@@ -69,23 +70,27 @@ async def calculate_price(
         PriceCalculationError: If price calculation fails
     """
     try:
-        # Validate tariff exists
-        if tariff not in config.TARIFFS:
-            raise InvalidTariffError(f"Invalid tariff: {tariff}")
-        
-        # Validate period exists for tariff
-        if period_days not in config.TARIFFS[tariff]:
-            raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
-        
+        # Combo tariffs pass an explicit base price (config.COMBO_TARIFFS),
+        # so they skip validation against config.TARIFFS.
+        if base_price_override_rubles is None:
+            # Validate tariff exists
+            if tariff not in config.TARIFFS:
+                raise InvalidTariffError(f"Invalid tariff: {tariff}")
+
+            # Validate period exists for tariff
+            if period_days not in config.TARIFFS[tariff]:
+                raise InvalidTariffError(f"Invalid period_days: {period_days} for tariff {tariff}")
+
         # Delegate to database layer
         result = await database.calculate_final_price(
             telegram_id=telegram_id,
             tariff=tariff,
             period_days=period_days,
             promo_code=promo_code,
-            country=country
+            country=country,
+            base_price_override_rubles=base_price_override_rubles
         )
-        
+
         return result
         
     except ValueError as e:
