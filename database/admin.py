@@ -372,6 +372,88 @@ async def get_analytics_by_period(hours: int) -> Dict[str, Any]:
         }
 
 
+async def get_purchase_breakdown() -> Dict[str, Any]:
+    """Per-category purchase counts and revenue across time windows.
+
+    Source: pending_purchases with status='paid' — the single table that
+    covers both subscription purchases (finalize_purchase marks it paid) and
+    notification-only products like the proxy (mark_pending_purchase_paid).
+
+    Categories: basic, plus, basic_combo, plus_combo, proxy.
+    Windows: 24h, 7d, 30d, 180d, 365d, all.
+
+    created_at is the checkout-start time (no separate paid timestamp is
+    stored), but payment completes within the ~15-min pending TTL, so it is
+    an accurate proxy for windows of a day or more.
+
+    Returns:
+        { category: { window: {"count": int, "revenue": int_kopecks} } }
+    """
+    pool = await get_pool()
+    now = datetime.now(timezone.utc)
+    s24 = _to_db_utc(now - timedelta(hours=24))
+    s7 = _to_db_utc(now - timedelta(days=7))
+    s30 = _to_db_utc(now - timedelta(days=30))
+    s180 = _to_db_utc(now - timedelta(days=180))
+    s365 = _to_db_utc(now - timedelta(days=365))
+
+    query = """
+        WITH classified AS (
+            SELECT
+                CASE
+                    WHEN purchase_type = 'proxy' THEN 'proxy'
+                    WHEN purchase_type = 'subscription' AND tariff = 'basic'
+                         AND COALESCE(is_combo, false) THEN 'basic_combo'
+                    WHEN purchase_type = 'subscription' AND tariff = 'plus'
+                         AND COALESCE(is_combo, false) THEN 'plus_combo'
+                    WHEN purchase_type = 'subscription' AND tariff = 'basic' THEN 'basic'
+                    WHEN purchase_type = 'subscription' AND tariff = 'plus'  THEN 'plus'
+                    ELSE NULL
+                END AS category,
+                price_kopecks,
+                created_at
+            FROM pending_purchases
+            WHERE status = 'paid'
+        )
+        SELECT
+            category,
+            COUNT(*) FILTER (WHERE created_at >= $1) AS c_24h,
+            COUNT(*) FILTER (WHERE created_at >= $2) AS c_7d,
+            COUNT(*) FILTER (WHERE created_at >= $3) AS c_30d,
+            COUNT(*) FILTER (WHERE created_at >= $4) AS c_180d,
+            COUNT(*) FILTER (WHERE created_at >= $5) AS c_365d,
+            COUNT(*) AS c_all,
+            COALESCE(SUM(price_kopecks) FILTER (WHERE created_at >= $1), 0) AS r_24h,
+            COALESCE(SUM(price_kopecks) FILTER (WHERE created_at >= $2), 0) AS r_7d,
+            COALESCE(SUM(price_kopecks) FILTER (WHERE created_at >= $3), 0) AS r_30d,
+            COALESCE(SUM(price_kopecks) FILTER (WHERE created_at >= $4), 0) AS r_180d,
+            COALESCE(SUM(price_kopecks) FILTER (WHERE created_at >= $5), 0) AS r_365d,
+            COALESCE(SUM(price_kopecks), 0) AS r_all
+        FROM classified
+        WHERE category IS NOT NULL
+        GROUP BY category
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(query, s24, s7, s30, s180, s365)
+
+    windows = ["24h", "7d", "30d", "180d", "365d", "all"]
+    result = {
+        cat: {w: {"count": 0, "revenue": 0} for w in windows}
+        for cat in ("basic", "plus", "basic_combo", "plus_combo", "proxy")
+    }
+    for row in rows:
+        cat = row["category"]
+        if cat not in result:
+            continue
+        for w in windows:
+            result[cat][w] = {
+                "count": row[f"c_{w}"] or 0,
+                "revenue": row[f"r_{w}"] or 0,
+            }
+    return result
+
+
 async def get_extended_bot_stats() -> Dict[str, Any]:
     """Расширенная статистика бота для мониторинга."""
     pool = await get_pool()
