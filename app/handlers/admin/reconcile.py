@@ -27,6 +27,8 @@ _TOLERANCE_SECONDS = 3600
 _MAX_SCAN = 5000
 # Seconds between live progress updates of the admin message.
 _PROGRESS_INTERVAL = 4
+# Concurrent Remnawave PATCH calls while fixing mismatches (no bulk endpoint).
+_FIX_CONCURRENCY = 8
 # Last reconciliation result per admin id — feeds the "Исправить" button.
 _last_mismatches: dict[int, list] = {}
 
@@ -249,27 +251,37 @@ async def callback_rmn_fix(callback: CallbackQuery):
         bot=callback.bot, parse_mode="HTML",
     )
 
-    fixed = 0
-    failed = 0
-    for i, m in enumerate(mismatches, 1):
-        try:
-            ok = await remnawave_premium.renew_premium_user(
-                m["telegram_id"], m["db_expires_at"],
-            )
-            if ok:
-                fixed += 1
-            else:
-                failed += 1
-        except Exception as e:
-            logger.warning("RECONCILE_FIX: tg=%s failed: %s", m["telegram_id"], e)
-            failed += 1
-        if i % 20 == 0 and i != total:
-            await safe_edit_text(
-                callback.message,
-                f"🔧 Исправляю расхождения…\n\n"
-                f"Обработано: <b>{i}</b> / {total}",
-                bot=callback.bot, parse_mode="HTML",
-            )
+    sem = asyncio.Semaphore(_FIX_CONCURRENCY)
+    progress: dict = {"done": 0}
+
+    async def _fix_one(m: dict) -> bool:
+        async with sem:
+            try:
+                ok = await remnawave_premium.renew_premium_user(
+                    m["telegram_id"], m["db_expires_at"],
+                )
+            except Exception as e:
+                logger.warning("RECONCILE_FIX: tg=%s failed: %s", m["telegram_id"], e)
+                ok = False
+        progress["done"] += 1
+        return bool(ok)
+
+    fix_task = asyncio.create_task(
+        asyncio.gather(*[_fix_one(m) for m in mismatches])
+    )
+    while not fix_task.done():
+        await asyncio.sleep(_PROGRESS_INTERVAL)
+        if fix_task.done():
+            break
+        await safe_edit_text(
+            callback.message,
+            "🔧 Исправляю расхождения…\n\n"
+            f"Обработано: <b>{progress['done']}</b> / {total}",
+            bot=callback.bot, parse_mode="HTML",
+        )
+    results = await fix_task
+    fixed = sum(1 for r in results if r)
+    failed = total - fixed
 
     _last_mismatches.pop(callback.from_user.id, None)
 
