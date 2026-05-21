@@ -44,6 +44,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         ],
         [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
         [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
+        [InlineKeyboardButton(text="🔄 Сверка с Remnawave", callback_data="admin:rmn_reconcile")],
     ])
     return keyboard
 
