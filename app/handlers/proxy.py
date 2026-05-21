@@ -233,8 +233,11 @@ async def _auto_delete(bot, chat_id: int, message_id: int):
 
 
 async def send_proxy_success(bot, telegram_id: int, purchase_id: str, pending: dict):
-    """Deliver the proxy after a confirmed payment. Called from confirmation.py."""
-    await database.mark_proxy_purchased(telegram_id)
+    """Deliver the proxy after a confirmed payment. Called from confirmation.py.
+
+    Delivers the link first, then records ownership — so a DB hiccup never
+    costs the buyer the product they paid for.
+    """
     try:
         await bot.send_message(
             telegram_id, _delivery_text(),
@@ -242,3 +245,8 @@ async def send_proxy_success(bot, telegram_id: int, purchase_id: str, pending: d
         )
     except Exception as e:
         logger.error("PROXY_DELIVERY_FAILED user=%s purchase_id=%s: %s", telegram_id, purchase_id, e)
+
+    try:
+        await database.mark_proxy_purchased(telegram_id)
+    except Exception as e:
+        logger.error("PROXY_MARK_FAILED user=%s purchase_id=%s: %s", telegram_id, purchase_id, e)
