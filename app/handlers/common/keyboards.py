@@ -101,8 +101,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             logger.warning(f"Error checking proxy ownership for main menu: {e}")
 
     proxy_button = InlineKeyboardButton(
-        text=("🧩 Мой Telegram-прокси" if has_proxy
-              else f"🧩 Telegram-прокси — {config.PROXY_PRICE_RUBLES} ₽"),
+        text=("🧩 Мой прокси" if has_proxy else "🧩 Telegram MT Прокси"),
         callback_data="proxy_menu",
     )
 
