@@ -27,6 +27,8 @@ _TOLERANCE_SECONDS = 3600
 _MAX_SCAN = 2000
 # Concurrent Remnawave API calls.
 _CONCURRENCY = 10
+# Seconds between live progress updates of the admin message.
+_PROGRESS_INTERVAL = 4
 # Last reconciliation result per admin id — feeds the "Исправить" button.
 _last_mismatches: dict[int, list] = {}
 
@@ -47,17 +49,24 @@ def _parse_rmn_dt(value) -> "datetime | None":
         return None
 
 
-async def _scan_mismatches() -> "tuple[int, list]":
+async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]":
     """Compare DB expires_at vs Remnawave expireAt for premium VPN users.
 
     Returns (checked_count, mismatches). Each mismatch is a dict with
     telegram_id, db_expires_at, rmn_expires_at (datetime or None), reason.
+
+    If `progress` is given, its "total" / "done" keys are kept up to date so a
+    caller can render a live progress indicator while the scan runs.
     """
     subs = await database.get_all_active_subscriptions()
     premium = [
         s for s in subs
         if s.get("remnawave_premium_uuid") and s.get("expires_at")
     ][:_MAX_SCAN]
+
+    if progress is not None:
+        progress["total"] = len(premium)
+        progress["done"] = 0
 
     sem = asyncio.Semaphore(_CONCURRENCY)
 
@@ -95,7 +104,14 @@ async def _scan_mismatches() -> "tuple[int, list]":
             }
         return None
 
-    results = await asyncio.gather(*[_check(s) for s in premium])
+    async def _check_counted(sub: dict) -> "dict | None":
+        try:
+            return await _check(sub)
+        finally:
+            if progress is not None:
+                progress["done"] += 1
+
+    results = await asyncio.gather(*[_check_counted(s) for s in premium])
     mismatches = [r for r in results if r is not None]
     return len(premium), mismatches
 
@@ -148,12 +164,25 @@ async def callback_rmn_reconcile(callback: CallbackQuery):
 
     await safe_edit_text(
         callback.message,
-        "🔄 Сверяю premium-подписки с Remnawave…\nЭто может занять до минуты.",
+        "🔄 Сверяю premium-подписки с Remnawave…\n"
+        "При большой базе это может занять несколько минут — дождитесь отчёта.",
         bot=callback.bot, parse_mode="HTML",
     )
 
+    progress: dict = {"total": 0, "done": 0}
     try:
-        checked, mismatches = await _scan_mismatches()
+        scan_task = asyncio.create_task(_scan_mismatches(progress))
+        while not scan_task.done():
+            await asyncio.sleep(_PROGRESS_INTERVAL)
+            total = progress.get("total") or 0
+            if total and not scan_task.done():
+                await safe_edit_text(
+                    callback.message,
+                    "🔄 Сверяю premium-подписки с Remnawave…\n\n"
+                    f"Проверено: <b>{progress.get('done', 0)}</b> / {total}",
+                    bot=callback.bot, parse_mode="HTML",
+                )
+        checked, mismatches = await scan_task
     except Exception as e:
         logger.exception("RECONCILE: scan failed: %s", e)
         await safe_edit_text(
@@ -201,15 +230,16 @@ async def callback_rmn_fix(callback: CallbackQuery):
         )
         return
 
+    total = len(mismatches)
     await safe_edit_text(
         callback.message,
-        f"🔧 Исправляю {len(mismatches)} расхождений…",
+        f"🔧 Исправляю {total} расхождений…",
         bot=callback.bot, parse_mode="HTML",
     )
 
     fixed = 0
     failed = 0
-    for m in mismatches:
+    for i, m in enumerate(mismatches, 1):
         try:
             ok = await remnawave_premium.renew_premium_user(
                 m["telegram_id"], m["db_expires_at"],
@@ -221,6 +251,13 @@ async def callback_rmn_fix(callback: CallbackQuery):
         except Exception as e:
             logger.warning("RECONCILE_FIX: tg=%s failed: %s", m["telegram_id"], e)
             failed += 1
+        if i % 20 == 0 and i != total:
+            await safe_edit_text(
+                callback.message,
+                f"🔧 Исправляю расхождения…\n\n"
+                f"Обработано: <b>{i}</b> / {total}",
+                bot=callback.bot, parse_mode="HTML",
+            )
 
     _last_mismatches.pop(callback.from_user.id, None)
 
