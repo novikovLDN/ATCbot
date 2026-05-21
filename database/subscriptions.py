@@ -4125,13 +4125,23 @@ async def mark_pending_purchase_paid(purchase_id: str) -> bool:
 
 
 async def has_purchased_proxy(telegram_id: int) -> bool:
-    """True if the user already owns the standalone Telegram-proxy product."""
+    """True if the user already owns the standalone Telegram-proxy product.
+
+    Tolerates a missing proxy_purchased_at column (migration 051 not applied
+    yet) by treating the user as a non-owner instead of raising.
+    """
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT proxy_purchased_at FROM users WHERE telegram_id = $1",
-            telegram_id,
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT proxy_purchased_at FROM users WHERE telegram_id = $1",
+                telegram_id,
+            )
+    except asyncpg.UndefinedColumnError:
+        logger.warning(
+            "has_purchased_proxy: users.proxy_purchased_at missing — migration 051 not applied"
         )
+        return False
     return bool(row and row["proxy_purchased_at"] is not None)
 
 
