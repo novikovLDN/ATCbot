@@ -44,34 +44,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         ],
         [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
         [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
-        # — Миграция samopis → Remnawave (Task 1 из ТЗ) —
-        [
-            InlineKeyboardButton(text="📊 Status", callback_data="admin:mig_status"),
-            InlineKeyboardButton(text="🔬 Verify", callback_data="admin:mig_verify"),
-            InlineKeyboardButton(text="📥 Download log", callback_data="admin:migration_download"),
-        ],
-        [
-            InlineKeyboardButton(text="🔍 Dry Run 50", callback_data="admin:mig_dryrun50"),
-            InlineKeyboardButton(text="🔎 Dry Run FULL", callback_data="admin:mig_dryrun_full"),
-        ],
-        [
-            InlineKeyboardButton(text="🎯 Apply 1", callback_data="admin:mig_apply1_input"),
-            InlineKeyboardButton(text="🛠 Apply 10", callback_data="admin:mig_apply10"),
-            InlineKeyboardButton(text="🛠 Apply 100", callback_data="admin:mig_apply100"),
-        ],
-        [
-            InlineKeyboardButton(text="🔢 Apply 500", callback_data="admin:mig_apply500"),
-            InlineKeyboardButton(text="🔢 Apply 1000", callback_data="admin:mig_apply1000"),
-        ],
-        [
-            InlineKeyboardButton(text="🚨 Apply ALL", callback_data="admin:mig_apply_all"),
-            InlineKeyboardButton(text="🧹 Clear stale lock", callback_data="admin:mig_clear_lock"),
-        ],
-        # — Task 3: уведомление о миграции инфраструктуры (one-shot broadcast) —
-        [
-            InlineKeyboardButton(text="🧪 Test mig-notice", callback_data="admin:mig_bcast_test"),
-            InlineKeyboardButton(text="📢 Broadcast mig-notice", callback_data="admin:mig_bcast"),
-        ],
+        [InlineKeyboardButton(text="🔄 Сверка с Remnawave", callback_data="admin:rmn_reconcile")],
     ])
     return keyboard
 

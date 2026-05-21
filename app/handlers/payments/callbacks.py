@@ -215,11 +215,24 @@ async def callback_switch_tariff(callback: CallbackQuery, state: FSMContext):
     buttons = []
 
     if is_combo:
-        # Комбо-тариф: берём цены из COMBO_TARIFFS
+        # Комбо-тариф: берём цены из COMBO_TARIFFS + применяем цепочку скидок
         tariff_data = config.COMBO_TARIFFS.get(new_tariff, {})
         period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
+        promo_session = await get_promo_session(state)
+        promo_code = promo_session.get("promo_code") if promo_session else None
         for period_days, info in tariff_data.items():
-            btn_text = i18n_get_text(language, period_keys.get(period_days, "combo.period_1"), gb=info["gb"], price=info["price"])
+            try:
+                price_info = await subscription_service.calculate_price(
+                    telegram_id=telegram_id,
+                    tariff=info["base_tariff"],
+                    period_days=period_days,
+                    promo_code=promo_code,
+                    base_price_override_rubles=info["price"],
+                )
+                price_rub = price_info["final_price_kopecks"] // 100
+            except Exception:
+                price_rub = info["price"]
+            btn_text = i18n_get_text(language, period_keys.get(period_days, "combo.period_1"), gb=info["gb"], price=price_rub)
             buttons.append([InlineKeyboardButton(
                 text=btn_text,
                 callback_data=f"combo_period:{new_tariff}:{period_days}",

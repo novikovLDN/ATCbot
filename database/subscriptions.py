@@ -3747,7 +3747,8 @@ async def calculate_final_price(
     tariff: str,
     period_days: int,
     promo_code: Optional[str] = None,
-    country: Optional[str] = None
+    country: Optional[str] = None,
+    base_price_override_rubles: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     ЕДИНАЯ ФУНКЦИЯ РАСЧЕТА ФИНАЛЬНОЙ ЦЕНЫ (SINGLE SOURCE OF TRUTH)
@@ -3780,20 +3781,25 @@ async def calculate_final_price(
         ValueError: Если тариф или период не найдены в конфиге
     """
     import config
-    
-    # Проверяем валидность тарифа и периода
-    if tariff not in config.TARIFFS:
-        raise ValueError(f"Invalid tariff: {tariff}")
-    
-    if period_days not in config.TARIFFS[tariff]:
-        raise ValueError(f"Invalid period_days: {period_days} for tariff {tariff}")
-    
-    # Получаем базовую цену в рублях из конфига
-    base_price_rubles = config.TARIFFS[tariff][period_days]["price"]
-    # Для бизнес-тарифов применяем множитель страны
-    if country and config.is_biz_tariff(tariff):
-        multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
-        base_price_rubles = int(round(base_price_rubles * multiplier / 100) * 100)
+
+    if base_price_override_rubles is not None:
+        # Комбо-тарифы: базовая цена приходит из config.COMBO_TARIFFS,
+        # её нет в config.TARIFFS — берём как есть, скидки применяются ниже.
+        base_price_rubles = base_price_override_rubles
+    else:
+        # Проверяем валидность тарифа и периода
+        if tariff not in config.TARIFFS:
+            raise ValueError(f"Invalid tariff: {tariff}")
+
+        if period_days not in config.TARIFFS[tariff]:
+            raise ValueError(f"Invalid period_days: {period_days} for tariff {tariff}")
+
+        # Получаем базовую цену в рублях из конфига
+        base_price_rubles = config.TARIFFS[tariff][period_days]["price"]
+        # Для бизнес-тарифов применяем множитель страны
+        if country and config.is_biz_tariff(tariff):
+            multiplier = config.BIZ_COUNTRIES.get(country, {}).get("multiplier", 1.0)
+            base_price_rubles = int(round(base_price_rubles * multiplier / 100) * 100)
     base_price_kopecks = round(base_price_rubles * 100)
     
     # ПРИОРИТЕТ 0: Промокод (высший приоритет, перекрывает все остальные скидки)

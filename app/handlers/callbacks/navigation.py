@@ -1340,9 +1340,10 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
     else:
         text = i18n_get_text(language, "combo.tariff_plus")
 
-    # Check for active promo
+    # Check for active promo (FSM) — used for the header label
     from app.handlers.common.utils import get_promo_session
     promo_session = await get_promo_session(state)
+    promo_code = promo_session.get("promo_code") if promo_session else None
     discount_pct = promo_session.get("discount_percent", 0) if promo_session else 0
 
     if discount_pct > 0:
@@ -1351,17 +1352,24 @@ async def callback_combo_tariff(callback: CallbackQuery, state: FSMContext):
         text += "\n\nВыберите период:"
 
     from app.handlers.payments.callbacks import _period_badge
+    from app.services.subscriptions import service as subscription_service
 
     buttons = []
     period_keys = {30: "combo.period_1", 90: "combo.period_3", 180: "combo.period_6", 365: "combo.period_12", 730: "combo.period_24"}
     for period_days, info in tariff.items():
-        base_price = info["price"]
-        if discount_pct > 0:
-            import math
-            final_price = math.ceil(base_price * (1 - discount_pct / 100))
-            btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=final_price)
-        else:
-            btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=base_price)
+        # Прогоняем через полную цепочку скидок (промокод / VIP / спецоффер / персональная)
+        try:
+            price_info = await subscription_service.calculate_price(
+                telegram_id=callback.from_user.id,
+                tariff=info["base_tariff"],
+                period_days=period_days,
+                promo_code=promo_code,
+                base_price_override_rubles=info["price"],
+            )
+            final_price = price_info["final_price_kopecks"] // 100
+        except Exception:
+            final_price = info["price"]
+        btn_text = i18n_get_text(language, period_keys[period_days], gb=info["gb"], price=final_price)
         badge = _period_badge(period_days)
         if badge:
             btn_text = f"{btn_text} {badge}"
@@ -1407,14 +1415,21 @@ async def callback_combo_period(callback: CallbackQuery, state: FSMContext):
     base_price_kopecks = info["price"] * 100
     gb = info["gb"]
 
-    # Apply promo discount if active
+    # Apply full discount chain (promo / VIP / special offer / personal)
     from app.handlers.common.utils import get_promo_session
+    from app.services.subscriptions import service as subscription_service
     promo_session = await get_promo_session(state)
-    if promo_session:
-        discount_pct = promo_session.get("discount_percent", 0)
-        import math
-        price_kopecks = math.ceil(base_price_kopecks * (1 - discount_pct / 100))
-    else:
+    promo_code = promo_session.get("promo_code") if promo_session else None
+    try:
+        price_info = await subscription_service.calculate_price(
+            telegram_id=callback.from_user.id,
+            tariff=base_tariff,
+            period_days=period_days,
+            promo_code=promo_code,
+            base_price_override_rubles=info["price"],
+        )
+        price_kopecks = price_info["final_price_kopecks"]
+    except Exception:
         price_kopecks = base_price_kopecks
 
     # Сохраняем данные в FSM для стандартного платёжного потока
