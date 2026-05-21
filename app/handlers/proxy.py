@@ -23,6 +23,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardBut
 
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.utils import safe_edit_text
+from app.utils.telegram_safe import safe_send_message
 
 proxy_router = Router()
 logger = logging.getLogger(__name__)
@@ -34,42 +35,42 @@ _LAVA_INVOICE_TIMEOUT = 15 * 60  # seconds
 
 def _sales_text() -> str:
     return (
-        "🧩 <b>Telegram-прокси</b>\n\n"
+        "![🧩](tg://emoji?id=5213306719215577669) <b>Telegram-прокси</b>\n\n"
         "Возвращает Telegram скорость, если его замедлили. "
         "Подключение в одно касание — без приложений и настроек.\n\n"
-        "⚠️ Не включайте вместе с VPN на одном устройстве — "
-        "они мешают друг другу. Прокси нужен там, где VPN нет.\n\n"
-        "💡 Прокси ускоряет только Telegram. Для сайтов и других "
-        "приложений нужен VPN Atlas Secure.\n\n"
-        f"💳 <b>{config.PROXY_PRICE_RUBLES} ₽</b> — разово, навсегда."
+        "![⚠️](tg://emoji?id=5447644880824181073) Не включайте вместе с VPN "
+        "на одном устройстве — они мешают друг другу. Прокси нужен там, "
+        "где VPN нет.\n\n"
+        "![💡](tg://emoji?id=5262844652964303985) Прокси ускоряет только "
+        "Telegram. Для сайтов и других приложений нужен VPN Atlas Secure.\n\n"
+        f"![💳](tg://emoji?id=5472250091332993630) <b>{config.PROXY_PRICE_RUBLES} ₽</b> "
+        "— разово, навсегда."
     )
 
 
 def _delivery_text() -> str:
     return (
-        "🧩 <b>Ваш Telegram-прокси готов</b>\n\n"
+        "![🧩](tg://emoji?id=5213306719215577669) <b>Ваш Telegram-прокси готов</b>\n\n"
         "Как подключить:\n"
-        "1️⃣ Нажмите кнопку «🔌 Подключить прокси» ниже\n"
-        "2️⃣ В открывшемся окне Telegram нажмите «Подключить»\n"
-        "3️⃣ Готово — Telegram работает через прокси\n\n"
-        "⚠️ Прокси ускоряет только Telegram. На устройстве с активным "
-        "VPN Atlas Secure прокси включать не нужно — они могут "
-        "конфликтовать.\n\n"
-        "🌍 Нужен полный доступ ко всем сайтам и приложениям, а не "
-        "только к Telegram? Оформите VPN Atlas Secure."
+        "![1️⃣](tg://emoji?id=5382322671679708881) Нажмите кнопку "
+        "«🔌 Подключить прокси» ниже\n"
+        "![2️⃣](tg://emoji?id=5381990043642502553) В открывшемся окне "
+        "Telegram нажмите «Подключить»\n"
+        "![3️⃣](tg://emoji?id=5381879959335738545) Готово — Telegram "
+        "работает через прокси\n\n"
+        "![⚠️](tg://emoji?id=5447644880824181073) Прокси ускоряет только "
+        "Telegram. На устройстве с активным VPN Atlas Secure прокси "
+        "включать не нужно — они могут конфликтовать.\n\n"
+        "![🌍](tg://emoji?id=5224450179368767019) Нужен полный доступ ко "
+        "всем сайтам и приложениям, а не только к Telegram? Оформите "
+        "VPN Atlas Secure."
     )
 
 
 def _sales_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"🏦 Оплатить через СБП — {config.PROXY_PRICE_RUBLES} ₽",
-            callback_data="proxy_pay_sbp",
-        )],
-        [InlineKeyboardButton(
-            text=f"💳 Оплатить картой — {config.PROXY_PRICE_RUBLES} ₽",
-            callback_data="proxy_pay_lava",
-        )],
+        [InlineKeyboardButton(text="🏦 СБП (+11%)", callback_data="proxy_pay_sbp")],
+        [InlineKeyboardButton(text="💳 Банковская карта", callback_data="proxy_pay_lava")],
         [InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu_main")],
     ])
@@ -238,13 +239,10 @@ async def send_proxy_success(bot, telegram_id: int, purchase_id: str, pending: d
     Delivers the link first, then records ownership — so a DB hiccup never
     costs the buyer the product they paid for.
     """
-    try:
-        await bot.send_message(
-            telegram_id, _delivery_text(),
-            reply_markup=_delivery_keyboard(), parse_mode="HTML",
-        )
-    except Exception as e:
-        logger.error("PROXY_DELIVERY_FAILED user=%s purchase_id=%s: %s", telegram_id, purchase_id, e)
+    # safe_send_message runs convert_tg_emoji + handles blocked users.
+    await safe_send_message(
+        bot, telegram_id, _delivery_text(), reply_markup=_delivery_keyboard(),
+    )
 
     try:
         await database.mark_proxy_purchased(telegram_id)
