@@ -304,6 +304,87 @@ async def callback_admin_stats(callback: CallbackQuery):
         await callback.answer(i18n_get_text(language, "errors.stats"), show_alert=True)
 
 
+def _fmt_rub(kopecks: int) -> str:
+    """Compact ruble amount: 597, 2.4к, 98к, 1.2М."""
+    rub = (kopecks or 0) / 100
+    if rub >= 1_000_000:
+        return f"{rub / 1_000_000:.1f}М"
+    if rub >= 10_000:
+        return f"{rub / 1000:.0f}к"
+    if rub >= 1000:
+        return f"{rub / 1000:.1f}к"
+    return f"{rub:.0f}"
+
+
+def _format_purchase_stats(data: dict) -> str:
+    """Render the purchase breakdown as two aligned <pre> tables."""
+    windows = [
+        ("24ч", "24h"), ("7д", "7d"), ("30д", "30d"),
+        ("180д", "180d"), ("1г", "365d"), ("всё", "all"),
+    ]
+    cats = [
+        ("Basic", "basic"), ("Plus", "plus"),
+        ("Basic комбо", "basic_combo"), ("Plus комбо", "plus_combo"),
+        ("MT Proxy", "proxy"),
+    ]
+    LW, CW = 12, 7
+
+    def _row(label: str, cells: list) -> str:
+        return label.ljust(LW) + "".join(str(c).rjust(CW) for c in cells)
+
+    def _table(field: str, formatter) -> str:
+        lines = [_row("", [w[0] for w in windows])]
+        totals = [0] * len(windows)
+        for clabel, ckey in cats:
+            raw = [data[ckey][wkey][field] for _, wkey in windows]
+            for i, v in enumerate(raw):
+                totals[i] += v
+            lines.append(_row(clabel, [formatter(v) for v in raw]))
+        lines.append("─" * (LW + CW * len(windows)))
+        lines.append(_row("Итого", [formatter(v) for v in totals]))
+        return "\n".join(lines)
+
+    count_tbl = _table("count", lambda v: str(v))
+    rev_tbl = _table("revenue", _fmt_rub)
+    return (
+        "📦 <b>Покупки по тарифам</b>\n\n"
+        "Количество покупок:\n"
+        f"<pre>{count_tbl}</pre>\n"
+        "Выручка, ₽ (≈):\n"
+        f"<pre>{rev_tbl}</pre>\n"
+        "<i>Источник — завершённые покупки. Время считается по началу "
+        "оформления (оплата проходит в пределах 15 мин). Оплаты через "
+        "Telegram Stars в выручке учитываются приблизительно.</i>"
+    )
+
+
+@admin_stats_router.callback_query(F.data == "admin:purchase_stats")
+async def callback_admin_purchase_stats(callback: CallbackQuery):
+    """Раздел: покупки по тарифам (Basic / Plus / комбо / MT Proxy)."""
+    language = await resolve_user_language(callback.from_user.id)
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer(i18n_get_text(language, "admin.access_denied"), show_alert=True)
+        return
+
+    try:
+        data = await database.get_purchase_breakdown()
+        text = _format_purchase_stats(data)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:purchase_stats")],
+            [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
+        ])
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+
+        await database._log_audit_event_atomic_standalone(
+            "admin_view_purchase_stats", callback.from_user.id, None,
+            "Admin viewed purchase breakdown",
+        )
+    except Exception as e:
+        logging.exception(f"Error in callback_admin_purchase_stats: {e}")
+        await callback.answer(i18n_get_text(language, "errors.stats"), show_alert=True)
+
+
 @admin_stats_router.callback_query(F.data == "admin:referral_stats")
 async def callback_admin_referral_stats(callback: CallbackQuery):
     """Реферальная статистика - главный экран с общей статистикой"""
