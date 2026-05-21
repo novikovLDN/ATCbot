@@ -145,6 +145,22 @@ TARIFFS = {
     },
 }
 
+# ── Telegram MTProto-прокси ─────────────────────────────────────────────
+# Разовая покупка (навсегда). Одна статичная ссылка на всех покупателей —
+# никакой сущности в Remnawave, подписка не активируется.
+PROXY_PRICE_RUBLES = 69
+# tg:// форма — открывает диалог подключения в Telegram.
+PROXY_TG_LINK = (
+    "tg://proxy?server=mtproxytg.atlassecure.uk&port=443"
+    "&secret=7u9aLwhaS5PXI6GiK2T4OjphenVyZS5taWNyb3NvZnQuY29t"
+)
+# https://t.me/proxy форма — используется в URL-кнопке (надёжно работает
+# в inline-кнопках, в отличие от tg://).
+PROXY_HTTPS_LINK = (
+    "https://t.me/proxy?server=mtproxytg.atlassecure.uk&port=443"
+    "&secret=7u9aLwhaS5PXI6GiK2T4OjphenVyZS5taWNyb3NvZnQuY29t"
+)
+
 # Список всех бизнес-тарифов (для проверок)
 BIZ_TARIFFS = ("biz_starter", "biz_team", "biz_business", "biz_pro", "biz_enterprise", "biz_ultimate")
 
