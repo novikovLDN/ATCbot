@@ -23,10 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Tolerance: differences below this are treated as equal (clock skew / rounding).
 _TOLERANCE_SECONDS = 3600
-# Max users scanned per run (safety ceiling for the API loop).
-_MAX_SCAN = 2000
-# Concurrent Remnawave API calls.
-_CONCURRENCY = 10
+# Max premium subscriptions scanned per run (safety ceiling).
+_MAX_SCAN = 5000
 # Seconds between live progress updates of the admin message.
 _PROGRESS_INTERVAL = 4
 # Last reconciliation result per admin id — feeds the "Исправить" button.
@@ -52,11 +50,17 @@ def _parse_rmn_dt(value) -> "datetime | None":
 async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]":
     """Compare DB expires_at vs Remnawave expireAt for premium VPN users.
 
+    Fetches the whole Remnawave user base once via paginated GET /api/users,
+    then compares locally — a handful of API calls instead of one per user.
+
     Returns (checked_count, mismatches). Each mismatch is a dict with
     telegram_id, db_expires_at, rmn_expires_at (datetime or None), reason.
 
-    If `progress` is given, its "total" / "done" keys are kept up to date so a
-    caller can render a live progress indicator while the scan runs.
+    Raises RuntimeError if Remnawave cannot return the user list, so the
+    caller reports a clear error instead of acting on partial data.
+
+    If `progress` is given, its "phase" / "total" / "done" keys are kept
+    current so the caller can render a live progress indicator.
     """
     subs = await database.get_all_active_subscriptions()
     premium = [
@@ -65,54 +69,59 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
     ][:_MAX_SCAN]
 
     if progress is not None:
+        progress["phase"] = "fetch"
         progress["total"] = len(premium)
         progress["done"] = 0
 
-    sem = asyncio.Semaphore(_CONCURRENCY)
+    all_users = await remnawave_api.get_all_users()
+    if all_users is None:
+        raise RuntimeError(
+            "Remnawave не отдал список пользователей (GET /api/users)."
+        )
 
-    async def _check(sub: dict) -> "dict | None":
+    by_uuid: dict = {}
+    for u in all_users:
+        uid = u.get("uuid")
+        if uid:
+            by_uuid[uid] = u
+
+    if progress is not None:
+        progress["phase"] = "compare"
+
+    mismatches = []
+    for sub in premium:
+        if progress is not None:
+            progress["done"] += 1
         telegram_id = sub.get("telegram_id")
         db_expires = sub.get("expires_at")
         uuid = sub.get("remnawave_premium_uuid")
-        async with sem:
-            try:
-                rmn_user = await remnawave_api.get_user(uuid)
-            except Exception as e:
-                logger.warning("RECONCILE: get_user failed tg=%s: %s", telegram_id, e)
-                return None
+
+        rmn_user = by_uuid.get(uuid)
         if rmn_user is None:
-            return {
+            mismatches.append({
                 "telegram_id": telegram_id,
                 "db_expires_at": db_expires,
                 "rmn_expires_at": None,
                 "reason": "нет в Remnawave",
-            }
+            })
+            continue
         rmn_expires = _parse_rmn_dt(rmn_user.get("expireAt"))
         if rmn_expires is None:
-            return {
+            mismatches.append({
                 "telegram_id": telegram_id,
                 "db_expires_at": db_expires,
                 "rmn_expires_at": None,
                 "reason": "нет даты в Remnawave",
-            }
+            })
+            continue
         if abs((db_expires - rmn_expires).total_seconds()) > _TOLERANCE_SECONDS:
-            return {
+            mismatches.append({
                 "telegram_id": telegram_id,
                 "db_expires_at": db_expires,
                 "rmn_expires_at": rmn_expires,
                 "reason": "дата не совпадает",
-            }
-        return None
+            })
 
-    async def _check_counted(sub: dict) -> "dict | None":
-        try:
-            return await _check(sub)
-        finally:
-            if progress is not None:
-                progress["done"] += 1
-
-    results = await asyncio.gather(*[_check_counted(s) for s in premium])
-    mismatches = [r for r in results if r is not None]
     return len(premium), mismatches
 
 
@@ -164,24 +173,27 @@ async def callback_rmn_reconcile(callback: CallbackQuery):
 
     await safe_edit_text(
         callback.message,
-        "🔄 Сверяю premium-подписки с Remnawave…\n"
-        "При большой базе это может занять несколько минут — дождитесь отчёта.",
+        "🔄 Сверяю premium-подписки с Remnawave…\nДождитесь отчёта.",
         bot=callback.bot, parse_mode="HTML",
     )
 
-    progress: dict = {"total": 0, "done": 0}
+    progress: dict = {"phase": "fetch", "total": 0, "done": 0}
     try:
         scan_task = asyncio.create_task(_scan_mismatches(progress))
         while not scan_task.done():
             await asyncio.sleep(_PROGRESS_INTERVAL)
-            total = progress.get("total") or 0
-            if total and not scan_task.done():
-                await safe_edit_text(
-                    callback.message,
-                    "🔄 Сверяю premium-подписки с Remnawave…\n\n"
-                    f"Проверено: <b>{progress.get('done', 0)}</b> / {total}",
-                    bot=callback.bot, parse_mode="HTML",
+            if scan_task.done():
+                break
+            if progress.get("phase") == "compare" and progress.get("total"):
+                text = (
+                    "🔄 Сверяю даты…\n\n"
+                    f"Проверено: <b>{progress.get('done', 0)}</b> / {progress['total']}"
                 )
+            else:
+                text = "🔄 Выгружаю пользователей из Remnawave…"
+            await safe_edit_text(
+                callback.message, text, bot=callback.bot, parse_mode="HTML",
+            )
         checked, mismatches = await scan_task
     except Exception as e:
         logger.exception("RECONCILE: scan failed: %s", e)

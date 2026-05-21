@@ -275,6 +275,41 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     return await _request("GET", f"/api/users/{uuid}")
 
 
+async def get_all_users(page_size: int = 500) -> Optional[list]:
+    """Fetch every Remnawave user via paginated GET /api/users.
+
+    Returns the full list of user entities. Returns None if the listing
+    endpoint is unavailable or any page fails — callers must treat None as
+    "cannot list" and fail loudly rather than act on partial data (a missing
+    page would otherwise look like a batch of deleted users).
+    """
+    collected: list = []
+    start = 0
+    total: Optional[int] = None
+    while True:
+        page = await _request("GET", f"/api/users?size={page_size}&start={start}")
+        if page is None:
+            return None
+        if isinstance(page, dict):
+            batch = page.get("users") or []
+            if page.get("total") is not None:
+                total = page.get("total")
+        elif isinstance(page, list):
+            batch = page
+        else:
+            return None
+        collected.extend(batch)
+        if not batch or len(batch) < page_size:
+            break
+        if total is not None and len(collected) >= total:
+            break
+        start += page_size
+        if start > 100_000:  # hard safety stop against a runaway loop
+            logger.error("REMNAWAVE_LIST: aborted, start exceeded 100000")
+            break
+    return collected
+
+
 _update_method: Optional[tuple] = None  # cached working (method, path_template)
 
 async def update_user(uuid: str, **fields) -> Optional[Dict[str, Any]]:
