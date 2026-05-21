@@ -163,6 +163,8 @@ from database.subscriptions import (  # noqa: F401
     has_active_special_offer,
     create_pending_balance_topup_purchase,
     create_pending_purchase,
+    has_purchased_proxy,
+    mark_proxy_purchased,
     get_pending_purchase,
     get_pending_purchase_by_id,
     cancel_pending_purchases,

@@ -93,6 +93,19 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     if is_biz_user:
         return _get_biz_main_menu_keyboard(language)
 
+    has_proxy = False
+    if telegram_id and database.DB_READY:
+        try:
+            has_proxy = await database.has_purchased_proxy(telegram_id)
+        except Exception as e:
+            logger.warning(f"Error checking proxy ownership for main menu: {e}")
+
+    proxy_button = InlineKeyboardButton(
+        text=("🧩 Мой Telegram-прокси" if has_proxy
+              else f"🧩 Telegram-прокси — {config.PROXY_PRICE_RUBLES} ₽"),
+        callback_data="proxy_menu",
+    )
+
     buttons = []
 
     # === ПЕРВАЯ КНОПКА: 3 состояния ===
@@ -144,6 +157,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             text="🌐 Только обход блокировок",
             callback_data="buy_bypass_only"
         )])
+        buttons.append([proxy_button])
 
     # Traffic button removed — traffic info is now in profile screen
 
@@ -171,6 +185,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         buttons.append([InlineKeyboardButton(
             text="💎 Программа лояльности", callback_data="menu_referral",
         )])
+        buttons.append([proxy_button])
         buttons.append([
             InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu_settings"),
             InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help"),

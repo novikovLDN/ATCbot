@@ -63,9 +63,10 @@ async def process_confirmed_payment(
         _purchase_type = pending.get("purchase_type") or "subscription"
         _tariff = pending.get("tariff") or ""
 
-        # Stars / Premium / Apple ID / Steam — just mark paid + send notifications (no finalize)
+        # Stars / Premium / Apple ID / Steam / Proxy — just mark paid + send
+        # notifications (no subscription to finalize)
         if (
-            _purchase_type in ("telegram_stars", "telegram_premium", "steam")
+            _purchase_type in ("telegram_stars", "telegram_premium", "steam", "proxy")
             or _tariff.startswith("apple_id_")
             or _tariff.startswith("steam_")
         ):
@@ -88,6 +89,9 @@ async def process_confirmed_payment(
                 elif _purchase_type == "steam" or _tariff.startswith("steam_"):
                     from app.handlers.payments.steam_purchase import send_steam_success
                     await send_steam_success(bot, telegram_id, purchase_id, pending)
+                elif _purchase_type == "proxy":
+                    from app.handlers.proxy import send_proxy_success
+                    await send_proxy_success(bot, telegram_id, purchase_id, pending)
                 elif _tariff.startswith("apple_id_"):
                     tariff_parts = _tariff.split("_")
                     region = tariff_parts[2] if len(tariff_parts) >= 3 else "usa"

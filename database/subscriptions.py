@@ -4124,6 +4124,37 @@ async def mark_pending_purchase_paid(purchase_id: str) -> bool:
             return False
 
 
+async def has_purchased_proxy(telegram_id: int) -> bool:
+    """True if the user already owns the standalone Telegram-proxy product."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT proxy_purchased_at FROM users WHERE telegram_id = $1",
+            telegram_id,
+        )
+    return bool(row and row["proxy_purchased_at"] is not None)
+
+
+async def mark_proxy_purchased(telegram_id: int) -> None:
+    """Record that the user owns the Telegram-proxy product (idempotent).
+
+    Keeps the first purchase timestamp — re-running never overwrites it.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO users (telegram_id, proxy_purchased_at)
+            VALUES ($1, CURRENT_TIMESTAMP)
+            ON CONFLICT (telegram_id) DO UPDATE
+                SET proxy_purchased_at = COALESCE(
+                    users.proxy_purchased_at, CURRENT_TIMESTAMP
+                )
+            """,
+            telegram_id,
+        )
+
+
 async def finalize_purchase(
     purchase_id: str,
     payment_provider: str,
