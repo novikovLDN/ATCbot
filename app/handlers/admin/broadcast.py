@@ -151,6 +151,8 @@ def _build_broadcast_reply_markup(
             )])
         elif btn == "buy_combo":
             rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
+        elif btn == "proxy":
+            rows.append([InlineKeyboardButton(text="🧩 MT Прокси", callback_data="proxy_menu")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -669,6 +671,7 @@ def _btn_label(btn_type: str) -> str:
         "happ_android": "📲 Скачать Happ Android",
         "web_client": "🌐 Веб-клиент QoDev",
         "buy_combo": "🏆 Купить Комбо",
+        "proxy": "🧩 MT Прокси",
     }
     return labels.get(btn_type, btn_type)
 
