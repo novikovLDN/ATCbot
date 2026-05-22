@@ -110,6 +110,30 @@ async def callback_proxy_menu(callback: CallbackQuery):
     )
 
 
+@proxy_router.callback_query(F.data == "proxy_open")
+async def callback_proxy_open(callback: CallbackQuery):
+    """Open the proxy screen as a NEW message — used from broadcasts.
+
+    Unlike proxy_menu, this never edits or deletes the triggering message,
+    so the broadcast (and its other buttons, e.g. the discount) stays intact.
+    """
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    if await database.has_purchased_proxy(telegram_id):
+        await safe_send_message(
+            callback.bot, telegram_id, _delivery_text(),
+            reply_markup=_delivery_keyboard(),
+        )
+    else:
+        await safe_send_message(
+            callback.bot, telegram_id, _sales_text(),
+            reply_markup=_sales_keyboard(),
+        )
+
+
 @proxy_router.callback_query(F.data == "proxy_pay_sbp")
 async def callback_proxy_pay_sbp(callback: CallbackQuery):
     """Pay for the proxy product via SBP (Platega)."""

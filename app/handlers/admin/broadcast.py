@@ -152,7 +152,7 @@ def _build_broadcast_reply_markup(
         elif btn == "buy_combo":
             rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
         elif btn == "proxy":
-            rows.append([InlineKeyboardButton(text="🌐 MT Прокси", callback_data="proxy_menu")])
+            rows.append([InlineKeyboardButton(text="🌐 MT Прокси", callback_data="proxy_open")])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
