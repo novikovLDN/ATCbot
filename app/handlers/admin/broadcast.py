@@ -947,10 +947,13 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                                 f"BROADCAST_SKIP_NO_BYPASS_KEY user={user_id} broadcast_id={broadcast_id}"
                             )
                             return (user_id, variant, None)
+                        # Escape so a URL containing &/</> can't break HTML parse_mode.
+                        import html as _html
+                        safe_url = _html.escape(bypass_url, quote=False)
                         if msg:
-                            msg = msg.replace("{bypass_key}", bypass_url)
+                            msg = msg.replace("{bypass_key}", safe_url)
                         if cap:
-                            cap = cap.replace("{bypass_key}", bypass_url)
+                            cap = cap.replace("{bypass_key}", safe_url)
 
                     msg_id = await _safe_send_with_buttons(
                         bot, user_id, msg, semaphore,
