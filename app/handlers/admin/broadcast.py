@@ -27,6 +27,7 @@ from app.handlers.admin.keyboards import (
 )
 from app.handlers.common.utils import safe_edit_text
 from app.handlers.common.guards import ensure_db_ready_callback, ensure_db_ready_message
+from app.services.user_subscription_links import get_user_bypass_url
 
 admin_broadcast_router = Router()
 logger = logging.getLogger(__name__)
@@ -935,6 +936,22 @@ async def callback_broadcast_confirm_send(callback: CallbackQuery, state: FSMCon
                     p_file_id: str | None = None,
                     cap: str | None = None,
                 ):
+                    # Per-user variable substitution (currently: {bypass_key}).
+                    # Users without a bypass URL are skipped — sending them a
+                    # message with a literal placeholder would be broken UX.
+                    needs_key = "{bypass_key}" in (msg or "") or "{bypass_key}" in (cap or "")
+                    if needs_key:
+                        bypass_url = await get_user_bypass_url(user_id)
+                        if not bypass_url:
+                            logger.info(
+                                f"BROADCAST_SKIP_NO_BYPASS_KEY user={user_id} broadcast_id={broadcast_id}"
+                            )
+                            return (user_id, variant, None)
+                        if msg:
+                            msg = msg.replace("{bypass_key}", bypass_url)
+                        if cap:
+                            cap = cap.replace("{bypass_key}", bypass_url)
+
                     msg_id = await _safe_send_with_buttons(
                         bot, user_id, msg, semaphore,
                         reply_markup=reply_markup,
