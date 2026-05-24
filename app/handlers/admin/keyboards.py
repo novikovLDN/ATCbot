@@ -31,6 +31,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         # — Маркетинг и уведомления —
         [InlineKeyboardButton(text="📣 Центр уведомлений", callback_data="admin:notifications")],
         [InlineKeyboardButton(text="🛠 Тех. работы — готовая рассылка", callback_data="admin:bcast_preset_maintenance")],
+        [InlineKeyboardButton(text="🎁 Выдать бонус", callback_data="admin:bonus")],
         [
             InlineKeyboardButton(text=i18n_get_text(language, "admin.create_promocode"), callback_data="admin:create_promocode"),
             InlineKeyboardButton(text=i18n_get_text(language, "admin.promo_stats"), callback_data="admin_promo_stats"),
