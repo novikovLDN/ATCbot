@@ -16,6 +16,7 @@ from .bypass_gift import admin_bypass_gift_router
 from .migration import admin_migration_router
 from .reconcile import admin_reconcile_router
 from .bonus import admin_bonus_router
+from .stage_users import admin_stage_users_router
 
 router = Router()
 
@@ -35,3 +36,4 @@ router.include_router(admin_bypass_gift_router)
 router.include_router(admin_migration_router)
 router.include_router(admin_reconcile_router)
 router.include_router(admin_bonus_router)
+router.include_router(admin_stage_users_router)

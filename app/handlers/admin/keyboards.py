@@ -4,6 +4,7 @@ Admin keyboard builders. Shared across admin handlers.
 from datetime import datetime
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+import config
 from app.i18n import get_text as i18n_get_text
 
 
@@ -49,6 +50,11 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
         [InlineKeyboardButton(text="🔄 Сверка с Remnawave", callback_data="admin:rmn_reconcile")],
     ])
+    if config.IS_STAGE:
+        keyboard.inline_keyboard.append([InlineKeyboardButton(
+            text="🧪 STAGE: пользователи БД",
+            callback_data="admin:stage_users",
+        )])
     return keyboard
 
 
