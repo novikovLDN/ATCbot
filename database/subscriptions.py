@@ -2562,6 +2562,45 @@ async def mark_reminder_flag_sent(telegram_id: int, flag_name: str):
         await conn.execute(query, telegram_id)
 
 
+async def get_winback_2d_candidates(*, lookback_days: int = 3) -> List[Dict[str, Any]]:
+    """Users whose VPN subscription expired within the last ``lookback_days``
+    and haven't been targeted by the 'winback 2d' campaign yet.
+
+    Excludes ``source='bypass_only'`` rows — we only winback people who
+    had a real paid VPN subscription, not bypass-only buyers.
+
+    Returns rows: ``{telegram_id, remnawave_uuid, subscription_type,
+    expires_at, source}``.  Caller is expected to further filter by
+    bypass-traffic balance (via Remnawave API) before sending.
+    """
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=lookback_days)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, remnawave_uuid, subscription_type, expires_at, source
+               FROM subscriptions
+               WHERE status = 'expired'
+                 AND expires_at >= $1 AND expires_at <= $2
+                 AND winback_2d_sent_at IS NULL
+                 AND COALESCE(source, '') != 'bypass_only'
+               ORDER BY expires_at DESC""",
+            _to_db_utc(since), _to_db_utc(now),
+        )
+        return [dict(r) for r in rows]
+
+
+async def mark_winback_2d_sent(telegram_id: int) -> None:
+    """Mark this user as contacted by the winback 2d campaign so a re-run
+    of ``run_winback_2d_campaign`` doesn't double-target them."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET winback_2d_sent_at = NOW() WHERE telegram_id = $1",
+            telegram_id,
+        )
+
+
 async def mark_user_unreachable(telegram_id: int) -> None:
     """Mark user as unreachable (chat not found, blocked). Background workers filter by is_reachable."""
     if not _core.DB_READY:
