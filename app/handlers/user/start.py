@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import database
 import config
-from aiogram import Router
-from aiogram.types import Message
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
@@ -65,6 +65,13 @@ async def cmd_start(message: Message, state: FSMContext):
     user = await database.get_user(telegram_id)
     is_new_user = user is None
     start_language = (user.get("language") or "ru") if user else "ru"
+
+    # STAGE GATE: новые пользователи в stage сначала выбирают «пользователь /
+    # разработчик». Пользователь — редирект на prod-бот по реф-ссылке, разработчик —
+    # продолжение во flow. В prod этот блок никогда не срабатывает.
+    if config.IS_STAGE and is_new_user:
+        await _show_stage_gate(message)
+        return
     # Safe username resolution: username or first_name or localized fallback
     username = safe_resolve_username(message.from_user, start_language, telegram_id)
     # Ограничиваем длину для БД
@@ -401,3 +408,73 @@ async def cmd_start(message: Message, state: FSMContext):
     # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
     text = i18n_get_text(start_language, "lang.select_title")
     await message.answer(text, reply_markup=get_language_keyboard(start_language), parse_mode="HTML")
+
+
+# ── STAGE-only: new-user gate ──────────────────────────────────────────────
+
+async def _show_stage_gate(message: Message) -> None:
+    """Greeting screen shown on the FIRST /start to any new user in STAGE.
+
+    The «Пользователь» button is a URL deep-link to the production bot with
+    our referral payload — clicking it never touches the stage DB. The
+    «Разработчик» button creates the user record locally and continues to
+    the normal flow (see callback_stage_gate_dev).
+    """
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="👤 Пользователь",
+            url="https://t.me/atlassecure_bot?start=ref_RC26QG",
+        )],
+        [InlineKeyboardButton(
+            text="💻 Разработчик",
+            callback_data="stage_gate:dev",
+        )],
+    ])
+    text = (
+        "Привет 👋\n\n"
+        "Ты разработчик Atlas Secure или пользователь?\n"
+        "Выбери вариант ниже 👇"
+    )
+    await message.answer(text, reply_markup=keyboard)
+
+
+@user_router.callback_query(F.data == "stage_gate:dev")
+async def callback_stage_gate_dev(callback: CallbackQuery, state: FSMContext):
+    """«Разработчик» — создаём user-запись и пускаем в обычный главный экран."""
+    if not config.IS_STAGE:
+        await callback.answer()
+        return
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+
+    if not database.DB_READY:
+        # Degraded: just render the menu without persisting anything.
+        language = await resolve_user_language(telegram_id)
+        text = i18n_get_text(language, "main.welcome")
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+        await callback.bot.send_message(telegram_id, text, reply_markup=keyboard, parse_mode="HTML")
+        return
+
+    user = await database.get_user(telegram_id)
+    if user is None:
+        username = safe_resolve_username(callback.from_user, "ru", telegram_id)
+        if username and len(username) > 64:
+            username = username[:64]
+        try:
+            await database.create_user(telegram_id, username, "ru")
+        except Exception as e:
+            logger.warning(f"STAGE_GATE_DEV: create_user failed user={telegram_id}: {e}")
+
+    language = await resolve_user_language(telegram_id)
+    text = i18n_get_text(language, "main.welcome")
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.bot.send_message(telegram_id, text, reply_markup=keyboard, parse_mode="HTML")
