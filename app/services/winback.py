@@ -58,10 +58,30 @@ DISCOUNT_VALID_DAYS = 7
 BYPASS_CHECK_CONCURRENCY = 8
 
 # How aggressively to parallelise the per-user gift+discount+send work.
-# Telegram global is ~30 msg/sec; the 0.07s sleep below keeps us under
-# that even at concurrency 7.
+# Matches broadcast_service.py — Telegram throws 429 on overflow and our
+# send code honours TelegramRetryAfter, so this self-throttles.
 SEND_CONCURRENCY = 7
 PER_MESSAGE_SLEEP = 0.07
+
+# Single-run guard.  The campaign is admin-triggered; without this a
+# double-click on "Запустить рассылку" would race two pipelines, each
+# calling grant_access for the same user → user gets 4 days instead of
+# 2, gets the notification twice, and we lose the mark_winback_2d_sent
+# guarantee between fetch and write.
+#
+# A plain bool is sufficient (and race-free) here because asyncio is
+# cooperative single-threaded: there is no `await` between the read and
+# the write below, so no other coroutine can slip in.  Process restart
+# resets it; we accept that — the worst case after a crash mid-run is
+# that orphaned users keep their dedup flag (gift+discount already
+# granted) so they won't be retargeted.  If we ever move to a
+# multi-worker setup, upgrade to a Postgres advisory lock.
+_campaign_running: bool = False
+
+
+def is_campaign_running() -> bool:
+    """Best-effort check used by the admin UI to show 'already running'."""
+    return _campaign_running
 
 
 # Sentinel: "effectively unlimited" remaining bytes.  Used when the panel
@@ -137,15 +157,22 @@ async def filter_by_bypass(
 
 
 async def preview_winback_audience() -> Dict[str, Any]:
-    """Dry-run: report how many users the campaign would touch right now,
-    broken down by the filter stages.  Does NOT send anything, does NOT
-    grant anything, does NOT mark anyone."""
+    """Dry-run: count how many users the campaign would touch right now,
+    broken down by filter stage.  Does NOT send anything, does NOT
+    grant anything, does NOT mark anyone.
+
+    Returns ``raw_count`` (DB), ``filtered_count`` (after bypass-balance
+    check), ``dropped_by_bypass`` (delta) and ``survivors`` (the actual
+    list — pass it to ``run_winback_2d_campaign(prefiltered_survivors=...)``
+    to avoid re-paying the Remnawave API cost on the run that follows).
+    """
     raw = await database.get_winback_2d_candidates(lookback_days=3)
     filtered = await filter_by_bypass(raw)
     return {
         "raw_count": len(raw),
         "filtered_count": len(filtered),
         "dropped_by_bypass": len(raw) - len(filtered),
+        "survivors": filtered,
     }
 
 
@@ -223,56 +250,18 @@ async def _send_winback_notification(bot: Bot, telegram_id: int, language: str) 
         return False
 
 
-async def run_winback_2d_campaign(
+async def _execute_winback(
     bot: Bot,
     admin_telegram_id: int,
-) -> Dict[str, Any]:
-    """Execute the campaign end-to-end.
+    survivors: List[Dict[str, Any]],
+    stats: Dict[str, Any],
+) -> None:
+    """Internal: run the per-user pipeline against a pre-filtered cohort.
 
-    Pipeline:
-      1. Pull raw candidates (status='expired' in last 3 days, no winback flag)
-      2. Filter by Remnawave bypass-balance ≤ 1 GB
-      3. For each survivor (concurrently, rate-limited):
-            grant gift → grant discount → send message → set dedup flag
-
-    Never raises.  Returns a stats dict suitable for admin reporting.
+    Mutates ``stats`` in-place so the caller can keep header counters
+    (raw_candidates, after_bypass_filter) it already computed during
+    pre-fetch.  Never raises.
     """
-    started_at = time.time()
-    stats = {
-        "raw_candidates": 0,
-        "after_bypass_filter": 0,
-        "gift_failed": 0,
-        "send_failed": 0,
-        "delivered": 0,
-        "duration_seconds": 0.0,
-    }
-
-    if not database.DB_READY:
-        logger.warning("WINBACK_SKIP db_not_ready")
-        stats["duration_seconds"] = time.time() - started_at
-        return stats
-
-    try:
-        raw = await database.get_winback_2d_candidates(lookback_days=3)
-    except Exception as e:
-        logger.exception("WINBACK_CANDIDATES_FETCH_ERROR %s", e)
-        stats["duration_seconds"] = time.time() - started_at
-        return stats
-    stats["raw_candidates"] = len(raw)
-
-    if not raw:
-        stats["duration_seconds"] = time.time() - started_at
-        logger.info("WINBACK_NO_CANDIDATES")
-        return stats
-
-    survivors = await filter_by_bypass(raw)
-    stats["after_bypass_filter"] = len(survivors)
-
-    if not survivors:
-        stats["duration_seconds"] = time.time() - started_at
-        logger.info("WINBACK_NO_SURVIVORS_AFTER_BYPASS_FILTER raw=%d", len(raw))
-        return stats
-
     semaphore = asyncio.Semaphore(SEND_CONCURRENCY)
     counters_lock = asyncio.Lock()
 
@@ -315,11 +304,92 @@ async def run_winback_2d_campaign(
                 else:
                     stats["send_failed"] += 1
 
+    await asyncio.gather(*(process_one(u) for u in survivors))
+
+
+async def run_winback_2d_campaign(
+    bot: Bot,
+    admin_telegram_id: int,
+    *,
+    prefiltered_survivors: Optional[List[Dict[str, Any]]] = None,
+    raw_count_hint: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Execute the campaign end-to-end.
+
+    Pipeline:
+      1. Pull raw candidates (status='expired' in last 3 days, no winback flag)
+      2. Filter by Remnawave bypass-balance ≤ 1 GB
+      3. For each survivor (concurrently, rate-limited):
+            grant gift → mark dedup flag → send message
+
+    Guarded by a module-level asyncio.Lock — a second invocation while a
+    first is still running returns immediately with ``skipped_already_running=True``.
+
+    ``prefiltered_survivors`` (optional): if the caller has already done
+    fetch + bypass-filter (e.g. an admin preview step), pass that list
+    here to skip the redundant DB query + Remnawave API round-trips.
+
+    Never raises.  Returns a stats dict suitable for admin reporting.
+    """
+    started_at = time.time()
+    stats = {
+        "raw_candidates": raw_count_hint or 0,
+        "after_bypass_filter": 0,
+        "gift_failed": 0,
+        "send_failed": 0,
+        "delivered": 0,
+        "duration_seconds": 0.0,
+        "skipped_already_running": False,
+    }
+
+    global _campaign_running
+    # Atomic check-and-set: no `await` between read and write, so the
+    # asyncio loop can't preempt us here.  Second concurrent invocation
+    # short-circuits without doing any work.
+    if _campaign_running:
+        stats["skipped_already_running"] = True
+        stats["duration_seconds"] = time.time() - started_at
+        logger.warning("WINBACK_SKIP already_running")
+        return stats
+    _campaign_running = True
+
     try:
-        await asyncio.gather(*(process_one(u) for u in survivors))
-    except asyncio.CancelledError:
-        logger.info("WINBACK_CANCELLED stats_partial=%s", stats)
-        raise
+        if not database.DB_READY:
+            logger.warning("WINBACK_SKIP db_not_ready")
+            stats["duration_seconds"] = time.time() - started_at
+            return stats
+
+        if prefiltered_survivors is None:
+            try:
+                raw = await database.get_winback_2d_candidates(lookback_days=3)
+            except Exception as e:
+                logger.exception("WINBACK_CANDIDATES_FETCH_ERROR %s", e)
+                stats["duration_seconds"] = time.time() - started_at
+                return stats
+            stats["raw_candidates"] = len(raw)
+            if not raw:
+                stats["duration_seconds"] = time.time() - started_at
+                logger.info("WINBACK_NO_CANDIDATES")
+                return stats
+            survivors = await filter_by_bypass(raw)
+        else:
+            survivors = prefiltered_survivors
+
+        stats["after_bypass_filter"] = len(survivors)
+        if not survivors:
+            stats["duration_seconds"] = time.time() - started_at
+            logger.info("WINBACK_NO_SURVIVORS raw=%d", stats["raw_candidates"])
+            return stats
+
+        try:
+            await _execute_winback(bot, admin_telegram_id, survivors, stats)
+        except asyncio.CancelledError:
+            logger.info("WINBACK_CANCELLED stats_partial=%s", stats)
+            raise
+    finally:
+        # Always release the flag — even on cancellation/exception — so
+        # a recoverable crash doesn't leave the campaign perma-locked.
+        _campaign_running = False
 
     stats["duration_seconds"] = time.time() - started_at
     logger.info(

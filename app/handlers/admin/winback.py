@@ -22,6 +22,7 @@ from app.services.language_service import resolve_user_language
 from app.services.winback import (
     preview_winback_audience,
     run_winback_2d_campaign,
+    is_campaign_running,
     SEND_CONCURRENCY,
     PER_MESSAGE_SLEEP,
 )
@@ -43,6 +44,21 @@ async def callback_admin_winback_preview(callback: CallbackQuery):
         return
     await callback.answer()
     language = await resolve_user_language(callback.from_user.id)
+
+    # If a campaign is already mid-flight, show that instead of doing
+    # another preview (which would re-pay the Remnawave bypass-balance
+    # API cost for nothing).
+    if is_campaign_running():
+        await safe_edit_text(
+            callback.message,
+            "⏳ <b>Кампания сейчас идёт</b>\n\nДождитесь отчёта — он придёт в этот чат, когда рассылка завершится.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notifications")],
+            ]),
+            bot=callback.bot,
+            parse_mode="HTML",
+        )
+        return
 
     try:
         audience = await preview_winback_audience()
@@ -90,19 +106,39 @@ async def callback_admin_winback_run(callback: CallbackQuery):
     if not _admin_only(callback):
         await callback.answer("Доступ запрещён", show_alert=True)
         return
+
+    # Guard: refuse a second click while a campaign is in flight.
+    if is_campaign_running():
+        await callback.answer("Кампания уже идёт — дождитесь отчёта", show_alert=True)
+        return
+
     await callback.answer("Запущено", show_alert=False)
     language = await resolve_user_language(callback.from_user.id)
     admin_telegram_id = callback.from_user.id
     chat_id = callback.message.chat.id
 
-    # Show an in-flight placeholder so the admin sees we're working.
-    # We re-resolve the cohort here so the "estimated duration" reflects
-    # the moment the user clicked Run.
+    # Resolve the cohort ONCE here (one DB query + one round of Remnawave
+    # bypass-balance checks) — we'll pass the survivors straight into the
+    # campaign so it doesn't re-pay the API cost.  Fresh resolve at click
+    # time guarantees we operate on the current cohort even if the admin
+    # opened the preview an hour ago.
     try:
         audience = await preview_winback_audience()
-    except Exception:
-        audience = {"raw_count": 0, "filtered_count": 0}
+    except Exception as e:
+        logger.exception("WINBACK_PREVIEW_AT_RUN_FAILED %s", e)
+        await safe_edit_text(
+            callback.message,
+            f"❌ Не смог посчитать кандидатов перед запуском: {type(e).__name__}: {e}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin:notifications")],
+            ]),
+            bot=callback.bot,
+        )
+        return
+
     count = audience["filtered_count"]
+    raw_count = audience["raw_count"]
+    survivors = audience["survivors"]
 
     if count == 0:
         await safe_edit_text(
@@ -116,8 +152,10 @@ async def callback_admin_winback_run(callback: CallbackQuery):
         )
         return
 
-    # Per-batch ETA: every SEND_CONCURRENCY users runs in parallel, then we
-    # sleep PER_MESSAGE_SLEEP per message.  Order-of-magnitude only.
+    # Per-batch ETA: every SEND_CONCURRENCY users runs in parallel, then
+    # we sleep PER_MESSAGE_SLEEP per message.  Order-of-magnitude only;
+    # grant_access calls the VPN API for new-issuance users which can
+    # dominate for cohorts that mostly expired with no prior UUID.
     eta_sec = max(int(count * PER_MESSAGE_SLEEP / SEND_CONCURRENCY), 1)
     await safe_edit_text(
         callback.message,
@@ -129,10 +167,16 @@ async def callback_admin_winback_run(callback: CallbackQuery):
 
     # Run the campaign in the background so we don't keep the callback
     # blocked on a long-running operation.  When done, send the report as
-    # a new message in the same chat.
+    # a new message in the same chat.  The module-level lock inside
+    # ``run_winback_2d_campaign`` is the source of truth — this UI guard
+    # just gives the admin instant feedback.
     async def _run_and_report():
         try:
-            stats = await run_winback_2d_campaign(callback.bot, admin_telegram_id)
+            stats = await run_winback_2d_campaign(
+                callback.bot, admin_telegram_id,
+                prefiltered_survivors=survivors,
+                raw_count_hint=raw_count,
+            )
         except Exception as e:
             logger.exception("WINBACK_CAMPAIGN_CRASHED %s", e)
             try:
@@ -144,6 +188,18 @@ async def callback_admin_winback_run(callback: CallbackQuery):
             except Exception:
                 pass
             return
+
+        if stats.get("skipped_already_running"):
+            try:
+                await callback.bot.send_message(
+                    chat_id,
+                    "⚠️ Кампания уже была запущена другим путём — пропустил, чтобы не дублировать рассылку.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            return
+
         try:
             await callback.bot.send_message(
                 chat_id,
