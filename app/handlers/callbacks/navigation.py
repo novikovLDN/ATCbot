@@ -18,7 +18,7 @@ from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.callbacks.language import MAIN_PHOTO_FILE_ID as _MAIN_PHOTO_ID
 from app.handlers.common.utils import format_text_with_incident, safe_edit_text
-from app.handlers.common.screens import show_profile
+from app.handlers.common.screens import show_profile, _open_help_screen
 from app.handlers.common.keyboards import (
     get_main_menu_keyboard,
     get_about_keyboard,
@@ -1596,20 +1596,8 @@ async def callback_claude_coming_soon(callback: CallbackQuery):
 
 @router.callback_query(F.data == "menu_help")
 async def callback_menu_help(callback: CallbackQuery):
-    """Help menu — FAQ, instructions, direct support."""
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-    language = await resolve_user_language(callback.from_user.id)
-    text = i18n_get_text(language, "help.menu_title")
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📖 Ответы на частые вопросы", callback_data="faq")],
-        [InlineKeyboardButton(text="📲 Инструкции по сервису", callback_data="connect_instruction")],
-        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
-    ])
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    """Help menu — FAQ, instructions, direct support (photo screen)."""
+    await _open_help_screen(callback, callback.bot)
 
 
 @router.callback_query(F.data == "faq")
