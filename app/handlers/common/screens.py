@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 # bad file_id never breaks a screen — it just degrades to text.
 PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFOS6BqBZmZmsUxWWhPKN1LC-AU4QtquAACoQ1rGyLfMFDUA7gTeeEv6AEAAwIAA3kAAzsE"
 
+SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFOS6RqBZnLNfSlXv_jvcyVPoUlHNGdwQACog1rGyLfMFCCfQnI4woaSAEAAwIAA3kAAzsE"
+
 # Telegram caps photo captions at 1024 chars (vs 4096 for plain text).
 # The profile screen with the bypass-traffic section + keys can exceed
 # that, so when the caption is too long we send a plain text message
@@ -104,6 +106,42 @@ async def _open_about_screen(event: Union[Message, CallbackQuery], bot: Bot):
     text = i18n_get_text(language, "main.about_text", "about_text")
     full_text = f"{title}\n\n{text}"
     await safe_edit_text(msg, full_text, reply_markup=get_about_keyboard(language), parse_mode="HTML", bot=bot)
+
+
+async def _open_help_screen(event: Union[Message, CallbackQuery], bot: Bot):
+    """Help menu (FAQ / Instructions / Operator). Reusable for callback and /help command.
+
+    Photo screen: always sends a fresh photo via `_send_screen_photo` (which
+    degrades to plain text if the file_id is unusable). When invoked from a
+    callback we delete the previous message first, which handles every
+    transition uniformly — photo→photo, text→photo, fresh-command.
+    """
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.answer()
+        except Exception:
+            pass
+        chat_id = event.message.chat.id
+        try:
+            await event.message.delete()
+        except Exception:
+            pass
+    else:
+        chat_id = event.chat.id
+
+    telegram_id = event.from_user.id
+    language = await resolve_user_language(telegram_id)
+    text = i18n_get_text(language, "help.menu_title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📖 Ответы на частые вопросы", callback_data="faq")],
+        [InlineKeyboardButton(text="📲 Инструкции по сервису", callback_data="connect_instruction")],
+        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
+    ])
+    await _send_screen_photo(
+        bot, chat_id, SUPPORT_PHOTO_FILE_ID, text,
+        reply_markup=keyboard, parse_mode="HTML",
+    )
 
 
 async def _open_instruction_screen(event: Union[Message, CallbackQuery], bot: Bot):
