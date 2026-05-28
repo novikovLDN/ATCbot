@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import database.core as _core
-from database.core import get_pool, _to_db_utc
+from database.core import get_pool, _to_db_utc, _from_db_utc
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +274,11 @@ async def execute_storm_for_user(
     if pool is None:
         return (0, 0, 0, 0)
 
-    is_online = last_seen_at is not None and last_seen_at >= announced_at
+    # Normalize both sides to aware UTC so naive-from-DB and aware-from-caller
+    # can compare cleanly.
+    last_seen_aware = _from_db_utc(last_seen_at) if last_seen_at is not None else None
+    announced_aware = announced_at if announced_at.tzinfo is not None else announced_at.replace(tzinfo=timezone.utc)
+    is_online = last_seen_aware is not None and last_seen_aware >= announced_aware
 
     killed = 0
     shielded = 0
