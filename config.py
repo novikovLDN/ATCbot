@@ -573,12 +573,12 @@ REMNAWAVE_BYPASS_USERNAME_PATTERN = env(
     default="{telegram_id}",
 )
 
-# Trial-specific bypass allowance (1 GB per TZ — premium is duration-limited,
-# bypass is byte-limited).
+# Trial-specific bypass allowance in megabytes (premium is duration-limited,
+# bypass is byte-limited).  Default 500 MB.
 try:
-    TRIAL_BYPASS_GB = int(env("TRIAL_BYPASS_GB", default="1"))
+    TRIAL_BYPASS_MB = int(env("TRIAL_BYPASS_MB", default="500"))
 except (TypeError, ValueError):
-    TRIAL_BYPASS_GB = 1
+    TRIAL_BYPASS_MB = 500
 
 # Bypass entity device limit (default 5; TZ matches premium=5/7).
 try:

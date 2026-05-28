@@ -221,6 +221,22 @@ from database.bypass_gift_links import (  # noqa: F401
     get_bypass_gift_links_summary,
 )
 
+# Farm storm: scheduling, shield, execution
+from database.farm import (  # noqa: F401
+    get_pending_storm,
+    mark_storm_announced,
+    mark_storm_executed,
+    schedule_next_storm,
+    replace_pending_storm_at,
+    list_users_with_growing_plots,
+    apply_storm_shield_atomic,
+    execute_storm_for_user,
+    touch_last_seen,
+    STORM_ANNOUNCE_BEFORE_HOURS,
+    STORM_MIN_INTERVAL_DAYS,
+    STORM_MAX_INTERVAL_DAYS,
+)
+
 # Admin: stats, broadcasts, analytics, exports, gifts, VIP, discounts
 from database.admin import (  # noqa: F401
     expire_old_pending_purchases,
