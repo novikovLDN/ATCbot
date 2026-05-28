@@ -85,6 +85,9 @@ async def _render(callback: CallbackQuery):
         [InlineKeyboardButton(
             text="🗓 Запланировать через…", callback_data="admin:storm:plan",
         )],
+        [InlineKeyboardButton(
+            text="🔍 Аудит эксплойта", callback_data="admin:storm:audit",
+        )],
     ]
     if pending is not None:
         extra.append([InlineKeyboardButton(
@@ -195,3 +198,105 @@ async def callback_admin_storm_force(callback: CallbackQuery):
     logger.info("ADMIN_STORM_FORCED admin=%s result=%s", callback.from_user.id, updated)
     await callback.answer("⚡ Шторм сдвинут на сейчас. Воркер исполнит на следующей итерации.", show_alert=True)
     await _render(callback)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Audit: pre-fix early-harvest exploit
+# ────────────────────────────────────────────────────────────────────────
+
+# Detects the dig-up + replant + early-harvest loop that was possible
+# between commit 1326a8e (storm handlers) and commit bfb6b93 (planting
+# blocked during storm).  After bfb6b93 this query naturally returns 0
+# rows because replant during storm is impossible — there is no legit
+# way for the same (user, storm, plot) to receive two early-harvest
+# events in one storm window.
+_AUDIT_SQL = """
+WITH storms AS (
+    SELECT id AS storm_id, announced_at,
+           COALESCE(executed_at, NOW()) AS window_end
+      FROM farm_storms
+     WHERE announced_at IS NOT NULL
+),
+early_harvests AS (
+    SELECT user_id, amount, created_at, description,
+           NULLIF((regexp_match(description, 'plot (\\d+)'))[1], '')::int AS plot_id
+      FROM balance_transactions
+     WHERE source = 'farm_early_harvest'
+),
+in_window AS (
+    SELECT s.storm_id, eh.*
+      FROM early_harvests eh
+      JOIN storms s
+        ON eh.created_at >= s.announced_at
+       AND eh.created_at <  s.window_end
+),
+per_plot AS (
+    SELECT user_id, storm_id, plot_id,
+           COUNT(*)                                AS events,
+           SUM(amount)                             AS total_kop,
+           SUM(amount) - MIN(amount)               AS exploit_kop
+      FROM in_window
+     GROUP BY user_id, storm_id, plot_id
+    HAVING COUNT(*) > 1
+)
+SELECT user_id,
+       SUM(exploit_kop)               AS exploit_kop_total,
+       SUM(events - 1)                AS extra_harvests,
+       COUNT(DISTINCT storm_id)       AS storms_affected,
+       array_agg(DISTINCT storm_id)   AS storm_ids
+  FROM per_plot
+ GROUP BY user_id
+ ORDER BY exploit_kop_total DESC
+ LIMIT 50
+"""
+
+
+@admin_farm_storm_router.callback_query(F.data == "admin:storm:audit")
+async def callback_admin_storm_audit(callback: CallbackQuery):
+    """Show top users that triggered the early-harvest exploit pre-fix."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    await callback.answer()
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(_AUDIT_SQL)
+    except Exception as e:
+        logger.exception("ADMIN_AUDIT_FAIL: %s", e)
+        await safe_edit_text(
+            callback.message,
+            f"❌ Не удалось выполнить аудит: <code>{type(e).__name__}</code>",
+            reply_markup=_kb([]), parse_mode="HTML",
+        )
+        return
+
+    lines = ["🔍 <b>Аудит эксплойта раннего сбора</b>\n"]
+    lines.append(
+        "<i>Эксплойт = одна и та же грядка собрана незрелым ≥2 раз "
+        "в одном штормовом окне. После фикса (bfb6b93) такие записи "
+        "появляться больше не должны.</i>\n"
+    )
+
+    if not rows:
+        lines.append("✅ <b>Эксплойт не зафиксирован.</b> Подозрительных пользователей нет.")
+    else:
+        total_kop = sum(r["exploit_kop_total"] or 0 for r in rows)
+        lines.append(
+            f"❗ Подозрительных юзеров: <b>{len(rows)}</b>  "
+            f"общий объём эксплойта: <b>{total_kop / 100:.2f} ₽</b>\n"
+        )
+        lines.append("<b>Топ-50:</b>")
+        lines.append("<code>")
+        lines.append(f"{'user_id':>12}  {'эксплойт':>10}  {'лишних':>6}  штормов")
+        for r in rows:
+            uid = r["user_id"]
+            rub = (r["exploit_kop_total"] or 0) / 100
+            extra = r["extra_harvests"] or 0
+            storms = r["storms_affected"] or 0
+            lines.append(f"{uid:>12}  {rub:>8.2f} ₽  {extra:>6}  {storms}")
+        lines.append("</code>")
+
+    await safe_edit_text(callback.message, "\n".join(lines),
+                         reply_markup=_kb([]), parse_mode="HTML")
