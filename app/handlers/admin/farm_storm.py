@@ -608,54 +608,94 @@ async def callback_admin_storm_spend(callback: CallbackQuery):
         return
 
     await callback.answer()
-    pool = await get_pool()
+    import html as _html
+    import json as _json
+
     try:
+        pool = await get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(_SPEND_SQL)
     except Exception as e:
-        logger.exception("ADMIN_SPEND_FAIL: %s", e)
-        await safe_edit_text(
-            callback.message,
-            f"❌ Не удалось получить траты: <code>{type(e).__name__}</code>",
-            reply_markup=_kb([]), parse_mode="HTML",
-        )
+        logger.exception("ADMIN_SPEND_SQL_FAIL: %s", e)
+        try:
+            await safe_edit_text(
+                callback.message,
+                f"❌ Не удалось получить траты: <code>{_html.escape(type(e).__name__)}</code>\n"
+                f"<code>{_html.escape(str(e)[:300])}</code>",
+                reply_markup=_kb([]), parse_mode="HTML", bot=callback.bot,
+            )
+        except Exception:
+            await callback.answer(f"Ошибка SQL: {type(e).__name__}", show_alert=True)
         return
 
-    lines = ["📋 <b>Траты эксплойтеров с момента первого эксплойта</b>\n"]
-    if not rows:
-        lines.append("✅ Эксплойтеров не найдено — нечего показывать.")
-    else:
-        import json as _json
-        for r in rows:
-            uid = r["user_id"]
-            exp = int(r["exploit_kop_total"] or 0) / 100
-            spent = int(r["total_spent_kop"] or 0) / 100
-            events = int(r["spend_events"] or 0)
-            first = r["first_exploit_at"]
-            first_s = first.strftime("%m-%d %H:%M") if first else "—"
+    try:
+        lines = ["📋 <b>Траты эксплойтеров с момента первого эксплойта</b>\n"]
+        if not rows:
+            lines.append("✅ Эксплойтеров не найдено — нечего показывать.")
+        else:
+            for r in rows:
+                uid = r["user_id"]
+                exp = int(r["exploit_kop_total"] or 0) / 100
+                spent = int(r["total_spent_kop"] or 0) / 100
+                events = int(r["spend_events"] or 0)
+                first = r["first_exploit_at"]
+                first_s = first.strftime("%m-%d %H:%M") if first else "—"
+
+                lines.append(
+                    f"\n🔴 <code>{uid}</code> — эксплойт <b>{exp:.2f} ₽</b>, "
+                    f"потратил с {_html.escape(first_s)}: "
+                    f"<b>{spent:.2f} ₽</b> в {events} операциях"
+                )
+
+                recent = r["recent_spend"]
+                if isinstance(recent, str):
+                    try:
+                        recent = _json.loads(recent)
+                    except Exception:
+                        recent = None
+                if not recent:
+                    lines.append("  <i>(списаний не было — деньги ещё лежат на балансе)</i>")
+                    continue
+                for ev in recent:
+                    when_raw = ev.get("when") or ""
+                    # `when` arrives as ISO string from json_build_object(timestamp).
+                    # Defensive: if asyncpg gave us a datetime instead, str() works either way.
+                    when = str(when_raw)[:16].replace("T", " ")
+                    src = ev.get("source") or "?"
+                    amt = int(ev.get("amount") or 0) / 100
+                    desc = (ev.get("desc") or "")[:55]
+                    lines.append(
+                        f"  • {_html.escape(when)}  −{amt:.2f} ₽  "
+                        f"<code>{_html.escape(src)}</code> {_html.escape(desc)}"
+                    )
 
             lines.append(
-                f"\n🔴 <code>{uid}</code> — эксплойт <b>{exp:.2f} ₽</b>, "
-                f"потратил с {first_s}: <b>{spent:.2f} ₽</b> в {events} операциях"
+                "\n<i>«Потратил» = все списания (amount &lt; 0) с момента первого эксплойта, "
+                "кроме самого clawback'а.</i>"
             )
 
-            recent = r["recent_spend"]
-            if isinstance(recent, str):
-                recent = _json.loads(recent)
-            if not recent:
-                lines.append("  <i>(списаний не было — деньги ещё лежат на балансе)</i>")
-                continue
-            for ev in recent:
-                when = ev.get("when", "")[:16].replace("T", " ")
-                src = ev.get("source", "?")
-                amt = int(ev.get("amount", 0)) / 100
-                desc = (ev.get("desc") or "")[:55]
-                lines.append(f"  • {when}  −{amt:.2f} ₽  <code>{src}</code> {desc}")
+        text = "\n".join(lines)
+        # Telegram caps a single message at 4096 chars.  Trim to ~3900 to leave
+        # room for keyboard metadata and a footer indicating the truncation.
+        TG_MAX = 3900
+        if len(text) > TG_MAX:
+            text = text[:TG_MAX] + (
+                "\n\n<i>… вывод обрезан (превышен лимит Telegram). "
+                "Полный список — через SQL по source='farm_early_harvest'.</i>"
+            )
 
-        lines.append(
-            "\n<i>«Потратил» = все списания (amount &lt; 0) с момента первого эксплойта, "
-            "кроме самого clawback'а.</i>"
-        )
-
-    await safe_edit_text(callback.message, "\n".join(lines),
-                         reply_markup=_kb([]), parse_mode="HTML")
+        await safe_edit_text(callback.message, text,
+                             reply_markup=_kb([]), parse_mode="HTML",
+                             bot=callback.bot)
+    except Exception as e:
+        logger.exception("ADMIN_SPEND_RENDER_FAIL: %s", e)
+        try:
+            await safe_edit_text(
+                callback.message,
+                f"❌ Ошибка отрисовки: <code>{_html.escape(type(e).__name__)}</code>\n"
+                f"<code>{_html.escape(str(e)[:300])}</code>\n"
+                f"Логи: ADMIN_SPEND_RENDER_FAIL.",
+                reply_markup=_kb([]), parse_mode="HTML", bot=callback.bot,
+            )
+        except Exception:
+            await callback.answer(f"Ошибка рендера: {type(e).__name__}", show_alert=True)
