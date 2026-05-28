@@ -525,9 +525,10 @@ async def callback_admin_storm_clawback_apply(callback: CallbackQuery):
 # Spending tracker: what did exploiters do with the stolen kopecks?
 # ────────────────────────────────────────────────────────────────────────
 
-# For each exploiter, fetch every negative balance_transaction made on or
-# after their FIRST exploit event.  Excludes the clawback row itself (its
-# source is 'farm_exploit_clawback') so we don't double-count it as "spend".
+# Full export: flat (exploiter × spend-event) rows for CSV.  No LIMIT — the
+# admin asked for the complete picture; truncation only happens if/when
+# Telegram won't accept the document (50 MB).  LEFT JOIN keeps exploiters
+# who haven't spent anything yet (their row has NULLs for spend_*).
 _SPEND_SQL = """
 WITH storms AS (
     SELECT id AS storm_id, announced_at,
@@ -558,7 +559,7 @@ per_plot AS (
 ),
 exploiters AS (
     SELECT user_id,
-           SUM(exploit_kop)   AS exploit_kop_total,
+           SUM(exploit_kop)    AS exploit_kop_total,
            MIN(first_event_at) AS first_exploit_at
       FROM per_plot
      GROUP BY user_id
@@ -566,50 +567,38 @@ exploiters AS (
 SELECT e.user_id,
        e.exploit_kop_total,
        e.first_exploit_at,
-       COALESCE(SUM(-bt.amount), 0) AS total_spent_kop,
-       COUNT(bt.id)                 AS spend_events,
-       (
-         SELECT json_agg(json_build_object(
-                   'when',   sub.created_at,
-                   'source', sub.source,
-                   'amount', -sub.amount,
-                   'desc',   sub.description
-               ) ORDER BY sub.created_at DESC)
-           FROM (
-               SELECT id, created_at, source, amount, description
-                 FROM balance_transactions
-                WHERE user_id = e.user_id
-                  AND amount < 0
-                  AND source <> 'farm_exploit_clawback'
-                  AND created_at >= e.first_exploit_at
-                ORDER BY created_at DESC
-                LIMIT 10
-           ) sub
-       ) AS recent_spend
+       bt.created_at  AS spend_at,
+       bt.source      AS spend_source,
+       (-bt.amount)   AS spend_kop,
+       bt.description AS spend_description
   FROM exploiters e
   LEFT JOIN balance_transactions bt
     ON bt.user_id = e.user_id
    AND bt.amount < 0
    AND bt.source <> 'farm_exploit_clawback'
    AND bt.created_at >= e.first_exploit_at
- GROUP BY e.user_id, e.exploit_kop_total, e.first_exploit_at
- ORDER BY e.exploit_kop_total DESC
- LIMIT 15
+ ORDER BY e.exploit_kop_total DESC, bt.created_at DESC
 """
+
 
 
 @admin_farm_storm_router.callback_query(F.data == "admin:storm:spend")
 async def callback_admin_storm_spend(callback: CallbackQuery):
-    """Show, for the top exploiters, every negative balance_transaction
-    they posted since their first exploit event.  Tells the admin where
-    the stolen kopecks have already gone (subscription, traffic, gifts…)."""
+    """Export, as a CSV document, every negative balance_transaction posted
+    by every exploiter since their first exploit event.  One row per
+    spend event; exploiters with zero spending get one row with empty
+    spend_* columns so they still appear in the file."""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
-    await callback.answer()
+    await callback.answer("Формирую CSV…")
+
+    import csv
+    import io
     import html as _html
-    import json as _json
+    from datetime import datetime as _dt
+    from aiogram.types import BufferedInputFile
 
     try:
         pool = await get_pool()
@@ -628,74 +617,94 @@ async def callback_admin_storm_spend(callback: CallbackQuery):
             await callback.answer(f"Ошибка SQL: {type(e).__name__}", show_alert=True)
         return
 
+    if not rows:
+        await safe_edit_text(
+            callback.message,
+            "📋 <b>Траты эксплойтеров</b>\n\n"
+            "✅ Эксплойтеров не найдено — экспортировать нечего.",
+            reply_markup=_kb([]), parse_mode="HTML", bot=callback.bot,
+        )
+        return
+
+    # Aggregate stats for the caption + chat-side preview.
+    unique_users = set()
+    total_exploit_kop = 0
+    total_spent_kop = 0
+    spend_event_count = 0
+    for r in rows:
+        uid = r["user_id"]
+        if uid not in unique_users:
+            unique_users.add(uid)
+            total_exploit_kop += int(r["exploit_kop_total"] or 0)
+        if r["spend_kop"] is not None:
+            total_spent_kop += int(r["spend_kop"])
+            spend_event_count += 1
+
+    # Build CSV in memory.  UTF-8 with BOM so Excel auto-detects encoding.
+    buf = io.StringIO()
+    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow([
+        "user_id",
+        "exploit_rub_total",
+        "first_exploit_at_utc",
+        "spend_at_utc",
+        "spend_source",
+        "spend_rub",
+        "spend_description",
+    ])
+    for r in rows:
+        exp_kop = int(r["exploit_kop_total"] or 0)
+        first_at = r["first_exploit_at"]
+        spend_at = r["spend_at"]
+        spend_kop = r["spend_kop"]
+        writer.writerow([
+            r["user_id"],
+            f"{exp_kop / 100:.2f}",
+            first_at.isoformat() if first_at else "",
+            spend_at.isoformat() if spend_at else "",
+            r["spend_source"] or "",
+            f"{int(spend_kop) / 100:.2f}" if spend_kop is not None else "",
+            r["spend_description"] or "",
+        ])
+    csv_bytes = ("﻿" + buf.getvalue()).encode("utf-8")
+
+    stamp = _dt.utcnow().strftime("%Y%m%d_%H%M%SZ")
+    filename = f"farm_exploit_spend_{stamp}.csv"
+    caption = (
+        f"📋 <b>Аудит трат эксплойтеров</b>\n"
+        f"  юзеров: <b>{len(unique_users)}</b>\n"
+        f"  объём эксплойта: <b>{total_exploit_kop / 100:.2f} ₽</b>\n"
+        f"  списаний после эксплойта: <b>{spend_event_count}</b> на "
+        f"<b>{total_spent_kop / 100:.2f} ₽</b>\n"
+        f"  всего строк в файле: <b>{len(rows)}</b>"
+    )
+
     try:
-        lines = ["📋 <b>Траты эксплойтеров с момента первого эксплойта</b>\n"]
-        if not rows:
-            lines.append("✅ Эксплойтеров не найдено — нечего показывать.")
-        else:
-            for r in rows:
-                uid = r["user_id"]
-                exp = int(r["exploit_kop_total"] or 0) / 100
-                spent = int(r["total_spent_kop"] or 0) / 100
-                events = int(r["spend_events"] or 0)
-                first = r["first_exploit_at"]
-                first_s = first.strftime("%m-%d %H:%M") if first else "—"
-
-                lines.append(
-                    f"\n🔴 <code>{uid}</code> — эксплойт <b>{exp:.2f} ₽</b>, "
-                    f"потратил с {_html.escape(first_s)}: "
-                    f"<b>{spent:.2f} ₽</b> в {events} операциях"
-                )
-
-                recent = r["recent_spend"]
-                if isinstance(recent, str):
-                    try:
-                        recent = _json.loads(recent)
-                    except Exception:
-                        recent = None
-                if not recent:
-                    lines.append("  <i>(списаний не было — деньги ещё лежат на балансе)</i>")
-                    continue
-                for ev in recent:
-                    when_raw = ev.get("when") or ""
-                    # `when` arrives as ISO string from json_build_object(timestamp).
-                    # Defensive: if asyncpg gave us a datetime instead, str() works either way.
-                    when = str(when_raw)[:16].replace("T", " ")
-                    src = ev.get("source") or "?"
-                    amt = int(ev.get("amount") or 0) / 100
-                    desc = (ev.get("desc") or "")[:55]
-                    lines.append(
-                        f"  • {_html.escape(when)}  −{amt:.2f} ₽  "
-                        f"<code>{_html.escape(src)}</code> {_html.escape(desc)}"
-                    )
-
-            lines.append(
-                "\n<i>«Потратил» = все списания (amount &lt; 0) с момента первого эксплойта, "
-                "кроме самого clawback'а.</i>"
-            )
-
-        text = "\n".join(lines)
-        # Telegram caps a single message at 4096 chars.  Trim to ~3900 to leave
-        # room for keyboard metadata and a footer indicating the truncation.
-        TG_MAX = 3900
-        if len(text) > TG_MAX:
-            text = text[:TG_MAX] + (
-                "\n\n<i>… вывод обрезан (превышен лимит Telegram). "
-                "Полный список — через SQL по source='farm_early_harvest'.</i>"
-            )
-
-        await safe_edit_text(callback.message, text,
-                             reply_markup=_kb([]), parse_mode="HTML",
-                             bot=callback.bot)
+        await callback.bot.send_document(
+            chat_id=callback.from_user.id,
+            document=BufferedInputFile(csv_bytes, filename=filename),
+            caption=caption,
+            parse_mode="HTML",
+        )
     except Exception as e:
-        logger.exception("ADMIN_SPEND_RENDER_FAIL: %s", e)
+        logger.exception("ADMIN_SPEND_SEND_DOC_FAIL: %s", e)
         try:
             await safe_edit_text(
                 callback.message,
-                f"❌ Ошибка отрисовки: <code>{_html.escape(type(e).__name__)}</code>\n"
-                f"<code>{_html.escape(str(e)[:300])}</code>\n"
-                f"Логи: ADMIN_SPEND_RENDER_FAIL.",
+                f"❌ Не удалось отправить файл: <code>{_html.escape(type(e).__name__)}</code>\n"
+                f"<code>{_html.escape(str(e)[:300])}</code>",
                 reply_markup=_kb([]), parse_mode="HTML", bot=callback.bot,
             )
         except Exception:
-            await callback.answer(f"Ошибка рендера: {type(e).__name__}", show_alert=True)
+            await callback.answer(f"Ошибка отправки: {type(e).__name__}", show_alert=True)
+        return
+
+    # Confirm on the original screen so the admin sees "done" + can come back.
+    await safe_edit_text(
+        callback.message,
+        f"📋 <b>Аудит трат эксплойтеров</b>\n\n"
+        f"📎 Файл <code>{_html.escape(filename)}</code> отправлен в чат "
+        f"({len(csv_bytes) // 1024} КБ, {len(rows)} строк).\n\n"
+        f"<i>Открывается в Excel / Google Sheets / Numbers.</i>",
+        reply_markup=_kb([]), parse_mode="HTML", bot=callback.bot,
+    )
