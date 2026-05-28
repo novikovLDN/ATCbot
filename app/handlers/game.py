@@ -610,12 +610,16 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
     # Imminent storm banner (only during the 24h announcement window)
     storm = await _get_imminent_storm()
     storm_active = storm is not None
+    storm_announced_at = None
     if storm_active:
         scheduled_at = storm["scheduled_at"]
         if scheduled_at.tzinfo is None:
             scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
         eta = scheduled_at - now
         eta_h = max(0, int(eta.total_seconds() // 3600))
+        storm_announced_at = storm.get("announced_at")
+        if storm_announced_at and storm_announced_at.tzinfo is None:
+            storm_announced_at = storm_announced_at.replace(tzinfo=timezone.utc)
         storm_banner = (
             f"⛈ <b>Надвигается шторм!</b> До удара ≈ {eta_h} ч\n"
             f"Растущие грядки без плёнки погибнут.\n"
@@ -668,8 +672,24 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
                 callback_data=f"farm_choose_{i}"
             )])
         elif status == "growing":
-            # Storm controls — only during the 24h announcement window, only if not already shielded.
+            # Storm controls — only during the 24h announcement window, only if not already shielded,
+            # and only for plants planted BEFORE the storm was announced.  The post-announce check
+            # closes an exploit where a user dug-up + replanted to early-harvest at 50% repeatedly.
+            eligible_for_storm_ctrls = False
             if storm_active and not plot.get("storm_shielded"):
+                if storm_announced_at is None:
+                    eligible_for_storm_ctrls = True
+                else:
+                    planted_at_str = plot.get("planted_at")
+                    if planted_at_str:
+                        try:
+                            planted_at = datetime.fromisoformat(planted_at_str)
+                            if planted_at.tzinfo is None:
+                                planted_at = planted_at.replace(tzinfo=timezone.utc)
+                            eligible_for_storm_ctrls = planted_at < storm_announced_at
+                        except ValueError:
+                            eligible_for_storm_ctrls = False
+            if eligible_for_storm_ctrls:
                 shield_cost_kopecks = storm_shield_price_kopecks(int(plant.get("reward", 0)))
                 shield_cost_rub = shield_cost_kopecks // 100
                 half_reward_rub = int(plant.get("reward", 0)) // 200  # half of reward, in RUB
@@ -1492,6 +1512,31 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
     if plot is None:
         await callback.answer("Грядка больше не растёт.", show_alert=True)
         return
+
+    # Anti-exploit: only plants that were already growing when the storm was
+    # announced can be early-harvested.  Replant-and-rinse loop would otherwise
+    # let a user farm 50% of any plant unlimited times during the announcement window.
+    announced_at = storm.get("announced_at")
+    if announced_at is not None:
+        if announced_at.tzinfo is None:
+            announced_at = announced_at.replace(tzinfo=timezone.utc)
+        planted_at_str = plot.get("planted_at")
+        if not planted_at_str:
+            await callback.answer("Ранний сбор недоступен для этой грядки.", show_alert=True)
+            return
+        try:
+            planted_at = datetime.fromisoformat(planted_at_str)
+            if planted_at.tzinfo is None:
+                planted_at = planted_at.replace(tzinfo=timezone.utc)
+        except ValueError:
+            await callback.answer("Ранний сбор недоступен для этой грядки.", show_alert=True)
+            return
+        if planted_at >= announced_at:
+            await callback.answer(
+                "Это растение было посажено уже во время шторма — ранний сбор для него недоступен.",
+                show_alert=True,
+            )
+            return
 
     plant = PLANT_TYPES.get(plot.get("plant_type"), {})
     half_reward_kopecks = int(plant.get("reward", 0)) // 2
