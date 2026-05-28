@@ -160,6 +160,7 @@ async def main():
     from app.core.telegram_error_middleware import TelegramErrorBoundaryMiddleware
     from app.core.chat_filter_middleware import PrivateChatOnlyMiddleware
     from app.core.rate_limit_middleware import GlobalRateLimitMiddleware
+    from app.core.last_seen_middleware import LastSeenMiddleware
 
     dp.update.middleware(ConcurrencyLimiterMiddleware(update_semaphore))
     dp.update.middleware(TelegramErrorBoundaryMiddleware())
@@ -169,6 +170,9 @@ async def main():
     # 2. Rate limiting
     dp.message.middleware(GlobalRateLimitMiddleware())
     dp.callback_query.middleware(GlobalRateLimitMiddleware())
+    # 3. last_seen_at bump (fire-and-forget) for the Farm storm online/offline split
+    dp.message.middleware(LastSeenMiddleware())
+    dp.callback_query.middleware(LastSeenMiddleware())
 
     # Регистрация handlers
     dp.include_router(root_router)
