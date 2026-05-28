@@ -3915,6 +3915,7 @@ async def create_pending_purchase(
     country: Optional[str] = None,
     purchase_type: str = "subscription",
     is_combo: bool = False,
+    farm_plot_id: Optional[int] = None,
 ) -> str:
     """
     Создать pending покупку с уникальным purchase_id
@@ -3945,9 +3946,9 @@ async def create_pending_purchase(
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
 
         # Соз��аем запись о по��упке
-        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country, is_combo)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"""
-        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country, is_combo)
+        _insert_sql = """INSERT INTO pending_purchases (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, status, expires_at, country, is_combo, farm_plot_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"""
+        _insert_args = (purchase_id, telegram_id, purchase_type, tariff, period_days, price_kopecks, promo_code, "pending", _to_db_utc(expires_at), country, is_combo, farm_plot_id)
         try:
             await conn.execute(_insert_sql, *_insert_args)
         except Exception as e:
@@ -4242,10 +4243,11 @@ async def finalize_purchase(
         purchase_country = pending_purchase.get("country")
         is_combo_purchase = pending_purchase.get("is_combo", False)
         expected_amount_rubles = price_kopecks / 100.0
-        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium", "telegram_stars"))
+        is_balance_topup = (purchase_type == "balance_topup") or (period_days == 0 and purchase_type not in ("traffic_pack", "gift", "apple_id", "telegram_premium", "telegram_stars", "farm_effect"))
         is_gift_purchase = (purchase_type == "gift")
         is_traffic_pack = (purchase_type == "traffic_pack")
         is_apple_id = (purchase_type == "apple_id")
+        is_farm_effect = (purchase_type == "farm_effect")
         amount_diff = abs(amount_rubles - expected_amount_rubles)
         # SECURITY: Percentage-based tolerance (0.5%) instead of fixed ±1₽
         # For 149₽ → max diff 0.75₽, for 1199₽ → max diff 6₽, minimum floor 0.50₽
@@ -4559,6 +4561,61 @@ async def finalize_purchase(
                         "is_renewal": False,
                         "is_traffic_pack": True,
                         "traffic_gb": _gb,
+                        "tariff_type": tariff_type,
+                    }
+
+                # STEP 4.7: ОБРАБОТКА ПОКУПКИ ЭФФЕКТА ФЕРМЫ (farm_storm_shield)
+                if is_farm_effect:
+                    plot_id = pending_purchase.get("farm_plot_id")
+                    logger.info(
+                        f"finalize_purchase: FARM_EFFECT [purchase_id={purchase_id}, user={telegram_id}, "
+                        f"tariff={tariff_type}, plot_id={plot_id}, amount={amount_rubles:.2f} RUB]"
+                    )
+                    if plot_id is None:
+                        raise ValueError(
+                            f"farm_effect purchase {purchase_id} has no farm_plot_id"
+                        )
+                    now_utc = datetime.now(timezone.utc)
+                    payment_id = await conn.fetchval(
+                        """INSERT INTO payments (telegram_id, tariff, amount, status, purchase_id, paid_at)
+                           VALUES ($1, $2, $3, 'approved', $4, $5) RETURNING id""",
+                        telegram_id,
+                        tariff_type or "farm_storm_shield",
+                        round(amount_rubles * 100),
+                        purchase_id,
+                        _to_db_utc(now_utc),
+                    )
+                    if not payment_id:
+                        raise Exception(
+                            f"Failed to create payment record for farm_effect: purchase_id={purchase_id}"
+                        )
+
+                    # Apply shield WITHOUT touching balance — already paid via PSP.
+                    # Pass our connection so the row update happens in the same
+                    # transaction (no nested advisory lock, no deadlock risk).
+                    from database.farm import apply_storm_shield_atomic
+                    shield_ok, shield_reason = await apply_storm_shield_atomic(
+                        telegram_id, plot_id, cost_kopecks=0, deduct_balance=False,
+                        conn=conn,
+                    )
+                    logger.info(
+                        f"finalize_purchase: FARM_EFFECT_SHIELD [purchase_id={purchase_id}, "
+                        f"plot_id={plot_id}, ok={shield_ok}, reason={shield_reason}]"
+                    )
+                    # Even on shield_ok=False (plot already harvested, already shielded,
+                    # status no longer growing) we keep the payment recorded — refund
+                    # logic, if needed, can run separately.  PSP webhook must not fail.
+
+                    return {
+                        "success": True,
+                        "payment_id": payment_id,
+                        "expires_at": None,
+                        "vpn_key": None,
+                        "is_renewal": False,
+                        "is_farm_effect": True,
+                        "farm_plot_id": plot_id,
+                        "farm_shield_applied": shield_ok,
+                        "farm_shield_reason": shield_reason,
                         "tariff_type": tariff_type,
                     }
 

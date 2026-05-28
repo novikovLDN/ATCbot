@@ -166,6 +166,7 @@ async def apply_storm_shield_atomic(
     cost_kopecks: int,
     *,
     deduct_balance: bool,
+    conn=None,
 ) -> Tuple[bool, str]:
     """Set storm_shielded=true on one plot atomically.
 
@@ -174,68 +175,79 @@ async def apply_storm_shield_atomic(
     just flips the flag (path for purchases paid via Lava/Платега, where
     the balance is not used).
 
+    If `conn` is passed, runs on the caller's connection without acquiring
+    a new one — caller owns the transaction and the advisory lock.
+
     Returns (success, reason).  reason values:
         "ok", "plot_not_growing", "plot_not_found", "insufficient_balance",
-        "already_shielded", "user_not_found"
+        "already_shielded", "user_not_found", "db_not_ready"
     """
     if not _core.DB_READY:
         return False, "db_not_ready"
+
+    async def _do(c):
+        row = await c.fetchrow(
+            "SELECT farm_plots, balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+            telegram_id,
+        )
+        if not row:
+            return False, "user_not_found"
+        plots = row["farm_plots"]
+        if isinstance(plots, str):
+            plots = json.loads(plots)
+        if not isinstance(plots, list):
+            return False, "plot_not_found"
+
+        target_idx = None
+        for i, p in enumerate(plots):
+            if int(p.get("plot_id", -1)) == plot_id:
+                target_idx = i
+                break
+        if target_idx is None:
+            return False, "plot_not_found"
+        target = plots[target_idx]
+        if target.get("status") != "growing":
+            return False, "plot_not_growing"
+        if target.get("storm_shielded") is True:
+            return False, "already_shielded"
+
+        if deduct_balance:
+            current_balance = row["balance"] or 0
+            if current_balance < cost_kopecks:
+                return False, "insufficient_balance"
+            await c.execute(
+                "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
+                cost_kopecks, telegram_id,
+            )
+            await c.execute(
+                """INSERT INTO balance_transactions
+                   (user_id, amount, type, source, description)
+                   VALUES ($1, $2, 'subscription_payment', 'farm_storm_shield', $3)""",
+                telegram_id, -cost_kopecks, f"Storm shield for plot {plot_id}",
+            )
+
+        plots[target_idx] = {**target, "storm_shielded": True}
+        await c.execute(
+            "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
+            json.dumps(plots), telegram_id,
+        )
+        logger.info(
+            "FARM_STORM_SHIELD_APPLIED user=%s plot=%s cost_kopecks=%s via_balance=%s",
+            telegram_id, plot_id, cost_kopecks, deduct_balance,
+        )
+        return True, "ok"
+
+    # Caller-managed connection — assume caller holds the txn and advisory lock.
+    if conn is not None:
+        return await _do(conn)
+
     pool = await get_pool()
     if pool is None:
         return False, "db_not_ready"
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
-            row = await conn.fetchrow(
-                "SELECT farm_plots, balance FROM users WHERE telegram_id = $1 FOR UPDATE",
-                telegram_id,
-            )
-            if not row:
-                return False, "user_not_found"
-            plots = row["farm_plots"]
-            if isinstance(plots, str):
-                plots = json.loads(plots)
-            if not isinstance(plots, list):
-                return False, "plot_not_found"
-
-            target_idx = None
-            for i, p in enumerate(plots):
-                if int(p.get("plot_id", -1)) == plot_id:
-                    target_idx = i
-                    break
-            if target_idx is None:
-                return False, "plot_not_found"
-            target = plots[target_idx]
-            if target.get("status") != "growing":
-                return False, "plot_not_growing"
-            if target.get("storm_shielded") is True:
-                return False, "already_shielded"
-
-            if deduct_balance:
-                current_balance = row["balance"] or 0
-                if current_balance < cost_kopecks:
-                    return False, "insufficient_balance"
-                await conn.execute(
-                    "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
-                    cost_kopecks, telegram_id,
-                )
-                await conn.execute(
-                    """INSERT INTO balance_transactions
-                       (user_id, amount, type, source, description)
-                       VALUES ($1, $2, 'subscription_payment', 'farm_storm_shield', $3)""",
-                    telegram_id, -cost_kopecks, f"Storm shield for plot {plot_id}",
-                )
-
-            plots[target_idx] = {**target, "storm_shielded": True}
-            await conn.execute(
-                "UPDATE users SET farm_plots = $1::jsonb WHERE telegram_id = $2",
-                json.dumps(plots), telegram_id,
-            )
-            logger.info(
-                "FARM_STORM_SHIELD_APPLIED user=%s plot=%s cost_kopecks=%s via_balance=%s",
-                telegram_id, plot_id, cost_kopecks, deduct_balance,
-            )
-            return True, "ok"
+    async with pool.acquire() as own_conn:
+        async with own_conn.transaction():
+            await own_conn.execute("SELECT pg_advisory_xact_lock($1)", telegram_id)
+            return await _do(own_conn)
 
 
 async def execute_storm_for_user(
