@@ -27,14 +27,43 @@ logger = logging.getLogger(__name__)
 
 # Plant types for Farm game
 PLANT_TYPES = {
-    "tomato":    {"emoji": "🍅", "name": "Томаты",   "days": 3,  "reward": 500},
-    "potato":    {"emoji": "🥔", "name": "Картофель","days": 5,  "reward": 1000},
-    "carrot":    {"emoji": "🥕", "name": "Морковь",  "days": 7,  "reward": 1000},
-    "cactus":    {"emoji": "🌵", "name": "Кактус",   "days": 10, "reward": 1500},
-    "apple":     {"emoji": "🍏", "name": "Яблоня",   "days": 8,  "reward": 1500},
-    "lavender":  {"emoji": "💜", "name": "Лаванда",  "days": 6,  "reward": 2000},
+    # Existing 6 cultures — untouched balance, classic line-up
+    "tomato":    {"emoji": "🍅", "name": "Томаты",      "days": 3,  "reward": 500},
+    "potato":    {"emoji": "🥔", "name": "Картофель",   "days": 5,  "reward": 1000},
+    "carrot":    {"emoji": "🥕", "name": "Морковь",     "days": 7,  "reward": 1000},
+    "cactus":    {"emoji": "🌵", "name": "Кактус",      "days": 10, "reward": 1500},
+    "apple":     {"emoji": "🍏", "name": "Яблоня",      "days": 8,  "reward": 1500},
+    "lavender":  {"emoji": "💜", "name": "Лаванда",     "days": 6,  "reward": 2000},
+    # Fast cultures — daily/short cycle
+    "greens":    {"emoji": "🌱", "name": "Зелень",      "days": 1,  "reward": 200},
+    "pepper":    {"emoji": "🌶", "name": "Перчик",      "days": 4,  "reward": 800},
+    # Mid cultures
+    "cucumber":  {"emoji": "🥒", "name": "Огурец",      "days": 5,  "reward": 1200},
+    "sunflower": {"emoji": "🌻", "name": "Подсолнух",   "days": 6,  "reward": 1400},
+    "strawberry":{"emoji": "🍓", "name": "Клубника",    "days": 7,  "reward": 1800},
+    # Trees — long cycle, premium reward
+    "grape":     {"emoji": "🍇", "name": "Виноград",    "days": 12, "reward": 3200},
+    "cherry":    {"emoji": "🍒", "name": "Вишня",       "days": 13, "reward": 3600},
+    "lemon":     {"emoji": "🍋", "name": "Лимонное дерево", "days": 16, "reward": 4800},
+    "oak":       {"emoji": "🌳", "name": "Дуб",         "days": 21, "reward": 7000},
 }
-# reward is in kopecks (500 = 5 RUB, 2000 = 20 RUB)
+# reward is in kopecks (200 = 2 RUB, 7000 = 70 RUB)
+
+
+# Storm shield price tiers (kopecks) — by plant reward
+# ≤ 25 RUB → 10 RUB,  26–40 RUB → 20 RUB,  > 40 RUB → 30 RUB
+def storm_shield_price_kopecks(plant_reward_kopecks: int) -> int:
+    if plant_reward_kopecks <= 2500:
+        return 1000
+    if plant_reward_kopecks <= 4000:
+        return 2000
+    return 3000
+
+
+# Farm plot purchase price (kopecks) — applies to NEW plot purchases only.
+# Existing users keep every plot they already bought; never decremented.
+FARM_PLOT_PRICE_KOPECKS = 6000  # 60 RUB
+FARM_MAX_PLOTS = 9
 
 
 def get_games_menu_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -640,17 +669,18 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             )])
     
     # Buy plot button
-    if plot_count < 9:
-        price = 5000  # 50 RUB in kopecks
-        remaining = 9 - plot_count
+    if plot_count < FARM_MAX_PLOTS:
+        price = FARM_PLOT_PRICE_KOPECKS
+        price_rub = price // 100
+        remaining = FARM_MAX_PLOTS - plot_count
         if balance >= price:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Купить грядку — 50 ₽ (осталось мест: {remaining})",
+                text=f"➕ Купить грядку — {price_rub} ₽ (осталось мест: {remaining})",
                 callback_data="farm_buy_plot"
             )])
         else:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Грядка (нужно 50 ₽, осталось мест: {remaining})",
+                text=f"➕ Грядка (нужно {price_rub} ₽, осталось мест: {remaining})",
                 callback_data="farm_noop"
             )])
     
@@ -1040,20 +1070,20 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
         return
     
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    if plot_count >= 9:
+
+    if plot_count >= FARM_MAX_PLOTS:
         await callback.answer("Максимальное количество грядок достигнуто", show_alert=True)
         return
-    
-    price = 5000  # 50 RUB in kopecks
+
+    price = FARM_PLOT_PRICE_KOPECKS
     if balance < price:
         await callback.answer("Недостаточно средств", show_alert=True)
         return
-    
+
     # Deduct balance
     success = await database.decrease_balance(
         telegram_id=telegram_id,
-        amount=50.0,  # 50 RUB
+        amount=price / 100.0,
         source="farm_buy_plot",
         description="Farm plot purchase"
     )
