@@ -275,13 +275,11 @@ async def process_stars_username(message: Message, state: FSMContext):
         f"Выберите способ оплаты:"
     )
 
-    balance = await database.get_user_balance(telegram_id)
+    # Balance payment is disabled by policy for Telegram Stars purchases.
+    # We still read the balance for parity with old logs but no button is
+    # rendered.  The server-side guard lives in callback_stars_pay_balance.
+    _ = await database.get_user_balance(telegram_id)
     buttons = []
-    if balance >= price:
-        buttons.append([InlineKeyboardButton(
-            text=f"💰 Баланс ({balance:.2f} ₽)",
-            callback_data="stars_pay:balance",
-        )])
     if config.TG_PROVIDER_TOKEN:
         buttons.append([InlineKeyboardButton(text="💳 Банковская карта", callback_data="stars_pay:card")])
 
@@ -347,33 +345,17 @@ async def _create_stars_purchase(telegram_id, username, stars, price):
 
 @stars_purchase_router.callback_query(F.data == "stars_pay:balance", StateFilter(TelegramStarsState.choose_payment_method))
 async def callback_stars_pay_balance(callback: CallbackQuery, state: FSMContext):
+    # Balance payment is disabled by policy for Telegram Stars purchases.
+    # The UI no longer offers this button, but the route stays as a guard
+    # against hand-crafted callback_data.
     try:
-        await callback.answer()
+        await callback.answer(
+            "Оплата с баланса для Telegram Stars недоступна. "
+            "Выберите карту или СБП.",
+            show_alert=True,
+        )
     except Exception:
         pass
-
-    result = await _get_stars_fsm_data(callback, state)
-    if not result:
-        return
-    username, stars, price, language = result
-    telegram_id = callback.from_user.id
-
-    balance = await database.get_user_balance(telegram_id)
-    if balance < price:
-        await callback.message.answer("❌ Недостаточно средств на балансе.", parse_mode="HTML")
-        return
-
-    try:
-        purchase_id, price_kopecks = await _create_stars_purchase(telegram_id, username, stars, price)
-        await database.decrease_balance(telegram_id, price, source="stars_purchase", description=f"Telegram Stars {stars}⭐ → {username}")
-        await database.mark_pending_purchase_paid(purchase_id)
-        await send_stars_success(callback.bot, telegram_id, purchase_id)
-    except Exception as e:
-        logger.exception("STARS_BALANCE_ERROR user=%s error=%s", telegram_id, e)
-        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        return
-
-    await state.clear()
 
 
 # ─── Payment: Card (TG Payments) ───

@@ -529,6 +529,17 @@ async def callback_admin_storm_clawback_apply(callback: CallbackQuery):
 # admin asked for the complete picture; truncation only happens if/when
 # Telegram won't accept the document (50 MB).  LEFT JOIN keeps exploiters
 # who haven't spent anything yet (their row has NULLs for spend_*).
+#
+# Balance columns:
+#   balance_now_kop          — users.balance, authoritative
+#   balance_before_exploit   — reconstructed: sum of every balance_transactions
+#                              row strictly before first_exploit_at.  Assumes
+#                              every balance change is logged (which is what
+#                              increase_balance / decrease_balance / payment
+#                              callbacks do).  Mismatch with users.balance
+#                              indicates a hand-edit or a legacy path that
+#                              didn't log — see balance_recon_now_kop in the
+#                              CSV to flag those users.
 _SPEND_SQL = """
 WITH storms AS (
     SELECT id AS storm_id, announced_at,
@@ -563,15 +574,35 @@ exploiters AS (
            MIN(first_event_at) AS first_exploit_at
       FROM per_plot
      GROUP BY user_id
+),
+exploiter_balances AS (
+    SELECT e.*,
+           COALESCE(u.balance, 0) AS balance_now_kop,
+           COALESCE((
+               SELECT SUM(bt.amount)
+                 FROM balance_transactions bt
+                WHERE bt.user_id = e.user_id
+                  AND bt.created_at < e.first_exploit_at
+           ), 0) AS balance_before_kop,
+           COALESCE((
+               SELECT SUM(bt.amount)
+                 FROM balance_transactions bt
+                WHERE bt.user_id = e.user_id
+           ), 0) AS balance_recon_now_kop
+      FROM exploiters e
+      LEFT JOIN users u ON u.telegram_id = e.user_id
 )
 SELECT e.user_id,
        e.exploit_kop_total,
        e.first_exploit_at,
+       e.balance_before_kop,
+       e.balance_now_kop,
+       e.balance_recon_now_kop,
        bt.created_at  AS spend_at,
        bt.source      AS spend_source,
        (-bt.amount)   AS spend_kop,
        bt.description AS spend_description
-  FROM exploiters e
+  FROM exploiter_balances e
   LEFT JOIN balance_transactions bt
     ON bt.user_id = e.user_id
    AND bt.amount < 0
@@ -579,6 +610,7 @@ SELECT e.user_id,
    AND bt.created_at >= e.first_exploit_at
  ORDER BY e.exploit_kop_total DESC, bt.created_at DESC
 """
+
 
 
 
@@ -631,11 +663,18 @@ async def callback_admin_storm_spend(callback: CallbackQuery):
     total_exploit_kop = 0
     total_spent_kop = 0
     spend_event_count = 0
+    total_balance_before_kop = 0
+    total_balance_now_kop = 0
+    drift_user_count = 0  # users whose users.balance disagrees with reconstruction
     for r in rows:
         uid = r["user_id"]
         if uid not in unique_users:
             unique_users.add(uid)
             total_exploit_kop += int(r["exploit_kop_total"] or 0)
+            total_balance_before_kop += int(r["balance_before_kop"] or 0)
+            total_balance_now_kop += int(r["balance_now_kop"] or 0)
+            if abs(int(r["balance_now_kop"] or 0) - int(r["balance_recon_now_kop"] or 0)) > 0:
+                drift_user_count += 1
         if r["spend_kop"] is not None:
             total_spent_kop += int(r["spend_kop"])
             spend_event_count += 1
@@ -647,6 +686,10 @@ async def callback_admin_storm_spend(callback: CallbackQuery):
         "user_id",
         "exploit_rub_total",
         "first_exploit_at_utc",
+        "balance_before_exploit_rub",   # reconstructed from balance_transactions
+        "balance_now_rub",              # users.balance (source of truth)
+        "balance_recon_now_rub",        # sum(transactions) — should match balance_now
+        "recon_drift_rub",              # balance_now − balance_recon_now (≈0 if logs are clean)
         "spend_at_utc",
         "spend_source",
         "spend_rub",
@@ -657,10 +700,17 @@ async def callback_admin_storm_spend(callback: CallbackQuery):
         first_at = r["first_exploit_at"]
         spend_at = r["spend_at"]
         spend_kop = r["spend_kop"]
+        bal_before = int(r["balance_before_kop"] or 0)
+        bal_now = int(r["balance_now_kop"] or 0)
+        bal_recon = int(r["balance_recon_now_kop"] or 0)
         writer.writerow([
             r["user_id"],
             f"{exp_kop / 100:.2f}",
             first_at.isoformat() if first_at else "",
+            f"{bal_before / 100:.2f}",
+            f"{bal_now / 100:.2f}",
+            f"{bal_recon / 100:.2f}",
+            f"{(bal_now - bal_recon) / 100:.2f}",
             spend_at.isoformat() if spend_at else "",
             r["spend_source"] or "",
             f"{int(spend_kop) / 100:.2f}" if spend_kop is not None else "",
@@ -670,14 +720,22 @@ async def callback_admin_storm_spend(callback: CallbackQuery):
 
     stamp = _dt.utcnow().strftime("%Y%m%d_%H%M%SZ")
     filename = f"farm_exploit_spend_{stamp}.csv"
-    caption = (
-        f"📋 <b>Аудит трат эксплойтеров</b>\n"
-        f"  юзеров: <b>{len(unique_users)}</b>\n"
-        f"  объём эксплойта: <b>{total_exploit_kop / 100:.2f} ₽</b>\n"
+    caption_lines = [
+        "📋 <b>Аудит трат эксплойтеров</b>",
+        f"  юзеров: <b>{len(unique_users)}</b>",
+        f"  объём эксплойта: <b>{total_exploit_kop / 100:.2f} ₽</b>",
+        f"  баланс ДО бага (суммарно): <b>{total_balance_before_kop / 100:.2f} ₽</b>",
+        f"  баланс СЕЙЧАС (суммарно): <b>{total_balance_now_kop / 100:.2f} ₽</b>",
         f"  списаний после эксплойта: <b>{spend_event_count}</b> на "
-        f"<b>{total_spent_kop / 100:.2f} ₽</b>\n"
-        f"  всего строк в файле: <b>{len(rows)}</b>"
-    )
+        f"<b>{total_spent_kop / 100:.2f} ₽</b>",
+        f"  всего строк в файле: <b>{len(rows)}</b>",
+    ]
+    if drift_user_count > 0:
+        caption_lines.append(
+            f"  ⚠️ юзеров с расхождением reconstruction vs users.balance: "
+            f"<b>{drift_user_count}</b> — см. колонку recon_drift_rub"
+        )
+    caption = "\n".join(caption_lines)
 
     try:
         await callback.bot.send_document(
