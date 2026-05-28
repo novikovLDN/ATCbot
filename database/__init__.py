@@ -135,8 +135,6 @@ from database.subscriptions import (  # noqa: F401
     get_subscriptions_needing_reminder,
     mark_reminder_sent,
     mark_reminder_flag_sent,
-    get_winback_2d_candidates,
-    mark_winback_2d_sent,
     mark_user_unreachable,
     update_last_reminder_at,
     get_promo_code,

@@ -104,7 +104,6 @@ async def callback_admin_notifications(callback: CallbackQuery, state: FSMContex
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_retention"), callback_data="admin:notif_retention")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_referral"), callback_data="admin:notif_referral")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.notif_subscription"), callback_data="admin:notif_subscription")],
-        [InlineKeyboardButton(text=i18n_get_text(language, "winback.admin_menu_button"), callback_data="admin:winback_2d")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.back"), callback_data="admin:main")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML")
