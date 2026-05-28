@@ -238,17 +238,62 @@ per_plot AS (
       FROM in_window
      GROUP BY user_id, storm_id, plot_id
     HAVING COUNT(*) > 1
+),
+exploit_totals AS (
+    SELECT user_id,
+           SUM(exploit_kop)         AS exploit_kop_total,
+           SUM(events - 1)          AS extra_harvests,
+           COUNT(DISTINCT storm_id) AS storms_affected
+      FROM per_plot
+     GROUP BY user_id
+),
+clawbacks AS (
+    SELECT user_id, -SUM(amount) AS clawback_kop_total
+      FROM balance_transactions
+     WHERE source = 'farm_exploit_clawback'
+     GROUP BY user_id
 )
-SELECT user_id,
-       SUM(exploit_kop)               AS exploit_kop_total,
-       SUM(events - 1)                AS extra_harvests,
-       COUNT(DISTINCT storm_id)       AS storms_affected,
-       array_agg(DISTINCT storm_id)   AS storm_ids
-  FROM per_plot
- GROUP BY user_id
- ORDER BY exploit_kop_total DESC
+SELECT et.user_id,
+       et.exploit_kop_total,
+       et.extra_harvests,
+       et.storms_affected,
+       COALESCE(cb.clawback_kop_total, 0)                        AS clawback_kop_total,
+       et.exploit_kop_total - COALESCE(cb.clawback_kop_total, 0) AS remaining_kop,
+       COALESCE(u.balance, 0)                                    AS current_balance_kop
+  FROM exploit_totals et
+  LEFT JOIN clawbacks cb ON cb.user_id = et.user_id
+  LEFT JOIN users u      ON u.telegram_id = et.user_id
+ ORDER BY remaining_kop DESC NULLS LAST
  LIMIT 50
 """
+
+
+async def _fetch_audit_rows():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetch(_AUDIT_SQL)
+
+
+def _compute_clawback_plan(rows):
+    """For each row, the actual amount we can take = min(remaining, balance).
+    Returns (plan, total_to_clawback_kop, partial_count) where
+    plan = [(user_id, take_kop, remaining_kop, balance_kop), ...] for entries with take>0."""
+    plan = []
+    total = 0
+    partial = 0
+    for r in rows:
+        remaining = int(r["remaining_kop"] or 0)
+        balance = int(r["current_balance_kop"] or 0)
+        if remaining <= 0:
+            continue
+        take = min(remaining, max(balance, 0))
+        if take <= 0:
+            continue
+        plan.append((r["user_id"], take, remaining, balance))
+        total += take
+        if take < remaining:
+            partial += 1
+    return plan, total, partial
 
 
 @admin_farm_storm_router.callback_query(F.data == "admin:storm:audit")
@@ -259,10 +304,8 @@ async def callback_admin_storm_audit(callback: CallbackQuery):
         return
 
     await callback.answer()
-    pool = await get_pool()
     try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(_AUDIT_SQL)
+        rows = await _fetch_audit_rows()
     except Exception as e:
         logger.exception("ADMIN_AUDIT_FAIL: %s", e)
         await safe_edit_text(
@@ -279,24 +322,340 @@ async def callback_admin_storm_audit(callback: CallbackQuery):
         "появляться больше не должны.</i>\n"
     )
 
+    extra_buttons = []
     if not rows:
         lines.append("✅ <b>Эксплойт не зафиксирован.</b> Подозрительных пользователей нет.")
     else:
-        total_kop = sum(r["exploit_kop_total"] or 0 for r in rows)
+        exploit_kop = sum(int(r["exploit_kop_total"] or 0) for r in rows)
+        clawed_kop = sum(int(r["clawback_kop_total"] or 0) for r in rows)
+        remaining_kop = sum(int(r["remaining_kop"] or 0) for r in rows)
         lines.append(
-            f"❗ Подозрительных юзеров: <b>{len(rows)}</b>  "
-            f"общий объём эксплойта: <b>{total_kop / 100:.2f} ₽</b>\n"
+            f"❗ Подозрительных юзеров: <b>{len(rows)}</b>\n"
+            f"  объём эксплойта: <b>{exploit_kop / 100:.2f} ₽</b>\n"
+            f"  уже списано:    <b>{clawed_kop / 100:.2f} ₽</b>\n"
+            f"  осталось:       <b>{remaining_kop / 100:.2f} ₽</b>\n"
         )
-        lines.append("<b>Топ-50:</b>")
+        lines.append("<b>Топ-50 (по остатку):</b>")
         lines.append("<code>")
-        lines.append(f"{'user_id':>12}  {'эксплойт':>10}  {'лишних':>6}  штормов")
+        lines.append(
+            f"{'user_id':>10} {'эксплойт':>9} {'списано':>9} {'остаток':>9} {'баланс':>9}"
+        )
         for r in rows:
             uid = r["user_id"]
-            rub = (r["exploit_kop_total"] or 0) / 100
-            extra = r["extra_harvests"] or 0
-            storms = r["storms_affected"] or 0
-            lines.append(f"{uid:>12}  {rub:>8.2f} ₽  {extra:>6}  {storms}")
+            exp = int(r["exploit_kop_total"] or 0) / 100
+            cb = int(r["clawback_kop_total"] or 0) / 100
+            rem = int(r["remaining_kop"] or 0) / 100
+            bal = int(r["current_balance_kop"] or 0) / 100
+            lines.append(
+                f"{uid:>10} {exp:>7.2f} ₽ {cb:>7.2f} ₽ {rem:>7.2f} ₽ {bal:>7.2f} ₽"
+            )
         lines.append("</code>")
+
+        # Offer clawback only when something is left to take
+        plan, total_take, partial = _compute_clawback_plan(rows)
+        if plan:
+            extra_buttons.append([InlineKeyboardButton(
+                text=f"↩ Откатить эксплойт — {total_take / 100:.2f} ₽ с {len(plan)} юзеров",
+                callback_data="admin:storm:clawback:confirm",
+            )])
+        # Spending tracker — even if there's nothing left to claw back, the
+        # admin may want to see WHERE the exploit money already went.
+        extra_buttons.append([InlineKeyboardButton(
+            text="📋 Что потратили эксплойтеры",
+            callback_data="admin:storm:spend",
+        )])
+
+    await safe_edit_text(callback.message, "\n".join(lines),
+                         reply_markup=_kb(extra_buttons), parse_mode="HTML")
+
+
+@admin_farm_storm_router.callback_query(F.data == "admin:storm:clawback:confirm")
+async def callback_admin_storm_clawback_confirm(callback: CallbackQuery):
+    """Confirmation screen — recompute the plan at this exact moment so the
+    admin sees what we'll really do, not a stale figure from the audit screen."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    await callback.answer()
+    try:
+        rows = await _fetch_audit_rows()
+    except Exception as e:
+        logger.exception("ADMIN_CLAWBACK_PREVIEW_FAIL: %s", e)
+        await callback.answer(f"Ошибка: {type(e).__name__}", show_alert=True)
+        return
+    plan, total_take, partial = _compute_clawback_plan(rows)
+
+    if not plan:
+        await callback.answer(
+            "Списывать нечего — у юзеров нулевой или отрицательный остаток.",
+            show_alert=True,
+        )
+        await _render(callback)
+        return
+
+    lines = [
+        "⚠️ <b>Подтверждение отката</b>\n",
+        f"Будет списано <b>{total_take / 100:.2f} ₽</b> с <b>{len(plan)}</b> юзеров.",
+    ]
+    if partial:
+        lines.append(
+            f"  • Частично (на балансе меньше долга): <b>{partial}</b> юзеров — "
+            f"спишем сколько есть, остаток долга останется висеть."
+        )
+    lines.append("\n<b>Превью (топ-15):</b>")
+    lines.append("<code>")
+    lines.append(f"{'user_id':>10} {'спишем':>9} {'из остатка':>11} {'баланс→0':>10}")
+    for uid, take, remaining, balance in plan[:15]:
+        new_bal = balance - take
+        lines.append(
+            f"{uid:>10} {take/100:>7.2f} ₽ {remaining/100:>9.2f} ₽ {new_bal/100:>8.2f} ₽"
+        )
+    lines.append("</code>")
+    if len(plan) > 15:
+        lines.append(f"\n…и ещё <b>{len(plan) - 15}</b> юзеров.")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Применить откат", callback_data="admin:storm:clawback:apply")],
+        [InlineKeyboardButton(text="❌ Отмена",           callback_data="admin:storm:audit")],
+    ])
+    await safe_edit_text(callback.message, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
+
+
+@admin_farm_storm_router.callback_query(F.data == "admin:storm:clawback:apply")
+async def callback_admin_storm_clawback_apply(callback: CallbackQuery):
+    """Atomically deduct the exploit gains.
+
+    Each user runs in its own transaction with an advisory lock and a
+    FOR UPDATE on the balance row.  Re-validates remaining_kop > 0 inside
+    the txn so repeated clicks are safe (idempotent via 'farm_exploit_clawback'
+    transactions accumulating in balance_transactions).
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    await callback.answer("Применяю откат…")
+    try:
+        rows = await _fetch_audit_rows()
+    except Exception as e:
+        logger.exception("ADMIN_CLAWBACK_FETCH_FAIL: %s", e)
+        await callback.answer(f"Ошибка: {type(e).__name__}", show_alert=True)
+        return
+    plan, _, _ = _compute_clawback_plan(rows)
+
+    pool = await get_pool()
+    applied_total = 0
+    applied_users = 0
+    partial_users = 0
+    skipped_users = 0
+
+    for uid, take_estimated, remaining_estimated, _balance_estimated in plan:
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute("SELECT pg_advisory_xact_lock($1)", uid)
+                    # Recompute under the lock — guards against double-clicks
+                    # and against the user spending balance between preview and apply.
+                    bal_row = await conn.fetchrow(
+                        "SELECT balance FROM users WHERE telegram_id = $1 FOR UPDATE",
+                        uid,
+                    )
+                    if bal_row is None:
+                        skipped_users += 1
+                        continue
+                    balance = int(bal_row["balance"] or 0)
+                    # remaining_estimated was net of existing clawbacks at fetch time;
+                    # a parallel admin click could only DECREASE it further, never grow,
+                    # so capping at balance here is safe even under a stray double-click.
+                    take = min(remaining_estimated, balance)
+                    if take <= 0:
+                        skipped_users += 1
+                        continue
+                    await conn.execute(
+                        "UPDATE users SET balance = balance - $1 WHERE telegram_id = $2",
+                        take, uid,
+                    )
+                    await conn.execute(
+                        """INSERT INTO balance_transactions
+                           (user_id, amount, type, source, description)
+                           VALUES ($1, $2, 'admin_adjustment', 'farm_exploit_clawback', $3)""",
+                        uid, -take,
+                        f"Clawback of early-harvest exploit "
+                        f"(took {take} kop of {remaining_estimated} kop owed)",
+                    )
+                    applied_total += take
+                    applied_users += 1
+                    if take < remaining_estimated:
+                        partial_users += 1
+                    logger.info(
+                        "ADMIN_CLAWBACK admin=%s user=%s took_kop=%s owed_kop=%s balance_after=%s",
+                        callback.from_user.id, uid, take, remaining_estimated, balance - take,
+                    )
+        except Exception as e:
+            logger.exception("ADMIN_CLAWBACK_USER_FAIL user=%s: %s", uid, e)
+            skipped_users += 1
+
+    lines = [
+        "✅ <b>Откат эксплойта применён</b>\n",
+        f"Списано всего: <b>{applied_total / 100:.2f} ₽</b>",
+        f"Юзеров обработано: <b>{applied_users}</b>",
+    ]
+    if partial_users:
+        lines.append(
+            f"  • Частично покрыто (баланс кончился): <b>{partial_users}</b>"
+        )
+    if skipped_users:
+        lines.append(
+            f"  • Пропущено (нулевой баланс / ошибка): <b>{skipped_users}</b>"
+        )
+    lines.append(
+        "\n<i>Пользователям сообщение НЕ отправлено. Если нужно — отправь "
+        "массовую рассылку отдельно через центр уведомлений.</i>"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔍 Открыть аудит",  callback_data="admin:storm:audit")],
+        [InlineKeyboardButton(text="🌪 К шторму",        callback_data="admin:storm")],
+        [InlineKeyboardButton(text="🔙 В админку",       callback_data="admin:main")],
+    ])
+    await safe_edit_text(callback.message, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Spending tracker: what did exploiters do with the stolen kopecks?
+# ────────────────────────────────────────────────────────────────────────
+
+# For each exploiter, fetch every negative balance_transaction made on or
+# after their FIRST exploit event.  Excludes the clawback row itself (its
+# source is 'farm_exploit_clawback') so we don't double-count it as "spend".
+_SPEND_SQL = """
+WITH storms AS (
+    SELECT id AS storm_id, announced_at,
+           COALESCE(executed_at, NOW()) AS window_end
+      FROM farm_storms
+     WHERE announced_at IS NOT NULL
+),
+early_harvests AS (
+    SELECT user_id, amount, created_at, description,
+           NULLIF((regexp_match(description, 'plot (\\d+)'))[1], '')::int AS plot_id
+      FROM balance_transactions
+     WHERE source = 'farm_early_harvest'
+),
+in_window AS (
+    SELECT s.storm_id, eh.*
+      FROM early_harvests eh
+      JOIN storms s
+        ON eh.created_at >= s.announced_at
+       AND eh.created_at <  s.window_end
+),
+per_plot AS (
+    SELECT user_id, storm_id, plot_id, COUNT(*) AS events,
+           SUM(amount) - MIN(amount) AS exploit_kop,
+           MIN(created_at) AS first_event_at
+      FROM in_window
+     GROUP BY user_id, storm_id, plot_id
+    HAVING COUNT(*) > 1
+),
+exploiters AS (
+    SELECT user_id,
+           SUM(exploit_kop)   AS exploit_kop_total,
+           MIN(first_event_at) AS first_exploit_at
+      FROM per_plot
+     GROUP BY user_id
+)
+SELECT e.user_id,
+       e.exploit_kop_total,
+       e.first_exploit_at,
+       COALESCE(SUM(-bt.amount), 0) AS total_spent_kop,
+       COUNT(bt.id)                 AS spend_events,
+       (
+         SELECT json_agg(json_build_object(
+                   'when',   sub.created_at,
+                   'source', sub.source,
+                   'amount', -sub.amount,
+                   'desc',   sub.description
+               ) ORDER BY sub.created_at DESC)
+           FROM (
+               SELECT id, created_at, source, amount, description
+                 FROM balance_transactions
+                WHERE user_id = e.user_id
+                  AND amount < 0
+                  AND source <> 'farm_exploit_clawback'
+                  AND created_at >= e.first_exploit_at
+                ORDER BY created_at DESC
+                LIMIT 10
+           ) sub
+       ) AS recent_spend
+  FROM exploiters e
+  LEFT JOIN balance_transactions bt
+    ON bt.user_id = e.user_id
+   AND bt.amount < 0
+   AND bt.source <> 'farm_exploit_clawback'
+   AND bt.created_at >= e.first_exploit_at
+ GROUP BY e.user_id, e.exploit_kop_total, e.first_exploit_at
+ ORDER BY e.exploit_kop_total DESC
+ LIMIT 15
+"""
+
+
+@admin_farm_storm_router.callback_query(F.data == "admin:storm:spend")
+async def callback_admin_storm_spend(callback: CallbackQuery):
+    """Show, for the top exploiters, every negative balance_transaction
+    they posted since their first exploit event.  Tells the admin where
+    the stolen kopecks have already gone (subscription, traffic, gifts…)."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    await callback.answer()
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(_SPEND_SQL)
+    except Exception as e:
+        logger.exception("ADMIN_SPEND_FAIL: %s", e)
+        await safe_edit_text(
+            callback.message,
+            f"❌ Не удалось получить траты: <code>{type(e).__name__}</code>",
+            reply_markup=_kb([]), parse_mode="HTML",
+        )
+        return
+
+    lines = ["📋 <b>Траты эксплойтеров с момента первого эксплойта</b>\n"]
+    if not rows:
+        lines.append("✅ Эксплойтеров не найдено — нечего показывать.")
+    else:
+        import json as _json
+        for r in rows:
+            uid = r["user_id"]
+            exp = int(r["exploit_kop_total"] or 0) / 100
+            spent = int(r["total_spent_kop"] or 0) / 100
+            events = int(r["spend_events"] or 0)
+            first = r["first_exploit_at"]
+            first_s = first.strftime("%m-%d %H:%M") if first else "—"
+
+            lines.append(
+                f"\n🔴 <code>{uid}</code> — эксплойт <b>{exp:.2f} ₽</b>, "
+                f"потратил с {first_s}: <b>{spent:.2f} ₽</b> в {events} операциях"
+            )
+
+            recent = r["recent_spend"]
+            if isinstance(recent, str):
+                recent = _json.loads(recent)
+            if not recent:
+                lines.append("  <i>(списаний не было — деньги ещё лежат на балансе)</i>")
+                continue
+            for ev in recent:
+                when = ev.get("when", "")[:16].replace("T", " ")
+                src = ev.get("source", "?")
+                amt = int(ev.get("amount", 0)) / 100
+                desc = (ev.get("desc") or "")[:55]
+                lines.append(f"  • {when}  −{amt:.2f} ₽  <code>{src}</code> {desc}")
+
+        lines.append(
+            "\n<i>«Потратил» = все списания (amount &lt; 0) с момента первого эксплойта, "
+            "кроме самого clawback'а.</i>"
+        )
 
     await safe_edit_text(callback.message, "\n".join(lines),
                          reply_markup=_kb([]), parse_mode="HTML")
