@@ -108,6 +108,100 @@ async def farm_notifications_iteration(bot: Bot):
             await database.save_farm_plots(telegram_id, farm_plots)
 
 
+async def farm_storm_iteration(bot: Bot):
+    """One pass of the storm scheduler.
+
+    Drives the storm lifecycle: pending → announced → executed → next-pending.
+    Runs inside the same 30-minute loop as ripe/dead notifications.
+    """
+    storm = await database.get_pending_storm()
+    if storm is None:
+        return
+
+    scheduled_at = storm["scheduled_at"]
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    announce_threshold = scheduled_at - timedelta(hours=database.STORM_ANNOUNCE_BEFORE_HOURS)
+
+    # 1. ANNOUNCE — within 24h of impact, and not yet announced.
+    if storm.get("announced_at") is None and now >= announce_threshold:
+        ok = await database.mark_storm_announced(storm["id"])
+        if ok:
+            logger.info("STORM_ANNOUNCED storm_id=%s scheduled_at=%s", storm["id"], scheduled_at)
+            users = await database.list_users_with_growing_plots()
+            for u in users:
+                try:
+                    await bot.send_message(
+                        u["telegram_id"],
+                        "⛈ <b>Надвигается шторм!</b>\n\n"
+                        f"Через ~{database.STORM_ANNOUNCE_BEFORE_HOURS} ч твои растущие грядки могут погибнуть.\n"
+                        f"🛡 Накрой их плёнкой (по 10–30 ₽), или 🚜 собери незрелым за 50 %.\n\n"
+                        f"Зайди на ферму, чтобы выбрать.",
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.warning("STORM_ANNOUNCE push failed user=%s err=%s", u["telegram_id"], type(e).__name__)
+
+    # Re-read after potential announce (so executed_at sees the latest)
+    storm = await database.get_pending_storm()
+    if storm is None:
+        return
+
+    scheduled_at = storm["scheduled_at"]
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    announced_at = storm.get("announced_at")
+    if announced_at and announced_at.tzinfo is None:
+        announced_at = announced_at.replace(tzinfo=timezone.utc)
+
+    # 2. EXECUTE — past scheduled_at, not yet executed.
+    if storm.get("executed_at") is None and now >= scheduled_at:
+        if announced_at is None:
+            # Defensive: if somehow announce was skipped, treat the moment of
+            # execution as "no online window existed" — everyone is offline.
+            announced_at = now
+
+        plant_rewards = {k: v["reward"] for k, v in PLANT_TYPES.items()}
+        users = await database.list_users_with_growing_plots()
+        total_k, total_s, total_ah, total_ahk = 0, 0, 0, 0
+
+        for u in users:
+            killed, shielded, autoharv, autoharv_kop = await database.execute_storm_for_user(
+                u["telegram_id"], u["farm_plots"], u["last_seen_at"],
+                announced_at, plant_rewards,
+            )
+            total_k += killed
+            total_s += shielded
+            total_ah += autoharv
+            total_ahk += autoharv_kop
+
+            # Per-user wrap-up push (only if anything happened to that user)
+            if killed + autoharv > 0:
+                lines = ["🌪 <b>Шторм прошёл</b>\n"]
+                if autoharv > 0:
+                    lines.append(f"🚜 Авто-сбор за 50%: +{autoharv_kop // 100} ₽ на баланс ({autoharv} грядок)")
+                if killed > 0:
+                    lines.append(f"💀 Погибло без плёнки: {killed} грядок")
+                if shielded > 0:
+                    lines.append(f"🛡 Спасено плёнкой: {shielded}")
+                try:
+                    await bot.send_message(u["telegram_id"], "\n".join(lines), parse_mode="HTML")
+                except Exception as e:
+                    logger.warning("STORM_WRAPUP push failed user=%s err=%s", u["telegram_id"], type(e).__name__)
+
+        await database.mark_storm_executed(
+            storm["id"],
+            killed=total_k, shielded=total_s,
+            auto_harvested=total_ah, auto_harvested_rub=total_ahk // 100,
+        )
+        next_id = await database.schedule_next_storm()
+        logger.info(
+            "STORM_EXECUTED storm_id=%s killed=%s shielded=%s auto=%s auto_rub=%s next_storm_id=%s",
+            storm["id"], total_k, total_s, total_ah, total_ahk // 100, next_id,
+        )
+
+
 async def farm_notifications_task(bot: Bot):
     """Фоновая задача для отправки уведомлений о ферме (выполняется каждые 30 минут)"""
     # Небольшая задержка при старте, чтобы БД успела инициализироваться
@@ -129,6 +223,7 @@ async def farm_notifications_task(bot: Bot):
         try:
             async def _run_iteration():
                 await farm_notifications_iteration(bot)
+                await farm_storm_iteration(bot)
             
             try:
                 await asyncio.wait_for(_run_iteration(), timeout=120.0)

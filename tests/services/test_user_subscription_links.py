@@ -84,12 +84,12 @@ def _patch_db(monkeypatch, *, rows=None, vals=None,
     return db
 
 
-def _patch_config(enabled=True, main_squad="main-sq", clients_squad="clients-sq", trial_gb=1):
+def _patch_config(enabled=True, main_squad="main-sq", clients_squad="clients-sq", trial_mb=500):
     cfg = SimpleNamespace(
         REMNAWAVE_ENABLED=enabled,
         REMNAWAVE_MAIN_SQUAD_UUID=main_squad,
         REMNAWAVE_SQUAD_UUID=clients_squad,
-        TRIAL_BYPASS_GB=trial_gb,
+        TRIAL_BYPASS_MB=trial_mb,
     )
     return patch.object(user_subscription_links, "config", cfg)
 
@@ -196,15 +196,15 @@ async def test_bypass_url_lazy_provisions_when_no_entity(monkeypatch):
     with _patch_config(), \
          patch.object(user_subscription_links, "config", SimpleNamespace(
              REMNAWAVE_ENABLED=True, REMNAWAVE_MAIN_SQUAD_UUID="main-sq",
-             REMNAWAVE_SQUAD_UUID="clients-sq", TRIAL_BYPASS_GB=1,
+             REMNAWAVE_SQUAD_UUID="clients-sq", TRIAL_BYPASS_MB=500,
          )), \
          patch("app.services.remnawave_bypass.create_bypass_user_entity", bcreate):
         url = await user_subscription_links.get_user_bypass_url(42)
 
     assert url == "https://rmnw/sub/new-byp"
     bcreate.assert_awaited_once()
-    # Trial-source → 1 GB
-    assert bcreate.call_args.kwargs["traffic_limit_bytes"] == 1 * 1024**3
+    # Trial-source → 500 MB
+    assert bcreate.call_args.kwargs["traffic_limit_bytes"] == 500 * 1024**2
 
 
 @pytest.mark.asyncio
@@ -223,7 +223,7 @@ async def test_bypass_url_returns_none_when_provision_fails(monkeypatch):
     ))
     with patch.object(user_subscription_links, "config", SimpleNamespace(
              REMNAWAVE_ENABLED=True, REMNAWAVE_MAIN_SQUAD_UUID="main-sq",
-             REMNAWAVE_SQUAD_UUID="clients-sq", TRIAL_BYPASS_GB=1,
+             REMNAWAVE_SQUAD_UUID="clients-sq", TRIAL_BYPASS_MB=500,
          )), \
          patch("app.services.remnawave_bypass.create_bypass_user_entity", bcreate):
         url = await user_subscription_links.get_user_bypass_url(42)

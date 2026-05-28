@@ -28,7 +28,7 @@ import pytest
 def _cfg(**overrides):
     cfg = type("Cfg", (), {})()
     cfg.REMNAWAVE_ENABLED = True
-    cfg.TRIAL_BYPASS_GB = 1
+    cfg.TRIAL_BYPASS_MB = 500
     cfg.COMBO_TARIFFS = {
         "combo_basic": {
             30: {"price": 269, "gb": 75, "base_tariff": "basic"},
@@ -74,10 +74,10 @@ def _fake_db(monkeypatch, *, existing_premium_uuid=None, existing_bypass_uuid=No
 # ── _bypass_bytes_for ──────────────────────────────────────────────────
 
 class TestBypassBytesFor:
-    def test_trial_returns_one_gb(self, monkeypatch):
+    def test_trial_returns_500_mb(self, monkeypatch):
         from app.services import purchase_flow
         with patch.object(purchase_flow, "config", _cfg()):
-            assert purchase_flow._bypass_bytes_for("basic", 30, is_trial=True) == 1 * 1024**3
+            assert purchase_flow._bypass_bytes_for("basic", 30, is_trial=True) == 500 * 1024**2
 
     def test_combo_uses_per_period_gb(self, monkeypatch):
         from app.services import purchase_flow
@@ -172,7 +172,7 @@ async def test_provision_trial_creates_both_with_1gb_bypass(monkeypatch):
             is_trial=True,
         )
 
-    assert cbm.call_args.kwargs["traffic_limit_bytes"] == 1 * 1024**3  # Trial=1GB
+    assert cbm.call_args.kwargs["traffic_limit_bytes"] == 500 * 1024**2  # Trial=500MB
 
 
 # ── Combo flow ────────────────────────────────────────────────────────

@@ -27,14 +27,43 @@ logger = logging.getLogger(__name__)
 
 # Plant types for Farm game
 PLANT_TYPES = {
-    "tomato":    {"emoji": "🍅", "name": "Томаты",   "days": 3,  "reward": 500},
-    "potato":    {"emoji": "🥔", "name": "Картофель","days": 5,  "reward": 1000},
-    "carrot":    {"emoji": "🥕", "name": "Морковь",  "days": 7,  "reward": 1000},
-    "cactus":    {"emoji": "🌵", "name": "Кактус",   "days": 10, "reward": 1500},
-    "apple":     {"emoji": "🍏", "name": "Яблоня",   "days": 8,  "reward": 1500},
-    "lavender":  {"emoji": "💜", "name": "Лаванда",  "days": 6,  "reward": 2000},
+    # Existing 6 cultures — untouched balance, classic line-up
+    "tomato":    {"emoji": "🍅", "name": "Томаты",      "days": 3,  "reward": 500},
+    "potato":    {"emoji": "🥔", "name": "Картофель",   "days": 5,  "reward": 1000},
+    "carrot":    {"emoji": "🥕", "name": "Морковь",     "days": 7,  "reward": 1000},
+    "cactus":    {"emoji": "🌵", "name": "Кактус",      "days": 10, "reward": 1500},
+    "apple":     {"emoji": "🍏", "name": "Яблоня",      "days": 8,  "reward": 1500},
+    "lavender":  {"emoji": "💜", "name": "Лаванда",     "days": 6,  "reward": 2000},
+    # Fast cultures — daily/short cycle
+    "greens":    {"emoji": "🌱", "name": "Зелень",      "days": 1,  "reward": 200},
+    "pepper":    {"emoji": "🌶", "name": "Перчик",      "days": 4,  "reward": 800},
+    # Mid cultures
+    "cucumber":  {"emoji": "🥒", "name": "Огурец",      "days": 5,  "reward": 1200},
+    "sunflower": {"emoji": "🌻", "name": "Подсолнух",   "days": 6,  "reward": 1400},
+    "strawberry":{"emoji": "🍓", "name": "Клубника",    "days": 7,  "reward": 1800},
+    # Trees — long cycle, premium reward
+    "grape":     {"emoji": "🍇", "name": "Виноград",    "days": 12, "reward": 3200},
+    "cherry":    {"emoji": "🍒", "name": "Вишня",       "days": 13, "reward": 3600},
+    "lemon":     {"emoji": "🍋", "name": "Лимонное дерево", "days": 16, "reward": 4800},
+    "oak":       {"emoji": "🌳", "name": "Дуб",         "days": 21, "reward": 7000},
 }
-# reward is in kopecks (500 = 5 RUB, 2000 = 20 RUB)
+# reward is in kopecks (200 = 2 RUB, 7000 = 70 RUB)
+
+
+# Storm shield price tiers (kopecks) — by plant reward
+# ≤ 25 RUB → 10 RUB,  26–40 RUB → 20 RUB,  > 40 RUB → 30 RUB
+def storm_shield_price_kopecks(plant_reward_kopecks: int) -> int:
+    if plant_reward_kopecks <= 2500:
+        return 1000
+    if plant_reward_kopecks <= 4000:
+        return 2000
+    return 3000
+
+
+# Farm plot purchase price (kopecks) — applies to NEW plot purchases only.
+# Existing users keep every plot they already bought; never decremented.
+FARM_PLOT_PRICE_KOPECKS = 6000  # 60 RUB
+FARM_MAX_PLOTS = 9
 
 
 def get_games_menu_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -542,6 +571,16 @@ async def callback_bomber_exit(callback: CallbackQuery, state: FSMContext):
         )
 
 
+async def _get_imminent_storm():
+    """Return the storm row if announced & not executed, else None."""
+    storm = await database.get_pending_storm()
+    if not storm:
+        return None
+    if storm.get("announced_at") and not storm.get("executed_at"):
+        return storm
+    return None
+
+
 async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance=None):
     """Render farm screen with current state"""
     telegram_id = callback.from_user.id
@@ -568,8 +607,26 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
     if changed:
         await database.save_farm_plots(telegram_id, farm_plots)
     
+    # Imminent storm banner (only during the 24h announcement window)
+    storm = await _get_imminent_storm()
+    storm_active = storm is not None
+    if storm_active:
+        scheduled_at = storm["scheduled_at"]
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        eta = scheduled_at - now
+        eta_h = max(0, int(eta.total_seconds() // 3600))
+        storm_banner = (
+            f"⛈ <b>Надвигается шторм!</b> До удара ≈ {eta_h} ч\n"
+            f"Растущие грядки без плёнки погибнут.\n"
+        )
+    else:
+        storm_banner = None
+
     # Build text (plot 0 always visible; plots 1-8 only if purchased, i.e. plot_id < plot_count)
     lines = ["🌾 <b>Ваша ферма</b>\n"]
+    if storm_banner:
+        lines.append(storm_banner)
     for plot in farm_plots:
         if plot["plot_id"] >= plot_count:
             continue
@@ -585,7 +642,8 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             remaining = ready_at - now
             days = remaining.days
             hours = remaining.seconds // 3600
-            lines.append(f"Грядка {i+1}: 🌱 {plant.get('name','')} — осталось {days}д {hours}ч")
+            shield_mark = " 🛡" if plot.get("storm_shielded") else ""
+            lines.append(f"Грядка {i+1}: 🌱 {plant.get('name','')}{shield_mark} — осталось {days}д {hours}ч")
         elif status == "ready":
             lines.append(f"Грядка {i+1}: {plant.get('emoji','🌿')} {plant.get('name','')} — ✅ Готово к сбору!")
         elif status == "dead":
@@ -610,13 +668,27 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
                 callback_data=f"farm_choose_{i}"
             )])
         elif status == "growing":
+            # Storm controls — only during the 24h announcement window, only if not already shielded.
+            if storm_active and not plot.get("storm_shielded"):
+                shield_cost_kopecks = storm_shield_price_kopecks(int(plant.get("reward", 0)))
+                shield_cost_rub = shield_cost_kopecks // 100
+                half_reward_rub = int(plant.get("reward", 0)) // 200  # half of reward, in RUB
+                buttons.append([InlineKeyboardButton(
+                    text=f"🛡 Накрыть #{i+1} — {shield_cost_rub} ₽",
+                    callback_data=f"farm_shield:{i}"
+                )])
+                buttons.append([InlineKeyboardButton(
+                    text=f"🚜 Собрать незрелым #{i+1} — +{half_reward_rub} ₽",
+                    callback_data=f"farm_early:{i}"
+                )])
+
             # Water button
             row = []
             water_used = plot.get("water_used_at")
             can_water = not water_used or (now - datetime.fromisoformat(water_used)).total_seconds() >= 86400
             fert_used = plot.get("fertilizer_used_at")
             can_fert = not fert_used or (now - datetime.fromisoformat(fert_used)).total_seconds() >= 86400
-            
+
             if can_water:
                 row.append(InlineKeyboardButton(text=f"💧 Полить #{i+1}", callback_data=f"farm_water_{i}"))
             if can_fert:
@@ -640,17 +712,18 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
             )])
     
     # Buy plot button
-    if plot_count < 9:
-        price = 5000  # 50 RUB in kopecks
-        remaining = 9 - plot_count
+    if plot_count < FARM_MAX_PLOTS:
+        price = FARM_PLOT_PRICE_KOPECKS
+        price_rub = price // 100
+        remaining = FARM_MAX_PLOTS - plot_count
         if balance >= price:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Купить грядку — 50 ₽ (осталось мест: {remaining})",
+                text=f"➕ Купить грядку — {price_rub} ₽ (осталось мест: {remaining})",
                 callback_data="farm_buy_plot"
             )])
         else:
             buttons.append([InlineKeyboardButton(
-                text=f"➕ Грядка (нужно 50 ₽, осталось мест: {remaining})",
+                text=f"➕ Грядка (нужно {price_rub} ₽, осталось мест: {remaining})",
                 callback_data="farm_noop"
             )])
     
@@ -1040,20 +1113,20 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
         return
     
     farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
-    
-    if plot_count >= 9:
+
+    if plot_count >= FARM_MAX_PLOTS:
         await callback.answer("Максимальное количество грядок достигнуто", show_alert=True)
         return
-    
-    price = 5000  # 50 RUB in kopecks
+
+    price = FARM_PLOT_PRICE_KOPECKS
     if balance < price:
         await callback.answer("Недостаточно средств", show_alert=True)
         return
-    
+
     # Deduct balance
     success = await database.decrease_balance(
         telegram_id=telegram_id,
-        amount=50.0,  # 50 RUB
+        amount=price / 100.0,
         source="farm_buy_plot",
         description="Farm plot purchase"
     )
@@ -1193,3 +1266,269 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
 async def callback_farm_noop(callback: CallbackQuery):
     """No-op handler for disabled buttons"""
     await callback.answer()
+
+
+# ════════════════════════════════════════════════════════════════════════
+# FARM STORM — shield purchase + early harvest
+# ════════════════════════════════════════════════════════════════════════
+
+def _parse_plot_id(callback_data: str, prefix: str) -> int:
+    """Extract integer plot_id from 'prefix:<n>' callback data; -1 on parse fail."""
+    try:
+        return int(callback_data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return -1
+
+
+async def _find_growing_plot(telegram_id: int, plot_id: int):
+    """Return (farm_plots, plot_count, balance, plot_dict) or (..., None) if
+    the plot is missing / not growing.  Caller short-circuits."""
+    farm_plots, plot_count, balance = await database.get_farm_data(telegram_id)
+    target = None
+    for p in farm_plots:
+        if int(p.get("plot_id", -1)) == plot_id:
+            target = p
+            break
+    if target is None or target.get("status") != "growing":
+        return farm_plots, plot_count, balance, None
+    return farm_plots, plot_count, balance, target
+
+
+@router.callback_query(F.data.startswith("farm_shield:"))
+async def callback_farm_shield(callback: CallbackQuery):
+    """🛡 Накрыть — pay via balance if enough, else show Lava/SBP screen."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+    telegram_id = callback.from_user.id
+
+    storm = await _get_imminent_storm()
+    if storm is None:
+        await callback.answer("Шторм уже прошёл или ещё не объявлен.", show_alert=True)
+        return
+
+    plot_id = _parse_plot_id(callback.data, "farm_shield")
+    if plot_id < 0:
+        return
+    farm_plots, plot_count, balance, plot = await _find_growing_plot(telegram_id, plot_id)
+    if plot is None:
+        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        return
+    if plot.get("storm_shielded"):
+        await callback.answer("Грядка уже накрыта.", show_alert=True)
+        return
+
+    plant = PLANT_TYPES.get(plot.get("plant_type"), {})
+    shield_cost = storm_shield_price_kopecks(int(plant.get("reward", 0)))
+    shield_cost_rub = shield_cost // 100
+
+    if balance >= shield_cost:
+        ok, reason = await database.apply_storm_shield_atomic(
+            telegram_id, plot_id, shield_cost, deduct_balance=True,
+        )
+        if ok:
+            await callback.answer(f"🛡 Грядка накрыта (−{shield_cost_rub} ₽)", show_alert=True)
+        else:
+            await callback.answer(f"Не удалось накрыть: {reason}", show_alert=True)
+        pool = await database.get_pool()
+        await _render_farm(callback, pool)
+        return
+
+    # Balance not enough → payment screen
+    need_rub = (shield_cost - balance) / 100.0
+    text = (
+        f"🛡 <b>Накрытие грядки {plot_id + 1}</b>\n\n"
+        f"Растение: {plant.get('emoji','')} {plant.get('name','')}\n"
+        f"Цена плёнки: <b>{shield_cost_rub} ₽</b>\n"
+        f"На балансе: {balance / 100:.2f} ₽ (не хватает {need_rub:.2f} ₽)\n\n"
+        f"Выберите способ оплаты:"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}")],
+        [InlineKeyboardButton(text="📲 СБП (+11%)", callback_data=f"farm_shield_sbp:{plot_id}")],
+        [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+    ])
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+
+
+@router.callback_query(F.data.startswith("farm_shield_lava:"))
+async def callback_farm_shield_lava(callback: CallbackQuery):
+    """Pay shield via Lava (card)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    telegram_id = callback.from_user.id
+
+    plot_id = _parse_plot_id(callback.data, "farm_shield_lava")
+    if plot_id < 0:
+        return
+    _, _, _, plot = await _find_growing_plot(telegram_id, plot_id)
+    if plot is None:
+        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        return
+    plant = PLANT_TYPES.get(plot.get("plant_type"), {})
+    shield_cost = storm_shield_price_kopecks(int(plant.get("reward", 0)))
+
+    import lava_service
+    if not lava_service.is_enabled():
+        await callback.answer("Оплата картой временно недоступна.", show_alert=True)
+        return
+
+    try:
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff="farm_storm_shield",
+            period_days=0,
+            price_kopecks=shield_cost,
+            purchase_type="farm_effect",
+            farm_plot_id=plot_id,
+        )
+        invoice = await lava_service.create_invoice(
+            amount_rubles=shield_cost / 100.0,
+            purchase_id=purchase_id,
+            comment=f"Atlas Secure — Накрытие грядки {plot_id + 1}",
+        )
+        invoice_id = invoice["invoice_id"]
+        payment_url = invoice["payment_url"]
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(invoice_id))
+        except Exception as e:
+            logger.error("Failed to save Lava invoice_id: %s", e)
+
+        text = (
+            f"💳 <b>Оплата накрытия грядки</b>\n\n"
+            f"Сумма: {shield_cost // 100} ₽\n\n"
+            f"После оплаты грядка накроется автоматически."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)],
+            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception("FARM_SHIELD_LAVA_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
+        await callback.answer("Ошибка создания платежа.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("farm_shield_sbp:"))
+async def callback_farm_shield_sbp(callback: CallbackQuery):
+    """Pay shield via Платега (SBP, +11%)."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    telegram_id = callback.from_user.id
+
+    plot_id = _parse_plot_id(callback.data, "farm_shield_sbp")
+    if plot_id < 0:
+        return
+    _, _, _, plot = await _find_growing_plot(telegram_id, plot_id)
+    if plot is None:
+        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        return
+    plant = PLANT_TYPES.get(plot.get("plant_type"), {})
+    shield_cost = storm_shield_price_kopecks(int(plant.get("reward", 0)))
+
+    import platega_service
+    if not platega_service.is_enabled():
+        await callback.answer("СБП временно недоступен.", show_alert=True)
+        return
+
+    try:
+        sbp_kopecks = platega_service.apply_sbp_markup(shield_cost)
+        purchase_id = await database.create_pending_purchase(
+            telegram_id=telegram_id,
+            tariff="farm_storm_shield",
+            period_days=0,
+            price_kopecks=sbp_kopecks,
+            purchase_type="farm_effect",
+            farm_plot_id=plot_id,
+        )
+        tx = await platega_service.create_transaction(
+            amount_rubles=sbp_kopecks / 100.0,
+            description=f"Atlas Secure — Накрытие грядки {plot_id + 1}",
+            purchase_id=purchase_id,
+        )
+        try:
+            await database.update_pending_purchase_invoice_id(purchase_id, str(tx["transaction_id"]))
+        except Exception as e:
+            logger.error("Failed to save SBP tx_id: %s", e)
+
+        text = (
+            f"📲 <b>СБП — накрытие грядки</b>\n\n"
+            f"Сумма с учётом наценки: {sbp_kopecks / 100:.2f} ₽\n\n"
+            f"После оплаты грядка накроется автоматически."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📲 Оплатить через СБП", url=tx["redirect_url"])],
+            [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        logger.exception("FARM_SHIELD_SBP_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
+        await callback.answer("Ошибка создания платежа.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("farm_early:"))
+async def callback_farm_early_harvest(callback: CallbackQuery):
+    """🚜 Собрать незрелым — credits 50% of plant reward, frees the plot."""
+    if not await ensure_db_ready_callback(callback):
+        return
+    await callback.answer()
+    telegram_id = callback.from_user.id
+
+    storm = await _get_imminent_storm()
+    if storm is None:
+        await callback.answer("Ранний сбор доступен только во время шторма.", show_alert=True)
+        return
+
+    plot_id = _parse_plot_id(callback.data, "farm_early")
+    if plot_id < 0:
+        return
+    farm_plots, plot_count, balance, plot = await _find_growing_plot(telegram_id, plot_id)
+    if plot is None:
+        await callback.answer("Грядка больше не растёт.", show_alert=True)
+        return
+
+    plant = PLANT_TYPES.get(plot.get("plant_type"), {})
+    half_reward_kopecks = int(plant.get("reward", 0)) // 2
+    if half_reward_kopecks <= 0:
+        await callback.answer("Ранний сбор недоступен для этого растения.", show_alert=True)
+        return
+
+    # Credit balance and reset plot to empty (mirrors normal harvest cleanup).
+    ok = await database.increase_balance(
+        telegram_id=telegram_id,
+        amount=half_reward_kopecks / 100.0,
+        source="farm_early_harvest",
+        description=f"Early harvest plot {plot_id} ({plant.get('name','')})",
+    )
+    if not ok:
+        await callback.answer("Не удалось зачислить награду.", show_alert=True)
+        return
+
+    for p in farm_plots:
+        if int(p.get("plot_id", -1)) == plot_id:
+            p["status"] = "empty"
+            p["plant_type"] = None
+            p["planted_at"] = None
+            p["ready_at"] = None
+            p["dead_at"] = None
+            p["notified_ready"] = False
+            p["notified_12h"] = False
+            p["notified_dead"] = False
+            p["water_used_at"] = None
+            p["fertilizer_used_at"] = None
+            p["storm_shielded"] = False
+            break
+    await database.save_farm_plots(telegram_id, farm_plots)
+
+    await callback.answer(
+        f"🚜 Собрано {plant.get('emoji','')} незрелым: +{half_reward_kopecks // 100} ₽",
+        show_alert=True,
+    )
+    pool = await database.get_pool()
+    await _render_farm(callback, pool)
