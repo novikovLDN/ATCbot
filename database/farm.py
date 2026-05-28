@@ -123,6 +123,51 @@ async def schedule_next_storm(now: Optional[datetime] = None) -> Optional[int]:
             return None
 
 
+async def replace_pending_storm_at(scheduled_at: datetime, announce_now: bool = True) -> int:
+    """Reschedule (or create) the pending storm at an exact moment.
+
+    Used by the admin "schedule in N hours" tool: replaces the existing
+    pending storm in-place so already-purchased shields carry over, and
+    optionally stamps announced_at=NOW so the announce-push goes out
+    immediately instead of waiting for the worker to notice the 24h window.
+
+    Returns the storm id.
+    """
+    if not _core.DB_READY:
+        raise RuntimeError("DB not ready")
+    pool = await get_pool()
+    if pool is None:
+        raise RuntimeError("DB not ready")
+    sched_naive = _to_db_utc(scheduled_at)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            existing = await conn.fetchrow(
+                "SELECT id FROM farm_storms WHERE executed_at IS NULL FOR UPDATE",
+            )
+            if existing is None:
+                row = await conn.fetchrow(
+                    """INSERT INTO farm_storms (scheduled_at, announced_at)
+                       VALUES ($1, CASE WHEN $2 THEN CURRENT_TIMESTAMP ELSE NULL END)
+                       RETURNING id""",
+                    sched_naive, announce_now,
+                )
+                storm_id = row["id"]
+            else:
+                storm_id = existing["id"]
+                await conn.execute(
+                    """UPDATE farm_storms
+                       SET scheduled_at = $2,
+                           announced_at = CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END
+                       WHERE id = $1""",
+                    storm_id, sched_naive, announce_now,
+                )
+    logger.info(
+        "STORM_RESCHEDULED storm_id=%s scheduled_at=%s announce_now=%s",
+        storm_id, scheduled_at, announce_now,
+    )
+    return storm_id
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Plot operations during storm
 # ──────────────────────────────────────────────────────────────────────
@@ -256,7 +301,7 @@ async def execute_storm_for_user(
     last_seen_at: Optional[datetime],
     announced_at: datetime,
     plant_rewards: Dict[str, int],
-) -> Tuple[int, int, int, int]:
+) -> Dict[str, Any]:
     """Apply storm effects to one user's plots.
 
     For each growing plot:
@@ -266,13 +311,25 @@ async def execute_storm_for_user(
 
     plant_rewards maps plant_type → full reward in kopecks.
 
-    Returns (killed_n, shielded_n, autoharv_n, autoharv_rub_total).
+    Returns a dict:
+        {
+            killed: int,
+            shielded: int,
+            autoharv: int,
+            autoharv_kopecks: int,
+            killed_plants: list[(plot_id, plant_type)],   # for itemized push
+            autoharv_plants: list[(plot_id, plant_type, half_kopecks)],
+        }
     """
+    empty_result = {
+        "killed": 0, "shielded": 0, "autoharv": 0, "autoharv_kopecks": 0,
+        "killed_plants": [], "autoharv_plants": [],
+    }
     if not _core.DB_READY:
-        return (0, 0, 0, 0)
+        return empty_result
     pool = await get_pool()
     if pool is None:
-        return (0, 0, 0, 0)
+        return empty_result
 
     # Normalize both sides to aware UTC so naive-from-DB and aware-from-caller
     # can compare cleanly.
@@ -284,6 +341,8 @@ async def execute_storm_for_user(
     shielded = 0
     autoharv = 0
     autoharv_kopecks = 0
+    killed_plants: List[Tuple[int, str]] = []
+    autoharv_plants: List[Tuple[int, str, int]] = []
 
     new_plots = []
     for p in farm_plots:
@@ -296,8 +355,12 @@ async def execute_storm_for_user(
             new_plots.append({**p, "storm_shielded": False})  # one-shot reset
             continue
 
+        plant_type = p.get("plant_type") or ""
+        plot_id = int(p.get("plot_id", -1))
+
         if is_online:
             killed += 1
+            killed_plants.append((plot_id, plant_type))
             new_plots.append({
                 **p,
                 "status": "dead",
@@ -305,12 +368,13 @@ async def execute_storm_for_user(
                 "storm_shielded": False,
             })
         else:
-            reward = plant_rewards.get(p.get("plant_type"), 0)
+            reward = plant_rewards.get(plant_type, 0)
             half = reward // 2
             autoharv += 1
             autoharv_kopecks += half
+            autoharv_plants.append((plot_id, plant_type, half))
             new_plots.append({
-                "plot_id": p.get("plot_id"),
+                "plot_id": plot_id,
                 "status": "empty",
                 "plant_type": None,
                 "planted_at": None,
@@ -325,7 +389,7 @@ async def execute_storm_for_user(
             })
 
     if killed == 0 and shielded == 0 and autoharv == 0:
-        return (0, 0, 0, 0)
+        return empty_result
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -351,7 +415,14 @@ async def execute_storm_for_user(
         "FARM_STORM_APPLIED user=%s online=%s killed=%s shielded=%s autoharv=%s autoharv_kopecks=%s",
         telegram_id, is_online, killed, shielded, autoharv, autoharv_kopecks,
     )
-    return (killed, shielded, autoharv, autoharv_kopecks)
+    return {
+        "killed": killed,
+        "shielded": shielded,
+        "autoharv": autoharv,
+        "autoharv_kopecks": autoharv_kopecks,
+        "killed_plants": killed_plants,
+        "autoharv_plants": autoharv_plants,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────

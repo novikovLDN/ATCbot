@@ -227,6 +227,7 @@ from database.farm import (  # noqa: F401
     mark_storm_announced,
     mark_storm_executed,
     schedule_next_storm,
+    replace_pending_storm_at,
     list_users_with_growing_plots,
     apply_storm_shield_atomic,
     execute_storm_for_user,
