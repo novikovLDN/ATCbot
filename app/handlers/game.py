@@ -610,19 +610,16 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
     # Imminent storm banner (only during the 24h announcement window)
     storm = await _get_imminent_storm()
     storm_active = storm is not None
-    storm_announced_at = None
     if storm_active:
         scheduled_at = storm["scheduled_at"]
         if scheduled_at.tzinfo is None:
             scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
         eta = scheduled_at - now
         eta_h = max(0, int(eta.total_seconds() // 3600))
-        storm_announced_at = storm.get("announced_at")
-        if storm_announced_at and storm_announced_at.tzinfo is None:
-            storm_announced_at = storm_announced_at.replace(tzinfo=timezone.utc)
         storm_banner = (
             f"⛈ <b>Надвигается шторм!</b> До удара ≈ {eta_h} ч\n"
             f"Растущие грядки без плёнки погибнут.\n"
+            f"🚫 <b>Посадка новых растений недоступна до конца шторма.</b>\n"
         )
     else:
         storm_banner = None
@@ -667,29 +664,21 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         plant = PLANT_TYPES.get(pt, {}) if pt else {}
         
         if status == "empty":
-            buttons.append([InlineKeyboardButton(
-                text=f"🌱 Посадить на грядку {i+1}",
-                callback_data=f"farm_choose_{i}"
-            )])
+            if storm_active:
+                buttons.append([InlineKeyboardButton(
+                    text=f"🚫 Грядка {i+1}: посадка во время шторма недоступна",
+                    callback_data="farm_noop"
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    text=f"🌱 Посадить на грядку {i+1}",
+                    callback_data=f"farm_choose_{i}"
+                )])
         elif status == "growing":
-            # Storm controls — only during the 24h announcement window, only if not already shielded,
-            # and only for plants planted BEFORE the storm was announced.  The post-announce check
-            # closes an exploit where a user dug-up + replanted to early-harvest at 50% repeatedly.
-            eligible_for_storm_ctrls = False
+            # Storm controls — only during the 24h announcement window, only if not already shielded.
+            # Planting is disabled during a storm (see callback_farm_choose_plant), so every
+            # growing plot at this point was planted BEFORE the storm — no replant exploit possible.
             if storm_active and not plot.get("storm_shielded"):
-                if storm_announced_at is None:
-                    eligible_for_storm_ctrls = True
-                else:
-                    planted_at_str = plot.get("planted_at")
-                    if planted_at_str:
-                        try:
-                            planted_at = datetime.fromisoformat(planted_at_str)
-                            if planted_at.tzinfo is None:
-                                planted_at = planted_at.replace(tzinfo=timezone.utc)
-                            eligible_for_storm_ctrls = planted_at < storm_announced_at
-                        except ValueError:
-                            eligible_for_storm_ctrls = False
-            if eligible_for_storm_ctrls:
                 shield_cost_kopecks = storm_shield_price_kopecks(int(plant.get("reward", 0)))
                 shield_cost_rub = shield_cost_kopecks // 100
                 half_reward_rub = int(plant.get("reward", 0)) // 200  # half of reward, in RUB
@@ -788,9 +777,19 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     """Show plant selection screen"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
+
     await callback.answer()
-    
+
+    # During an announced storm planting is disabled to prevent the
+    # replant + early-harvest loop and to keep the rule simple for players.
+    if await _get_imminent_storm() is not None:
+        await callback.answer(
+            "🚫 Идёт шторм — посадка временно недоступна. "
+            "После шторма можно будет сажать снова.",
+            show_alert=True,
+        )
+        return
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     plot_id = int(callback.data.split("_")[-1])
@@ -816,12 +815,21 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     """Plant a seed"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
+
     await callback.answer()
-    
+
+    # Server-side gate — must match the farm_choose_ guard.  A user could
+    # otherwise hand-craft farm_plant_<plot>_<type> to bypass the menu hide.
+    if await _get_imminent_storm() is not None:
+        await callback.answer(
+            "🚫 Идёт шторм — посадка временно недоступна.",
+            show_alert=True,
+        )
+        return
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
     parts = callback.data.split("_")
     plot_id = int(parts[2])
     plant_type = parts[3]
@@ -1512,31 +1520,6 @@ async def callback_farm_early_harvest(callback: CallbackQuery):
     if plot is None:
         await callback.answer("Грядка больше не растёт.", show_alert=True)
         return
-
-    # Anti-exploit: only plants that were already growing when the storm was
-    # announced can be early-harvested.  Replant-and-rinse loop would otherwise
-    # let a user farm 50% of any plant unlimited times during the announcement window.
-    announced_at = storm.get("announced_at")
-    if announced_at is not None:
-        if announced_at.tzinfo is None:
-            announced_at = announced_at.replace(tzinfo=timezone.utc)
-        planted_at_str = plot.get("planted_at")
-        if not planted_at_str:
-            await callback.answer("Ранний сбор недоступен для этой грядки.", show_alert=True)
-            return
-        try:
-            planted_at = datetime.fromisoformat(planted_at_str)
-            if planted_at.tzinfo is None:
-                planted_at = planted_at.replace(tzinfo=timezone.utc)
-        except ValueError:
-            await callback.answer("Ранний сбор недоступен для этой грядки.", show_alert=True)
-            return
-        if planted_at >= announced_at:
-            await callback.answer(
-                "Это растение было посажено уже во время шторма — ранний сбор для него недоступен.",
-                show_alert=True,
-            )
-            return
 
     plant = PLANT_TYPES.get(plot.get("plant_type"), {})
     half_reward_kopecks = int(plant.get("reward", 0)) // 2
