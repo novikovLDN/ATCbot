@@ -37,9 +37,15 @@ logger = logging.getLogger(__name__)
 # `_send_screen_photo` falls back to a plain text message on ANY
 # send_photo failure (stale id / wrong bot / caption too long), so a
 # bad file_id never breaks a screen — it just degrades to text.
-PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFOS6BqBZmZmsUxWWhPKN1LC-AU4QtquAACoQ1rGyLfMFDUA7gTeeEv6AEAAwIAA3kAAzsE"
+PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU06RqGqSy7ZznGSzMqpWqKob_ly-ByQACYA9rGxA30FBNWYvPRln8OgEAAwIAA3kAAzsE"
 
-SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFOS6RqBZnLNfSlXv_jvcyVPoUlHNGdwQACog1rGyLfMFCCfQnI4woaSAEAAwIAA3kAAzsE"
+SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE"
+
+SHOP_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08RqGqWH5bytFQj3dTputnGpYJzHEAACHA5rG4Qv2VAe5eXMo4mvpAEAAwIAA3kAAzsE"
+
+GIFT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08dqGqW7fM71f6jxAAHg0TqaIRev3jAAAh0OaxuEL9lQeDYgAjezwKoBAAMCAAN5AAM7BA"
+
+GAMES_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU09FqGqX9Jn5MUCs5Umhem0uAzq_wNwACHg5rG4Qv2VCtTQ2_vzbH5gEAAwIAA3kAAzsE"
 
 # Telegram caps photo captions at 1024 chars (vs 4096 for plain text).
 # The profile screen with the bypass-traffic section + keys can exceed
