@@ -504,7 +504,7 @@ async def callback_get_sub_key(callback: CallbackQuery):
 # ── Connect instruction ──────────────────────────────────────────
 
 _DEVICE_SELECT_PHOTO = {
-    "prod": "AgACAgQAAxkBAAFOS6VqBZnxRThQj-HPjYIfqNF-klYSiQACow1rGyLfMFDpbm-fYQTNWQEAAwIAA3kAAzsE",
+    "prod": "AgACAgQAAxkBAAFU07NqGqUXEmVZ5SivuY0gwUhd7TBCeAACXw9rGxA30FCkvieRMzznwwEAAwIAA3kAAzsE",
     "stage": "AgACAgQAAxkBAAIhc2oZ_tiD1jsG8eB-9HrSgTTiyjEUAAJfD2sbEDfQUDPuD983y47VAQADAgADeQADOwQ",
 }
 
