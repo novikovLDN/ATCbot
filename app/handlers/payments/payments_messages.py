@@ -1237,6 +1237,35 @@ async def process_successful_payment(message: Message, state: FSMContext):
     # Skip for combo purchases — combo traffic is added separately below
     fsm_data = await state.get_data()
     combo_bypass_gb = fsm_data.get("combo_bypass_gb", 0)
+
+    # CRITICAL FSM-FALLBACK: combo_bypass_gb is set in FSM state when the
+    # invoice is created, but Telegram Payments are asynchronous — between
+    # invoice and SUCCESSFUL_PAYMENT the user can open another menu (which
+    # state.clear()s), or the bot can restart (in-memory FSM is gone).
+    # If we lost the FSM but finalize tells us this was a combo, recover
+    # the GB amount from config.COMBO_TARIFFS by tariff + period_days.
+    # Without this, combo Юкасса-buyers got their subscription but NO bypass GB.
+    if combo_bypass_gb <= 0 and getattr(result, "is_combo", False):
+        _sub_type_for_combo = (
+            getattr(result, "subscription_type", None)
+            or (tariff_type or "basic")
+        ).strip().lower()
+        combo_key = f"combo_{_sub_type_for_combo}"
+        combo_info = (config.COMBO_TARIFFS or {}).get(combo_key, {}).get(period_days)
+        if combo_info and combo_info.get("gb"):
+            combo_bypass_gb = int(combo_info["gb"])
+            logger.warning(
+                "COMBO_BYPASS_FSM_FALLBACK user=%s gb=%s combo_key=%s period_days=%s "
+                "purchase_id=%s — FSM was empty, recovered from config",
+                telegram_id, combo_bypass_gb, combo_key, period_days, purchase_id,
+            )
+        else:
+            logger.error(
+                "COMBO_BYPASS_FSM_FALLBACK_FAIL user=%s combo_key=%s period_days=%s "
+                "purchase_id=%s — combo config missing, GB cannot be granted",
+                telegram_id, combo_key, period_days, purchase_id,
+            )
+
     try:
         from app.services.remnawave_service import renew_remnawave_user_bg
         _sub_type = (tariff_type or "basic").strip().lower()
