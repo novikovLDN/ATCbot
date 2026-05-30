@@ -158,12 +158,10 @@ def _get_login_keyboard(language: str) -> InlineKeyboardMarkup:
 def _get_payment_method_keyboard(language: str, price_rub: int, balance: float) -> InlineKeyboardMarkup:
     buttons: list = []
 
-    # Balance (only if sufficient)
-    if balance >= price_rub:
-        buttons.append([InlineKeyboardButton(
-            text=f"💰 Баланс ({balance:.2f} ₽)",
-            callback_data="steam:pay:balance",
-        )])
+    # NOTE: balance payment is disabled for Steam top-ups by policy.
+    # Card / SBP only.  Keeping the `balance` arg for API stability and
+    # in case we re-enable it later.
+    _ = balance  # intentionally unused
 
     # Card via TG Payments / YooKassa
     if config.TG_PROVIDER_TOKEN:
@@ -426,40 +424,17 @@ async def _create_pending_purchase(telegram_id: int, login: str, amount: int, pr
     StateFilter(SteamPurchaseState.choose_payment_method),
 )
 async def callback_steam_pay_balance(callback: CallbackQuery, state: FSMContext):
+    # Balance payment is disabled by policy for Steam top-ups.  The UI no
+    # longer surfaces this button, but the route stays here as a guard
+    # against hand-crafted callback_data.
     try:
-        await callback.answer()
+        await callback.answer(
+            "Оплата с баланса для пополнения Steam недоступна. "
+            "Выберите карту или СБП.",
+            show_alert=True,
+        )
     except Exception:
         pass
-
-    res = await _get_steam_fsm(callback, state)
-    if not res:
-        return
-    amount, login, price, language = res
-    telegram_id = callback.from_user.id
-
-    balance = await database.get_user_balance(telegram_id)
-    if balance < price:
-        await callback.message.answer("❌ Недостаточно средств на балансе.", parse_mode="HTML")
-        return
-
-    try:
-        purchase_id, _ = await _create_pending_purchase(telegram_id, login, amount, price)
-        ok = await database.decrease_balance(
-            telegram_id, price,
-            source="steam_purchase",
-            description=f"Пополнение Steam {login} — {amount} ₽",
-        )
-        if not ok:
-            await callback.message.answer("❌ Не удалось списать с баланса. Попробуйте ещё раз.", parse_mode="HTML")
-            return
-        await database.mark_pending_purchase_paid(purchase_id)
-        await send_steam_success(callback.bot, telegram_id, purchase_id)
-    except Exception as e:
-        logger.exception("STEAM_BALANCE_ERROR user=%s err=%s", telegram_id, e)
-        await callback.message.answer(i18n_get_text(language, "errors.payment_processing"), parse_mode="HTML")
-        return
-
-    await state.clear()
 
 
 # ── Payment: Card via Telegram Payments (YooKassa) ────────────────────

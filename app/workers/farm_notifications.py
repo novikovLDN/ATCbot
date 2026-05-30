@@ -108,6 +108,46 @@ async def farm_notifications_iteration(bot: Bot):
             await database.save_farm_plots(telegram_id, farm_plots)
 
 
+def _format_eta(delta_seconds: int) -> str:
+    """Human-friendly ETA: '6 ч', '1 д 4 ч', '20 мин' (for the last hour)."""
+    if delta_seconds < 3600:
+        m = max(1, delta_seconds // 60)
+        return f"{m} мин"
+    h = delta_seconds // 3600
+    if h < 24:
+        return f"{h} ч"
+    d, rh = divmod(h, 24)
+    return f"{d} д {rh} ч" if rh else f"{d} д"
+
+
+async def broadcast_storm_announce(bot: Bot, users, scheduled_at: datetime):
+    """Send the storm warning to every user with growing plots.
+
+    Used by both the 24h worker pass and the admin "schedule in N hours"
+    tool — keeping a single source of truth for the wording and ETA math.
+    """
+    now = datetime.now(timezone.utc)
+    if scheduled_at.tzinfo is None:
+        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+    eta = _format_eta(max(0, int((scheduled_at - now).total_seconds())))
+    text = (
+        "⛈ <b>Надвигается шторм!</b>\n\n"
+        f"Через ~{eta} твои растущие грядки могут погибнуть.\n"
+        "🛡 Накрой их плёнкой (10/20/30 ₽ в зависимости от культуры), "
+        "или 🚜 собери незрелым за 50 %.\n\n"
+        "Зайди на ферму, чтобы выбрать."
+    )
+    sent = 0
+    for u in users:
+        try:
+            await bot.send_message(u["telegram_id"], text, parse_mode="HTML")
+            sent += 1
+        except Exception as e:
+            logger.warning("STORM_ANNOUNCE push failed user=%s err=%s", u["telegram_id"], type(e).__name__)
+    logger.info("STORM_ANNOUNCE broadcast: sent=%s/%s", sent, len(users))
+    return sent
+
+
 async def farm_storm_iteration(bot: Bot):
     """One pass of the storm scheduler.
 
@@ -130,18 +170,7 @@ async def farm_storm_iteration(bot: Bot):
         if ok:
             logger.info("STORM_ANNOUNCED storm_id=%s scheduled_at=%s", storm["id"], scheduled_at)
             users = await database.list_users_with_growing_plots()
-            for u in users:
-                try:
-                    await bot.send_message(
-                        u["telegram_id"],
-                        "⛈ <b>Надвигается шторм!</b>\n\n"
-                        f"Через ~{database.STORM_ANNOUNCE_BEFORE_HOURS} ч твои растущие грядки могут погибнуть.\n"
-                        f"🛡 Накрой их плёнкой (по 10–30 ₽), или 🚜 собери незрелым за 50 %.\n\n"
-                        f"Зайди на ферму, чтобы выбрать.",
-                        parse_mode="HTML",
-                    )
-                except Exception as e:
-                    logger.warning("STORM_ANNOUNCE push failed user=%s err=%s", u["telegram_id"], type(e).__name__)
+            await broadcast_storm_announce(bot, users, scheduled_at)
 
     # Re-read after potential announce (so executed_at sees the latest)
     storm = await database.get_pending_storm()
@@ -167,10 +196,14 @@ async def farm_storm_iteration(bot: Bot):
         total_k, total_s, total_ah, total_ahk = 0, 0, 0, 0
 
         for u in users:
-            killed, shielded, autoharv, autoharv_kop = await database.execute_storm_for_user(
+            result = await database.execute_storm_for_user(
                 u["telegram_id"], u["farm_plots"], u["last_seen_at"],
                 announced_at, plant_rewards,
             )
+            killed = result["killed"]
+            shielded = result["shielded"]
+            autoharv = result["autoharv"]
+            autoharv_kop = result["autoharv_kopecks"]
             total_k += killed
             total_s += shielded
             total_ah += autoharv
@@ -179,12 +212,24 @@ async def farm_storm_iteration(bot: Bot):
             # Per-user wrap-up push (only if anything happened to that user)
             if killed + autoharv > 0:
                 lines = ["🌪 <b>Шторм прошёл</b>\n"]
-                if autoharv > 0:
-                    lines.append(f"🚜 Авто-сбор за 50%: +{autoharv_kop // 100} ₽ на баланс ({autoharv} грядок)")
                 if killed > 0:
-                    lines.append(f"💀 Погибло без плёнки: {killed} грядок")
+                    lines.append(f"💀 <b>Погибли без плёнки ({killed}):</b>")
+                    for plot_id, ptype in result["killed_plants"]:
+                        plant = PLANT_TYPES.get(ptype, {})
+                        emoji = plant.get("emoji", "🌿")
+                        name = plant.get("name", ptype or "растение")
+                        lines.append(f"  {emoji} {name} (грядка {plot_id + 1})")
+                if autoharv > 0:
+                    lines.append(
+                        f"\n🚜 <b>Авто-сбор за 50% (+{autoharv_kop // 100} ₽):</b>"
+                    )
+                    for plot_id, ptype, half_kop in result["autoharv_plants"]:
+                        plant = PLANT_TYPES.get(ptype, {})
+                        emoji = plant.get("emoji", "🌿")
+                        name = plant.get("name", ptype or "растение")
+                        lines.append(f"  {emoji} {name} (грядка {plot_id + 1}) +{half_kop // 100} ₽")
                 if shielded > 0:
-                    lines.append(f"🛡 Спасено плёнкой: {shielded}")
+                    lines.append(f"\n🛡 Спасено плёнкой: {shielded}")
                 try:
                     await bot.send_message(u["telegram_id"], "\n".join(lines), parse_mode="HTML")
                 except Exception as e:

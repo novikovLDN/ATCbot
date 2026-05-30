@@ -619,6 +619,7 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         storm_banner = (
             f"⛈ <b>Надвигается шторм!</b> До удара ≈ {eta_h} ч\n"
             f"Растущие грядки без плёнки погибнут.\n"
+            f"🚫 <b>Посадка новых растений недоступна до конца шторма.</b>\n"
         )
     else:
         storm_banner = None
@@ -663,12 +664,20 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
         plant = PLANT_TYPES.get(pt, {}) if pt else {}
         
         if status == "empty":
-            buttons.append([InlineKeyboardButton(
-                text=f"🌱 Посадить на грядку {i+1}",
-                callback_data=f"farm_choose_{i}"
-            )])
+            if storm_active:
+                buttons.append([InlineKeyboardButton(
+                    text=f"🚫 Грядка {i+1}: посадка во время шторма недоступна",
+                    callback_data="farm_noop"
+                )])
+            else:
+                buttons.append([InlineKeyboardButton(
+                    text=f"🌱 Посадить на грядку {i+1}",
+                    callback_data=f"farm_choose_{i}"
+                )])
         elif status == "growing":
             # Storm controls — only during the 24h announcement window, only if not already shielded.
+            # Planting is disabled during a storm (see callback_farm_choose_plant), so every
+            # growing plot at this point was planted BEFORE the storm — no replant exploit possible.
             if storm_active and not plot.get("storm_shielded"):
                 shield_cost_kopecks = storm_shield_price_kopecks(int(plant.get("reward", 0)))
                 shield_cost_rub = shield_cost_kopecks // 100
@@ -768,9 +777,19 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     """Show plant selection screen"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
+
     await callback.answer()
-    
+
+    # During an announced storm planting is disabled to prevent the
+    # replant + early-harvest loop and to keep the rule simple for players.
+    if await _get_imminent_storm() is not None:
+        await callback.answer(
+            "🚫 Идёт шторм — посадка временно недоступна. "
+            "После шторма можно будет сажать снова.",
+            show_alert=True,
+        )
+        return
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
     plot_id = int(callback.data.split("_")[-1])
@@ -796,12 +815,21 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     """Plant a seed"""
     if not await ensure_db_ready_callback(callback, allow_readonly_in_stage=True):
         return
-    
+
     await callback.answer()
-    
+
+    # Server-side gate — must match the farm_choose_ guard.  A user could
+    # otherwise hand-craft farm_plant_<plot>_<type> to bypass the menu hide.
+    if await _get_imminent_storm() is not None:
+        await callback.answer(
+            "🚫 Идёт шторм — посадка временно недоступна.",
+            show_alert=True,
+        )
+        return
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
-    
+
     parts = callback.data.split("_")
     plot_id = int(parts[2])
     plant_type = parts[3]
