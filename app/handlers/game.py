@@ -124,24 +124,18 @@ async def callback_games_menu(callback: CallbackQuery):
 
     text = i18n_get_text(language, "games.menu_title")
 
-    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
-    if has_photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=telegram_id,
-            text=text,
-            reply_markup=get_games_menu_keyboard(language),
-            parse_mode="HTML",
-        )
-    else:
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_games_menu_keyboard(language),
-            parse_mode="HTML",
-        )
+    # Photo screen: drop previous message (text or photo) and send a fresh
+    # photo-with-caption.  _send_screen_photo falls back to text if needed.
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    from app.handlers.common.screens import _send_screen_photo, GAMES_PHOTO_FILE_ID
+    await _send_screen_photo(
+        callback.bot, telegram_id, GAMES_PHOTO_FILE_ID, text,
+        reply_markup=get_games_menu_keyboard(language),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == "game_bowling")

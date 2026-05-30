@@ -105,7 +105,17 @@ async def callback_gift_start(callback: CallbackQuery, state: FSMContext):
         )],
     ])
 
-    await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML", bot=callback.bot)
+    # Photo screen: drop previous message (text or photo) and send a fresh
+    # photo-with-caption.  _send_screen_photo falls back to text if needed.
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    from app.handlers.common.screens import _send_screen_photo, GIFT_PHOTO_FILE_ID
+    await _send_screen_photo(
+        callback.bot, telegram_id, GIFT_PHOTO_FILE_ID, text,
+        reply_markup=keyboard, parse_mode="HTML",
+    )
     await state.set_state(GiftState.choose_tariff)
 
 

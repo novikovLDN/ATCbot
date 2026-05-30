@@ -41,6 +41,12 @@ PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU06RqGqSy7ZznGSzMqpWqKob_ly-ByQACYA9rGxA
 
 SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE"
 
+SHOP_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08RqGqWH5bytFQj3dTputnGpYJzHEAACHA5rG4Qv2VAe5eXMo4mvpAEAAwIAA3kAAzsE"
+
+GIFT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08dqGqW7fM71f6jxAAHg0TqaIRev3jAAAh0OaxuEL9lQeDYgAjezwKoBAAMCAAN5AAM7BA"
+
+GAMES_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU09FqGqX9Jn5MUCs5Umhem0uAzq_wNwACHg5rG4Qv2VCtTQ2_vzbH5gEAAwIAA3kAAzsE"
+
 # Telegram caps photo captions at 1024 chars (vs 4096 for plain text).
 # The profile screen with the bypass-traffic section + keys can exceed
 # that, so when the caption is too long we send a plain text message

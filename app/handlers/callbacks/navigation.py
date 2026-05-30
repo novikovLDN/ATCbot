@@ -1558,7 +1558,7 @@ _APPLE_REGIONS = {"usa": "🇺🇸 USA", "turkey": "🇹🇷 Turkey"}
 
 @router.callback_query(F.data == "mini_shop")
 async def callback_mini_shop(callback: CallbackQuery):
-    """Mini shop main screen."""
+    """Mini shop main screen — photo + caption."""
     try:
         await callback.answer()
     except Exception:
@@ -1574,17 +1574,19 @@ async def callback_mini_shop(callback: CallbackQuery):
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
 
-    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
-    if has_photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=callback.from_user.id, text=text, reply_markup=keyboard, parse_mode="HTML",
-        )
-    else:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+    # Delete the previous message (be it text or photo) and send a fresh
+    # photo-with-caption screen.  _send_screen_photo degrades to a text
+    # message if the file_id is unusable on the current bot.
+    chat_id = callback.from_user.id
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    from app.handlers.common.screens import _send_screen_photo, SHOP_PHOTO_FILE_ID
+    await _send_screen_photo(
+        callback.bot, chat_id, SHOP_PHOTO_FILE_ID, text,
+        reply_markup=keyboard, parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == "claude_coming_soon")
