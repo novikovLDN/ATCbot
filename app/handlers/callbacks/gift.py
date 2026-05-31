@@ -875,3 +875,96 @@ async def callback_gift_detail(callback: CallbackQuery):
         ])
 
     await safe_edit_text(callback.message, text, reply_markup=keyboard, parse_mode="HTML", bot=callback.bot)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# "Купить со скидкой 20%" CTA attached to admin gift notifications
+# (see app/handlers/admin/bonus.py::_gift_keyboard).
+# Activates a 20%-off personal discount valid for 3 days, then opens the
+# main menu where the user picks a tariff — the discount applies
+# automatically via calculate_final_price's personal_discount branch.
+# Repeat clicks are idempotent: an already-active personal discount is
+# not overwritten so the user keeps the strongest one they have.
+# ────────────────────────────────────────────────────────────────────────
+from datetime import datetime, timedelta, timezone
+
+
+_GIFT_OFFER_PERCENT = 20
+_GIFT_OFFER_DAYS = 3
+
+
+@gift_router.callback_query(F.data == "gift_offer:claim")
+async def callback_gift_offer_claim(callback: CallbackQuery, state: FSMContext):
+    """Activate the 20% personal discount tied to a gift notification."""
+    telegram_id = callback.from_user.id
+
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    # If the user already has an active personal discount, don't downgrade
+    # them or shorten an existing offer — just remind that it's already on.
+    try:
+        existing = await database.get_user_discount(telegram_id)
+    except Exception as e:
+        logger.exception("GIFT_OFFER_DISCOUNT_LOOKUP_FAIL user=%s err=%s", telegram_id, e)
+        existing = None
+
+    if existing:
+        existing_percent = int(existing.get("discount_percent") or 0)
+        existing_expires = existing.get("expires_at")
+        if existing_expires:
+            try:
+                if existing_expires.tzinfo is None:
+                    existing_expires = existing_expires.replace(tzinfo=timezone.utc)
+                hours = max(0, int((existing_expires - datetime.now(timezone.utc)).total_seconds() // 3600))
+                tail = f" (осталось ≈{hours} ч)"
+            except Exception:
+                tail = ""
+        else:
+            tail = " (без срока)"
+        await callback.answer(
+            f"У вас уже активна персональная скидка {existing_percent}%{tail}. "
+            "Можно сразу выбрать тариф.",
+            show_alert=True,
+        )
+        return
+
+    # Fresh activation: 20% for 3 days.
+    expires_at = datetime.now(timezone.utc) + timedelta(days=_GIFT_OFFER_DAYS)
+    try:
+        ok = await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=_GIFT_OFFER_PERCENT,
+            expires_at=expires_at,
+            created_by=config.ADMIN_TELEGRAM_ID,
+        )
+    except Exception as e:
+        logger.exception("GIFT_OFFER_DISCOUNT_CREATE_FAIL user=%s err=%s", telegram_id, e)
+        ok = False
+
+    if not ok:
+        await callback.answer(
+            "Не удалось активировать скидку. Попробуйте позже или напишите в поддержку.",
+            show_alert=True,
+        )
+        return
+
+    logger.info(
+        "GIFT_OFFER_DISCOUNT_ACTIVATED user=%s percent=%s days=%s expires_at=%s",
+        telegram_id, _GIFT_OFFER_PERCENT, _GIFT_OFFER_DAYS, expires_at.isoformat(),
+    )
+
+    text = (
+        f"🎉 <b>Скидка {_GIFT_OFFER_PERCENT}% активирована!</b>\n\n"
+        f"Действует {_GIFT_OFFER_DAYS} дня — успейте оформить подписку.\n"
+        "Скидка применится автоматически при оплате."
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Выбрать тариф", callback_data="menu_main")],
+    ])
+    try:
+        await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("GIFT_OFFER_ACK_SEND_FAIL user=%s err=%s", telegram_id, e)

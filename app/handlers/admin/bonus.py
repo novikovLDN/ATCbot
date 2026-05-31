@@ -96,6 +96,16 @@ def _gift_text(t: str, amount: int) -> str:
     )
 
 
+def _gift_keyboard() -> InlineKeyboardMarkup:
+    """Buy-with-20%-discount CTA attached to every gift notification."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="🛒 Купить со скидкой 20%",
+            callback_data="gift_offer:claim",
+        )],
+    ])
+
+
 # ── Screens ──────────────────────────────────────────────────────────────
 
 @admin_bonus_router.callback_query(F.data == "admin:bonus")
@@ -353,7 +363,10 @@ async def _run_bonus_distribution(*, bot, admin_id, chat_id, msg_id,
                 if ok:
                     stats["ok"] += 1
                     try:
-                        sent = await safe_send_message(bot, uid, _gift_text(bonus_type, amount))
+                        sent = await safe_send_message(
+                            bot, uid, _gift_text(bonus_type, amount),
+                            reply_markup=_gift_keyboard(), parse_mode="HTML",
+                        )
                         if sent is not None:
                             stats["notified"] += 1
                     except Exception:
