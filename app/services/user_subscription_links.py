@@ -203,15 +203,14 @@ async def _try_lazy_provision_entities(telegram_id: int) -> dict:
                     )
 
             # ── Bypass entity ─────────────────────────────────────────
-            # Trial → TRIAL_BYPASS_MB MB (default 0 — entity exists but no
-            # traffic until the user buys a pack), paid → 10 GB.
+            # Trial → TRIAL_BYPASS_MB MB, paid (any tariff) → 10 GB.
             # Combo edge case: paid combo buyers got their bypass through
             # the regular purchase flow already, so they wouldn't reach
             # this branch (existing_bypass would be set).
             existing_bypass = (sub.get("remnawave_uuid") or "").strip()
             if not existing_bypass and getattr(config, "REMNAWAVE_SQUAD_UUID", ""):
                 if is_trial:
-                    trial_mb = int(getattr(config, "TRIAL_BYPASS_MB", 0))
+                    trial_mb = int(getattr(config, "TRIAL_BYPASS_MB", 500)) or 500
                     bypass_bytes = trial_mb * (1024 ** 2)
                 else:
                     bypass_bytes = 10 * (1024 ** 3)  # default basic/plus traffic cap

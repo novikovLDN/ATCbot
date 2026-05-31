@@ -127,11 +127,8 @@ async def create_bypass_user_entity(
     """
     if not config.REMNAWAVE_ENABLED:
         return BypassCreateResult(False, None, None, None, 0, "remnawave_disabled")
-    # 0 is a legitimate "create the entity but grant no traffic" value
-    # used by trial provisioning — the user must buy a pack before bypass
-    # works.  Negative values are still rejected as a typo guard.
-    if traffic_limit_bytes < 0:
-        return BypassCreateResult(False, None, None, None, 0, "negative_traffic_limit")
+    if traffic_limit_bytes <= 0:
+        return BypassCreateResult(False, None, None, None, 0, "non_positive_traffic_limit")
 
     squad_uuid = (
         getattr(config, "REMNAWAVE_CLIENTS_SQUAD_UUID", "")

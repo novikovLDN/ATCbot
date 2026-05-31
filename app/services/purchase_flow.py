@@ -39,16 +39,15 @@ from app.services import remnawave_bypass, remnawave_premium
 logger = logging.getLogger(__name__)
 
 # Free-tier traffic allowance for the bypass entity on a Trial run.
-# Sourced from config.TRIAL_BYPASS_MB (default 0 MB — entity is created but
-# carries no bypass traffic; user must buy a GB pack to use bypass).
+# Sourced from config.TRIAL_BYPASS_MB (default 500 MB).
 def _trial_bypass_bytes() -> int:
-    return int(getattr(config, "TRIAL_BYPASS_MB", 0)) * (1024 ** 2)
+    return int(getattr(config, "TRIAL_BYPASS_MB", 500)) * (1024 ** 2)
 
 
 def _bypass_bytes_for(tariff: str, period_days: int, is_trial: bool) -> int:
     """Return the bypass entity's trafficLimitBytes for the given tariff.
 
-    - Trial → config.TRIAL_BYPASS_MB MB (default 0 — no bypass traffic)
+    - Trial → config.TRIAL_BYPASS_MB MB
     - Combo → COMBO_TARIFFS[tariff][period_days]["gb"] GB (overrides base)
     - Basic / Plus → TRAFFIC_LIMITS[tariff][period_days] (already in bytes)
     """
