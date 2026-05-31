@@ -46,8 +46,13 @@ _DAYS_PRESETS = [1, 3, 7, 14, 30]
 _MAX_TRAFFIC_GB = 1000
 _MAX_DAYS = 365
 
-_BONUS_CONCURRENCY = 10
-_BONUS_BATCH_SIZE = 100
+# Batch tuning for bulk distribution.  Smaller batches + a between-batch
+# pause keep Remnawave and Telegram from refusing or 429-ing us on big
+# segments (1000+ users).  Tuned conservatively — admins are not in a
+# hurry, infrastructure is.
+_BONUS_CONCURRENCY = 5      # parallel Remnawave + Telegram calls per batch
+_BONUS_BATCH_SIZE = 40      # users per batch
+_BONUS_BATCH_PAUSE_SEC = 3  # cooldown between batches
 
 # Single-flight guard so two admin clicks can't interleave.
 _bonus_active = False
@@ -375,9 +380,11 @@ async def _run_bonus_distribution(*, bot, admin_id, chat_id, msg_id,
                     stats["fail"] += 1
                 stats["done"] += 1
 
-        for i in range(0, total, _BONUS_BATCH_SIZE):
+        batch_count = (total + _BONUS_BATCH_SIZE - 1) // _BONUS_BATCH_SIZE
+        for batch_idx, i in enumerate(range(0, total, _BONUS_BATCH_SIZE)):
             batch = user_ids[i:i + _BONUS_BATCH_SIZE]
             await asyncio.gather(*(_apply_one(uid) for uid in batch), return_exceptions=True)
+            is_last_batch = (batch_idx + 1) >= batch_count
             try:
                 await bot.edit_message_text(
                     chat_id=chat_id, message_id=msg_id,
@@ -387,12 +394,17 @@ async def _run_bonus_distribution(*, bot, admin_id, chat_id, msg_id,
                         f"Прогресс: {stats['done']}/{total}\n"
                         f"✅ Выдано: {stats['ok']}\n"
                         f"❌ Не удалось: {stats['fail']}\n"
-                        f"📨 Уведомлено: {stats['notified']}"
+                        f"📨 Уведомлено: {stats['notified']}\n"
+                        f"⏳ Батч {batch_idx + 1}/{batch_count}"
+                        + ("" if is_last_batch else f" · пауза {_BONUS_BATCH_PAUSE_SEC} с")
                     ),
                     parse_mode="HTML",
                 )
             except Exception:
                 pass
+            # Cool-down between batches so Remnawave / Telegram don't time us out.
+            if not is_last_batch:
+                await asyncio.sleep(_BONUS_BATCH_PAUSE_SEC)
 
         try:
             await bot.edit_message_text(
