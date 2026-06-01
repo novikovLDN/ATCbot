@@ -20,6 +20,15 @@ from app.utils.logging_helpers import (
 )
 # import outline_api  # DISABLED - мигрировали на Xray Core (VLESS)
 
+
+# Photo header for the 3-day-before-expiry reminder. Empty string for stage —
+# stage bot can't render the prod file_id, so we silently fall through to
+# safe_send_message (no photo).
+_REMINDER_3D_PHOTO = {
+    "prod": "AgACAgQAAxkBAAFU1DxqGqtH5bNmsjjv1hncBK3mGdiBnQACLA5rG4Qv2VC5BOb25R-UugEAAwIAA3cAAzsE",
+    "stage": "",
+}
+
 # Idempotency: skip if reminder sent within this window (container restart guard)
 REMINDER_IDEMPOTENCY_WINDOW = timedelta(minutes=30)
 
@@ -184,8 +193,33 @@ async def send_smart_reminders(bot: Bot):
                     audit_message = "Paid subscription reminder (3h before expiry) with 15% discount"
                 
                 if text and keyboard:
-                    # Send reminder (safe_send_message handles chat_not_found, blocked)
-                    sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
+                    # 3-day reminder gets a photo header on prod; everything else
+                    # stays plain text.  Photo send falls back to text on any
+                    # error (stale file_id, blocked, etc.) via safe_send_message.
+                    sent = None
+                    if reminder_type == ReminderType.REMINDER_3D:
+                        photo_id = _REMINDER_3D_PHOTO.get(
+                            "prod" if config.IS_PROD else "stage", ""
+                        )
+                        if photo_id:
+                            try:
+                                sent = await bot.send_photo(
+                                    chat_id=telegram_id,
+                                    photo=photo_id,
+                                    caption=text,
+                                    reply_markup=keyboard,
+                                    parse_mode="HTML",
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "REMINDER_3D photo send failed user=%s err=%s — "
+                                    "falling back to plain text",
+                                    telegram_id, type(e).__name__,
+                                )
+                                sent = None
+                    if sent is None:
+                        # Default path / photo fallback: plain text reminder.
+                        sent = await safe_send_message(bot, telegram_id, text, reply_markup=keyboard)
                     if sent is None:
                         continue
                     await asyncio.sleep(0.05)  # Telegram rate limit: max 20 msgs/sec

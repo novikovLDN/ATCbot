@@ -21,6 +21,7 @@ from app.services.language_service import resolve_user_language
 from app.handlers.common.guards import ensure_db_ready_callback
 from app.handlers.common.keyboards import get_back_keyboard
 from app.handlers.common.states import BomberState
+from app.handlers.common.utils import safe_edit_text
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -124,24 +125,18 @@ async def callback_games_menu(callback: CallbackQuery):
 
     text = i18n_get_text(language, "games.menu_title")
 
-    has_photo = getattr(callback.message, "photo", None) and len(callback.message.photo) > 0
-    if has_photo:
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
-        await callback.bot.send_message(
-            chat_id=telegram_id,
-            text=text,
-            reply_markup=get_games_menu_keyboard(language),
-            parse_mode="HTML",
-        )
-    else:
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_games_menu_keyboard(language),
-            parse_mode="HTML",
-        )
+    # Photo screen: drop previous message (text or photo) and send a fresh
+    # photo-with-caption.  _send_screen_photo falls back to text if needed.
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    from app.handlers.common.screens import _send_screen_photo, GAMES_PHOTO_FILE_ID
+    await _send_screen_photo(
+        callback.bot, telegram_id, GAMES_PHOTO_FILE_ID, text,
+        reply_markup=get_games_menu_keyboard(language),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data == "game_bowling")
@@ -160,7 +155,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
     try:
         pool = await database.get_pool()
         if not pool:
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message,
                 i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
                 reply_markup=get_back_keyboard(language),
                 parse_mode="HTML",
@@ -192,7 +187,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                     days = remaining.days
                     hours = remaining.seconds // 3600
                     text = i18n_get_text(language, "games.bowling_cooldown", "Боулинг-клуб закрыт 🎳\nСледующая игра доступна через: {days}д {hours}ч").format(days=days, hours=hours)
-                    await callback.message.edit_text(
+                    await safe_edit_text(callback.message,
                         text,
                         reply_markup=get_games_back_keyboard(language),
                         parse_mode="HTML",
@@ -216,7 +211,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
                         callback_data="menu_main",
                     )],
                 ])
-                await callback.message.edit_text(paywall_text, reply_markup=keyboard, parse_mode="HTML")
+                await safe_edit_text(callback.message,paywall_text, reply_markup=keyboard, parse_mode="HTML")
                 logger.info("GAME_BOWL [user=%s] no_subscription paywall", telegram_id)
                 return
 
@@ -272,7 +267,7 @@ async def callback_game_bowling(callback: CallbackQuery, bot: Bot = None):
 
     except Exception as e:
         logger.exception("GAME_BOWL [user=%s] error=%s", telegram_id, e)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -295,7 +290,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
     try:
         pool = await database.get_pool()
         if not pool:
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message,
                 i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
                 reply_markup=get_games_back_keyboard(language),
                 parse_mode="HTML",
@@ -327,7 +322,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                     days = remaining.days
                     hours = remaining.seconds // 3600
                     text = i18n_get_text(language, "games.dice_cooldown", "⏳ Вы уже бросали кубик!\nСледующий бросок доступен через: {days} дней {hours} часов").format(days=days, hours=hours)
-                    await callback.message.edit_text(
+                    await safe_edit_text(callback.message,
                         text,
                         reply_markup=get_games_back_keyboard(language),
                         parse_mode="HTML",
@@ -351,7 +346,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
                         callback_data="games_menu",
                     )],
                 ])
-                await callback.message.edit_text(paywall_text, reply_markup=keyboard, parse_mode="HTML")
+                await safe_edit_text(callback.message,paywall_text, reply_markup=keyboard, parse_mode="HTML")
                 logger.info("GAME_DICE [user=%s] no_subscription paywall", telegram_id)
                 return
 
@@ -399,7 +394,7 @@ async def callback_game_dice(callback: CallbackQuery, bot: Bot = None):
 
     except Exception as e:
         logger.exception("GAME_DICE [user=%s] error=%s", telegram_id, e)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -463,7 +458,7 @@ async def callback_game_bomber(callback: CallbackQuery, state: FSMContext):
     
     text = i18n_get_text(language, "games.bomber_rules", "💣 Бомбер\n\nПравила:\n• Размещайте бомбы на поле, избегая мин бота\n• Если наступите на свою бомбу — взрыв! 💥\n• Если наступите на мину бота — взрыв! 💥\n• Нажмите 'Завершить' чтобы безопасно выйти\n\nУдачи! 🍀")
     
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         text,
         reply_markup=create_bomber_grid_keyboard(mines, player_bombs, language),
         parse_mode="HTML",
@@ -490,7 +485,7 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
             # Self-destruct!
             await state.clear()
             text = i18n_get_text(language, "games.bomber_self_destruct", "🧨 БУМ! Вы подорвались на своей бомбе!\n\nИгра окончена. Попробуйте ещё раз!")
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message,
                 text,
                 reply_markup=get_games_back_keyboard(language),
                 parse_mode="HTML",
@@ -503,13 +498,13 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
             # Game over!
             await state.clear()
             text = i18n_get_text(language, "games.bomber_mine_exploded", "💥 БУМ! Вы подорвались на мине бота!\n\nИгра окончена. Попробуйте ещё раз!")
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message,
                 text,
                 reply_markup=create_bomber_grid_keyboard(mines, player_bombs, language, game_over=True),
                 parse_mode="HTML",
             )
             await asyncio.sleep(2)
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message,
                 text,
                 reply_markup=get_games_back_keyboard(language),
                 parse_mode="HTML",
@@ -529,7 +524,7 @@ async def callback_bomber_cell(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.exception("GAME_BOMBER [user=%s] error=%s", telegram_id, e)
         await state.clear()
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -553,7 +548,7 @@ async def callback_bomber_exit(callback: CallbackQuery, state: FSMContext):
         
         text = i18n_get_text(language, "games.bomber_safe_exit", "😮‍💨 Вы вышли из игры целым!\n\nВыжило бомб: {count}").format(count=bomb_count)
         
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             text,
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -564,7 +559,7 @@ async def callback_bomber_exit(callback: CallbackQuery, state: FSMContext):
     except Exception as e:
         logger.exception("GAME_BOMBER_EXIT [user=%s] error=%s", telegram_id, e)
         await state.clear()
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.generic", "Произошла ошибка. Попробуйте позже."),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -744,7 +739,7 @@ async def _render_farm(callback, pool, farm_plots=None, plot_count=None, balance
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -762,7 +757,7 @@ async def callback_game_farm(callback: CallbackQuery):
     if not pool:
         telegram_id = callback.from_user.id
         language = await resolve_user_language(telegram_id)
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -803,7 +798,7 @@ async def callback_farm_choose_plant(callback: CallbackQuery, state: FSMContext)
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="game_farm")])
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         f"🌱 <b>Выберите растение для грядки {plot_id+1}:</b>",
         reply_markup=keyboard,
         parse_mode="HTML"
@@ -840,7 +835,7 @@ async def callback_farm_plant(callback: CallbackQuery, state: FSMContext):
     
     pool = await database.get_pool()
     if not pool:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -894,7 +889,7 @@ async def callback_farm_water(callback: CallbackQuery, state: FSMContext):
     
     pool = await database.get_pool()
     if not pool:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -944,7 +939,7 @@ async def callback_farm_fert(callback: CallbackQuery, state: FSMContext):
     
     pool = await database.get_pool()
     if not pool:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -994,7 +989,7 @@ async def callback_farm_harvest(callback: CallbackQuery, state: FSMContext):
     
     pool = await database.get_pool()
     if not pool:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -1069,7 +1064,7 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
         
         pool = await database.get_pool()
         if not pool:
-            await callback.message.edit_text(
+            await safe_edit_text(callback.message,
                 i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
                 reply_markup=get_games_back_keyboard(language),
                 parse_mode="HTML",
@@ -1113,7 +1108,7 @@ async def callback_farm_remove(callback: CallbackQuery, state: FSMContext):
         )]
     ])
     
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         "Хотите убрать погибшее растение?",
         reply_markup=keyboard,
         parse_mode="HTML",
@@ -1133,7 +1128,7 @@ async def callback_farm_buy_plot(callback: CallbackQuery, state: FSMContext):
     
     pool = await database.get_pool()
     if not pool:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -1202,7 +1197,7 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
     
     pool = await database.get_pool()
     if not pool:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -1234,7 +1229,7 @@ async def callback_farm_dig(callback: CallbackQuery, state: FSMContext):
         ]
     ])
     
-    await callback.message.edit_text(
+    await safe_edit_text(callback.message,
         f"⛏ <b>Выкопать растение?</b>\n\n"
         f"Вы хотите выкопать <b>{plant_name}</b> на грядке {plot_id+1}?\n\n"
         f"⚠️ Растение будет уничтожено без награды.\n"
@@ -1258,7 +1253,7 @@ async def callback_farm_dig_confirm(callback: CallbackQuery, state: FSMContext):
     
     pool = await database.get_pool()
     if not pool:
-        await callback.message.edit_text(
+        await safe_edit_text(callback.message,
             i18n_get_text(language, "errors.database_unavailable", "Database temporarily unavailable"),
             reply_markup=get_games_back_keyboard(language),
             parse_mode="HTML",
@@ -1377,7 +1372,7 @@ async def callback_farm_shield(callback: CallbackQuery):
         [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
     ])
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
             raise
@@ -1435,7 +1430,7 @@ async def callback_farm_shield_lava(callback: CallbackQuery):
             [InlineKeyboardButton(text="💳 Перейти к оплате", url=payment_url)],
             [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
     except Exception as e:
         logger.exception("FARM_SHIELD_LAVA_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
@@ -1493,7 +1488,7 @@ async def callback_farm_shield_sbp(callback: CallbackQuery):
             [InlineKeyboardButton(text="📲 Оплатить через СБП", url=tx["redirect_url"])],
             [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
         ])
-        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+        await safe_edit_text(callback.message,text, reply_markup=keyboard, parse_mode="HTML")
         await callback.answer()
     except Exception as e:
         logger.exception("FARM_SHIELD_SBP_ERROR user=%s plot=%s: %s", telegram_id, plot_id, e)
