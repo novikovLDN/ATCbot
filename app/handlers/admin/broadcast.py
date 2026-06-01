@@ -160,6 +160,12 @@ def _build_broadcast_reply_markup(
         elif btn == "promo_traffic":
             label = f"📊 Купить трафик −{discount}%" if discount else "📊 Купить трафик"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_traffic:{broadcast_id}")])
+        elif btn == "gift_3m":
+            # Fixed 20% / 24h preset — no per-broadcast configuration needed.
+            rows.append([InlineKeyboardButton(
+                text="🎁 Скидка 20% на 3 месяца",
+                callback_data="broadcast_gift_3m",
+            )])
         elif btn == "bypass":
             rows.append([InlineKeyboardButton(text="🌐 Включить обход", callback_data="traffic_info")])
         elif btn == "channel":
@@ -291,6 +297,88 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
     except Exception as e:
         logger.exception(f"Error applying broadcast promo discount: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
+
+@admin_broadcast_router.callback_query(F.data == "broadcast_gift_3m")
+async def callback_broadcast_gift_3m(callback: CallbackQuery, state: FSMContext):
+    """User clicked the "🎁 Скидка 20% на 3 месяца" CTA in a broadcast.
+
+    Preset: 20% off, 24 h to use, applied to whichever 3-month tariff the
+    user picks on the next screen.  Skidka is implemented via
+    create_user_discount (same path as gift_offer:claim) — so it slots
+    into calculate_final_price's personal_discount branch unchanged.
+
+    Repeat clicks are idempotent: an existing active personal discount
+    is never downgraded — the user is told what they already have.
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+
+    try:
+        existing = await database.get_user_discount(telegram_id)
+    except Exception as e:
+        logger.exception("BROADCAST_GIFT3M_LOOKUP_FAIL user=%s err=%s", telegram_id, e)
+        existing = None
+
+    if existing:
+        pct = int(existing.get("discount_percent") or 0)
+        await callback.answer(
+            f"У вас уже активна персональная скидка {pct}%. "
+            "Откройте «Купить подписку» и выберите тариф на 3 месяца.",
+            show_alert=True,
+        )
+        # Still take them to the tariff screen so they can act on it now.
+        try:
+            from app.handlers.common.screens import show_tariffs_main_screen
+            await show_tariffs_main_screen(callback, state)
+        except Exception:
+            pass
+        return
+
+    from datetime import timedelta
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    try:
+        ok = await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=20,
+            expires_at=expires_at,
+            created_by=config.ADMIN_TELEGRAM_ID,
+        )
+    except Exception as e:
+        logger.exception("BROADCAST_GIFT3M_CREATE_FAIL user=%s err=%s", telegram_id, e)
+        ok = False
+
+    if not ok:
+        await callback.answer(
+            "Не удалось активировать скидку. Попробуйте позже или напишите в поддержку.",
+            show_alert=True,
+        )
+        return
+
+    logger.info(
+        "BROADCAST_GIFT3M_ACTIVATED user=%s percent=20 hours=24 expires_at=%s",
+        telegram_id, expires_at.isoformat(),
+    )
+
+    try:
+        from app.handlers.common.screens import show_tariffs_main_screen
+        await show_tariffs_main_screen(callback, state)
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT3M_SHOW_TARIFFS_FAIL user=%s err=%s", telegram_id, e)
+
+    try:
+        await callback.message.answer(
+            "🎁 <b>Скидка 20% активирована!</b>\n\n"
+            "Действует 24 часа — выберите тариф на <b>3 месяца</b> "
+            "и скидка применится автоматически при оплате.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
 
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_promo_traffic:"))
@@ -716,6 +804,21 @@ async def callback_broadcast_buttons(callback: CallbackQuery, state: FSMContext)
                 "Введите процент скидки для акции (число от 1 до 99):",
                 parse_mode="HTML",
             )
+    elif btn_type == "gift_3m":
+        # Preset: fixed 20% / 24h.  No extra input needed — just toggle in the list.
+        data = await state.get_data()
+        buttons = data.get("broadcast_buttons", [])
+        if btn_type in buttons:
+            buttons.remove(btn_type)
+        else:
+            buttons.append(btn_type)
+        await state.update_data(broadcast_buttons=buttons)
+        await callback.message.edit_text(
+            f"Выбранные кнопки: {', '.join(_btn_label(b) for b in buttons)}\n\n"
+            "Выберите ещё кнопки или нажмите «Готово»:",
+            reply_markup=get_broadcast_buttons_keyboard(language, selected=buttons),
+            parse_mode="HTML",
+        )
     elif btn_type == "done":
         # Finished selecting buttons, move to segment
         await state.set_state(BroadcastCreate.waiting_for_segment)
@@ -748,6 +851,7 @@ def _btn_label(btn_type: str) -> str:
         "buy": "🛒 Купить",
         "promo_buy": "🎁 Купить со скидкой",
         "promo_traffic": "📊 Купить трафик промо",
+        "gift_3m": "🎁 Скидка 20% на 3 месяца",
         "bypass": "🌐 Включить обход",
         "channel": "📢 Наш канал",
         "support": "💬 Поддержка",
