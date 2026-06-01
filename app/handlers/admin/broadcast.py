@@ -362,18 +362,19 @@ async def callback_broadcast_gift_3m(callback: CallbackQuery, state: FSMContext)
 
     lines.append("")
     lines.append("⏰ Скидка действует здесь и сейчас.")
-    rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu_main")])
 
     text = "\n".join(lines)
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
 
+    chat_id = callback.message.chat.id if callback.message and callback.message.chat else callback.from_user.id
     try:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await callback.message.delete()
     except Exception:
-        try:
-            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            logger.warning("BROADCAST_GIFT3M_RENDER_FAIL user=%s err=%s", callback.from_user.id, e)
+        pass
+    try:
+        await callback.bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT3M_RENDER_FAIL user=%s err=%s", callback.from_user.id, e)
 
     logger.info("BROADCAST_GIFT3M_SHOWN user=%s", callback.from_user.id)
 
