@@ -302,6 +302,7 @@ def get_broadcast_buttons_keyboard(language: str = "ru", selected: list = None):
         ("🛒 Купить", "buy"),
         ("🎁 Купить со скидкой", "promo_buy"),
         ("📊 Купить трафик промо", "promo_traffic"),
+        ("🎁 Скидка 30% на 3 месяца", "gift_3m"),
         ("🌐 Включить обход", "bypass"),
         ("📢 Наш канал", "channel"),
         ("💬 Поддержка", "support"),
