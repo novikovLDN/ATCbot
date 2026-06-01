@@ -299,18 +299,89 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
+_GIFT3M_DISCOUNT_PERCENT = 20
+_GIFT3M_PERIOD_DAYS = 90
+
+
+def _gift3m_price_rubles(tariff: str) -> int | None:
+    """Discounted 3-month price in rubles for the four eligible tariffs."""
+    if tariff in ("basic", "plus"):
+        base = config.TARIFFS.get(tariff, {}).get(_GIFT3M_PERIOD_DAYS, {}).get("price")
+    elif tariff in ("combo_basic", "combo_plus"):
+        base = config.COMBO_TARIFFS.get(tariff, {}).get(_GIFT3M_PERIOD_DAYS, {}).get("price")
+    else:
+        return None
+    if not base:
+        return None
+    return round(base * (100 - _GIFT3M_DISCOUNT_PERCENT) / 100)
+
+
+def _gift3m_base_price_rubles(tariff: str) -> int | None:
+    if tariff in ("basic", "plus"):
+        return config.TARIFFS.get(tariff, {}).get(_GIFT3M_PERIOD_DAYS, {}).get("price")
+    if tariff in ("combo_basic", "combo_plus"):
+        return config.COMBO_TARIFFS.get(tariff, {}).get(_GIFT3M_PERIOD_DAYS, {}).get("price")
+    return None
+
+
 @admin_broadcast_router.callback_query(F.data == "broadcast_gift_3m")
 async def callback_broadcast_gift_3m(callback: CallbackQuery, state: FSMContext):
     """User clicked the "🎁 Скидка 20% на 3 месяца" CTA in a broadcast.
 
-    Preset: 20% off, 24 h to use, applied to whichever 3-month tariff the
-    user picks on the next screen.  Skidka is implemented via
-    create_user_discount (same path as gift_offer:claim) — so it slots
-    into calculate_final_price's personal_discount branch unchanged.
-
-    Repeat clicks are idempotent: an existing active personal discount
-    is never downgraded — the user is told what they already have.
+    Shows a dedicated screen with 4 pre-discounted 3-month buttons
+    (Basic, Plus, Combo Basic, Combo Plus). The discount is realised
+    purely as a final_price_kopecks override carried in FSM into the
+    standard payment-method screen — no personal_discount row is
+    created, so the offer cannot leak to other periods or expire as
+    stale DB state.
     """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    lines = [
+        f"🎁 <b>Подарок: −{_GIFT3M_DISCOUNT_PERCENT}% на 3 месяца</b>",
+        "",
+    ]
+    rows = []
+    for tariff, label in (
+        ("basic", "🌟 Basic"),
+        ("plus", "⚡ Plus"),
+        ("combo_basic", "🚀 Combo Basic"),
+        ("combo_plus", "🚀 Combo Plus"),
+    ):
+        base = _gift3m_base_price_rubles(tariff)
+        disc = _gift3m_price_rubles(tariff)
+        if base is None or disc is None:
+            continue
+        lines.append(f"{label} 3м — было {base} ₽, стало <b>{disc} ₽</b>")
+        rows.append([InlineKeyboardButton(
+            text=f"🎁 {label} 3м · {disc} ₽",
+            callback_data=f"bcg3m:buy:{tariff}",
+        )])
+
+    lines.append("")
+    lines.append("⏰ Скидка действует здесь и сейчас.")
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu_main")])
+
+    text = "\n".join(lines)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    try:
+        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+    except Exception:
+        try:
+            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        except Exception as e:
+            logger.warning("BROADCAST_GIFT3M_RENDER_FAIL user=%s err=%s", callback.from_user.id, e)
+
+    logger.info("BROADCAST_GIFT3M_SHOWN user=%s", callback.from_user.id)
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("bcg3m:buy:"))
+async def callback_broadcast_gift_3m_buy(callback: CallbackQuery, state: FSMContext):
+    """User picked one of the four 3-month gift tariffs — jump straight to payment-method selection."""
     try:
         await callback.answer()
     except Exception:
@@ -319,66 +390,46 @@ async def callback_broadcast_gift_3m(callback: CallbackQuery, state: FSMContext)
     telegram_id = callback.from_user.id
 
     try:
-        existing = await database.get_user_discount(telegram_id)
-    except Exception as e:
-        logger.exception("BROADCAST_GIFT3M_LOOKUP_FAIL user=%s err=%s", telegram_id, e)
-        existing = None
-
-    if existing:
-        pct = int(existing.get("discount_percent") or 0)
-        await callback.answer(
-            f"У вас уже активна персональная скидка {pct}%. "
-            "Откройте «Купить подписку» и выберите тариф на 3 месяца.",
-            show_alert=True,
-        )
-        # Still take them to the tariff screen so they can act on it now.
-        try:
-            from app.handlers.common.screens import show_tariffs_main_screen
-            await show_tariffs_main_screen(callback, state)
-        except Exception:
-            pass
+        tariff = callback.data.split(":", 2)[2]
+    except IndexError:
+        await callback.answer("Ошибка", show_alert=True)
         return
 
-    from datetime import timedelta
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
-    try:
-        ok = await database.create_user_discount(
-            telegram_id=telegram_id,
-            discount_percent=20,
-            expires_at=expires_at,
-            created_by=config.ADMIN_TELEGRAM_ID,
-        )
-    except Exception as e:
-        logger.exception("BROADCAST_GIFT3M_CREATE_FAIL user=%s err=%s", telegram_id, e)
-        ok = False
-
-    if not ok:
-        await callback.answer(
-            "Не удалось активировать скидку. Попробуйте позже или напишите в поддержку.",
-            show_alert=True,
-        )
+    price_rubles = _gift3m_price_rubles(tariff)
+    if price_rubles is None:
+        await callback.answer("Тариф недоступен", show_alert=True)
         return
+
+    price_kopecks = price_rubles * 100
+    if tariff in ("combo_basic", "combo_plus"):
+        combo_info = config.COMBO_TARIFFS.get(tariff, {}).get(_GIFT3M_PERIOD_DAYS, {})
+        base_tariff = combo_info.get("base_tariff")
+        gb = combo_info.get("gb", 0)
+    else:
+        base_tariff = tariff
+        gb = 0
+
+    if base_tariff not in config.TARIFFS:
+        await callback.answer("Тариф недоступен", show_alert=True)
+        return
+
+    from app.handlers.common.states import PurchaseState
+    await state.update_data(
+        tariff_type=base_tariff,
+        period_days=_GIFT3M_PERIOD_DAYS,
+        final_price_kopecks=price_kopecks,
+        discount_percent=_GIFT3M_DISCOUNT_PERCENT,
+        combo_bypass_gb=gb,
+    )
+    await state.set_state(PurchaseState.choose_payment_method)
 
     logger.info(
-        "BROADCAST_GIFT3M_ACTIVATED user=%s percent=20 hours=24 expires_at=%s",
-        telegram_id, expires_at.isoformat(),
+        "BROADCAST_GIFT3M_BUY user=%s tariff=%s base=%s combo_gb=%s price_kopecks=%s",
+        telegram_id, tariff, base_tariff, gb, price_kopecks,
     )
 
-    try:
-        from app.handlers.common.screens import show_tariffs_main_screen
-        await show_tariffs_main_screen(callback, state)
-    except Exception as e:
-        logger.warning("BROADCAST_GIFT3M_SHOW_TARIFFS_FAIL user=%s err=%s", telegram_id, e)
-
-    try:
-        await callback.message.answer(
-            "🎁 <b>Скидка 20% активирована!</b>\n\n"
-            "Действует 24 часа — выберите тариф на <b>3 месяца</b> "
-            "и скидка применится автоматически при оплате.",
-            parse_mode="HTML",
-        )
-    except Exception:
-        pass
+    from handlers import show_payment_method_selection
+    await show_payment_method_selection(callback, base_tariff, _GIFT3M_PERIOD_DAYS, price_kopecks)
 
 
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_promo_traffic:"))
