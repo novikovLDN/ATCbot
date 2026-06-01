@@ -161,9 +161,8 @@ def _build_broadcast_reply_markup(
             label = f"📊 Купить трафик −{discount}%" if discount else "📊 Купить трафик"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_traffic:{broadcast_id}")])
         elif btn == "gift_3m":
-            # Fixed 20% / 24h preset — no per-broadcast configuration needed.
             rows.append([InlineKeyboardButton(
-                text="🎁 Скидка 20% на 3 месяца",
+                text="🎁 Скидка 30% на 3 месяца",
                 callback_data="broadcast_gift_3m",
             )])
         elif btn == "bypass":
@@ -299,7 +298,7 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
-_GIFT3M_DISCOUNT_PERCENT = 20
+_GIFT3M_DISCOUNT_PERCENT = 30
 _GIFT3M_PERIOD_DAYS = 90
 
 
@@ -326,7 +325,7 @@ def _gift3m_base_price_rubles(tariff: str) -> int | None:
 
 @admin_broadcast_router.callback_query(F.data == "broadcast_gift_3m")
 async def callback_broadcast_gift_3m(callback: CallbackQuery, state: FSMContext):
-    """User clicked the "🎁 Скидка 20% на 3 месяца" CTA in a broadcast.
+    """User clicked the "🎁 Скидка 30% на 3 месяца" CTA in a broadcast.
 
     Shows a dedicated screen with 4 pre-discounted 3-month buttons
     (Basic, Plus, Combo Basic, Combo Plus). The discount is realised
@@ -363,18 +362,19 @@ async def callback_broadcast_gift_3m(callback: CallbackQuery, state: FSMContext)
 
     lines.append("")
     lines.append("⏰ Скидка действует здесь и сейчас.")
-    rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu_main")])
 
     text = "\n".join(lines)
     keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
 
+    chat_id = callback.message.chat.id if callback.message and callback.message.chat else callback.from_user.id
     try:
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        await callback.message.delete()
     except Exception:
-        try:
-            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-        except Exception as e:
-            logger.warning("BROADCAST_GIFT3M_RENDER_FAIL user=%s err=%s", callback.from_user.id, e)
+        pass
+    try:
+        await callback.bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        logger.warning("BROADCAST_GIFT3M_RENDER_FAIL user=%s err=%s", callback.from_user.id, e)
 
     logger.info("BROADCAST_GIFT3M_SHOWN user=%s", callback.from_user.id)
 
@@ -902,7 +902,7 @@ def _btn_label(btn_type: str) -> str:
         "buy": "🛒 Купить",
         "promo_buy": "🎁 Купить со скидкой",
         "promo_traffic": "📊 Купить трафик промо",
-        "gift_3m": "🎁 Скидка 20% на 3 месяца",
+        "gift_3m": "🎁 Скидка 30% на 3 месяца",
         "bypass": "🌐 Включить обход",
         "channel": "📢 Наш канал",
         "support": "💬 Поддержка",
