@@ -708,7 +708,7 @@ async def callback_pay_balance(callback: CallbackQuery, state: FSMContext):
                     )
                 if bypass_url:
                     links_block_parts.append(
-                        f"🚧 <b>Bypass</b> (обходы LTE):\n<code>{bypass_url}</code>"
+                        f"🚧 <b>Pro</b> (Pro-режим):\n<code>{bypass_url}</code>"
                     )
                 if links_block_parts:
                     text = text + "\n\n" + "\n\n".join(links_block_parts)
