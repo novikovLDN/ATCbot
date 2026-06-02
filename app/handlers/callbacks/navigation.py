@@ -736,7 +736,7 @@ async def callback_setup_step2(callback: CallbackQuery):
         # Bypass key buttons
         if bypass_url:
             buttons.append([InlineKeyboardButton(
-                text="🌐 Добавить Pro-режим ключ",
+                text="🌐 Добавить обход ключ",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
             )])
 

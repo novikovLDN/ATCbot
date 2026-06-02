@@ -153,7 +153,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             callback_data="menu_buy_vpn"
         )])
         buttons.append([InlineKeyboardButton(
-            text="🌐 Только Pro-режим строгих ограничений",
+            text="🌐 Только обход блокировок",
             callback_data="buy_bypass_only"
         )])
         buttons.append([proxy_button])
@@ -169,7 +169,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         if is_bypass_only:
             # Bypass-only: кнопки докупить трафик и купить подписку
             buttons.append([
-                InlineKeyboardButton(text="🌐 Купить ГБ Pro-режима", callback_data="buy_traffic"),
+                InlineKeyboardButton(text="🌐 Купить ГБ обхода", callback_data="buy_traffic"),
                 InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn"),
             ])
         else:

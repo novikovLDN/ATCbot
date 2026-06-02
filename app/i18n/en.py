@@ -244,9 +244,9 @@ LANG = {
     'buy.tariff_corporate': "🏗 Corporate access\n\nSolution for teams of any size\n\n🖥 Dedicated server for your company\n👥 Employee access control\n🛠 Tailored setup and support\n\n👉 Message us — we’ll pick the right setup for your needs",
     'buy.tariff_label_basic': "🪙 Basic",
     'buy.tariff_label_plus': "👑 Plus",
-    'buy.tariff_plus': "👑 Plus\nAlways online — even when other VPNs fail\nPro mode for any restrictions with priority speed ⚡️",
-    'buy.tariff_plus_desc': "👑 Tariff: Plus\n\nAlways online — even when other VPNs fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Pro mode for any restrictions including strict filters\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPN keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
-    'buy.tariff_plus_description': "👑 Tariff: Plus\n\nAlways online — even when other VPNs fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Pro mode for any restrictions including strict filters\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPN keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
+    'buy.tariff_plus': "👑 Plus\nAlways online — even when other VPNs fail\nBypass any blocks with priority speed ⚡️",
+    'buy.tariff_plus_desc': "👑 Tariff: Plus\n\nAlways online — even when other VPNs fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Bypasses any blocks including whitelists\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPN keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
+    'buy.tariff_plus_description': "👑 Tariff: Plus\n\nAlways online — even when other VPNs fail\n\n⚡ Priority speed for streaming and gaming\n🛡 Bypasses any blocks including whitelists\n🇪🇺 Dedicated servers in multiple countries\n🔄 Backup routes — VPN keeps working even under load\n\n👉 Maximum reliability and freedom with no compromises",
     'buy.tariff_plus_selected': "🔐 Plus tariff selected\nWhat period are you interested in?",
     'buy.tariff_select_basic_button': "⚡️ Select Basic",
     'buy.tariff_select_plus_button': "👑 Select Plus",
@@ -309,15 +309,15 @@ LANG = {
     'setup.manual_button': "📖 Manual setup",
     'setup.copy_key_label': "👇 Tap the key to copy:",
     'setup.key_vpn_label': "🔑 <b>VPN key</b> (regular servers):",
-    'setup.key_bypass_label': "🔑 <b>Pro mode key</b> (RU strict filters):",
+    'setup.key_bypass_label': "🔑 <b>Bypass key</b> (RU whitelists):",
     'setup.device_button': "📲 Set up device",
     'setup.done_button': "✅ Done",
     'setup.help_button': "❓ Need help",
     'setup.qr_button': "📲 Add device",
     'setup.qr_choose_type': "📲 <b>Add device</b>\n\nChoose connection type:",
     'setup.qr_standard_btn': "Standard servers (unlimited)",
-    'setup.qr_bypass_btn': "Pro mode strict filter",
-    'setup.qr_bypass_unavailable': "❌ Strict filter Pro mode is not available.\n\nMake sure you have an active subscription and Pro mode traffic.",
+    'setup.qr_bypass_btn': "Bypass whitelist",
+    'setup.qr_bypass_unavailable': "❌ Whitelist bypass is not available.\n\nMake sure you have an active subscription and bypass traffic.",
     'setup.qr_instruction': "📲 <b>Add device</b>\n\n<b>Via QR code:</b>\nScan the code above in the app:\n├ <b>Happ</b> → 📸 camera icon\n├ <b>V2RayTun</b> → <b>+</b> → «Scan QR»\n└ <b>Hiddify</b> → <b>+</b> → «Scan QR»\n\n<b>Manually:</b>\nTap the key below — it will be copied, then:\n├ <b>Happ</b> → clipboard icon at bottom\n├ <b>V2RayTun</b> → <b>+</b> → «Import from clipboard»\n└ <b>Hiddify</b> → <b>+</b> → «From clipboard»",
     'setup.download_happ': "📲 Download Happ",
     'setup.download_hiddify': "📲 Download Hiddify",
@@ -329,10 +329,10 @@ LANG = {
     'setup.instruction_macos': "🍎 <b>macOS Setup</b>\n\nDownload one of the apps below and proceed to the next step.\n\n❗️ If the app is not available in your region — choose <b>Happ</b>.",
     'setup.instruction_windows': "🪟 <b>Windows Setup</b>\n\nDownload one of the apps below and proceed to the next step.",
     'setup.select_device': "📱 <b>Select your device:</b>",
-    'setup.combined_ios': "📱 <b>Connect on iOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (strict filter Pro mode)",
-    'setup.combined_android': "🤖 <b>Connect on Android</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (strict filter Pro mode)",
-    'setup.combined_macos': "🍎 <b>Connect on macOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (strict filter Pro mode)",
-    'setup.combined_windows': "🪟 <b>Connect on Windows</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (strict filter Pro mode)",
+    'setup.combined_ios': "📱 <b>Connect on iOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
+    'setup.combined_android': "🤖 <b>Connect on Android</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
+    'setup.combined_macos': "🍎 <b>Connect on macOS</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
+    'setup.combined_windows': "🪟 <b>Connect on Windows</b>\n\n1️⃣ Download the app if not installed yet\n2️⃣ Tap the app name:\n\n🌐 — standard servers (unlimited)\n🤍 — new servers (whitelist bypass)",
     'incident.banner': "⚠️ Technical work in progress",
     'instruction._device_android': "🤖 Android",
     'instruction._device_desktop': "💻 Windows / macOS",
@@ -362,7 +362,7 @@ LANG = {
     'main.ecosystem_text': "Atlas Secure develops as a unified digital environment within Telegram.\n\n⚪️ Available in the ecosystem:\n\n📶 Stable access service\n• High speed without limits\n• Stable messengers\n• Banking and gov services work\n• Stable mobile connection\n\n📊 Only Tracker (coming soon)\nPersonal habit assistant — goals and focus in one place.\n\n⚙️ All services unified in one management system.\n\nAtlas Secure is not separate features, but a connected environment where everything works together.",
     'main.settings': "⚙️ Settings",
     'main.settings_title': "⚙️ Atlas Secure Settings",
-    'main.about_text': "Atlas Secure — digital ecosystem,\ndeployed within Telegram.\n\n🔐 Architecture without log storage\n⚡ High and stable connection speed\n📶 Proper operation in Pro / 5G / Wi-Fi\n🧩 Personal access keys\n🇪🇺 Yellow \n🛡 Privacy by default\n\n🌍 Multilingual interface\n💳 Secure payment methods\n\nThe ecosystem is built so\nthat the connection remains stable,\nand management — simple and transparent.",
+    'main.about_text': "Atlas Secure — digital ecosystem,\ndeployed within Telegram.\n\n🔐 Architecture without log storage\n⚡ High and stable connection speed\n📶 Proper operation in LTE / 5G / Wi-Fi\n🧩 Personal access keys\n🇪🇺 Yellow \n🛡 Privacy by default\n\n🌍 Multilingual interface\n💳 Secure payment methods\n\nThe ecosystem is built so\nthat the connection remains stable,\nand management — simple and transparent.",
     'main.about_title': "🔎 About Atlas Secure",
     'main.auto_renew_disable': "⏸ Disable auto-renewal",
     'main.auto_renew_disabled': "⏸ Auto-renewal disabled",
@@ -484,7 +484,7 @@ LANG = {
     'main.trial_button': "🎁 3-Day Trial Period",
     'main.trial_expired_text': "🔓 <b>Trial access ended</b>\n\nYour trial period has expired.\n\n🎟 Use promo code <b>YAbx30</b> for 30% discount on your first subscription.\n\nSubscribe now to continue using secure access.",
     'main.trial_not_available': "❌ Trial period is not available. You have already used it or have an active subscription.",
-    'main.trial_notification_6h': "👋 Glad to have you with us!\n\nYour VPN is active and protecting you right now. Try opening YouTube, Instagram or any restricted site — everything works without limits 🌍",
+    'main.trial_notification_6h': "👋 Glad to have you with us!\n\nYour VPN is active and protecting you right now. Try opening YouTube, Instagram or any blocked site — everything works without limits 🌍",
     'main.trial_notification_60h': "⏰ 24 hours left of your trial\n\nYou've already seen the speed and stability of Atlas Secure. To keep protection running without interruption, start a subscription 🔥",
     'main.trial_notification_71h': "🔔 In 6 hours your trial access will end and VPN will turn off\n\nDon't lose protection — get a subscription from 199₽ and use it without limits 💎",
     'main.user_fallback': "user",
@@ -494,7 +494,7 @@ LANG = {
     'main.vip_status_active': "👑 Your VIP status is active",
     'main.vip_status_badge': "👑 VIP status active",
     'main.welcome': "🔐 Atlas Secure\n\n🧩 Private digital access\n⚙️ Stable operation of familiar services\n🛡 Privacy by default\n\nYou connect —\neverything else works in the background.",
-    'main.welcome_bypass': "💎 <b>Atlas Secure</b> — your digital shield\n\n🌐 Pro mode — active\n\n⚡️ Lightning-fast connection\n🛡 Traffic protected 24/7\n🌍 The internet as it should be",
+    'main.welcome_bypass': "💎 <b>Atlas Secure</b> — your digital shield\n\n🌐 Bypass — active\n\n⚡️ Lightning-fast connection\n🛡 Traffic protected 24/7\n🌍 The internet as it should be",
     'main.welcome_discount_label': "<tg-emoji emoji-id=\"5449800250032143374\">🎁</tg-emoji> Welcome Discount",
     'main.yes': "YES",
     'payment.already_processed': "✅ This payment has already been processed.",
@@ -650,7 +650,7 @@ LANG = {
     'connect.instruction_screen': "📖 <b>Connection Instructions</b>\n\nTap «Connect» or\n«🌐 Open Mini App» below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇",
     'connect.autosetup_btn': "📲 Connect",
     'connect.open_miniapp_btn': "🌐 Open Mini App",
-    'connect.autosetup_screen': "📱 <b>Auto Setup</b>\n\nTap the button for the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.\n\n🌐 — regular servers with basic Pro mode\n🤍 — servers for Pro mode of RU strict filters\n\nYou can install both keys at once.",
+    'connect.autosetup_screen': "📱 <b>Auto Setup</b>\n\nTap the button for the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.\n\n🌐 — regular servers with basic bypass\n🤍 — servers for bypassing RU whitelists\n\nYou can install both keys at once.",
 
     # Gift subscription
     'main.gift_subscription': "🎁 Gift Subscription",
@@ -774,7 +774,7 @@ LANG = {
 
     # profile
     'profile.key_atlas': '🇩🇪 Copy Atlas DE',
-    'profile.key_whitelist': '⚪️ Copy Strict Filter',
+    'profile.key_whitelist': '⚪️ Copy White List',
 
     # referral
     'referral.cashback_referred': '👤 Referral: {referred}',
@@ -811,15 +811,15 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 My Traffic",
-    'traffic.info': "📊 <b>Pro Mode Restrictions</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Pro mode key</b> <i>(tap to copy)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Alternative key for Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Where to paste:</b>\n├ <b>Happ</b> → Home → <b>+</b> → Paste from clipboard\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
-    'traffic.no_subscription': "📊 <b>Pro Mode Restrictions</b> 🇷🇺\n\n🔒 No active subscription.",
-    'traffic.trial_no_bypass': "📊 <b>Pro Mode Restrictions</b> 🇷🇺\n\n🔒 Pro mode is available on Basic and Plus plans.",
+    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Bypass key</b> <i>(tap to copy)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Alternative key for Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Where to paste:</b>\n├ <b>Happ</b> → Home → <b>+</b> → Paste from clipboard\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.no_subscription': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 No active subscription.",
+    'traffic.trial_no_bypass': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 Bypass is available on Basic and Plus plans.",
     'traffic.trial_upgrade_hint': "Get Basic or Plus subscription to unlock more GB and traffic purchases",
-    'traffic.not_provisioned': "📊 Pro mode is not set up yet. Try again later.",
+    'traffic.not_provisioned': "📊 Bypass is not set up yet. Try again later.",
     'traffic.fetch_error': "⚠️ Failed to load traffic data. Try again later.",
-    'traffic.warning_low': "{remaining} of Pro mode traffic remaining",
-    'traffic.warning_critical': "Pro mode traffic is almost depleted!",
-    'traffic.subscription_expired_bypass_active': "⚠️ <b>Your main subscription has expired</b>\n\nPro mode continues to work — your GB are intact.\n\nDon't forget to buy more traffic if it's running low 👇",
+    'traffic.warning_low': "{remaining} of bypass traffic remaining",
+    'traffic.warning_critical': "Bypass traffic is almost depleted!",
+    'traffic.subscription_expired_bypass_active': "⚠️ <b>Your main subscription has expired</b>\n\nBypass continues to work — your GB are intact.\n\nDon't forget to buy more traffic if it's running low 👇",
     'traffic.buy_subscription': "📈 Buy Subscription",
     'traffic.buy_traffic_btn': "💳 Buy Traffic",
     'traffic.back_to_traffic': "📊 Back to Traffic",
@@ -833,27 +833,27 @@ LANG = {
     'traffic.insufficient_balance': "❌ Insufficient balance",
     'traffic.purchase_success': "✅ <b>Traffic added!</b>\n\n📦 +{gb} GB\n💰 {price} ₽",
     'traffic.purchase_failed': "❌ Error adding traffic. Funds returned to balance.",
-    'traffic.notify_3gb': "⚠️ {remaining} of Pro mode traffic remaining 🇷🇺\n\nBuy additional traffic to keep Pro mode working.",
-    'traffic.notify_1gb': "🔴 Less than 1 GB of Pro mode traffic! Pro mode will stop soon.",
-    'traffic.notify_500mb': "❗️ Only {remaining} of Pro mode traffic left!",
-    'traffic.notify_zero': "🚫 Pro mode traffic depleted.\n\nAtlas Fast 🇩🇪 continues working without limits.",
+    'traffic.notify_3gb': "⚠️ {remaining} of bypass traffic remaining 🇷🇺\n\nBuy additional traffic to keep bypass working.",
+    'traffic.notify_1gb': "🔴 Less than 1 GB of bypass traffic! Bypass will stop soon.",
+    'traffic.notify_500mb': "❗️ Only {remaining} of bypass traffic left!",
+    'traffic.notify_zero': "🚫 Bypass traffic depleted.\n\nAtlas Fast 🇩🇪 continues working without limits.",
 
     # Bypass gift links — user-facing redemption messages
-    'bypass_gift.activated': "🎁 <b>Gift activated!</b>\n\nYou received <b>{gb} GB</b> of Pro mode traffic.\n\nThese GB are now available and work independently of your subscription. Open «Enable Pro mode» to use them.",
+    'bypass_gift.activated': "🎁 <b>Gift activated!</b>\n\nYou received <b>{gb} GB</b> of bypass traffic.\n\nThese GB are now available and work independently of your subscription. Open «Enable bypass» to use them.",
     'bypass_gift.error_already_redeemed': "🎁 <b>This link was already redeemed by your account.</b>\n\nEach link can be used only once per account. If you need more traffic, ask the sender for a new link.",
     'bypass_gift.error_not_found': "❌ <b>Gift link not found.</b>\n\nCheck that the link is correct or contact the sender.",
     'bypass_gift.error_expired': "⏰ <b>This gift link has expired.</b>\n\nAsk the sender to create a new one.",
     'bypass_gift.error_max_uses': "🚫 <b>Redemption limit reached.</b>\n\nThis link has already been used the maximum number of times. Ask the sender for a new link.",
     'bypass_gift.error_remnawave': "⚠️ <b>Could not credit your GB — please try again later.</b>\n\nIf the problem persists, contact support.",
-    'bypass_gift.connect_btn': "🌐 Connect Pro mode",
+    'bypass_gift.connect_btn': "🌐 Connect Bypass",
 
     # Bypass gift — dedicated setup flow (only reachable from gift link)
-    'bgift_setup.select_device': "📱 <b>Choose your device</b>\n\nWe'll set up Pro mode in two short steps. First, pick the device you'll use.",
+    'bgift_setup.select_device': "📱 <b>Choose your device</b>\n\nWe'll set up bypass in two short steps. First, pick the device you'll use.",
     'bgift_setup.connect_screen': (
         "⚡️ <b>Connect in one tap</b>\n\n"
-        "Add the key to start using Pro mode.\n\n"
-        "🌐 <b>Pro mode</b> — Russian strict filter routing, the internet works from anywhere in the world.\n\n"
-        "<b>Your Pro mode key:</b>\n"
+        "Add the key to start using bypass.\n\n"
+        "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
+        "<b>Your bypass key:</b>\n"
         "<blockquote><code>{sub_url}</code></blockquote>\n"
         "<i>Tap the key to copy it.</i>\n\n"
         "━━━━━━━━━━━━━━━━━\n"
@@ -872,8 +872,8 @@ LANG = {
     ),
     'bgift_setup.connect_no_key': (
         "⚡️ <b>Connect in one tap</b>\n\n"
-        "🌐 <b>Pro mode</b> — Russian strict filter routing, the internet works from anywhere in the world.\n\n"
-        "⚠️ We couldn't fetch your Pro mode key. "
+        "🌐 <b>Bypass</b> — Russian whitelist routing, the internet works from anywhere in the world.\n\n"
+        "⚠️ We couldn't fetch your bypass key. "
         "Wait a minute and tap «Back → Next» again. "
         "If the error persists, please contact support."
     ),
