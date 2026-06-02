@@ -1187,12 +1187,12 @@ async def callback_bypass_pay_card(callback: CallbackQuery):
         )
 
         payload = f"purchase:{purchase_id}"
-        prices = [LabeledPrice(label=f"Pro mode {gb} GB", amount=price_kopecks)]
+        prices = [LabeledPrice(label=f"Bypass {gb} GB", amount=price_kopecks)]
 
         await callback.bot.send_invoice(
             chat_id=telegram_id,
-            title=f"Atlas Secure — Pro mode {gb} GB",
-            description=f"Pro mode strict filter traffic — {gb} GB",
+            title=f"Atlas Secure — Bypass {gb} GB",
+            description=f"Bypass whitelist traffic — {gb} GB",
             payload=payload,
             provider_token=config.TG_PROVIDER_TOKEN,
             currency="RUB",
@@ -1246,7 +1246,7 @@ async def callback_bypass_pay_sbp(callback: CallbackQuery):
 
         tx_data = await platega_service.create_transaction(
             amount_rubles=sbp_price_rubles,
-            description=f"Atlas Secure — Pro mode {gb} GB",
+            description=f"Atlas Secure — Bypass {gb} GB",
             purchase_id=purchase_id,
         )
 
@@ -1304,12 +1304,12 @@ async def callback_bypass_pay_stars(callback: CallbackQuery):
         )
 
         payload = f"purchase:{purchase_id}"
-        prices = [LabeledPrice(label=f"Pro mode {gb} GB", amount=price_stars)]
+        prices = [LabeledPrice(label=f"Bypass {gb} GB", amount=price_stars)]
 
         await callback.bot.send_invoice(
             chat_id=telegram_id,
-            title=f"Atlas Secure — Pro mode {gb} GB",
-            description=f"Pro mode strict filter traffic — {gb} GB",
+            title=f"Atlas Secure — Bypass {gb} GB",
+            description=f"Bypass whitelist traffic — {gb} GB",
             payload=payload,
             provider_token="",
             currency="XTR",
@@ -1357,7 +1357,7 @@ async def callback_bypass_pay_crypto(callback: CallbackQuery):
 
         invoice = await cryptobot_service.create_invoice(
             amount_rubles=float(price),
-            description=f"Atlas Secure — Pro mode {gb} GB",
+            description=f"Atlas Secure — Bypass {gb} GB",
             purchase_id=purchase_id,
         )
 
@@ -1415,7 +1415,7 @@ async def callback_bypass_pay_lava(callback: CallbackQuery):
         invoice_data = await lava_service.create_invoice(
             amount_rubles=price_rubles,
             purchase_id=purchase_id,
-            comment=f"Atlas Secure — Pro mode {gb} GB",
+            comment=f"Atlas Secure — Bypass {gb} GB",
         )
 
         invoice_id = invoice_data["invoice_id"]
