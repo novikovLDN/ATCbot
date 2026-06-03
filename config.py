@@ -357,12 +357,14 @@ XRAY_SYNC_ENABLED = env("XRAY_SYNC_ENABLED", default="false").lower() == "true"
 # Bot receives vless_link from API — never generates links locally.
 
 # Platega (SBP) Configuration
-# СБП оплата через Platega.io — наценка +11%
+# Platega.io — единый провайдер: СБП (2), Карта (11), Международные (12)
 PLATEGA_MERCHANT_ID = env("PLATEGA_MERCHANT_ID", default="")
 PLATEGA_SECRET = env("PLATEGA_SECRET")
 PLATEGA_API_URL = env("PLATEGA_API_URL") or "https://app.platega.io"
-# Процент наценки для СБП (11%)
-SBP_MARKUP_PERCENT = 11
+# Наценки на методы Platega (override через env при необходимости)
+SBP_MARKUP_PERCENT = int(env("SBP_MARKUP_PERCENT", default="0") or "0")
+PLATEGA_CARD_MARKUP_PERCENT = int(env("PLATEGA_CARD_MARKUP_PERCENT", default="0") or "0")
+PLATEGA_INTL_MARKUP_PERCENT = int(env("PLATEGA_INTL_MARKUP_PERCENT", default="0") or "0")
 
 # CryptoBot (Crypto Pay) Configuration
 # Криптовалютная оплата через @CryptoBot

@@ -69,7 +69,7 @@ def _delivery_text() -> str:
 
 def _sales_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏦 СБП (+11%)", callback_data="proxy_pay_sbp")],
+        [InlineKeyboardButton(text="📱 СБП", callback_data="proxy_pay_sbp")],
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data="proxy_pay_lava")],
         [InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu_main")],

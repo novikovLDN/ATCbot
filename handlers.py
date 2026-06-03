@@ -1018,33 +1018,44 @@ async def show_payment_method_selection(
         callback_data="pay:balance"
     )])
     
-    # Кнопка оплаты картой
+    import platega_service
+    platega_on = platega_service.is_enabled()
+
+    if platega_on:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.card_pl"),
+            callback_data="pay:card_pl"
+        )])
+
     buttons.append([InlineKeyboardButton(
-        text="💳 Банковская карта",
+        text=i18n_get_text(language, "payment.card"),
         callback_data="pay:card"
     )])
 
-    # Кнопка оплаты картой через Lava
+    if platega_on:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.sbp"),
+            callback_data="pay:sbp"
+        )])
+
     import lava_service
     if lava_service.is_enabled():
         buttons.append([InlineKeyboardButton(
-            text="📱 СБП 3%",
+            text=i18n_get_text(language, "payment.lava"),
             callback_data="pay:lava"
         )])
 
-    # Кнопка оплаты через СБП (Platega, +11%)
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.sbp"),
-        callback_data="pay:sbp"
-    )])
+    if platega_on:
+        buttons.append([InlineKeyboardButton(
+            text=i18n_get_text(language, "payment.intl_pl"),
+            callback_data="pay:intl_pl"
+        )])
 
-    # Кнопка оплаты Telegram Stars
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.stars"),
         callback_data="pay:stars"
     )])
 
-    # Кнопка оплаты криптовалютой (CryptoBot)
     import cryptobot_service
     if cryptobot_service.is_enabled():
         buttons.append([InlineKeyboardButton(
