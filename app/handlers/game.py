@@ -1368,7 +1368,7 @@ async def callback_farm_shield(callback: CallbackQuery):
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Картой", callback_data=f"farm_shield_lava:{plot_id}")],
-        [InlineKeyboardButton(text="📲 СБП (+11%)", callback_data=f"farm_shield_sbp:{plot_id}")],
+        [InlineKeyboardButton(text="📲 СБП", callback_data=f"farm_shield_sbp:{plot_id}")],
         [InlineKeyboardButton(text="🔙 На ферму", callback_data="game_farm")],
     ])
     try:

@@ -1010,49 +1010,41 @@ async def show_payment_method_selection(
     
     # Формируем кнопки
     buttons = []
-    
-    # Кнопка оплаты балансом (с указанием доступного баланса)
-    balance_button_text = i18n_get_text(language, "payment.balance", balance=balance_rubles)
-    buttons.append([InlineKeyboardButton(
-        text=balance_button_text,
-        callback_data="pay:balance"
-    )])
-    
-    # Кнопка оплаты картой
-    buttons.append([InlineKeyboardButton(
-        text="💳 Банковская карта",
-        callback_data="pay:card"
-    )])
 
-    # Кнопка оплаты картой через Lava
+    import platega_service
     import lava_service
-    if lava_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text="📱 СБП 3%",
-            callback_data="pay:lava"
-        )])
-
-    # Кнопка оплаты через СБП (Platega, +11%)
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.sbp"),
-        callback_data="pay:sbp"
-    )])
-
-    # Кнопка оплаты Telegram Stars
-    buttons.append([InlineKeyboardButton(
-        text=i18n_get_text(language, "payment.stars"),
-        callback_data="pay:stars"
-    )])
-
-    # Кнопка оплаты криптовалютой (CryptoBot)
     import cryptobot_service
-    if cryptobot_service.is_enabled():
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "payment.crypto"),
-            callback_data="pay:crypto"
-        )])
+    platega_on = platega_service.is_enabled()
+    lava_on = lava_service.is_enabled()
+    crypto_on = cryptobot_service.is_enabled()
 
-    # Кнопка "Назад"
+    btn_card_pl = InlineKeyboardButton(text=i18n_get_text(language, "payment.card_pl"), callback_data="pay:card_pl")
+    btn_sbp = InlineKeyboardButton(text=i18n_get_text(language, "payment.sbp"), callback_data="pay:sbp")
+    btn_card = InlineKeyboardButton(text=i18n_get_text(language, "payment.card"), callback_data="pay:card")
+    btn_lava = InlineKeyboardButton(text=i18n_get_text(language, "payment.lava"), callback_data="pay:lava")
+    btn_intl = InlineKeyboardButton(text=i18n_get_text(language, "payment.intl_pl"), callback_data="pay:intl_pl")
+    btn_stars = InlineKeyboardButton(text=i18n_get_text(language, "payment.stars"), callback_data="pay:stars")
+    btn_crypto = InlineKeyboardButton(text=i18n_get_text(language, "payment.crypto"), callback_data="pay:crypto")
+
+    if platega_on:
+        buttons.append([btn_card_pl, btn_sbp])
+
+    row2 = [btn_card]
+    if lava_on:
+        row2.append(btn_lava)
+    buttons.append(row2)
+
+    if platega_on:
+        buttons.append([btn_intl])
+
+    row4 = [btn_stars]
+    if crypto_on:
+        row4.append(btn_crypto)
+    buttons.append(row4)
+
+    balance_button_text = i18n_get_text(language, "payment.balance", balance=balance_rubles)
+    buttons.append([InlineKeyboardButton(text=balance_button_text, callback_data="pay:balance")])
+
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data="menu_buy_vpn"
