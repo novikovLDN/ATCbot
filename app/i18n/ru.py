@@ -907,7 +907,8 @@ LANG = {
     'premium.main_button': "⚡️ Купить Telegram Premium ⚡️",
 
     # --- Help / FAQ ---
-    'help.menu_title': "❓ <b>Помощь</b>\n\nВыберите подходящий вариант ниже:\n\n<blockquote>📖 <b>Ответы на частые вопросы</b>\nКороткие решения типичных проблем</blockquote>\n\n<blockquote>📲 <b>Инструкции по сервису</b>\nКак настроить VPN на вашем устройстве</blockquote>\n\n<blockquote>💬 <b>Помощь</b>\nНаписать живому оператору в Telegram</blockquote>",
+    'help.menu_title': "❓ <b>Помощь</b>\n\nВыберите подходящий вариант ниже:\n\n<blockquote>📖 <b>Ответы на частые вопросы</b>\nКороткие решения типичных проблем</blockquote>\n\n<blockquote>📲 <b>Инструкции по сервису</b>\nКак настроить VPN на вашем устройстве</blockquote>\n\n<blockquote>📞 <b>Контакты</b>\nПочта поддержки и отдела продаж</blockquote>\n\n<blockquote>💬 <b>Помощь</b>\nНаписать живому оператору в Telegram</blockquote>",
+    'help.contacts_title': "📞 <b>Контакты</b>\n\nСвяжитесь с нами по электронной почте:\n\n<blockquote>📧 <b>Техническая поддержка</b>\n<code>support@atlassecure.uk</code>\nПроекты Atlas Secure и QoDev</blockquote>\n\n<blockquote>💼 <b>Отдел продаж</b>\n<code>sales@atlassecure.uk</code>\nИнфраструктурные решения Atlas Secure</blockquote>\n\n<i>Нажмите на адрес, чтобы скопировать.</i>",
     'help.faq_title': "📖 <b>Ответы на частые вопросы</b>\n\nВыберите свой вопрос — покажем короткое решение.",
     'help.faq_q1': "🚫 Не работает VPN",
     'help.faq_q2': "📲 Как подключиться / настроить",

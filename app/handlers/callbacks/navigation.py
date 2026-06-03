@@ -1602,6 +1602,21 @@ async def callback_menu_help(callback: CallbackQuery):
     await _open_help_screen(callback, callback.bot)
 
 
+@router.callback_query(F.data == "help_contacts")
+async def callback_help_contacts(callback: CallbackQuery):
+    """Contacts — support and sales emails."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    language = await resolve_user_language(callback.from_user.id)
+    text = i18n_get_text(language, "help.contacts_title")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_help")],
+    ])
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
 @router.callback_query(F.data == "faq")
 async def callback_faq(callback: CallbackQuery):
     """FAQ — top questions."""
