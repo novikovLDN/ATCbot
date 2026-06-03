@@ -41,6 +41,8 @@ PROFILE_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU06RqGqSy7ZznGSzMqpWqKob_ly-ByQACYA9rGxA
 
 SUPPORT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU07dqGqVLNGYWl3jMGShmNxuNUgvkpAACGw5rG4Qv2VBVBIqM5lqnCgEAAwIAA3kAAzsE"
 
+CONTACTS_PHOTO_FILE_ID = "AgACAgQAAxkBAAFaMrhqIIn_mXiy0317JBGMgFkHl6d9DQACvhZrG8kkCVH3VeBvZR6bxAEAAwIAA3kAAzsE"
+
 SHOP_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08RqGqWH5bytFQj3dTputnGpYJzHEAACHA5rG4Qv2VAe5eXMo4mvpAEAAwIAA3kAAzsE"
 
 GIFT_PHOTO_FILE_ID = "AgACAgQAAxkBAAFU08dqGqW7fM71f6jxAAHg0TqaIRev3jAAAh0OaxuEL9lQeDYgAjezwKoBAAMCAAN5AAM7BA"
@@ -141,6 +143,7 @@ async def _open_help_screen(event: Union[Message, CallbackQuery], bot: Bot):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📖 Ответы на частые вопросы", callback_data="faq")],
         [InlineKeyboardButton(text="📲 Инструкции по сервису", callback_data="connect_instruction")],
+        [InlineKeyboardButton(text="📞 Контакты", callback_data="help_contacts")],
         [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
