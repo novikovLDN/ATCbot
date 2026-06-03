@@ -40,10 +40,27 @@ def _get_headers() -> Dict[str, str]:
     }
 
 
+PAYMENT_METHOD_SBP = 2
+PAYMENT_METHOD_CARD = 11
+PAYMENT_METHOD_INTL = 12
+
+
+def _apply_markup(price_kopecks: int, percent: int) -> int:
+    if percent <= 0:
+        return price_kopecks
+    return math.ceil(price_kopecks * (1 + percent / 100.0))
+
+
 def apply_sbp_markup(price_kopecks: int) -> int:
-    """Apply SBP markup (+11%) to price in kopecks. Returns new price rounded up."""
-    markup = config.SBP_MARKUP_PERCENT / 100.0
-    return math.ceil(price_kopecks * (1 + markup))
+    return _apply_markup(price_kopecks, config.SBP_MARKUP_PERCENT)
+
+
+def apply_card_markup(price_kopecks: int) -> int:
+    return _apply_markup(price_kopecks, config.PLATEGA_CARD_MARKUP_PERCENT)
+
+
+def apply_intl_markup(price_kopecks: int) -> int:
+    return _apply_markup(price_kopecks, config.PLATEGA_INTL_MARKUP_PERCENT)
 
 
 async def create_transaction(
@@ -52,9 +69,10 @@ async def create_transaction(
     purchase_id: str,
     return_url: Optional[str] = None,
     failed_url: Optional[str] = None,
+    method: int = PAYMENT_METHOD_SBP,
 ) -> Dict[str, Any]:
     """
-    Create SBP payment transaction via Platega API.
+    Create a Platega payment transaction.
 
     Args:
         amount_rubles: Payment amount in rubles (already with markup applied)
@@ -62,6 +80,7 @@ async def create_transaction(
         purchase_id: Internal purchase ID (stored in payload)
         return_url: Redirect URL after successful payment
         failed_url: Redirect URL after failed payment
+        method: Platega paymentMethod (2=SBP, 11=Card, 12=International)
 
     Returns:
         {"transaction_id": str, "redirect_url": str}
@@ -73,7 +92,7 @@ async def create_transaction(
         raise Exception("Platega not configured")
 
     request_body = {
-        "paymentMethod": 2,  # SBP
+        "paymentMethod": method,
         "id": str(uuid4()),
         "paymentDetails": {
             "amount": round(amount_rubles, 2),
@@ -122,7 +141,7 @@ async def create_transaction(
 
     logger.info(
         f"Platega transaction created: transaction_id={transaction_id}, "
-        f"amount={amount_rubles} RUB, purchase_id={purchase_id}"
+        f"amount={amount_rubles} RUB, purchase_id={purchase_id}, method={method}"
     )
 
     return {
