@@ -2443,9 +2443,11 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                 await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
                 logger.critical(
-                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED — webhook will return 5xx for retry",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
+                ret_val["remnawave_sync_failed"] = True
+                ret_val["remnawave_sync_error"] = str(e)[:200]
         return ret_val
 
 
@@ -4848,9 +4850,11 @@ async def finalize_purchase(
                 await purchase_flow.sync_renewal_to_remnawave(sync_info)
             except Exception as e:
                 logger.critical(
-                    "RENEWAL_REMNAWAVE_SYNC_FAILED",
+                    "RENEWAL_REMNAWAVE_SYNC_FAILED — webhook will return 5xx for retry",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
+                ret_val["remnawave_sync_failed"] = True
+                ret_val["remnawave_sync_error"] = str(e)[:200]
         if ret_val is not None:
             # Set or clear combo flag reliably from pending_purchase data (not FSM)
             try:
