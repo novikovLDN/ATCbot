@@ -456,6 +456,28 @@ async def init_db() -> bool:
     # Now proceed with table creation (pool.acquire() is safe after yield)
     # STRICT PATTERN: async with pool.acquire() as conn
     async with _pool.acquire() as conn:
+        # ── Fast-fail on schema locks ──────────────────────────────────
+        # Migrations 001–053 have already created every table and column
+        # below. The 100+ `CREATE TABLE / ALTER TABLE … IF NOT EXISTS`
+        # statements that follow are idempotent legacy fallbacks for
+        # bootstrapping a virgin DB. Each one still asks Postgres for
+        # ACCESS EXCLUSIVE LOCK on its table — and on a 350k-user prod
+        # base, if even one transaction (autovacuum, idle-in-tx) holds
+        # a conflicting lock, the ALTER blocks indefinitely. Once asyncpg's
+        # client-side command_timeout (30s) fires it CANCELS the query
+        # and releases the connection back to the pool — the next
+        # `conn.execute()` then crashes with InterfaceError.
+        #
+        # Server-side lock_timeout/statement_timeout make any stuck
+        # statement fail as a normal query error in a few seconds,
+        # caught by the surrounding try/except and the loop moves on.
+        # Connection stays healthy.
+        try:
+            await conn.execute("SET lock_timeout = '5s'")
+            await conn.execute("SET statement_timeout = '20s'")
+        except Exception as e:
+            logger.warning("Failed to set statement/lock timeouts: %s", e)
+
         # Таблица users
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -466,7 +488,7 @@ async def init_db() -> bool:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # Миграция: добавляем referral_level, если его нет
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_level TEXT DEFAULT 'base' CHECK (referral_level IN ('base', 'vip'))")
