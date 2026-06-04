@@ -175,20 +175,30 @@ async def process_confirmed_payment(
             f"{provider} webhook: purchase already processed (ValueError): "
             f"purchase_id={purchase_id}, error={e}"
         )
-        # Provider retry path: first webhook committed the DB, but the
+        # Provider retry path: the first webhook committed the DB, but the
         # post-commit Remnawave sync may have failed. Re-run the idempotent
         # provision so the user lands in sync. provision_subscription handles
         # both create and renew, and adopts existing panel entities.
+        # Only run for an actually-active subscription whose row already has
+        # a future expires_at — never resync something we deliberately let
+        # expire.
         try:
             from app.services import purchase_flow
+            from datetime import datetime, timezone
             sub = await database.get_subscription(telegram_id)
-            if sub and sub.get("expires_at") and sub.get("subscription_type"):
-                _pd = pending.get("period_days") or 30
-                _tariff = sub.get("subscription_type") or "basic"
+            sub_expires = sub.get("expires_at") if sub else None
+            sub_tariff = sub.get("subscription_type") if sub else None
+            still_active = bool(
+                sub_expires
+                and sub_tariff
+                and sub_expires > datetime.now(timezone.utc)
+            )
+            if still_active:
+                _pd = (pending.get("period_days") if pending else None) or 30
                 await purchase_flow.provision_subscription(
                     telegram_id,
-                    tariff=_tariff,
-                    subscription_end=sub["expires_at"],
+                    tariff=sub_tariff,
+                    subscription_end=sub_expires,
                     period_days=int(_pd),
                     is_trial=False,
                 )
