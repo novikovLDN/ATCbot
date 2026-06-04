@@ -713,22 +713,25 @@ async def get_users_by_segment(segment: str) -> list:
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
-            # Subscription expired exactly N full days ago (24-hour bucket)
-            # AND the user does NOT currently have an active subscription
-            # (so a renewed user is not pulled back into the win-back funnel).
+            # User's MOST RECENT subscription expired exactly N full days
+            # ago (24-hour bucket). Looking at MAX(expires_at) rather than
+            # any row makes this robust against multiple-row history
+            # (renewal flow uses both UPDATE and INSERT depending on path).
+            # Also implicitly excludes users with an active subscription:
+            # if their latest expires_at is in the past window, then by
+            # definition they have no active row.
             days = int(segment.split("_")[1].rstrip("d"))
             now = _to_db_utc(datetime.now(timezone.utc))
             rows = await conn.fetch(
-                """SELECT DISTINCT u.telegram_id
-                   FROM users u
-                   INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
-                   WHERE s.expires_at >= $1 - ($2 || ' days')::interval
-                     AND s.expires_at <  $1 - ($3 || ' days')::interval
-                     AND NOT EXISTS (
-                         SELECT 1 FROM subscriptions s2
-                         WHERE s2.telegram_id = u.telegram_id
-                           AND s2.expires_at > $1
-                     )""",
+                """SELECT u.telegram_id FROM users u
+                   WHERE (
+                       SELECT MAX(s.expires_at) FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                   ) >= $1 - ($2 || ' days')::interval
+                     AND (
+                       SELECT MAX(s.expires_at) FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                   ) <  $1 - ($3 || ' days')::interval""",
                 now, str(days + 1), str(days),
             )
             return [row["telegram_id"] for row in rows]
