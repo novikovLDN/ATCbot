@@ -24,13 +24,19 @@ logger = logging.getLogger(__name__)
 # Tolerance: differences below this are treated as equal (clock skew / rounding).
 _TOLERANCE_SECONDS = 3600
 # Max premium subscriptions scanned per run (safety ceiling).
-_MAX_SCAN = 5000
+_MAX_SCAN = 100_000
 # Seconds between live progress updates of the admin message.
 _PROGRESS_INTERVAL = 4
 # Concurrent Remnawave PATCH calls while fixing mismatches (no bulk endpoint).
-_FIX_CONCURRENCY = 8
+_FIX_CONCURRENCY = 16
 # Last reconciliation result per admin id — feeds the "Исправить" button.
 _last_mismatches: dict[int, list] = {}
+
+
+# Mismatch reason buckets. The fix path branches on these — date-only diffs
+# get a cheap PATCH, missing-entity ones need a full re-provision.
+_REASON_DATE = "date_mismatch"
+_REASON_MISSING = "missing_on_panel"
 
 
 def _parse_rmn_dt(value) -> "datetime | None":
@@ -97,6 +103,7 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
         telegram_id = sub.get("telegram_id")
         db_expires = sub.get("expires_at")
         uuid = sub.get("remnawave_premium_uuid")
+        tariff = (sub.get("subscription_type") or "basic").strip().lower()
 
         rmn_user = by_uuid.get(uuid)
         if rmn_user is None:
@@ -104,7 +111,8 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
                 "telegram_id": telegram_id,
                 "db_expires_at": db_expires,
                 "rmn_expires_at": None,
-                "reason": "нет в Remnawave",
+                "reason": _REASON_MISSING,
+                "tariff": tariff,
             })
             continue
         rmn_expires = _parse_rmn_dt(rmn_user.get("expireAt"))
@@ -113,7 +121,8 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
                 "telegram_id": telegram_id,
                 "db_expires_at": db_expires,
                 "rmn_expires_at": None,
-                "reason": "нет даты в Remnawave",
+                "reason": _REASON_MISSING,
+                "tariff": tariff,
             })
             continue
         if abs((db_expires - rmn_expires).total_seconds()) > _TOLERANCE_SECONDS:
@@ -121,13 +130,22 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
                 "telegram_id": telegram_id,
                 "db_expires_at": db_expires,
                 "rmn_expires_at": rmn_expires,
-                "reason": "дата не совпадает",
+                "reason": _REASON_DATE,
+                "tariff": tariff,
             })
 
     return len(premium), mismatches
 
 
+_REASON_LABEL = {
+    _REASON_MISSING: "нет на панели",
+    _REASON_DATE: "дата не совпадает",
+}
+
+
 def _format_report(checked: int, mismatches: list) -> str:
+    missing = sum(1 for m in mismatches if m["reason"] == _REASON_MISSING)
+    date_diff = sum(1 for m in mismatches if m["reason"] == _REASON_DATE)
     lines = [
         "🔄 <b>Сверка premium-подписок с Remnawave</b>",
         "",
@@ -139,18 +157,25 @@ def _format_report(checked: int, mismatches: list) -> str:
         return "\n".join(lines)
 
     lines.append("")
-    shown = mismatches[:30]
+    lines.append(f"  • Нет на панели: <b>{missing}</b> — нужен полный provision")
+    lines.append(f"  • Дата не совпадает: <b>{date_diff}</b> — нужен PATCH expireAt")
+    lines.append("")
+    shown = mismatches[:20]
     for i, m in enumerate(shown, 1):
         db_str = m["db_expires_at"].strftime("%Y-%m-%d %H:%M")
         rmn = m["rmn_expires_at"]
         rmn_str = rmn.strftime("%Y-%m-%d %H:%M") if rmn else "—"
+        reason_label = _REASON_LABEL.get(m["reason"], m["reason"])
         lines.append(
-            f"{i}. <code>{m['telegram_id']}</code> · {m['reason']}\n"
+            f"{i}. <code>{m['telegram_id']}</code> · {reason_label}\n"
             f"   БД: {db_str} · Remnawave: {rmn_str}"
         )
     if len(mismatches) > len(shown):
         lines.append(f"\n…и ещё {len(mismatches) - len(shown)}.")
-    lines.append("\nКнопка «Исправить» подтянет дату Remnawave под дату нашей БД.")
+    lines.append(
+        "\n«Исправить» догонит панель под БД: для отсутствующих — пересоздаст "
+        "entity, для расходящихся дат — обновит expireAt."
+    )
     return "\n".join(lines)
 
 
@@ -193,9 +218,12 @@ async def callback_rmn_reconcile(callback: CallbackQuery):
                 )
             else:
                 text = "🔄 Выгружаю пользователей из Remnawave…"
-            await safe_edit_text(
-                callback.message, text, bot=callback.bot, parse_mode="HTML",
-            )
+            try:
+                await safe_edit_text(
+                    callback.message, text, bot=callback.bot, parse_mode="HTML",
+                )
+            except Exception as ui_err:
+                logger.debug("RECONCILE: progress edit suppressed: %s", ui_err)
         checked, mismatches = await scan_task
     except Exception as e:
         logger.exception("RECONCILE: scan failed: %s", e)
@@ -252,17 +280,47 @@ async def callback_rmn_fix(callback: CallbackQuery):
     )
 
     sem = asyncio.Semaphore(_FIX_CONCURRENCY)
-    progress: dict = {"done": 0}
+    progress: dict = {"done": 0, "fixed_date": 0, "fixed_provision": 0, "failed": 0}
 
     async def _fix_one(m: dict) -> bool:
         async with sem:
+            ok = False
             try:
-                ok = await remnawave_premium.renew_premium_user(
-                    m["telegram_id"], m["db_expires_at"],
-                )
+                if m["reason"] == _REASON_DATE:
+                    ok = await remnawave_premium.renew_premium_user(
+                        m["telegram_id"], m["db_expires_at"],
+                    )
+                    if ok:
+                        progress["fixed_date"] += 1
+                elif m["reason"] == _REASON_MISSING:
+                    # Recreate the panel entity end-to-end. provision_subscription
+                    # is idempotent: it adopts an existing entity if one exists
+                    # under our requested uuid, otherwise creates a new one and
+                    # writes the new uuid/url back into the DB.
+                    from app.services import purchase_flow
+                    pd_seconds = (m["db_expires_at"] - datetime.now(timezone.utc)).total_seconds()
+                    period_days = max(1, int(pd_seconds // 86400))
+                    await purchase_flow.provision_subscription(
+                        m["telegram_id"],
+                        tariff=m.get("tariff") or "basic",
+                        subscription_end=m["db_expires_at"],
+                        period_days=period_days,
+                        is_trial=False,
+                    )
+                    ok = True
+                    progress["fixed_provision"] += 1
             except Exception as e:
-                logger.warning("RECONCILE_FIX: tg=%s failed: %s", m["telegram_id"], e)
+                logger.warning(
+                    "RECONCILE_FIX: tg=%s reason=%s failed: %s",
+                    m["telegram_id"], m["reason"], e,
+                )
                 ok = False
+            if not ok and m["reason"] != _REASON_DATE:
+                # PATCH path tracks its own success in fixed_date — only count
+                # other failures here to avoid double-counting.
+                pass
+            if not ok:
+                progress["failed"] += 1
         progress["done"] += 1
         return bool(ok)
 
@@ -273,12 +331,18 @@ async def callback_rmn_fix(callback: CallbackQuery):
         await asyncio.sleep(_PROGRESS_INTERVAL)
         if fix_task.done():
             break
-        await safe_edit_text(
-            callback.message,
-            "🔧 Исправляю расхождения…\n\n"
-            f"Обработано: <b>{progress['done']}</b> / {total}",
-            bot=callback.bot, parse_mode="HTML",
-        )
+        try:
+            await safe_edit_text(
+                callback.message,
+                "🔧 Исправляю расхождения…\n\n"
+                f"Обработано: <b>{progress['done']}</b> / {total}\n"
+                f"  ✅ Дата подтянута: {progress['fixed_date']}\n"
+                f"  ✅ Entity создан: {progress['fixed_provision']}\n"
+                f"  ❌ Не удалось: {progress['failed']}",
+                bot=callback.bot, parse_mode="HTML",
+            )
+        except Exception as ui_err:
+            logger.debug("RECONCILE_FIX: progress edit suppressed: %s", ui_err)
     results = await fix_task
     fixed = sum(1 for r in results if r)
     failed = total - fixed
@@ -287,9 +351,10 @@ async def callback_rmn_fix(callback: CallbackQuery):
 
     text = (
         "🔧 <b>Исправление расхождений</b>\n\n"
-        f"✅ Исправлено: <b>{fixed}</b>\n"
+        f"✅ Исправлено всего: <b>{fixed}</b> / {total}\n"
+        f"  • Дата подтянута: <b>{progress['fixed_date']}</b>\n"
+        f"  • Entity создан: <b>{progress['fixed_provision']}</b>\n"
         f"❌ Не удалось: <b>{failed}</b>\n\n"
-        "Дата Remnawave подтянута под дату нашей БД.\n"
         "Запустите сверку повторно, чтобы убедиться."
     )
     await safe_edit_text(
