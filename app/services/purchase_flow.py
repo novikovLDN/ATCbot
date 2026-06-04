@@ -223,23 +223,27 @@ async def provision_subscription(
             description=f"Bypass via bot ({tariff})",
         )
         if not bresult.ok:
-            raise RuntimeError(
-                f"bypass provision failed: tg={telegram_id} "
-                f"status={bresult.status} error={bresult.error}"
+            # Bypass failure should NOT block premium provisioning — the user
+            # still gets their premium URL.  Log and continue.
+            logger.error(
+                "PURCHASE_FLOW: bypass provision failed (continuing without bypass) "
+                "tg=%s status=%s error=%s",
+                telegram_id, bresult.status, bresult.error,
             )
-        bypass_sub_url = bresult.subscription_url
-        try:
-            await database.set_remnawave_bypass_cache(
-                telegram_id,
-                bresult.panel_uuid,
-                bresult.subscription_url,
-                bresult.short_uuid,
-            )
-        except Exception as e:
-            logger.warning(
-                "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
-                telegram_id, e,
-            )
+        else:
+            bypass_sub_url = bresult.subscription_url
+            try:
+                await database.set_remnawave_bypass_cache(
+                    telegram_id,
+                    bresult.panel_uuid,
+                    bresult.subscription_url,
+                    bresult.short_uuid,
+                )
+            except Exception as e:
+                logger.warning(
+                    "PURCHASE_FLOW: failed to persist bypass cache tg=%s %s",
+                    telegram_id, e,
+                )
 
     logger.info(
         "PURCHASE_FLOW_DONE: tg=%s tariff=%s premium_uuid=%s bypass_uuid=%s "
@@ -273,16 +277,21 @@ async def sync_renewal_to_remnawave(sync_info: dict) -> None:
 
     `sync_info` is the `renewal_xray_sync_after_commit` payload built by
     grant_access: telegram_id, subscription_end, tariff, period_days.
-    Raises on Remnawave failure so the caller can signal the webhook to
-    return 5xx and let the payment provider retry.
+    Never raises — logs on failure.
     """
-    await provision_subscription(
-        sync_info["telegram_id"],
-        tariff=sync_info.get("tariff") or "basic",
-        subscription_end=sync_info["subscription_end"],
-        period_days=int(sync_info.get("period_days") or 30),
-        is_trial=False,
-    )
+    try:
+        await provision_subscription(
+            sync_info["telegram_id"],
+            tariff=sync_info.get("tariff") or "basic",
+            subscription_end=sync_info["subscription_end"],
+            period_days=int(sync_info.get("period_days") or 30),
+            is_trial=False,
+        )
+    except Exception as e:
+        logger.critical(
+            "RENEWAL_REMNAWAVE_SYNC_FAILED tg=%s err=%s",
+            sync_info.get("telegram_id"), e,
+        )
 
 
 __all__ = ["provision_subscription", "sync_renewal_to_remnawave"]
