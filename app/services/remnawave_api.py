@@ -275,14 +275,21 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     return await _request("GET", f"/api/users/{uuid}")
 
 
-async def get_all_users(page_size: int = 500) -> Optional[list]:
+async def get_all_users(page_size: int = 2000, progress_cb=None) -> Optional[list]:
     """Fetch every Remnawave user via paginated GET /api/users.
 
-    Returns the full list of user entities. Each page is retried up to 3
-    times with exponential backoff so a single transient failure (timeout
-    / 5xx) doesn't trash a multi-page scan. Returns None only if a page
-    still fails after retries — callers must treat None as "cannot list"
-    and fail loudly rather than act on partial data.
+    page_size=2000 reduces page count ~4x vs 500 for a 350k-user base
+    (~180 pages × ~1s ≈ 3 minutes instead of 12). Each page is retried up
+    to 3 times with exponential backoff so a single transient failure
+    (timeout / 5xx) doesn't trash a multi-page scan.
+
+    Returns None only if a page still fails after retries — callers must
+    treat None as "cannot list" and fail loudly rather than act on partial
+    data.
+
+    If `progress_cb` is given, it's awaited after each page with
+    (collected_count, total_or_none) so the caller can render a live
+    counter.
     """
     import asyncio
     collected: list = []
@@ -312,13 +319,23 @@ async def get_all_users(page_size: int = 500) -> Optional[list]:
         else:
             return None
         collected.extend(batch)
+        if progress_cb is not None:
+            try:
+                if asyncio.iscoroutinefunction(progress_cb):
+                    await progress_cb(len(collected), total)
+                else:
+                    progress_cb(len(collected), total)
+            except Exception:
+                pass
         if not batch or len(batch) < page_size:
             break
         if total is not None and len(collected) >= total:
             break
         start += page_size
-        if start > 100_000:  # hard safety stop against a runaway loop
-            logger.error("REMNAWAVE_LIST: aborted, start exceeded 100000")
+        # Hard safety stop. Sized for the current prod base (~358k) with
+        # plenty of headroom; raise if you grow past it.
+        if start > 2_000_000:
+            logger.error("REMNAWAVE_LIST: aborted, start exceeded 2_000_000")
             break
     return collected
 
