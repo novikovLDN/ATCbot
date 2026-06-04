@@ -278,17 +278,30 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
 async def get_all_users(page_size: int = 500) -> Optional[list]:
     """Fetch every Remnawave user via paginated GET /api/users.
 
-    Returns the full list of user entities. Returns None if the listing
-    endpoint is unavailable or any page fails — callers must treat None as
-    "cannot list" and fail loudly rather than act on partial data (a missing
-    page would otherwise look like a batch of deleted users).
+    Returns the full list of user entities. Each page is retried up to 3
+    times with exponential backoff so a single transient failure (timeout
+    / 5xx) doesn't trash a multi-page scan. Returns None only if a page
+    still fails after retries — callers must treat None as "cannot list"
+    and fail loudly rather than act on partial data.
     """
+    import asyncio
     collected: list = []
     start = 0
     total: Optional[int] = None
     while True:
-        page = await _request("GET", f"/api/users?size={page_size}&start={start}")
+        page = None
+        for attempt in range(3):
+            page = await _request("GET", f"/api/users?size={page_size}&start={start}")
+            if page is not None:
+                break
+            backoff = 1.5 ** attempt
+            logger.warning(
+                "REMNAWAVE_LIST: page start=%s attempt=%s failed, retrying in %.1fs",
+                start, attempt + 1, backoff,
+            )
+            await asyncio.sleep(backoff)
         if page is None:
+            logger.error("REMNAWAVE_LIST: page start=%s failed after 3 attempts", start)
             return None
         if isinstance(page, dict):
             batch = page.get("users") or []
