@@ -660,7 +660,15 @@ async def get_users_by_segment(segment: str) -> list:
     """Получить список Telegram ID пользователей по сегменту
 
     Args:
-        segment: Сегмент получателей (all_users | active_subscriptions | no_subscription)
+        segment: Сегмент получателей:
+            - all_users            — все
+            - active_subscriptions — активная подписка
+            - no_subscription      — нет активной подписки (включая истёкшие)
+            - no_remnawave         — никогда не имели entity в Remnawave
+                                     (ни premium, ни bypass)
+            - expired_1d / expired_2d / expired_3d — подписка истекла
+                                     ровно N полных суток назад
+                                     (и сейчас нет активной)
 
     Returns:
         Список Telegram ID пользователей
@@ -689,6 +697,39 @@ async def get_users_by_segment(segment: str) -> list:
                        WHERE s.telegram_id = u.telegram_id AND s.expires_at > $1
                    )""",
                 now
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "no_remnawave":
+            # Users who never had ANY Remnawave entity — neither premium
+            # nor bypass. They've never been provisioned on the panel.
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                         AND (s.remnawave_premium_uuid IS NOT NULL
+                              OR s.remnawave_uuid IS NOT NULL)
+                   )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("expired_1d", "expired_2d", "expired_3d"):
+            # Subscription expired exactly N full days ago (24-hour bucket)
+            # AND the user does NOT currently have an active subscription
+            # (so a renewed user is not pulled back into the win-back funnel).
+            days = int(segment.split("_")[1].rstrip("d"))
+            now = _to_db_utc(datetime.now(timezone.utc))
+            rows = await conn.fetch(
+                """SELECT DISTINCT u.telegram_id
+                   FROM users u
+                   INNER JOIN subscriptions s ON u.telegram_id = s.telegram_id
+                   WHERE s.expires_at >= $1 - ($2 || ' days')::interval
+                     AND s.expires_at <  $1 - ($3 || ' days')::interval
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s2
+                         WHERE s2.telegram_id = u.telegram_id
+                           AND s2.expires_at > $1
+                     )""",
+                now, str(days + 1), str(days),
             )
             return [row["telegram_id"] for row in rows]
         else:

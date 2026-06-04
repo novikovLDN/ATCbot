@@ -563,6 +563,11 @@ def get_broadcast_segment_keyboard(language: str = "ru"):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_all"), callback_data="broadcast_segment:all_users")],
         [InlineKeyboardButton(text=i18n_get_text(language, "broadcast._segment_active"), callback_data="broadcast_segment:active_subscriptions")],
+        [InlineKeyboardButton(text="🚫 Без подписки", callback_data="broadcast_segment:no_subscription")],
+        [InlineKeyboardButton(text="🆕 Никогда не подключались", callback_data="broadcast_segment:no_remnawave")],
+        [InlineKeyboardButton(text="📅 Истёк 1 день назад", callback_data="broadcast_segment:expired_1d")],
+        [InlineKeyboardButton(text="📅 Истёк 2 дня назад", callback_data="broadcast_segment:expired_2d")],
+        [InlineKeyboardButton(text="📅 Истёк 3 дня назад", callback_data="broadcast_segment:expired_3d")],
         [InlineKeyboardButton(text=i18n_get_text(language, "admin.cancel"), callback_data="admin:broadcast")],
     ])
 
