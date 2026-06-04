@@ -275,17 +275,18 @@ async def get_user(uuid: str) -> Optional[Dict[str, Any]]:
     return await _request("GET", f"/api/users/{uuid}")
 
 
-async def get_all_users(page_size: int = 2000, progress_cb=None) -> Optional[list]:
+async def get_all_users(page_size: int = 1000, progress_cb=None) -> Optional[list]:
     """Fetch every Remnawave user via paginated GET /api/users.
 
-    page_size=2000 reduces page count ~4x vs 500 for a 350k-user base
-    (~180 pages × ~1s ≈ 3 minutes instead of 12). Each page is retried up
-    to 3 times with exponential backoff so a single transient failure
-    (timeout / 5xx) doesn't trash a multi-page scan.
+    Remnawave caps `size` at 1000 (HTTP 400 above that). page_size=1000
+    halves the page count vs the original 500 (~10 pages for the current
+    10k-entity panel) without tripping the validation cap.
 
-    Returns None only if a page still fails after retries — callers must
-    treat None as "cannot list" and fail loudly rather than act on partial
-    data.
+    Each page is retried up to 3 times with exponential backoff so a
+    single transient failure (timeout / 5xx) doesn't trash a multi-page
+    scan. Permanent failures (HTTP 4xx) propagate as None — callers must
+    treat None as "cannot list" and fail loudly rather than act on
+    partial data.
 
     If `progress_cb` is given, it's awaited after each page with
     (collected_count, total_or_none) so the caller can render a live
