@@ -720,19 +720,23 @@ async def get_users_by_segment(segment: str) -> list:
             # Also implicitly excludes users with an active subscription:
             # if their latest expires_at is in the past window, then by
             # definition they have no active row.
+            #
+            # Using NOW() directly (timestamptz) and `$ * INTERVAL '1 day'`
+            # avoids type-mismatch with naive Python datetimes — asyncpg
+            # serialises tz-naive datetimes in a way that breaks `param -
+            # interval` arithmetic on Postgres.
             days = int(segment.split("_")[1].rstrip("d"))
-            now = _to_db_utc(datetime.now(timezone.utc))
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
                    WHERE (
                        SELECT MAX(s.expires_at) FROM subscriptions s
                        WHERE s.telegram_id = u.telegram_id
-                   ) >= $1 - ($2 || ' days')::interval
+                   ) >= NOW() - $1 * INTERVAL '1 day'
                      AND (
                        SELECT MAX(s.expires_at) FROM subscriptions s
                        WHERE s.telegram_id = u.telegram_id
-                   ) <  $1 - ($3 || ' days')::interval""",
-                now, str(days + 1), str(days),
+                   ) <  NOW() - $2 * INTERVAL '1 day'""",
+                days + 1, days,
             )
             return [row["telegram_id"] for row in rows]
         else:
