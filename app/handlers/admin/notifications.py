@@ -83,6 +83,10 @@ SEGMENT_OPTIONS = {
     "all_users": "🌍 Все пользователи",
     "active_subscriptions": "🔐 С активной подпиской",
     "no_subscription": "🚫 Без подписки",
+    "no_remnawave": "🆕 Никогда не подключались",
+    "expired_1d": "📅 Истёк 1 день назад",
+    "expired_2d": "📅 Истёк 2 дня назад",
+    "expired_3d": "📅 Истёк 3 дня назад",
 }
 
 

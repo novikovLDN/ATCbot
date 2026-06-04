@@ -660,7 +660,15 @@ async def get_users_by_segment(segment: str) -> list:
     """Получить список Telegram ID пользователей по сегменту
 
     Args:
-        segment: Сегмент получателей (all_users | active_subscriptions | no_subscription)
+        segment: Сегмент получателей:
+            - all_users            — все
+            - active_subscriptions — активная подписка
+            - no_subscription      — нет активной подписки (включая истёкшие)
+            - no_remnawave         — никогда не имели entity в Remnawave
+                                     (ни premium, ни bypass)
+            - expired_1d / expired_2d / expired_3d — подписка истекла
+                                     ровно N полных суток назад
+                                     (и сейчас нет активной)
 
     Returns:
         Список Telegram ID пользователей
@@ -689,6 +697,42 @@ async def get_users_by_segment(segment: str) -> list:
                        WHERE s.telegram_id = u.telegram_id AND s.expires_at > $1
                    )""",
                 now
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "no_remnawave":
+            # Users who never had ANY Remnawave entity — neither premium
+            # nor bypass. They've never been provisioned on the panel.
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                         AND (s.remnawave_premium_uuid IS NOT NULL
+                              OR s.remnawave_uuid IS NOT NULL)
+                   )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("expired_1d", "expired_2d", "expired_3d"):
+            # User's MOST RECENT subscription expired exactly N full days
+            # ago (24-hour bucket). Looking at MAX(expires_at) rather than
+            # any row makes this robust against multiple-row history
+            # (renewal flow uses both UPDATE and INSERT depending on path).
+            # Also implicitly excludes users with an active subscription:
+            # if their latest expires_at is in the past window, then by
+            # definition they have no active row.
+            days = int(segment.split("_")[1].rstrip("d"))
+            now = _to_db_utc(datetime.now(timezone.utc))
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE (
+                       SELECT MAX(s.expires_at) FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                   ) >= $1 - ($2 || ' days')::interval
+                     AND (
+                       SELECT MAX(s.expires_at) FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                   ) <  $1 - ($3 || ' days')::interval""",
+                now, str(days + 1), str(days),
             )
             return [row["telegram_id"] for row in rows]
         else:

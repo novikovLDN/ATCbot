@@ -1099,7 +1099,12 @@ async def callback_broadcast_segment(callback: CallbackQuery, state: FSMContext)
 
     segment_name = {
         "all_users": "Все пользователи",
-        "active_subscriptions": "Только активные подписки"
+        "active_subscriptions": "Только активные подписки",
+        "no_subscription": "Без подписки",
+        "no_remnawave": "Никогда не подключались",
+        "expired_1d": "Истёк 1 день назад",
+        "expired_2d": "Истёк 2 дня назад",
+        "expired_3d": "Истёк 3 дня назад",
     }
 
     prefix = f"{emoji} " if emoji else ""
