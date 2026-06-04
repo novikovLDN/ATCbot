@@ -80,8 +80,15 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
         progress["phase"] = "fetch"
         progress["total"] = len(premium)
         progress["done"] = 0
+        progress["fetched"] = 0
+        progress["fetch_total"] = None
 
-    all_users = await remnawave_api.get_all_users()
+    def _on_fetch(collected: int, total):
+        if progress is not None:
+            progress["fetched"] = collected
+            progress["fetch_total"] = total
+
+    all_users = await remnawave_api.get_all_users(progress_cb=_on_fetch)
     if all_users is None:
         raise RuntimeError(
             "Remnawave не отдал список пользователей (GET /api/users)."
@@ -217,7 +224,21 @@ async def callback_rmn_reconcile(callback: CallbackQuery):
                     f"Проверено: <b>{progress.get('done', 0)}</b> / {progress['total']}"
                 )
             else:
-                text = "🔄 Выгружаю пользователей из Remnawave…"
+                fetched = progress.get("fetched", 0)
+                fetch_total = progress.get("fetch_total")
+                if fetched:
+                    if fetch_total:
+                        text = (
+                            "🔄 Выгружаю пользователей из Remnawave…\n\n"
+                            f"Получено: <b>{fetched}</b> / {fetch_total}"
+                        )
+                    else:
+                        text = (
+                            "🔄 Выгружаю пользователей из Remnawave…\n\n"
+                            f"Получено: <b>{fetched}</b>"
+                        )
+                else:
+                    text = "🔄 Выгружаю пользователей из Remnawave…"
             try:
                 await safe_edit_text(
                     callback.message, text, bot=callback.bot, parse_mode="HTML",
