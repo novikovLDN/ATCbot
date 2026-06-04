@@ -345,9 +345,10 @@ async def callback_rmn_fix(callback: CallbackQuery):
         progress["done"] += 1
         return bool(ok)
 
-    fix_task = asyncio.create_task(
-        asyncio.gather(*[_fix_one(m) for m in mismatches])
-    )
+    async def _run_all_fixes():
+        return await asyncio.gather(*[_fix_one(m) for m in mismatches])
+
+    fix_task = asyncio.create_task(_run_all_fixes())
     while not fix_task.done():
         await asyncio.sleep(_PROGRESS_INTERVAL)
         if fix_task.done():
