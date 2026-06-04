@@ -114,14 +114,6 @@ async def process_confirmed_payment(
             logger.error(f"{provider} webhook: finalize_purchase failed: {result}")
             raise Exception(f"finalize_purchase returned invalid result: {result}")
 
-        if result.get("remnawave_sync_failed"):
-            err = result.get("remnawave_sync_error") or "unknown"
-            logger.error(
-                f"WEBHOOK_RETRY_REQUESTED: provider={provider}, user={telegram_id}, "
-                f"purchase_id={purchase_id}, remnawave_sync_error={err}"
-            )
-            raise TransientPaymentError(f"Remnawave sync failed: {err}")
-
         payment_id = result["payment_id"]
         expires_at = result.get("expires_at")
         is_balance_topup = result.get("is_balance_topup", False)
@@ -175,41 +167,9 @@ async def process_confirmed_payment(
             f"{provider} webhook: purchase already processed (ValueError): "
             f"purchase_id={purchase_id}, error={e}"
         )
-        # Provider retry path: first webhook committed the DB, but the
-        # post-commit Remnawave sync may have failed. Re-run the idempotent
-        # provision so the user lands in sync. provision_subscription handles
-        # both create and renew, and adopts existing panel entities.
-        try:
-            from app.services import purchase_flow
-            sub = await database.get_subscription(telegram_id)
-            if sub and sub.get("expires_at") and sub.get("subscription_type"):
-                _pd = pending.get("period_days") or 30
-                _tariff = sub.get("subscription_type") or "basic"
-                await purchase_flow.provision_subscription(
-                    telegram_id,
-                    tariff=_tariff,
-                    subscription_end=sub["expires_at"],
-                    period_days=int(_pd),
-                    is_trial=False,
-                )
-                logger.info(
-                    f"WEBHOOK_REPLAY_RESYNCED: provider={provider}, user={telegram_id}, "
-                    f"purchase_id={purchase_id}"
-                )
-        except Exception as resync_err:
-            logger.error(
-                f"WEBHOOK_REPLAY_RESYNC_FAILED: provider={provider}, user={telegram_id}, "
-                f"purchase_id={purchase_id}, error={resync_err}"
-            )
-            raise TransientPaymentError(
-                f"Replay resync to Remnawave failed: {resync_err}"
-            ) from resync_err
         return {"status": "already_processed"}
-    except (asyncpg.PostgresError, asyncio.TimeoutError, OSError, RuntimeError) as e:
-        # Transient infrastructure error (DB / network / Remnawave provision
-        # raised RuntimeError) — provider MUST retry. provision_subscription
-        # raises RuntimeError when the panel responds non-2xx; treat as transient
-        # so the webhook returns 5xx and the payment provider replays it.
+    except (asyncpg.PostgresError, asyncio.TimeoutError, OSError) as e:
+        # Transient infrastructure error — provider MUST retry
         logger.error(
             f"PAYMENT_TRANSIENT_ERROR: provider={provider}, user={telegram_id}, "
             f"purchase_id={purchase_id}, error={type(e).__name__}: {e}"
@@ -221,7 +181,7 @@ async def process_confirmed_payment(
             amount_rubles=amount_rubles, tariff=tariff, period_days=period_days,
         )
         raise TransientPaymentError(
-            f"Transient error during payment: {type(e).__name__}: {e}"
+            f"Transient DB error during payment: {type(e).__name__}"
         ) from e
     except Exception as e:
         logger.exception(
@@ -397,34 +357,30 @@ async def _send_confirmation(
 
         # Combo: add bypass traffic (was missing for webhook payments!)
         if is_combo:
-            _pd = result.get("period_days", 30) or 30
-            combo_key = f"combo_{subscription_type}"
-            combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
-            if not combo_info:
-                logger.error("COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s",
-                             provider, telegram_id, combo_key, _pd)
-                raise TransientPaymentError(
-                    f"combo tariff config missing: {combo_key}/{_pd}d"
-                )
-            combo_gb = combo_info["gb"]
-            traffic_bytes = combo_gb * 1024**3
-            from app.services.remnawave_service import add_bypass_traffic
-            rmn_ok = await add_bypass_traffic(
-                telegram_id,
-                traffic_bytes,
-                subscription_type=subscription_type,
-                subscription_end=expires_at,
-                period_days=_pd,
-            )
-            if not rmn_ok:
-                logger.error("COMBO_BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s — webhook will retry",
-                             provider, telegram_id, combo_gb)
-                raise TransientPaymentError(
-                    f"combo bypass-traffic add failed: user={telegram_id} gb={combo_gb}"
-                )
-            await database.record_traffic_purchase(telegram_id, combo_gb, 0)
-            logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s",
-                        provider, telegram_id, combo_gb)
+            try:
+                _pd = result.get("period_days", 30) or 30
+                combo_key = f"combo_{subscription_type}"
+                combo_info = config.COMBO_TARIFFS.get(combo_key, {}).get(_pd)
+                if combo_info:
+                    combo_gb = combo_info["gb"]
+                    traffic_bytes = combo_gb * 1024**3
+                    from app.services.remnawave_service import add_bypass_traffic
+                    rmn_ok = await add_bypass_traffic(
+                        telegram_id,
+                        traffic_bytes,
+                        subscription_type=subscription_type,
+                        subscription_end=expires_at,
+                        period_days=_pd,
+                    )
+                    if rmn_ok:
+                        await database.record_traffic_purchase(telegram_id, combo_gb, 0)
+                        logger.info("COMBO_BYPASS_TRAFFIC_ADDED: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
+                    else:
+                        logger.warning("COMBO_BYPASS_TRAFFIC_FAIL: provider=%s user=%s gb=%s", provider, telegram_id, combo_gb)
+                else:
+                    logger.warning("COMBO_TARIFF_NOT_FOUND: provider=%s user=%s combo_key=%s period=%s", provider, telegram_id, combo_key, _pd)
+            except Exception as combo_err:
+                logger.error("COMBO_BYPASS_TRAFFIC_ERROR: provider=%s user=%s error=%s", provider, telegram_id, combo_err)
 
 
 async def _handle_traffic_pack_confirmation(
