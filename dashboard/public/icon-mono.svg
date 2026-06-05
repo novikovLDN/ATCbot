@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g transform="translate(256 256)">
+    <path
+      d="M0 -180 L150 -125 L150 30 C150 110 80 170 0 190 C-80 170 -150 110 -150 30 L-150 -125 Z"
+      fill="#000"
+    />
+  </g>
+</svg>
