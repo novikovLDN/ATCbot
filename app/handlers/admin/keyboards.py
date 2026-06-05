@@ -49,6 +49,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         [InlineKeyboardButton(text="💬 Написать пользователю", callback_data="admin:chat")],
         [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
         [InlineKeyboardButton(text="🔄 Сверка с Remnawave", callback_data="admin:rmn_reconcile")],
+        [InlineKeyboardButton(text="🩹 Откат premium ×10y", callback_data="admin:premium_recovery")],
         [InlineKeyboardButton(text="🌪 Шторм (Ферма)", callback_data="admin:storm")],
     ])
     if config.IS_STAGE:
