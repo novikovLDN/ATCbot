@@ -2839,3 +2839,32 @@ async def get_activated_gifts_bulk(telegram_ids: list) -> dict:
         })
     return out
 
+
+async def get_max_subscription_end_bulk(telegram_ids: list) -> dict:
+    """Bulk-fetch the user's MAX(subscription_history.end_date) per user.
+
+    subscription_history is the source-of-truth ledger for every
+    subscription event — purchases, renewals, gifts, admin grants —
+    so the maximum end_date is the user's actual last legitimate
+    premium expiry, regardless of which acquisition path they came
+    through. Recovery uses this as the primary signal instead of
+    reconstructing dates from pending_purchases.
+
+    Returns dict: telegram_id -> datetime | None.
+    """
+    if not telegram_ids:
+        return {}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, MAX(end_date) AS last_end
+               FROM subscription_history
+               WHERE telegram_id = ANY($1::bigint[])
+               GROUP BY telegram_id""",
+            telegram_ids,
+        )
+    out: dict = {tg: None for tg in telegram_ids}
+    for r in rows:
+        out[r["telegram_id"]] = r["last_end"]
+    return out
+
