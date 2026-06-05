@@ -662,10 +662,14 @@ async def create_user(telegram_id: int, username: Optional[str] = None, language
     async with pool.acquire() as conn:
         referral_code = generate_referral_code(telegram_id)
 
-        await conn.execute(
+        # RETURNING distinguishes a real INSERT from ON CONFLICT DO NOTHING —
+        # we only fire user:registered when a new row actually appeared, so
+        # the dashboard counter doesn't tick on a return-visit /start.
+        inserted_id = await conn.fetchval(
             """INSERT INTO users (telegram_id, username, language, referral_code)
                VALUES ($1, $2, $3, $4)
-               ON CONFLICT (telegram_id) DO NOTHING""",
+               ON CONFLICT (telegram_id) DO NOTHING
+               RETURNING telegram_id""",
             telegram_id, username, language, referral_code
         )
 
@@ -675,6 +679,17 @@ async def create_user(telegram_id: int, username: Optional[str] = None, language
             "UPDATE users SET referral_code = $1 WHERE telegram_id = $2 AND referral_code IS NULL",
             referral_code, telegram_id
         )
+
+    if inserted_id is not None:
+        try:
+            from app.events import bus
+            bus.publish({
+                "type": "user:registered",
+                "telegram_id": telegram_id,
+                "username": username,
+            })
+        except Exception:
+            pass
 
 
 async def get_user_referral_code(telegram_id: int) -> Optional[str]:

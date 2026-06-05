@@ -85,6 +85,24 @@ except ValueError:
     print(f"ERROR: ADMIN_TELEGRAM_ID must be a number, got: {ADMIN_TELEGRAM_ID_STR}", file=sys.stderr)
     sys.exit(1)
 
+# ====================================================================================
+# Admin Web Dashboard (mounted at /dashboard inside the existing FastAPI app)
+# ====================================================================================
+# JWT_SECRET — used to sign magic-link tokens issued by the /admin bot command and
+# to verify them on REST/WebSocket calls. Generate with `openssl rand -hex 32`.
+# DASHBOARD_BASE_URL — public origin of the bot (same as webhook), used to build
+# the magic-link URL in the /admin command, e.g. https://atlas.up.railway.app.
+# DASHBOARD_ENABLED is True only when BOTH are set; otherwise the dashboard routers
+# are silently skipped — bot still works fine without them.
+JWT_SECRET = env("JWT_SECRET")
+DASHBOARD_BASE_URL = env("DASHBOARD_BASE_URL")
+DASHBOARD_ENABLED = bool(JWT_SECRET and DASHBOARD_BASE_URL)
+if not DASHBOARD_ENABLED:
+    _log.info(
+        "DASHBOARD disabled — set %s_JWT_SECRET and %s_DASHBOARD_BASE_URL to enable",
+        APP_ENV.upper(), APP_ENV.upper(),
+    )
+
 # Тарифы Basic и Plus с периодами
 # Структура: tariff_type -> period_days -> price
 TARIFFS = {

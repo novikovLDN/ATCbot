@@ -50,6 +50,31 @@ try:
 except Exception:
     logger.exception("subscription_proxy mount failed")
 
+# Admin web dashboard — mounted only when JWT_SECRET + DASHBOARD_BASE_URL are
+# set (config.DASHBOARD_ENABLED). When disabled, the bot runs identically to
+# the pre-dashboard build. When enabled:
+#   /dashboard/api/*   — REST (auth, stats, users, ...)
+#   /dashboard/ws      — WebSocket fan-out from app.events.bus
+#   /dashboard/*       — static React SPA (mounted later, see DASHBOARD_DIST_DIR)
+try:
+    import config as _cfg
+    if getattr(_cfg, "DASHBOARD_ENABLED", False):
+        from app.api import dashboard as _dashboard
+        app.include_router(_dashboard.router, prefix="/dashboard/api")
+        app.include_router(_dashboard.ws_router, prefix="/dashboard")
+        # Static SPA mount is conditional — only if dashboard/dist exists.
+        # During Phase 1A (backend only) the directory may not be built yet.
+        import os as _os
+        _dist = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__))), "dashboard", "dist")
+        if _os.path.isdir(_dist):
+            from fastapi.staticfiles import StaticFiles
+            app.mount("/dashboard", StaticFiles(directory=_dist, html=True), name="dashboard-spa")
+            logger.info("DASHBOARD mounted: api+ws+static (dist=%s)", _dist)
+        else:
+            logger.info("DASHBOARD mounted: api+ws only (no dist at %s yet)", _dist)
+except Exception:
+    logger.exception("dashboard mount failed")
+
 
 @app.get("/health")
 async def health():

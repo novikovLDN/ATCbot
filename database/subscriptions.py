@@ -2484,6 +2484,18 @@ async def approve_payment_atomic(payment_id: int, months: int, admin_telegram_id
                     "RENEWAL_REMNAWAVE_SYNC_FAILED in approve_payment_atomic",
                     extra={"telegram_id": sync_info["telegram_id"], "uuid": sync_info["uuid"][:8] + "...", "error": str(e)[:200]}
                 )
+        if ret_val and ret_val[0] is not None:
+            try:
+                from app.events import bus
+                bus.publish({
+                    "type": "payment:approved",
+                    "payment_id": payment_id,
+                    "telegram_id": telegram_id,
+                    "is_renewal": ret_val[1],
+                    "expires_at": ret_val[0].isoformat() if hasattr(ret_val[0], "isoformat") else None,
+                })
+            except Exception:
+                pass
         return ret_val
 
 
