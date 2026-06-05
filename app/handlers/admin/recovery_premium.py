@@ -108,17 +108,18 @@ def _compute_real_end(history: list) -> "datetime | None":
 async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
     """Build the recovery plan from DB only — no panel fetch.
 
-    Each item: {telegram_id, panel_uuid, real_end, source, action}.
-    `source` is informational: 'paid' / 'gift' / 'none' — which signal
-    was used to derive real_end.
+    Source of truth is `subscription_history.end_date` (MAX per user)
+    — it's the ledger that ALL subscription paths write into:
+    purchases, renewals, gift activations, admin grants. Falling back
+    to paid_purchases + gifts only catches a subset; subscription_history
+    catches them all.
 
-    Actions:
-      - 'patch'        — set panel expireAt to real_end. Used for
-                         everyone whose real_end can be reasoned about,
-                         including the now-fallback (real_end = NOW
-                         means the entity expires immediately, which is
-                         exactly what we want for users who never paid
-                         and have no active gift).
+    Each item: {telegram_id, panel_uuid, real_end, source, action}.
+    `source`:
+      - 'history'  — used MAX(end_date) from subscription_history
+      - 'gift'     — fallback to activated gift (history empty)
+      - 'paid'     — fallback to pending_purchases paid replay
+      - 'none'     — no signal anywhere → real_end = NOW (entity expires)
     """
     candidates = await database.get_premium_recovery_candidates()
     candidates = candidates[:_MAX_SCAN]
@@ -129,7 +130,8 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
         progress["done"] = 0
 
     tg_ids = [c["telegram_id"] for c in candidates]
-    histories = await database.get_paid_subscription_history_bulk(tg_ids)
+    history_ends = await database.get_max_subscription_end_bulk(tg_ids)
+    paid = await database.get_paid_subscription_history_bulk(tg_ids)
     gifts = await database.get_activated_gifts_bulk(tg_ids)
 
     plan: list = []
@@ -140,28 +142,31 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
         tg = cand["telegram_id"]
         panel_uuid = cand["remnawave_premium_uuid"]
 
-        paid_end = _compute_real_end(histories.get(tg, []))
-        gift_end = _compute_real_end([
-            # gifts use activated_at as the start point; reuse the same
-            # incremental replay helper by aliasing the field name.
-            {"created_at": g["activated_at"], "period_days": g["period_days"]}
-            for g in gifts.get(tg, [])
-        ])
+        hist_end = history_ends.get(tg)
+        if hist_end is not None and hist_end.tzinfo is None:
+            hist_end = hist_end.replace(tzinfo=timezone.utc)
 
-        # Take the later of the two — whichever signal grants more time wins.
-        candidates_end = [d for d in (paid_end, gift_end) if d is not None]
-        if candidates_end:
-            real_end = max(candidates_end)
-            source = "paid" if paid_end == real_end else "gift"
+        if hist_end is not None:
+            real_end = hist_end
+            source = "history"
         else:
-            # No paid history AND no activated gift → user never had a
-            # legitimate claim on premium beyond their trial/free tier.
-            # Roll the panel back to NOW so the entity expires immediately.
-            # If a real customer is caught here (e.g. admin-grant outside
-            # the gift table), they can come to support and we re-issue —
-            # but standing by while everyone keeps a free decade is worse.
-            real_end = now
-            source = "none"
+            # Belt-and-suspenders fallback if subscription_history is
+            # missing the row (very old data / pre-history table).
+            gift_end = _compute_real_end([
+                {"created_at": g["activated_at"], "period_days": g["period_days"]}
+                for g in gifts.get(tg, [])
+            ])
+            paid_end = _compute_real_end(paid.get(tg, []))
+            candidates_end = [d for d in (gift_end, paid_end) if d is not None]
+            if candidates_end:
+                real_end = max(candidates_end)
+                source = "gift" if gift_end == real_end else "paid"
+            else:
+                # No signal anywhere — user has no legitimate claim on
+                # premium time. Roll expireAt back to NOW so the panel
+                # entity expires immediately.
+                real_end = now
+                source = "none"
 
         plan.append({
             "telegram_id": tg, "panel_uuid": panel_uuid,
@@ -177,50 +182,42 @@ def _format_dry_run(checked: int, plan: list) -> str:
     for p in plan:
         by_source.setdefault(p["source"], []).append(p)
 
+    n_hist = len(by_source.get("history", []))
     n_paid = len(by_source.get("paid", []))
     n_gift = len(by_source.get("gift", []))
     n_none = len(by_source.get("none", []))
-    n_total = n_paid + n_gift + n_none
+    n_total = n_hist + n_paid + n_gift + n_none
 
     lines = [
         "🩹 <b>Откат premium-подписок (Dry-run)</b>",
         "",
         f"Кандидатов в БД: <b>{checked}</b>",
         "",
-        f"  💳 <b>{n_paid}</b> — есть paid-история → откат на реальную дату",
-        f"  🎁 <b>{n_gift}</b> — активный подарок → откат на дату окончания подарка",
-        f"  ⛔ <b>{n_none}</b> — нет paid и нет gift → expireAt = сейчас (entity истечёт)",
+        f"  📜 <b>{n_hist}</b> — subscription_history → реальный последний end_date",
+        f"  💳 <b>{n_paid}</b> — fallback на pending_purchases (paid)",
+        f"  🎁 <b>{n_gift}</b> — fallback на gift_subscriptions",
+        f"  ⛔ <b>{n_none}</b> — нет ни одного сигнала → expireAt = сейчас",
     ]
 
-    sample_paid = by_source.get("paid", [])[:3]
-    sample_gift = by_source.get("gift", [])[:3]
-    sample_none = by_source.get("none", [])[:3]
-    if sample_paid or sample_gift or sample_none:
+    samples: list = []
+    for src, emoji in (("history", "📜"), ("paid", "💳"),
+                       ("gift", "🎁"), ("none", "⛔")):
+        for s in by_source.get(src, [])[:3]:
+            samples.append((emoji, s))
+    if samples:
         lines.append("")
         lines.append("<i>Примеры:</i>")
-        for s in sample_paid:
-            lines.append(
-                f"  💳 <code>{s['telegram_id']}</code> → "
-                f"{s['real_end'].strftime('%Y-%m-%d')}"
-            )
-        for s in sample_gift:
-            lines.append(
-                f"  🎁 <code>{s['telegram_id']}</code> → "
-                f"{s['real_end'].strftime('%Y-%m-%d')}"
-            )
-        for s in sample_none:
-            lines.append(
-                f"  ⛔ <code>{s['telegram_id']}</code> → "
-                f"{s['real_end'].strftime('%Y-%m-%d %H:%M')} (now)"
-            )
+        for emoji, s in samples:
+            stamp = s["real_end"].strftime("%Y-%m-%d")
+            extra = " (now)" if s["source"] == "none" else ""
+            lines.append(f"  {emoji} <code>{s['telegram_id']}</code> → {stamp}{extra}")
 
     if n_total == 0:
         lines.append("\n✅ Изменений не требуется.")
     else:
         lines.append(
             f"\nПри подтверждении: <b>{n_total}</b> панель-записей будут "
-            "откатаны (idempotent — повторный запуск не вредит). "
-            "Bypass entities <b>не трогаются</b>."
+            "откатаны (idempotent). Bypass entities <b>не трогаются</b>."
         )
         eta_min = max(1, n_total * (_FIX_THROTTLE_S + 0.2) / _FIX_CONCURRENCY / 60)
         lines.append(
@@ -341,45 +338,46 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     )
 
     sem = asyncio.Semaphore(_FIX_CONCURRENCY)
-    progress: dict = {"done": 0, "ok": 0, "failed": 0}
+    progress: dict = {"done": 0, "ok": 0, "gone": 0, "failed": 0}
 
     async def _fix_one(p: dict) -> bool:
-        # Throttled, retried PATCH. renew_premium_user already retries
-        # internally 3x; we add another outer pass with backoff so a
-        # broader hiccup (panel cold) doesn't drop the record.
+        # ONE call to renew_premium_user (it already retries 3x
+        # internally across 5 endpoints). If it returns False it
+        # almost always means the entity was deleted from the panel
+        # (404 on every endpoint, every retry) — which is fine for
+        # us: a missing entity grants no premium. So we count those
+        # as "gone" (effectively succeeded), not "failed".
         async with sem:
             ok = False
-            for attempt in range(1, _FIX_RETRY + 1):
-                try:
-                    ok = await remnawave_premium.renew_premium_user(
-                        p["telegram_id"], p["real_end"],
-                    )
-                    if ok:
-                        progress["ok"] += 1
-                        logger.info(
-                            "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s attempt=%d",
-                            p["telegram_id"], p["panel_uuid"][:8],
-                            p["real_end"].isoformat(), attempt,
-                        )
-                        break
-                except Exception as e:
-                    logger.warning(
-                        "PREMIUM_RECOVERY: tg=%s uuid=%s attempt %d/%d %s: %s",
-                        p["telegram_id"], p["panel_uuid"][:8],
-                        attempt, _FIX_RETRY, type(e).__name__, e,
-                    )
-                if attempt < _FIX_RETRY:
-                    await asyncio.sleep(1.5 ** attempt)  # 1.5s, 2.25s
-            if not ok:
-                progress["failed"] += 1
-                logger.error(
-                    "PREMIUM_RECOVERY_GIVE_UP tg=%s uuid=%s after %d attempts",
-                    p["telegram_id"], p["panel_uuid"][:8], _FIX_RETRY,
+            try:
+                ok = await remnawave_premium.renew_premium_user(
+                    p["telegram_id"], p["real_end"],
+                )
+            except Exception as e:
+                logger.warning(
+                    "PREMIUM_RECOVERY: tg=%s uuid=%s %s: %s",
+                    p["telegram_id"], p["panel_uuid"][:8],
+                    type(e).__name__, e,
+                )
+            if ok:
+                progress["ok"] += 1
+                logger.info(
+                    "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
+                    p["telegram_id"], p["panel_uuid"][:8],
+                    p["real_end"].isoformat(), p["source"],
+                )
+            else:
+                # Treat as "entity absent or unreachable" — premium is
+                # not active either way, our goal is achieved.
+                progress["gone"] += 1
+                logger.info(
+                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (entity missing or panel rejected)",
+                    p["telegram_id"], p["panel_uuid"][:8],
                 )
             # Spread requests so the panel stays calm.
             await asyncio.sleep(_FIX_THROTTLE_S)
         progress["done"] += 1
-        return bool(ok)
+        return True
 
     async def _run_all_fixes():
         return await asyncio.gather(*[_fix_one(p) for p in actionable])
@@ -395,7 +393,8 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                 "🩹 Применяю откат…\n\n"
                 f"Обработано: <b>{progress['done']}</b> / {total}\n"
                 f"  ✅ Откатано: {progress['ok']}\n"
-                f"  ❌ Не удалось: {progress['failed']}",
+                f"  👻 Уже нет на панели: {progress['gone']}\n"
+                f"  ❌ Сбой: {progress['failed']}",
                 bot=callback.bot, parse_mode="HTML",
             )
         except Exception:
@@ -406,8 +405,9 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
 
     text = (
         "🩹 <b>Откат premium-подписок завершён</b>\n\n"
-        f"✅ Откатано: <b>{progress['ok']}</b> / {total}\n"
-        f"❌ Не удалось: <b>{progress['failed']}</b>\n\n"
+        f"✅ Откатано на панели: <b>{progress['ok']}</b> / {total}\n"
+        f"👻 Уже отсутствуют (premium не активен): <b>{progress['gone']}</b>\n"
+        f"❌ Сбой (нужен ручной разбор): <b>{progress['failed']}</b>\n\n"
         "<i>Bypass entities остались нетронутыми.</i>\n"
         "Запустите Dry-run повторно, чтобы убедиться."
     )

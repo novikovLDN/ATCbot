@@ -298,4 +298,5 @@ from database.admin import (  # noqa: F401
     get_user_paid_subscription_history,
     get_paid_subscription_history_bulk,
     get_activated_gifts_bulk,
+    get_max_subscription_end_bulk,
 )
