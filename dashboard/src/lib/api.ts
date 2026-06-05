@@ -243,6 +243,39 @@ export const endpoints = {
 
   paymentsPending: () =>
     api.get<Array<Record<string, unknown>>>("/payments/pending"),
+  paymentsRevenue: (hours: number) =>
+    api.get<{
+      revenue_rubles: number;
+      payments_count: number;
+      avg_check_rubles: number;
+      by_type: Record<string, { count: number; revenue_rubles: number }>;
+    }>(`/payments/revenue?hours=${hours}`),
+  paymentsByProvider: (hours: number) =>
+    api.get<Array<{ provider: string; count: number; revenue_rubles: number }>>(
+      `/payments/by-provider?hours=${hours}`,
+    ),
+  paymentsRecent: (params: { limit?: number; hours?: number; status?: string } = {}) => {
+    const u = new URLSearchParams();
+    if (params.limit !== undefined) u.set("limit", String(params.limit));
+    if (params.hours !== undefined) u.set("hours", String(params.hours));
+    if (params.status) u.set("status", params.status);
+    const qs = u.toString();
+    return api.get<Array<Record<string, unknown>>>(
+      "/payments/recent" + (qs ? `?${qs}` : ""),
+    );
+  },
+  paymentsTraffic: (hours: number) =>
+    api.get<{
+      count: number;
+      revenue_rubles: number;
+      total_gb: number;
+      by_method: Array<{
+        method: string;
+        count: number;
+        revenue_rubles: number;
+        total_gb: number;
+      }>;
+    }>(`/payments/traffic?hours=${hours}`),
   paymentDetail: (id: number) =>
     api.get<Record<string, unknown>>(`/payments/${id}`),
 

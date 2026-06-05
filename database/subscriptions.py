@@ -4383,11 +4383,28 @@ async def finalize_purchase(
                     f"provider={payment_provider}, amount={amount_rubles:.2f} RUB, amount_match=True, purchase_status={status}"
                 )
 
-                # STEP 3: Обновляем pending_purchase → paid
-                result = await conn.execute(
-                    "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
-                    purchase_id
-                )
+                # STEP 3: Обновляем pending_purchase → paid + payment_provider
+                # payment_provider added for analytics (migration 054). The
+                # column may be missing on freshly-deployed-but-not-migrated
+                # boxes; we ignore the error in that case so the payment
+                # still settles.
+                try:
+                    result = await conn.execute(
+                        """UPDATE pending_purchases
+                           SET status = 'paid', payment_provider = $2
+                           WHERE purchase_id = $1
+                             AND status IN ('pending', 'expired')""",
+                        purchase_id, payment_provider,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "finalize_purchase: provider write skipped (%s) — "
+                        "falling back to status-only update", e,
+                    )
+                    result = await conn.execute(
+                        "UPDATE pending_purchases SET status = 'paid' WHERE purchase_id = $1 AND status IN ('pending', 'expired')",
+                        purchase_id,
+                    )
             
                 if result != "UPDATE 1":
                     error_msg = f"Failed to mark pending purchase as paid: purchase_id={purchase_id}"
