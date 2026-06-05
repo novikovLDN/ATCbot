@@ -60,7 +60,10 @@ export function Users() {
           placeholder="Поиск по Telegram ID или @username"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          autoFocus
+          inputMode="search"
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
         />
         <button type="submit" className="btn-primary" disabled={!query.trim()}>
           Найти

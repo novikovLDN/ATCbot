@@ -20,7 +20,12 @@ export function LiveIndicator() {
   }, [lastBeat]);
 
   return (
-    <div className="pointer-events-none fixed bottom-3 right-3 z-40 hidden items-center gap-2 rounded-full border border-border bg-bg-card/80 px-3 py-1.5 text-[11px] font-medium backdrop-blur md:flex">
+    <div
+      className="pointer-events-none fixed right-3 z-40 flex items-center gap-2 rounded-full border border-border bg-bg-card/80 px-3 py-1.5 text-[11px] font-medium backdrop-blur"
+      style={{
+        bottom: "max(80px, calc(env(safe-area-inset-bottom) + 88px))",
+      }}
+    >
       <span
         className={
           status === "live"
