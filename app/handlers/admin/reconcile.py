@@ -71,9 +71,23 @@ async def _scan_mismatches(progress: "dict | None" = None) -> "tuple[int, list]"
     current so the caller can render a live progress indicator.
     """
     subs = await database.get_all_active_subscriptions()
+    # CRITICAL: skip bypass-only rows.
+    #
+    # When a paid premium subscription expires but the user still has a
+    # bypass entity, fast_expiry_cleanup (database/subscriptions.py:283)
+    # rewrites the row in-place: it strips the Xray UUID/keys, flips
+    # is_bypass_only=TRUE, and sets expires_at = NOW + 10 years (because
+    # bypass has no time limit, only GB). The row's
+    # `remnawave_premium_uuid` is NOT cleared in that UPDATE, so a naive
+    # scan would treat these "frozen premium" rows as active premium with
+    # expires_at in 2036 — and the previous version of this tool happily
+    # pushed that 10-year date onto the panel, granting hundreds of users
+    # premium for free. NEVER reconcile bypass-only rows here.
     premium = [
         s for s in subs
-        if s.get("remnawave_premium_uuid") and s.get("expires_at")
+        if s.get("remnawave_premium_uuid")
+        and s.get("expires_at")
+        and not s.get("is_bypass_only")
     ][:_MAX_SCAN]
 
     if progress is not None:
