@@ -108,19 +108,17 @@ def _compute_real_end(history: list) -> "datetime | None":
 async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
     """Build the recovery plan from DB only — no panel fetch.
 
-    Fetching ~1300 entities from Remnawave (full pagination OR per-UUID
-    GET) reliably triggers their rate-limit / connection reset around
-    300-10000 requests on a loaded panel, stalling the scan. For recovery
-    we don't *need* the panel state up front — `renew_premium_user`
-    PATCH is idempotent (same expireAt sent twice is a no-op), so we can
-    plan from DB alone and just send the PATCH during Apply.
+    Each item: {telegram_id, panel_uuid, real_end, source, action}.
+    `source` is informational: 'paid' / 'gift' / 'none' — which signal
+    was used to derive real_end.
 
-    Each item:
-      {telegram_id, panel_uuid, real_end, action}
-    where `action` is one of:
-      - 'patch'   — has a real paid end date → roll expireAt back to it
-      - 'no_history'  — no paid premium history. Skipped from auto-fix
-                        (manual review).
+    Actions:
+      - 'patch'        — set panel expireAt to real_end. Used for
+                         everyone whose real_end can be reasoned about,
+                         including the now-fallback (real_end = NOW
+                         means the entity expires immediately, which is
+                         exactly what we want for users who never paid
+                         and have no active gift).
     """
     candidates = await database.get_premium_recovery_candidates()
     candidates = candidates[:_MAX_SCAN]
@@ -130,72 +128,104 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
         progress["total"] = len(candidates)
         progress["done"] = 0
 
-    # ONE bulk query for the entire candidate list.
     tg_ids = [c["telegram_id"] for c in candidates]
     histories = await database.get_paid_subscription_history_bulk(tg_ids)
+    gifts = await database.get_activated_gifts_bulk(tg_ids)
 
     plan: list = []
+    now = datetime.now(timezone.utc)
     for cand in candidates:
         if progress is not None:
             progress["done"] += 1
         tg = cand["telegram_id"]
         panel_uuid = cand["remnawave_premium_uuid"]
 
-        history = histories.get(tg, [])
-        real_end = _compute_real_end(history)
+        paid_end = _compute_real_end(histories.get(tg, []))
+        gift_end = _compute_real_end([
+            # gifts use activated_at as the start point; reuse the same
+            # incremental replay helper by aliasing the field name.
+            {"created_at": g["activated_at"], "period_days": g["period_days"]}
+            for g in gifts.get(tg, [])
+        ])
 
-        if real_end is None:
-            plan.append({
-                "telegram_id": tg, "panel_uuid": panel_uuid,
-                "real_end": None, "action": "no_history",
-            })
-            continue
+        # Take the later of the two — whichever signal grants more time wins.
+        candidates_end = [d for d in (paid_end, gift_end) if d is not None]
+        if candidates_end:
+            real_end = max(candidates_end)
+            source = "paid" if paid_end == real_end else "gift"
+        else:
+            # No paid history AND no activated gift → user never had a
+            # legitimate claim on premium beyond their trial/free tier.
+            # Roll the panel back to NOW so the entity expires immediately.
+            # If a real customer is caught here (e.g. admin-grant outside
+            # the gift table), they can come to support and we re-issue —
+            # but standing by while everyone keeps a free decade is worse.
+            real_end = now
+            source = "none"
 
         plan.append({
             "telegram_id": tg, "panel_uuid": panel_uuid,
-            "real_end": real_end, "action": "patch",
+            "real_end": real_end, "source": source,
+            "action": "patch",
         })
 
     return len(candidates), plan
 
 
 def _format_dry_run(checked: int, plan: list) -> str:
-    by_action: dict = {}
+    by_source: dict = {}
     for p in plan:
-        by_action.setdefault(p["action"], []).append(p)
+        by_source.setdefault(p["source"], []).append(p)
 
-    n_patch = len(by_action.get("patch", []))
-    n_no_hist = len(by_action.get("no_history", []))
+    n_paid = len(by_source.get("paid", []))
+    n_gift = len(by_source.get("gift", []))
+    n_none = len(by_source.get("none", []))
+    n_total = n_paid + n_gift + n_none
 
     lines = [
         "🩹 <b>Откат premium-подписок (Dry-run)</b>",
         "",
         f"Кандидатов в БД: <b>{checked}</b>",
         "",
-        f"  • <b>{n_patch}</b> — будет откатано (по реальной paid-истории)",
-        f"  • <b>{n_no_hist}</b> — нет paid-истории (пропуск, ручное решение)",
+        f"  💳 <b>{n_paid}</b> — есть paid-история → откат на реальную дату",
+        f"  🎁 <b>{n_gift}</b> — активный подарок → откат на дату окончания подарка",
+        f"  ⛔ <b>{n_none}</b> — нет paid и нет gift → expireAt = сейчас (entity истечёт)",
     ]
 
-    sample = by_action.get("patch", [])[:10]
-    if sample:
+    sample_paid = by_source.get("paid", [])[:3]
+    sample_gift = by_source.get("gift", [])[:3]
+    sample_none = by_source.get("none", [])[:3]
+    if sample_paid or sample_gift or sample_none:
         lines.append("")
-        lines.append("<i>Примеры (до 10):</i>")
-        for s in sample:
-            tg = s["telegram_id"]
-            to_ = s["real_end"].strftime("%Y-%m-%d") if s["real_end"] else "—"
-            lines.append(f"  <code>{tg}</code> → expireAt = {to_}")
+        lines.append("<i>Примеры:</i>")
+        for s in sample_paid:
+            lines.append(
+                f"  💳 <code>{s['telegram_id']}</code> → "
+                f"{s['real_end'].strftime('%Y-%m-%d')}"
+            )
+        for s in sample_gift:
+            lines.append(
+                f"  🎁 <code>{s['telegram_id']}</code> → "
+                f"{s['real_end'].strftime('%Y-%m-%d')}"
+            )
+        for s in sample_none:
+            lines.append(
+                f"  ⛔ <code>{s['telegram_id']}</code> → "
+                f"{s['real_end'].strftime('%Y-%m-%d %H:%M')} (now)"
+            )
 
-    if n_patch == 0:
+    if n_total == 0:
         lines.append("\n✅ Изменений не требуется.")
     else:
         lines.append(
-            f"\nПри подтверждении: <b>{n_patch}</b> панель-записей будут "
-            "откатаны под их реальный paid-срок (idempotent — повторный "
-            "запуск ничего не сломает). Bypass entities <b>не трогаются</b>."
+            f"\nПри подтверждении: <b>{n_total}</b> панель-записей будут "
+            "откатаны (idempotent — повторный запуск не вредит). "
+            "Bypass entities <b>не трогаются</b>."
         )
+        eta_min = max(1, n_total * (_FIX_THROTTLE_S + 0.2) / _FIX_CONCURRENCY / 60)
         lines.append(
-            f"\n⏱ Apply займёт ~{max(1, n_patch * (_FIX_THROTTLE_S + 0.2) / _FIX_CONCURRENCY / 60):.0f} мин "
-            f"(throttle {_FIX_CONCURRENCY} parallel, {int(_FIX_THROTTLE_S*1000)}ms между запросами)."
+            f"\n⏱ Apply ~{eta_min:.0f} мин "
+            f"(throttle {_FIX_CONCURRENCY} parallel, {int(_FIX_THROTTLE_S*1000)}ms между)."
         )
 
     return "\n".join(lines)

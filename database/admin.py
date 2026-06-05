@@ -2806,3 +2806,36 @@ async def get_paid_subscription_history_bulk(telegram_ids: list) -> dict:
         })
     return out
 
+
+async def get_activated_gifts_bulk(telegram_ids: list) -> dict:
+    """Bulk-fetch activated gift subscriptions for users in ONE query.
+
+    Returns dict: telegram_id -> [{activated_at, period_days}, ...]
+    Ascending by activated_at. Missing users get empty list.
+
+    Recovery uses this to honour gift subscriptions when computing
+    real premium end date — paid history might be empty but a real
+    gift still grants premium time.
+    """
+    if not telegram_ids:
+        return {}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT activated_by, activated_at, period_days
+               FROM gift_subscriptions
+               WHERE activated_by = ANY($1::bigint[])
+                 AND status = 'activated'
+                 AND activated_at IS NOT NULL
+                 AND period_days > 0
+               ORDER BY activated_by, activated_at ASC""",
+            telegram_ids,
+        )
+    out: dict = {tg: [] for tg in telegram_ids}
+    for r in rows:
+        out[r["activated_by"]].append({
+            "activated_at": r["activated_at"],
+            "period_days": r["period_days"],
+        })
+    return out
+
