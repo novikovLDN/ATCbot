@@ -31,7 +31,7 @@ export function Sidebar() {
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-bg-subtle/40 px-4 py-6 md:flex">
       <div className="mb-8 flex items-center gap-3 px-2">
         <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-accent to-violet-500 text-white shadow-[0_4px_12px_-2px_rgba(99,102,241,0.4)]">
-          <ShieldCheck className="h-4.5 w-4.5" strokeWidth={2.5} />
+          <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={2.5} />
         </div>
         <div>
           <div className="text-sm font-semibold leading-tight text-fg">Atlas</div>
