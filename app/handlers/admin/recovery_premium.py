@@ -341,39 +341,58 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     progress: dict = {"done": 0, "ok": 0, "gone": 0, "failed": 0}
 
     async def _fix_one(p: dict) -> bool:
-        # ONE call to renew_premium_user (it already retries 3x
-        # internally across 5 endpoints). If it returns False it
-        # almost always means the entity was deleted from the panel
-        # (404 on every endpoint, every retry) — which is fine for
-        # us: a missing entity grants no premium. So we count those
-        # as "gone" (effectively succeeded), not "failed".
+        # Fast path for entities that have been deleted from the panel:
+        # do a cheap GET first. 404 → entity is gone → done (premium
+        # not active anyway, our goal is achieved), no need to spend
+        # ~10 s on renew_premium_user pushing PATCH against 5 endpoints
+        # × 3 retries that will all 404. Only entities that exist on
+        # the panel get the full PATCH path.
         async with sem:
-            ok = False
+            uuid = p["panel_uuid"]
+            exists = False
             try:
-                ok = await remnawave_premium.renew_premium_user(
-                    p["telegram_id"], p["real_end"],
-                )
+                user = await remnawave_api.get_user(uuid)
+                exists = user is not None
             except Exception as e:
                 logger.warning(
-                    "PREMIUM_RECOVERY: tg=%s uuid=%s %s: %s",
-                    p["telegram_id"], p["panel_uuid"][:8],
+                    "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
+                    p["telegram_id"], uuid[:8],
                     type(e).__name__, e,
                 )
-            if ok:
-                progress["ok"] += 1
-                logger.info(
-                    "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
-                    p["telegram_id"], p["panel_uuid"][:8],
-                    p["real_end"].isoformat(), p["source"],
-                )
-            else:
-                # Treat as "entity absent or unreachable" — premium is
-                # not active either way, our goal is achieved.
+                # Treat probe error as "unsure" — try the PATCH anyway.
+                exists = True
+
+            if not exists:
                 progress["gone"] += 1
                 logger.info(
-                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (entity missing or panel rejected)",
-                    p["telegram_id"], p["panel_uuid"][:8],
+                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (404 on probe)",
+                    p["telegram_id"], uuid[:8],
                 )
+            else:
+                ok = False
+                try:
+                    ok = await remnawave_premium.renew_premium_user(
+                        p["telegram_id"], p["real_end"],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
+                        p["telegram_id"], uuid[:8],
+                        type(e).__name__, e,
+                    )
+                if ok:
+                    progress["ok"] += 1
+                    logger.info(
+                        "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
+                        p["telegram_id"], uuid[:8],
+                        p["real_end"].isoformat(), p["source"],
+                    )
+                else:
+                    progress["failed"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY_PATCH_FAIL tg=%s uuid=%s (entity exists but PATCH failed)",
+                        p["telegram_id"], uuid[:8],
+                    )
             # Spread requests so the panel stays calm.
             await asyncio.sleep(_FIX_THROTTLE_S)
         progress["done"] += 1
