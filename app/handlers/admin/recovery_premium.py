@@ -121,17 +121,29 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
         progress["total"] = len(candidates)
         progress["done"] = 0
         progress["fetched"] = 0
-        progress["fetch_total"] = None
+        progress["fetch_total"] = len(candidates)
 
-    def _on_fetch(collected: int, total):
+    # Fetch panel state per UUID with bounded concurrency.
+    #
+    # Earlier version did a full paginated `get_all_users` pull — but
+    # the panel stalls/loops past ~10k entities and we don't need the
+    # other ~9k anyway. Direct GET /api/users/{uuid} per candidate is
+    # both cheaper and bounded by our own input size.
+    sem = asyncio.Semaphore(8)
+    panel_by_uuid: dict = {}
+
+    async def _fetch_one(uuid: str):
+        async with sem:
+            try:
+                user = await remnawave_api.get_user(uuid)
+            except Exception as e:
+                logger.warning("PREMIUM_RECOVERY: panel fetch failed for %s: %s", uuid[:8], e)
+                user = None
+        panel_by_uuid[uuid] = user
         if progress is not None:
-            progress["fetched"] = collected
-            progress["fetch_total"] = total
+            progress["fetched"] = len(panel_by_uuid)
 
-    panel_users = await remnawave_api.get_all_users(progress_cb=_on_fetch)
-    if panel_users is None:
-        raise RuntimeError("Remnawave не отдал список пользователей.")
-    by_uuid = {u.get("uuid"): u for u in panel_users if u.get("uuid")}
+    await asyncio.gather(*[_fetch_one(c["remnawave_premium_uuid"]) for c in candidates])
 
     if progress is not None:
         progress["phase"] = "compute"
@@ -152,7 +164,7 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
         tg = cand["telegram_id"]
         panel_uuid = cand["remnawave_premium_uuid"]
 
-        rmn = by_uuid.get(panel_uuid)
+        rmn = panel_by_uuid.get(panel_uuid)
         if rmn is None:
             plan.append({
                 "telegram_id": tg, "panel_uuid": panel_uuid,
@@ -284,13 +296,20 @@ async def callback_premium_recovery(callback: CallbackQuery):
                 )
             else:
                 fetched = progress.get("fetched", 0)
+                ftotal = progress.get("fetch_total")
                 if fetched:
-                    text = (
-                        "🩹 Выгружаю пользователей из Remnawave…\n\n"
-                        f"Получено: <b>{fetched}</b>"
-                    )
+                    if ftotal:
+                        text = (
+                            "🩹 Выгружаю кандидатов из Remnawave…\n\n"
+                            f"Получено: <b>{fetched}</b> / {ftotal}"
+                        )
+                    else:
+                        text = (
+                            "🩹 Выгружаю кандидатов из Remnawave…\n\n"
+                            f"Получено: <b>{fetched}</b>"
+                        )
                 else:
-                    text = "🩹 Выгружаю пользователей из Remnawave…"
+                    text = "🩹 Выгружаю кандидатов из Remnawave…"
             try:
                 await safe_edit_text(
                     callback.message, text, bot=callback.bot, parse_mode="HTML",
