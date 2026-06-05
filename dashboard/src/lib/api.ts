@@ -20,7 +20,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(BASE + path, { ...init, headers });
+  const res = await fetch(BASE + path, {
+    ...init,
+    headers,
+    // Send the HttpOnly session cookie set by /api/auth/login.
+    // Same-origin requests honour this by default in modern browsers,
+    // but being explicit guards against quirks (Safari standalone PWA
+    // sometimes drops cookies on cross-context navigations).
+    credentials: "include",
+  });
   if (res.status === 401) {
     auth.clear();
     // Force a hard reload so route guards re-evaluate and show login.
@@ -94,6 +102,14 @@ export interface UserDetail {
 }
 
 export const endpoints = {
+  authStatus: () =>
+    api.get<{ has_password: boolean; has_session: boolean }>("/auth/status"),
+  authSetup: (body: { username: string; password: string; bootstrap_token: string }) =>
+    api.post<{ ok: boolean }>("/auth/setup", body),
+  authLogin: (body: { username: string; password: string }) =>
+    api.post<{ ok: boolean }>("/auth/login", body),
+  authLogout: () => api.post<{ ok: boolean }>("/auth/logout"),
+  authMe: () => api.get<{ telegram_id: number }>("/auth/me"),
   authVerify: (token: string) =>
     api.get<{ telegram_id: number; role: string; expires_at: number }>(
       `/auth/verify?token=${encodeURIComponent(token)}`,

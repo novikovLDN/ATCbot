@@ -24,32 +24,159 @@ admin_base_router = Router()
 logger = logging.getLogger(__name__)
 
 
+async def _build_admin_menu(message_or_callback) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the bot-side admin entry message: open dashboard +
+    reset password. The full set of in-bot admin tools has moved to
+    the web dashboard; this command is now just the front door."""
+    from app.api.dashboard.auth import issue_login_token
+    from app.services import admin_auth
+
+    enabled = getattr(config, "DASHBOARD_ENABLED", False)
+    has_password = False
+    try:
+        has_password = await admin_auth.credentials_exist()
+    except Exception:
+        pass
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if enabled:
+        try:
+            token = issue_login_token(_admin_id(message_or_callback))
+            url = f"{config.DASHBOARD_BASE_URL.rstrip('/')}/dashboard/?login={token}"
+            rows.append([InlineKeyboardButton(text="🛡 Открыть дашборд", url=url)])
+        except Exception as e:
+            logger.warning("DASHBOARD_LINK_FAIL: %s", e)
+
+    rows.append([InlineKeyboardButton(
+        text="🔄 Сбросить пароль" if has_password else "🆕 Установить пароль",
+        callback_data="admin:reset_password",
+    )])
+
+    if has_password:
+        body = (
+            "🛡 <b>Atlas Admin</b>\n\n"
+            "Открой дашборд — войдёшь по уже установленному логину и паролю.\n\n"
+            "Если забыл пароль — жми <b>«Сбросить пароль»</b>, "
+            "потом снова открой дашборд и придумай новый."
+        )
+    else:
+        body = (
+            "🛡 <b>Atlas Admin</b>\n\n"
+            "Это твой первый вход. Нажми <b>«Открыть дашборд»</b> — там "
+            "тебя попросят придумать логин и пароль. "
+            "После этого ссылка перестанет автоматически впускать "
+            "в дашборд; для входа понадобятся логин/пароль."
+        )
+    return body, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _admin_id(obj) -> int:
+    if hasattr(obj, "from_user") and obj.from_user is not None:
+        return int(obj.from_user.id)
+    return int(config.ADMIN_TELEGRAM_ID)
+
+
 @admin_base_router.message(Command("admin"))
 @admin_only
 async def cmd_admin(message: Message):
-    """Административный дашборд"""
-    language = await resolve_user_language(message.from_user.id)
-    text = i18n_get_text(language, "admin.dashboard_title")
-    await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language), parse_mode="HTML")
+    """Web-dashboard entry — magic-link + password reset button.
 
-    # When the web dashboard is configured, send a separate magic-link message
-    # so the admin can choose between the in-bot menu (above) and the browser
-    # UI. The link is a short-lived JWT — re-issue by typing /admin again.
-    if getattr(config, "DASHBOARD_ENABLED", False):
+    The full in-bot admin menu has moved to the web dashboard; this
+    command intentionally has nothing else."""
+    body, kb = await _build_admin_menu(message)
+    await message.answer(body, reply_markup=kb, parse_mode="HTML")
+
+
+@admin_base_router.callback_query(F.data == "admin:reset_password")
+@admin_only
+async def callback_reset_password(callback: CallbackQuery):
+    """Confirm-then-clear admin web credentials + every active
+    session. Next dashboard visit will ask the admin to set new
+    login/password."""
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    rows = [
+        [InlineKeyboardButton(
+            text="⚠️ Да, сбросить",
+            callback_data="admin:reset_password_confirm",
+        )],
+        [InlineKeyboardButton(
+            text="❌ Отмена", callback_data="admin:reset_password_cancel",
+        )],
+    ]
+    text = (
+        "⚠️ <b>Сбросить пароль?</b>\n\n"
+        "Будет удалён логин/пароль и все активные сессии. "
+        "При следующем открытии дашборда ты заново придумаешь "
+        "логин и пароль через magic-ссылку.\n\n"
+        "Старые открытые вкладки/PWA на устройствах разлогинятся."
+    )
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            parse_mode="HTML",
+        )
+
+
+@admin_base_router.callback_query(F.data == "admin:reset_password_cancel")
+@admin_only
+async def callback_reset_password_cancel(callback: CallbackQuery):
+    try:
+        await callback.answer("Отменено")
+    except Exception:
+        pass
+    body, kb = await _build_admin_menu(callback)
+    try:
+        await callback.message.edit_text(body, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(body, reply_markup=kb, parse_mode="HTML")
+
+
+@admin_base_router.callback_query(F.data == "admin:reset_password_confirm")
+@admin_only
+async def callback_reset_password_confirm(callback: CallbackQuery):
+    from app.services import admin_auth
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    try:
+        ok = await admin_auth.clear_credentials()
+    except Exception as e:
+        logger.exception("reset_password_confirm clear_credentials error: %s", e)
+        ok = False
+
+    if not ok:
         try:
-            from app.api.dashboard.auth import issue_login_token
-            token = issue_login_token(message.from_user.id)
-            url = f"{config.DASHBOARD_BASE_URL.rstrip('/')}/dashboard/?login={token}"
-            await message.answer(
-                "🌐 <b>Веб-дашборд</b>\n\n"
-                "Ссылка действует <b>10 минут</b>. Если истечёт — снова жми /admin.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🛡 Открыть дашборд", url=url)],
-                ]),
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.warning("DASHBOARD_LINK_FAIL admin=%s err=%s", message.from_user.id, e)
+            await callback.message.answer("❌ Не удалось сбросить. Попробуй ещё раз.")
+        except Exception:
+            pass
+        return
+
+    body, kb = await _build_admin_menu(callback)
+    final_body = (
+        "✅ <b>Сброшено</b>\n\n"
+        "Логин и пароль удалены, все сессии закрыты.\n\n"
+        f"{body}"
+    )
+    try:
+        await callback.message.edit_text(
+            final_body, reply_markup=kb, parse_mode="HTML",
+        )
+    except Exception:
+        await callback.message.answer(
+            final_body, reply_markup=kb, parse_mode="HTML",
+        )
 
 
 @admin_base_router.callback_query(F.data == "admin:dashboard")
