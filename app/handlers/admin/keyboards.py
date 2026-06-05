@@ -50,6 +50,7 @@ def get_admin_dashboard_keyboard(language: str = "ru"):
         [InlineKeyboardButton(text="🎁 Гифт-ссылки на ГБ", callback_data="admin:bgift")],
         [InlineKeyboardButton(text="🩹 Откат premium ×10y", callback_data="admin:premium_recovery")],
         [InlineKeyboardButton(text="🔍 Аудит активных подписок", callback_data="admin:audit_subs")],
+        [InlineKeyboardButton(text="🗃 Аудит БД дат (+10y)", callback_data="admin:audit_db_dates")],
         [InlineKeyboardButton(text="🌪 Шторм (Ферма)", callback_data="admin:storm")],
     ])
     if config.IS_STAGE:

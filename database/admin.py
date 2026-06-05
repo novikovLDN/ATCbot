@@ -2946,3 +2946,58 @@ async def get_active_premium_subscribers() -> list:
                ORDER BY telegram_id"""
         )
     return [dict(r) for r in rows]
+
+
+async def get_subscriptions_with_far_future_expires() -> list:
+    """All subscriptions whose DB expires_at is parked in the far future.
+
+    This is the symptom of the bug discovered during the audit: when a
+    user's premium expired and they had a bypass entity, the
+    fast_expiry_cleanup transition rewrote expires_at to NOW + 10 years
+    as a bypass-only marker — but the user's subsequent purchases never
+    overwrote that marker, leaving the bot UI showing "expires in 10
+    years" even though the panel was rolled back to the real date.
+
+    Returns dicts with telegram_id, expires_at, status,
+    subscription_type, is_bypass_only.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, expires_at, status, subscription_type,
+                      is_bypass_only, remnawave_premium_uuid
+               FROM subscriptions
+               WHERE status = 'active'
+                 AND expires_at > NOW() + INTERVAL '2 years'
+               ORDER BY telegram_id"""
+        )
+    return [dict(r) for r in rows]
+
+
+async def update_subscription_expires_at_bulk(updates: list) -> int:
+    """Bulk-update subscriptions.expires_at.
+
+    Args:
+        updates: list of {"telegram_id": int, "new_expires_at": datetime}
+
+    Returns count of rows successfully updated.
+
+    Uses asyncpg.executemany — one round-trip for the whole batch.
+    """
+    if not updates:
+        return 0
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Coerce to naive UTC (the column is TIMESTAMPTZ but the bot's
+        # other writers pass naive — keep consistent so equality
+        # comparisons elsewhere don't drift across tz casts).
+        rows = [
+            (u["new_expires_at"], u["telegram_id"])
+            for u in updates
+        ]
+        async with conn.transaction():
+            await conn.executemany(
+                "UPDATE subscriptions SET expires_at = $1 WHERE telegram_id = $2 AND status = 'active'",
+                rows,
+            )
+    return len(updates)
