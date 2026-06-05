@@ -128,15 +128,24 @@ async def auth_status(
 ):
     """Public — used by the SPA on mount to decide which screen to
     render. NEVER requires auth, but tells the SPA whether it has a
-    valid session and whether a password is set globally."""
+    valid session, whether a password is set, and whether at least
+    one passkey is registered (drives the "Войти через Face ID"
+    button)."""
     has_password = await admin_auth.credentials_exist()
     has_session = False
     if atlas_admin_session:
         tg = await admin_auth.lookup_session(atlas_admin_session)
         has_session = tg is not None and admin_auth.is_admin(tg)
+    has_passkey = False
+    try:
+        from app.services import admin_passkeys
+        has_passkey = (await admin_passkeys.passkey_count()) > 0
+    except Exception:
+        pass
     return {
         "has_password": has_password,
         "has_session": has_session,
+        "has_passkey": has_passkey,
     }
 
 
@@ -209,6 +218,105 @@ async def auth_me(
     if tg is None or not admin_auth.is_admin(tg):
         raise HTTPException(401, "invalid_session")
     return {"telegram_id": tg}
+
+
+# ── Passkey (WebAuthn) ───────────────────────────────────────────────
+
+
+class PasskeyRegisterVerifyRequest(BaseModel):
+    challenge_token: str = Field(..., min_length=8)
+    credential: dict
+    label: Optional[str] = Field(None, max_length=64)
+
+
+class PasskeyAuthVerifyRequest(BaseModel):
+    challenge_token: str = Field(..., min_length=8)
+    credential: dict
+
+
+async def _require_session(
+    atlas_admin_session: Optional[str] = Cookie(default=None),
+) -> int:
+    if not atlas_admin_session:
+        raise HTTPException(401, "no_session")
+    tg = await admin_auth.lookup_session(atlas_admin_session)
+    if tg is None or not admin_auth.is_admin(tg):
+        raise HTTPException(401, "invalid_session")
+    return tg
+
+
+@router.post("/passkey/register/options")
+async def passkey_register_options(
+    _tg: int = Depends(_require_session),
+):
+    from app.services import admin_passkeys
+    creds = await admin_auth.get_credentials()
+    username = str((creds or {}).get("username") or "atlas-admin")
+    try:
+        options, token = await admin_passkeys.make_registration_options(username)
+    except Exception as e:
+        raise HTTPException(500, f"register_options_failed: {e}")
+    return {"options": options, "challenge_token": token}
+
+
+@router.post("/passkey/register/verify")
+async def passkey_register_verify(
+    body: PasskeyRegisterVerifyRequest,
+    _tg: int = Depends(_require_session),
+):
+    from app.services import admin_passkeys
+    ok, err = await admin_passkeys.verify_and_store_registration(
+        challenge_token=body.challenge_token,
+        credential=body.credential,
+        label=body.label,
+    )
+    if not ok:
+        raise HTTPException(400, f"register_failed: {err}")
+    return {"ok": True}
+
+
+@router.post("/passkey/auth/options")
+async def passkey_auth_options():
+    from app.services import admin_passkeys
+    if await admin_passkeys.passkey_count() == 0:
+        raise HTTPException(409, "no_passkeys_registered")
+    try:
+        options, token = await admin_passkeys.make_authentication_options()
+    except Exception as e:
+        raise HTTPException(500, f"auth_options_failed: {e}")
+    return {"options": options, "challenge_token": token}
+
+
+@router.post("/passkey/auth/verify")
+async def passkey_auth_verify(
+    body: PasskeyAuthVerifyRequest,
+    response: Response,
+):
+    from app.services import admin_passkeys
+    ok, err = await admin_passkeys.verify_authentication(
+        challenge_token=body.challenge_token,
+        credential=body.credential,
+    )
+    if not ok:
+        raise HTTPException(401, f"auth_failed: {err}")
+    token = await admin_auth.create_session(config.ADMIN_TELEGRAM_ID)
+    _set_session_cookie(response, token)
+    return {"ok": True}
+
+
+@router.get("/passkey/list")
+async def passkey_list(_tg: int = Depends(_require_session)):
+    from app.services import admin_passkeys
+    return await admin_passkeys.list_passkeys()
+
+
+@router.delete("/passkey/{pk_id}")
+async def passkey_delete(pk_id: int, _tg: int = Depends(_require_session)):
+    from app.services import admin_passkeys
+    ok = await admin_passkeys.delete_passkey(pk_id)
+    if not ok:
+        raise HTTPException(404, "not_found")
+    return {"ok": True}
 
 
 # Backwards-compatibility for the original /verify endpoint — kept so

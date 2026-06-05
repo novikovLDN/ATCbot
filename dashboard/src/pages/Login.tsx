@@ -1,9 +1,46 @@
-import { useState } from "react";
-import { ShieldCheck, Bot, Lock, User, Eye, EyeOff } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ShieldCheck, Bot, Lock, User, Eye, EyeOff, Fingerprint } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
+import { isPasskeySupported, loginWithPasskey } from "@/lib/passkey";
 import { Spinner } from "@/components/Spinner";
 
 export function Login({ onDone }: { onDone: () => void }) {
+  const [passkeyAvailable, setPasskeyAvailable] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    endpoints
+      .authStatus()
+      .then((s) => {
+        if (mounted) setPasskeyAvailable(!!s.has_passkey && isPasskeySupported());
+      })
+      .catch(() => {
+        //
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const onPasskey = async () => {
+    setPasskeyBusy(true);
+    try {
+      await loginWithPasskey();
+      onDone();
+    } catch (e: unknown) {
+      const ae = e as ApiError;
+      if (ae?.detail === "cancelled") {
+        // user dismissed the OS prompt — silent
+      } else {
+        // surface a friendly message
+        alert(ae?.detail ?? "Не удалось войти через passkey");
+      }
+    } finally {
+      setPasskeyBusy(false);
+    }
+  };
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
@@ -49,6 +86,29 @@ export function Login({ onDone }: { onDone: () => void }) {
           <p className="mt-2 text-sm text-fg-muted">
             Войди по логину и паролю. Сессия будет действовать <b>5 дней</b>.
           </p>
+
+          {passkeyAvailable && (
+            <div className="mt-5">
+              <button
+                type="button"
+                onClick={onPasskey}
+                disabled={passkeyBusy}
+                className="btn-secondary w-full"
+              >
+                {passkeyBusy ? (
+                  <Spinner />
+                ) : (
+                  <Fingerprint className="h-3.5 w-3.5 text-accent" />
+                )}
+                Войти через Face ID / Touch ID
+              </button>
+              <div className="my-4 flex items-center gap-2 text-[11px] uppercase tracking-wider text-fg-subtle">
+                <div className="h-px flex-1 bg-border" />
+                или
+                <div className="h-px flex-1 bg-border" />
+              </div>
+            </div>
+          )}
 
           <form onSubmit={submit} className="mt-6 space-y-3">
             <Field icon={User} label="Логин">

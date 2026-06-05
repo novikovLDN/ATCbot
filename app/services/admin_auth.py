@@ -119,7 +119,8 @@ async def set_credentials(username: str, plain_password: str) -> bool:
 
 async def clear_credentials() -> bool:
     """Delete ALL credential rows (singleton, so it's effectively one)
-    plus revoke all active sessions. Called by the bot's reset button."""
+    plus revoke all active sessions AND any registered passkeys.
+    Called by the bot's reset button."""
     from database.core import get_pool
     pool = await get_pool()
     if pool is None:
@@ -128,6 +129,11 @@ async def clear_credentials() -> bool:
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM admin_credentials")
         await purge_all_sessions()
+        try:
+            from app.services import admin_passkeys
+            await admin_passkeys.purge_all_passkeys()
+        except Exception:
+            pass
         return True
     except Exception as e:
         logger.exception("clear_credentials failed: %s", e)
