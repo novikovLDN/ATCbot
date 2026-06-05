@@ -296,4 +296,5 @@ from database.admin import (  # noqa: F401
     get_user_gifts,
     get_premium_recovery_candidates,
     get_user_paid_subscription_history,
+    get_paid_subscription_history_bulk,
 )

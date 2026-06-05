@@ -138,6 +138,12 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
         progress["total"] = len(candidates)
         progress["done"] = 0
 
+    # ONE bulk query for the entire candidate list instead of N
+    # roundtrips — the per-user version was overloading the pool and
+    # stalling the scan on large cohorts (1k+).
+    tg_ids = [c["telegram_id"] for c in candidates]
+    histories = await database.get_paid_subscription_history_bulk(tg_ids)
+
     plan: list = []
     now = datetime.now(timezone.utc)
     for cand in candidates:
@@ -156,7 +162,7 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
             continue
         panel_expires = _parse_rmn_dt(rmn.get("expireAt"))
 
-        history = await database.get_user_paid_subscription_history(tg)
+        history = histories.get(tg, [])
         real_end = _compute_real_end(history)
 
         if real_end is None:
