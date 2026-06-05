@@ -82,6 +82,31 @@ async def payments_traffic(hours: int = Query(24, gt=0, le=8760)):
         raise HTTPException(500, f"traffic_failed: {e}")
 
 
+@router.get("/errors/summary")
+async def payments_errors_summary(hours: int = Query(24, gt=0, le=8760)):
+    try:
+        return _serialize(await database.get_payment_errors_summary(hours))
+    except Exception as e:
+        raise HTTPException(500, f"errors_summary_failed: {e}")
+
+
+@router.get("/errors")
+async def payments_errors(
+    limit: int = Query(100, gt=0, le=500),
+    hours: Optional[int] = Query(168, gt=0, le=8760),
+    provider: Optional[str] = Query(None, max_length=40),
+    stage: Optional[str] = Query(None, max_length=60),
+):
+    try:
+        return _serialize(
+            await database.get_recent_payment_errors(
+                limit=limit, hours=hours, provider=provider, stage=stage,
+            )
+        )
+    except Exception as e:
+        raise HTTPException(500, f"errors_failed: {e}")
+
+
 @router.get("/{payment_id}")
 async def payment_detail(payment_id: int = Path(..., gt=0)):
     try:

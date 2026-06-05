@@ -276,6 +276,23 @@ export const endpoints = {
         total_gb: number;
       }>;
     }>(`/payments/traffic?hours=${hours}`),
+  paymentsErrorsSummary: (hours: number) =>
+    api.get<{
+      total: number;
+      by_stage: Array<{ stage: string; count: number }>;
+      by_provider: Array<{ provider: string; count: number }>;
+    }>(`/payments/errors/summary?hours=${hours}`),
+  paymentsErrors: (params: { limit?: number; hours?: number; provider?: string; stage?: string } = {}) => {
+    const u = new URLSearchParams();
+    if (params.limit !== undefined) u.set("limit", String(params.limit));
+    if (params.hours !== undefined) u.set("hours", String(params.hours));
+    if (params.provider) u.set("provider", params.provider);
+    if (params.stage) u.set("stage", params.stage);
+    const qs = u.toString();
+    return api.get<Array<Record<string, unknown>>>(
+      "/payments/errors" + (qs ? `?${qs}` : ""),
+    );
+  },
   paymentDetail: (id: number) =>
     api.get<Record<string, unknown>>(`/payments/${id}`),
 
