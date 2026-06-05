@@ -217,6 +217,30 @@ export const endpoints = {
     max_uses: number;
   }) => api.post<Record<string, unknown>>("/bgift", body),
   bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
+
+  userDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}`),
+
+  incidentGet: () =>
+    api.get<{ is_active: boolean; incident_text: string | null }>("/incident"),
+  incidentSet: (body: { is_active: boolean; incident_text?: string | null }) =>
+    api.post<{ ok: boolean; is_active: boolean }>("/incident", body),
+
+  promoList: () =>
+    api.get<Array<Record<string, unknown>>>("/promo/list"),
+  promoCreate: (body: {
+    code: string;
+    discount_percent: number;
+    duration_seconds: number;
+    max_uses: number;
+  }) =>
+    api.post<{ ok: boolean; promo_id: number; code: string }>("/promo", body),
+  promoDeactivate: (id: number) =>
+    api.del<{ ok: boolean }>(`/promo/${id}`),
+
+  paymentsPending: () =>
+    api.get<Array<Record<string, unknown>>>("/payments/pending"),
+  paymentDetail: (id: number) =>
+    api.get<Record<string, unknown>>(`/payments/${id}`),
 };
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers

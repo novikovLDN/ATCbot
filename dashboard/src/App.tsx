@@ -14,6 +14,8 @@ import { Broadcasts } from "@/pages/Broadcasts";
 import { BroadcastCreate } from "@/pages/BroadcastCreate";
 import { Referrals } from "@/pages/Referrals";
 import { BypassGifts } from "@/pages/BypassGifts";
+import { PromoCodes } from "@/pages/PromoCodes";
+import { Service } from "@/pages/Service";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -70,6 +72,8 @@ export default function App() {
               <Route path="broadcasts/new" element={<BroadcastCreate />} />
               <Route path="referrals" element={<Referrals />} />
               <Route path="bgift" element={<BypassGifts />} />
+              <Route path="promo" element={<PromoCodes />} />
+              <Route path="service" element={<Service />} />
               <Route path="audit" element={<Audit />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

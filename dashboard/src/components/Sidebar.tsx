@@ -9,6 +9,8 @@ import {
   ShieldCheck,
   Share2,
   Gift,
+  Tag,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
@@ -25,9 +27,11 @@ const items: NavItem[] = [
   { to: "/users", label: "Пользователи", icon: Users },
   { to: "/analytics", label: "Аналитика", icon: TrendingUp },
   { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
+  { to: "/promo", label: "Промокоды", icon: Tag },
   { to: "/referrals", label: "Рефералы", icon: Share2 },
   { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
   { to: "/audit", label: "Аудит", icon: ScrollText },
+  { to: "/service", label: "Сервис", icon: Wrench },
 ];
 
 export function Sidebar() {
