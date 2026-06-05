@@ -44,6 +44,7 @@ from app.core.feature_flags import get_feature_flags
 from app.handlers.notifications import send_referral_cashback_notification
 from app.handlers.common.keyboards import get_payment_success_keyboard
 from app.handlers.common.states import BroadcastCreate
+from app.handlers.admin.promo_trial import PromoTrialFSM
 from app.handlers.common.utils import clear_promo_session
 
 payments_router = Router()
@@ -86,9 +87,19 @@ async def process_pre_checkout_query(pre_checkout_query: PreCheckoutQuery):
     )
 
 
-@payments_router.message(F.photo, ~StateFilter(BroadcastCreate.waiting_for_message))
+@payments_router.message(
+    F.photo,
+    ~StateFilter(BroadcastCreate.waiting_for_message),
+    ~StateFilter(PromoTrialFSM.waiting_for_photo),
+)
 async def log_incoming_photo_file_id(message: Message):
-    """Log file_id of incoming photos for later use (e.g. loyalty images). Does not send reply."""
+    """Log file_id of incoming photos for later use (e.g. loyalty images). Does not send reply.
+
+    Excludes FSM states that legitimately consume an admin-attached
+    photo (broadcast wizard, trial-promo photo attach), so the
+    intended handler in that router gets the message instead of us
+    silently swallowing it for a log line.
+    """
     try:
         telegram_id = message.from_user.id if message.from_user else 0
         file_id = message.photo[-1].file_id
