@@ -3005,12 +3005,23 @@ async def update_subscription_expires_at_bulk(updates: list) -> int:
 
 async def get_active_trial_telegram_ids() -> list:
     """Telegram IDs of users currently on an active trial — and ONLY
-    on a trial (no live paid premium subscription).
+    on a trial (no live PAID premium subscription).
 
-    Used by the trial-targeted promo broadcast:
-      - users.trial_expires_at > NOW   → trial still running
-      - subscriptions row for that user that is active premium and
-        in-window does NOT exist                → not paying yet
+    Trial activation writes a `subscriptions` row with source='trial',
+    status='active', subscription_type='basic' (default tariff in
+    grant_access), expires_at = trial end, is_bypass_only=FALSE. That
+    means the "looks like an active paid sub" filter MUST exclude
+    source='trial' explicitly — otherwise the audience comes out
+    empty (every trial user gets filtered as if they were already
+    paying).
+
+    Filters:
+      - users.trial_expires_at > NOW                 → trial running
+      - NO subscriptions row with:
+          - status='active', expires_at > NOW
+          - source != 'trial'                        → really paid
+          - is_bypass_only=FALSE
+          - subscription_type IN paid tariffs
 
     Returns sorted list of telegram_id integers.
     """
@@ -3026,6 +3037,7 @@ async def get_active_trial_telegram_ids() -> list:
                      WHERE s.telegram_id = u.telegram_id
                        AND s.status = 'active'
                        AND s.expires_at > NOW()
+                       AND COALESCE(s.source, '') != 'trial'
                        AND COALESCE(s.is_bypass_only, FALSE) = FALSE
                        AND s.subscription_type IN (
                            'basic', 'plus', 'biz_starter', 'biz_team',
