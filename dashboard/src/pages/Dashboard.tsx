@@ -43,6 +43,14 @@ export function Dashboard() {
     queryFn: () => endpoints.statsPeriod(24),
     refetchInterval: 60000,
   });
+  // get_analytics_by_period doesn't compute revenue / payments — pull
+  // those from /payments/revenue so the 24h tile matches what's on
+  // the Payments page rather than reading missing fields.
+  const today24Revenue = useQuery({
+    queryKey: ["payments", "revenue", 24],
+    queryFn: () => endpoints.paymentsRevenue(24),
+    refetchInterval: 60000,
+  });
 
   const [live, setLive] = useState<LiveEntry[]>([]);
 
@@ -160,14 +168,18 @@ export function Dashboard() {
             </div>
             <Clock className="h-4 w-4 text-fg-subtle" />
           </div>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
             <Tile
               label="Платежей"
-              value={fmtNum(asNum(today.data?.payment_count ?? today.data?.payments))}
+              value={fmtNum(today24Revenue.data?.payments_count)}
             />
             <Tile
               label="Доход"
-              value={fmtRub(asNum(today.data?.revenue))}
+              value={fmtRub(today24Revenue.data?.revenue_rubles)}
+            />
+            <Tile
+              label="Средний чек"
+              value={fmtRub(today24Revenue.data?.avg_check_rubles)}
             />
             <Tile
               label="Новых юзеров"

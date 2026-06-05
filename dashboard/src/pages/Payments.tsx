@@ -177,9 +177,187 @@ export function Payments() {
         </div>
       )}
 
+      <PaymentErrors hours={hours} />
       <PaymentsFeed hours={hours} />
     </div>
   );
+}
+
+function PaymentErrors({ hours }: { hours: number }) {
+  const summary = useQuery({
+    queryKey: ["payments", "errors", "summary", hours],
+    queryFn: () => endpoints.paymentsErrorsSummary(hours),
+    refetchInterval: 30_000,
+  });
+  const [expanded, setExpanded] = useState(false);
+  const rows = useQuery({
+    queryKey: ["payments", "errors", "list", hours],
+    queryFn: () => endpoints.paymentsErrors({ hours, limit: 200 }),
+    enabled: expanded,
+    refetchInterval: expanded ? 15_000 : false,
+  });
+
+  const total = summary.data?.total ?? 0;
+  const empty = total === 0;
+
+  return (
+    <section
+      className={
+        empty
+          ? "card p-5"
+          : "card border-danger/30 bg-danger/[0.04] p-5"
+      }
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <div className="flex items-center gap-3">
+          <div
+            className={
+              empty
+                ? "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border"
+                : "grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-danger/15 text-danger"
+            }
+          >
+            <AlertCircle className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Ошибки платежей
+            </div>
+            <h2 className="text-lg font-semibold text-fg">
+              {empty ? "Без сбоев" : `${fmtNum(total)} событий`}
+            </h2>
+          </div>
+        </div>
+        <ChevronDown
+          className={
+            expanded
+              ? "h-4 w-4 rotate-180 text-fg-subtle transition"
+              : "h-4 w-4 text-fg-subtle transition"
+          }
+        />
+      </button>
+
+      {!empty && !expanded && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {summary.data?.by_stage.slice(0, 6).map((s) => (
+            <span key={s.stage} className="badge-danger">
+              {labelForStage(s.stage)} · {fmtNum(s.count)}
+            </span>
+          ))}
+          {summary.data?.by_provider.slice(0, 6).map((p) => (
+            <span key={p.provider} className="badge-muted">
+              {PROVIDER_LABELS[p.provider] ?? p.provider} · {fmtNum(p.count)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          {!empty && (
+            <div className="flex flex-wrap gap-1.5">
+              {summary.data?.by_stage.map((s) => (
+                <span key={s.stage} className="badge-danger">
+                  {labelForStage(s.stage)} · {fmtNum(s.count)}
+                </span>
+              ))}
+              {summary.data?.by_provider.map((p) => (
+                <span key={p.provider} className="badge-muted">
+                  {PROVIDER_LABELS[p.provider] ?? p.provider} · {fmtNum(p.count)}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {rows.isLoading ? (
+            <div className="flex items-center gap-2 text-sm text-fg-muted">
+              <Spinner /> Загружаю...
+            </div>
+          ) : !rows.data || rows.data.length === 0 ? (
+            <div className="text-sm text-fg-muted">
+              Под текущие фильтры ошибок нет.
+            </div>
+          ) : (
+            <ul className="divide-y divide-border/60">
+              {rows.data.map((r, i) => {
+                const provider = String(r.payment_provider ?? "unknown");
+                const stage = String(r.stage ?? "");
+                const tg = asNum(r.telegram_id);
+                const code = r.error_code ? String(r.error_code) : "";
+                const msg = r.error_message ? String(r.error_message) : "";
+                const created =
+                  typeof r.created_at === "string"
+                    ? fmtDate(r.created_at)
+                    : "";
+                const amt = asNum(r.amount_rubles);
+                return (
+                  <li key={String(r.id ?? i)} className="py-2 text-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="badge-danger">
+                        {labelForStage(stage)}
+                      </span>
+                      <span className="badge-muted">
+                        {PROVIDER_LABELS[provider] ?? provider}
+                      </span>
+                      {tg != null && (
+                        <span className="text-fg">tg:{tg}</span>
+                      )}
+                      {r.username ? (
+                        <span className="text-fg-muted">
+                          @{String(r.username)}
+                        </span>
+                      ) : null}
+                      {amt != null && (
+                        <span className="text-fg-muted">
+                          · {fmtRub(amt)}
+                        </span>
+                      )}
+                      {code && (
+                        <code className="rounded bg-bg-elevated px-1.5 py-0.5 text-[11px] text-fg-muted">
+                          {code}
+                        </code>
+                      )}
+                    </div>
+                    {msg && (
+                      <div className="mt-1 font-mono text-xs text-fg-muted line-clamp-2">
+                        {msg}
+                      </div>
+                    )}
+                    <div className="mt-1 text-[11px] text-fg-subtle">
+                      {created}{" "}
+                      {r.purchase_id ? (
+                        <span>· {String(r.purchase_id).slice(0, 20)}</span>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function labelForStage(stage: string): string {
+  const map: Record<string, string> = {
+    webhook_invalid_json: "Неверный JSON",
+    setup_missing: "Бот не готов",
+    service_missing: "Сервис не подключён",
+    transient: "Временная ошибка",
+    timeout: "Таймаут",
+    unhandled_exception: "Исключение",
+    amount_mismatch: "Сумма не совпадает",
+    provider_callback_invalid: "Невалидный callback",
+    provision_failed: "Provisioning",
+    idempotency_rejected: "Идемпотентность",
+  };
+  return map[stage] ?? stage;
 }
 
 function ChartCard({

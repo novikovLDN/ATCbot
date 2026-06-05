@@ -516,6 +516,168 @@ async def get_recent_payments_feed(
     return out
 
 
+async def log_payment_error(
+    *,
+    stage: str,
+    telegram_id: Optional[int] = None,
+    purchase_id: Optional[str] = None,
+    payment_provider: Optional[str] = None,
+    amount_rubles: Optional[float] = None,
+    error_code: Optional[str] = None,
+    error_message: Optional[str] = None,
+    raw_payload: Optional[Dict[str, Any]] = None,
+) -> Optional[int]:
+    """Append a payment-error row. Never raises — payment-error logging
+    must not break the caller's own error handling. Returns the inserted
+    row's id, or None on failure (e.g. table not migrated yet).
+
+    `stage` is a short label like 'webhook_validation', 'amount_mismatch',
+    'provider_callback_invalid', 'provision_failed', 'idempotency_rejected'.
+    """
+    if not _core.DB_READY:
+        return None
+    pool = await get_pool()
+    if pool is None:
+        return None
+
+    import json
+    payload_json = None
+    if raw_payload is not None:
+        try:
+            payload_json = json.dumps(raw_payload, default=str)[:8000]
+        except Exception:
+            payload_json = None
+
+    try:
+        async with pool.acquire() as conn:
+            row_id = await conn.fetchval(
+                """INSERT INTO payment_errors
+                       (telegram_id, purchase_id, payment_provider,
+                        amount_rubles, stage, error_code, error_message,
+                        raw_payload)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+                   RETURNING id""",
+                telegram_id, purchase_id, payment_provider,
+                amount_rubles, stage,
+                (error_code or "")[:120] if error_code else None,
+                (error_message or "")[:2000] if error_message else None,
+                payload_json,
+            )
+            try:
+                from app.events import bus
+                bus.publish({
+                    "type": "payment:error",
+                    "id": int(row_id) if row_id else None,
+                    "telegram_id": telegram_id,
+                    "stage": stage,
+                    "provider": payment_provider,
+                })
+            except Exception:
+                pass
+            return int(row_id) if row_id else None
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError) as e:
+        logger.warning("log_payment_error: table missing — %s", e)
+        return None
+    except Exception as e:
+        logger.warning("log_payment_error: %s", e)
+        return None
+
+
+async def get_recent_payment_errors(
+    limit: int = 100,
+    hours: Optional[int] = None,
+    provider: Optional[str] = None,
+    stage: Optional[str] = None,
+) -> list:
+    """Recent payment_errors rows, newest first. Returns [] if the
+    table doesn't exist yet."""
+    pool = await get_pool()
+    if pool is None:
+        return []
+    where = ["TRUE"]
+    params: list = []
+    if hours is not None:
+        params.append(_to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours)))
+        where.append(f"created_at >= ${len(params)}")
+    if provider:
+        params.append(provider)
+        where.append(f"payment_provider = ${len(params)}")
+    if stage:
+        params.append(stage)
+        where.append(f"stage = ${len(params)}")
+    params.append(limit)
+    limit_idx = len(params)
+    sql = f"""
+        SELECT pe.*, u.username
+        FROM payment_errors pe
+        LEFT JOIN users u ON u.telegram_id = pe.telegram_id
+        WHERE {' AND '.join(where)}
+        ORDER BY pe.created_at DESC
+        LIMIT ${limit_idx}
+    """
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError):
+        return []
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("created_at"):
+            d["created_at"] = _from_db_utc(d["created_at"])
+        if d.get("amount_rubles") is not None:
+            try:
+                d["amount_rubles"] = float(d["amount_rubles"])
+            except Exception:
+                d["amount_rubles"] = None
+        out.append(d)
+    return out
+
+
+async def get_payment_errors_summary(hours: int = 24) -> Dict[str, Any]:
+    """Counters for the Payments page header — total errors in window,
+    plus by stage and by provider."""
+    pool = await get_pool()
+    if pool is None:
+        return {"total": 0, "by_stage": [], "by_provider": []}
+    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
+    try:
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM payment_errors WHERE created_at >= $1",
+                since,
+            ) or 0
+            by_stage = await conn.fetch(
+                """SELECT stage, COUNT(*)::BIGINT AS count
+                   FROM payment_errors
+                   WHERE created_at >= $1
+                   GROUP BY stage
+                   ORDER BY count DESC
+                   LIMIT 10""",
+                since,
+            )
+            by_provider = await conn.fetch(
+                """SELECT COALESCE(payment_provider, 'unknown') AS provider,
+                          COUNT(*)::BIGINT AS count
+                   FROM payment_errors
+                   WHERE created_at >= $1
+                   GROUP BY provider
+                   ORDER BY count DESC""",
+                since,
+            )
+    except (asyncpg.UndefinedTableError, asyncpg.PostgresError):
+        return {"total": 0, "by_stage": [], "by_provider": []}
+    return {
+        "total": int(total),
+        "by_stage": [{"stage": r["stage"], "count": int(r["count"])} for r in by_stage],
+        "by_provider": [
+            {"provider": r["provider"], "count": int(r["count"])}
+            for r in by_provider
+        ],
+    }
+
+
 async def get_traffic_stats(hours: int) -> Dict[str, Any]:
     """Traffic-purchase stats — separate revenue/count + breakdown by
     payment_method (column may be optional on older deploys)."""
