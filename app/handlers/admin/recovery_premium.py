@@ -380,7 +380,8 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     )
 
     sem = asyncio.Semaphore(_FIX_CONCURRENCY)
-    progress: dict = {"done": 0, "ok": 0, "gone": 0, "failed": 0}
+    progress: dict = {"done": 0, "ok": 0, "gone": 0,
+                      "skipped": 0, "failed": 0}
 
     # Direct update_user. We deliberately bypass renew_premium_user
     # here because its internal "try 3 times across 5 endpoints"
@@ -399,6 +400,77 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     async def _fix_one(p: dict) -> bool:
         async with sem:
             uuid = p["panel_uuid"]
+            tg = p["telegram_id"]
+            expected_username = f"tg_{tg}_premium"
+
+            # SAFETY CHECK 1: GET the entity to verify it's the premium
+            # one for THIS user. Two reasons:
+            #   (a) If BD has a stale remnawave_premium_uuid that now
+            #       points at a different entity (bypass / someone
+            #       else's premium / migrated), we MUST NOT patch it.
+            #   (b) If panel returned 404, the entity is already gone
+            #       — count as already-achieved and skip the PATCH.
+            try:
+                user = await remnawave_api.get_user(uuid)
+            except Exception as e:
+                progress["failed"] += 1
+                progress["done"] += 1
+                logger.warning(
+                    "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
+                    tg, uuid[:8], type(e).__name__, e,
+                )
+                return False
+
+            if user is None:
+                # 404 / not found on the panel.
+                progress["gone"] += 1
+                progress["done"] += 1
+                logger.info(
+                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (not found on panel)",
+                    tg, uuid[:8],
+                )
+                return True
+
+            actual_username = (user.get("username") or "").strip()
+            if actual_username != expected_username:
+                # NOT our premium entity for this user. Refuse to touch.
+                progress["skipped"] += 1
+                progress["done"] += 1
+                logger.warning(
+                    "PREMIUM_RECOVERY_SKIP_WRONG_USERNAME tg=%s uuid=%s "
+                    "expected=%s got=%r — entity not patched",
+                    tg, uuid[:8], expected_username, actual_username,
+                )
+                return False
+
+            # SAFETY CHECK 2 (paranoid double-check): if the entity has
+            # an `expireAt` that ISN'T in the +10y far-future bucket
+            # already, then somehow it's already fine — skip the PATCH
+            # to avoid shortening a legitimately-active subscription.
+            try:
+                existing_expire_str = user.get("expireAt") or ""
+                if existing_expire_str:
+                    s = existing_expire_str
+                    if s.endswith("Z"):
+                        s = s[:-1] + "+00:00"
+                    existing_dt = datetime.fromisoformat(s)
+                    if existing_dt.tzinfo is None:
+                        existing_dt = existing_dt.replace(tzinfo=timezone.utc)
+                    # If existing expireAt is < NOW+5y, this entity was
+                    # NOT one we accidentally extended. Leave alone.
+                    if existing_dt < datetime.now(timezone.utc) + timedelta(days=365 * 5):
+                        progress["skipped"] += 1
+                        progress["done"] += 1
+                        logger.info(
+                            "PREMIUM_RECOVERY_SKIP_NOT_AFFECTED tg=%s uuid=%s "
+                            "expireAt=%s — already within sane range",
+                            tg, uuid[:8], existing_expire_str,
+                        )
+                        return False
+            except Exception:
+                pass
+
+            # All clear — patch.
             fields = {"expireAt": _iso_z(p["real_end"]), "status": "ACTIVE"}
             if external_squad:
                 fields["externalSquadUuid"] = external_squad
@@ -407,25 +479,21 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                 result = await remnawave_api.update_user(uuid, **fields)
             except Exception as e:
                 logger.warning(
-                    "PREMIUM_RECOVERY: tg=%s uuid=%s %s: %s",
-                    p["telegram_id"], uuid[:8],
-                    type(e).__name__, e,
+                    "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
+                    tg, uuid[:8], type(e).__name__, e,
                 )
             if result is not None:
                 progress["ok"] += 1
                 logger.info(
-                    "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
-                    p["telegram_id"], uuid[:8],
+                    "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s username=%s to=%s source=%s",
+                    tg, uuid[:8], actual_username,
                     p["real_end"].isoformat(), p["source"],
                 )
             else:
-                # All 5 endpoints rejected — almost certainly entity
-                # is deleted from the panel. Premium is not active
-                # either way, our goal is achieved.
-                progress["gone"] += 1
-                logger.info(
-                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (panel rejected all endpoints)",
-                    p["telegram_id"], uuid[:8],
+                progress["failed"] += 1
+                logger.warning(
+                    "PREMIUM_RECOVERY_FAIL tg=%s uuid=%s username=%s (PATCH rejected)",
+                    tg, uuid[:8], actual_username,
                 )
         progress["done"] += 1
         return True
@@ -444,7 +512,8 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                 "🩹 Применяю откат…\n\n"
                 f"Обработано: <b>{progress['done']}</b> / {total}\n"
                 f"  ✅ Откатано: {progress['ok']}\n"
-                f"  👻 Уже отсутствует: {progress['gone']}\n"
+                f"  👻 Уже отсутствует на панели: {progress['gone']}\n"
+                f"  🛡 Не тронуто (защита): {progress['skipped']}\n"
                 f"  ❌ Сбой: {progress['failed']}",
                 bot=callback.bot, parse_mode="HTML",
             )
@@ -457,9 +526,11 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     text = (
         "🩹 <b>Откат premium-подписок завершён</b>\n\n"
         f"✅ Откатано на панели: <b>{progress['ok']}</b> / {total}\n"
-        f"👻 Уже отсутствуют (premium не активен): <b>{progress['gone']}</b>\n"
-        f"❌ Сбой (нужен ручной разбор): <b>{progress['failed']}</b>\n\n"
+        f"👻 Уже отсутствует на панели: <b>{progress['gone']}</b>\n"
+        f"🛡 Не тронуто (защита username/дата): <b>{progress['skipped']}</b>\n"
+        f"❌ Сбой (ручной разбор): <b>{progress['failed']}</b>\n\n"
         "<i>Bypass entities остались нетронутыми.</i>\n"
+        "<i>Защита по username: трогаем только entity вида tg_&lt;id&gt;_premium.</i>\n"
         "Запустите повторно, чтобы убедиться (idempotent)."
     )
     await safe_edit_text(
