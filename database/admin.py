@@ -2772,3 +2772,37 @@ async def get_user_paid_subscription_history(telegram_id: int) -> list:
         )
     return [dict(r) for r in rows]
 
+
+async def get_paid_subscription_history_bulk(telegram_ids: list) -> dict:
+    """Bulk-fetch paid subscription history for many users in ONE query.
+
+    Returns a dict: telegram_id -> [{created_at, period_days, tariff}, ...]
+    sorted ascending by created_at. Missing users get an empty list.
+
+    Used by the premium recovery scan instead of 1k+ separate roundtrips.
+    """
+    if not telegram_ids:
+        return {}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, created_at, period_days, tariff
+               FROM pending_purchases
+               WHERE telegram_id = ANY($1::bigint[])
+                 AND status = 'paid'
+                 AND period_days > 0
+                 AND tariff IN ('basic', 'plus', 'biz_starter', 'biz_team',
+                                'biz_business', 'biz_pro', 'biz_enterprise',
+                                'biz_ultimate')
+               ORDER BY telegram_id, created_at ASC""",
+            telegram_ids,
+        )
+    out: dict = {tg: [] for tg in telegram_ids}
+    for r in rows:
+        out[r["telegram_id"]].append({
+            "created_at": r["created_at"],
+            "period_days": r["period_days"],
+            "tariff": r["tariff"],
+        })
+    return out
+
