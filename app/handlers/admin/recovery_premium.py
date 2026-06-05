@@ -262,10 +262,9 @@ def _format_dry_run(checked: int, plan: list) -> str:
             f"\nПри подтверждении: <b>{n_total}</b> панель-записей будут "
             "откатаны (idempotent). Bypass entities <b>не трогаются</b>."
         )
-        eta_min = max(1, n_total * (_FIX_THROTTLE_S + 0.2) / _FIX_CONCURRENCY / 60)
+        eta_min = max(1, int(n_total * 0.5 / _FIX_CONCURRENCY / 60))
         lines.append(
-            f"\n⏱ Apply ~{eta_min:.0f} мин "
-            f"(throttle {_FIX_CONCURRENCY} parallel, {int(_FIX_THROTTLE_S*1000)}ms между)."
+            f"\n⏱ Apply ~{eta_min} мин ({_FIX_CONCURRENCY} parallel)."
         )
 
     return "\n".join(lines)
