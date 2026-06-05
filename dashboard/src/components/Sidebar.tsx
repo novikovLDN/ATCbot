@@ -11,6 +11,7 @@ import {
   Gift,
   Tag,
   Wrench,
+  CreditCard,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
@@ -26,6 +27,7 @@ const items: NavItem[] = [
   { to: "/", label: "Главная", icon: LayoutDashboard },
   { to: "/users", label: "Пользователи", icon: Users },
   { to: "/analytics", label: "Аналитика", icon: TrendingUp },
+  { to: "/payments", label: "Платежи", icon: CreditCard },
   { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
   { to: "/promo", label: "Промокоды", icon: Tag },
   { to: "/referrals", label: "Рефералы", icon: Share2 },

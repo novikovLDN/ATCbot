@@ -372,6 +372,205 @@ async def get_analytics_by_period(hours: int) -> Dict[str, Any]:
         }
 
 
+async def get_revenue_for_period(hours: int) -> Dict[str, Any]:
+    """Money in over the last N hours from paid pending_purchases.
+
+    Returns totals (rubles) + counts split by purchase_type so the
+    UI can render a single KPI for the period plus a small breakdown.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return {
+            "revenue_rubles": 0.0,
+            "payments_count": 0,
+            "avg_check_rubles": 0.0,
+            "by_type": {},
+        }
+    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT
+                   COALESCE(SUM(price_kopecks), 0)::BIGINT AS total_kopecks,
+                   COUNT(*)::BIGINT AS count
+               FROM pending_purchases
+               WHERE status = 'paid' AND created_at >= $1""",
+            since,
+        )
+        by_type_rows = await conn.fetch(
+            """SELECT
+                   COALESCE(purchase_type, 'subscription') AS purchase_type,
+                   COUNT(*)::BIGINT AS count,
+                   COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kopecks
+               FROM pending_purchases
+               WHERE status = 'paid' AND created_at >= $1
+               GROUP BY purchase_type
+               ORDER BY revenue_kopecks DESC""",
+            since,
+        )
+    total = int(row["total_kopecks"]) if row else 0
+    count = int(row["count"]) if row else 0
+    return {
+        "revenue_rubles": total / 100,
+        "payments_count": count,
+        "avg_check_rubles": (total / 100 / count) if count else 0.0,
+        "by_type": {
+            r["purchase_type"]: {
+                "count": int(r["count"]),
+                "revenue_rubles": int(r["revenue_kopecks"]) / 100,
+            }
+            for r in by_type_rows
+        },
+    }
+
+
+async def get_payments_by_provider(hours: int) -> list:
+    """Breakdown of paid purchases by payment_provider.
+
+    Uses the payment_provider column (migration 054) when present.
+    NULL rows are bucketed as 'unknown' so old data is still visible.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return []
+    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                """SELECT
+                       COALESCE(payment_provider, 'unknown') AS provider,
+                       COUNT(*)::BIGINT AS count,
+                       COALESCE(SUM(price_kopecks), 0)::BIGINT AS revenue_kopecks
+                   FROM pending_purchases
+                   WHERE status = 'paid' AND created_at >= $1
+                   GROUP BY provider
+                   ORDER BY revenue_kopecks DESC""",
+                since,
+            )
+        except asyncpg.UndefinedColumnError:
+            # Migration 054 not applied yet — return only what we can
+            # infer from payments table.
+            rows = []
+    return [
+        {
+            "provider": r["provider"],
+            "count": int(r["count"]),
+            "revenue_rubles": int(r["revenue_kopecks"]) / 100,
+        }
+        for r in rows
+    ]
+
+
+async def get_recent_payments_feed(
+    limit: int = 100,
+    hours: Optional[int] = None,
+    status: Optional[str] = None,
+) -> list:
+    """Recent paid (and optionally pending/expired) purchases for the
+    Payments page feed. Joins users so we render @username with no
+    second round-trip."""
+    pool = await get_pool()
+    if pool is None:
+        return []
+    where = ["pp.created_at IS NOT NULL"]
+    params: list = []
+    if hours is not None:
+        params.append(_to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours)))
+        where.append(f"pp.created_at >= ${len(params)}")
+    if status:
+        params.append(status)
+        where.append(f"pp.status = ${len(params)}")
+    params.append(limit)
+    limit_idx = len(params)
+    sql = f"""
+        SELECT
+            pp.id, pp.purchase_id, pp.telegram_id, pp.tariff,
+            pp.purchase_type, pp.period_days, pp.price_kopecks,
+            pp.status, pp.created_at, pp.promo_code, pp.is_combo,
+            pp.country, pp.farm_plot_id,
+            COALESCE(pp.payment_provider, 'unknown') AS payment_provider,
+            u.username
+        FROM pending_purchases pp
+        LEFT JOIN users u ON u.telegram_id = pp.telegram_id
+        WHERE {' AND '.join(where)}
+        ORDER BY pp.created_at DESC
+        LIMIT ${limit_idx}
+    """
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(sql, *params)
+        except asyncpg.UndefinedColumnError:
+            # Migration not applied — fall back without payment_provider
+            sql_fallback = sql.replace(
+                "COALESCE(pp.payment_provider, 'unknown') AS payment_provider,",
+                "'unknown' AS payment_provider,",
+            )
+            rows = await conn.fetch(sql_fallback, *params)
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("created_at"):
+            d["created_at"] = _from_db_utc(d["created_at"])
+        # convert kopecks to rubles for UI
+        d["price_rubles"] = (d.get("price_kopecks") or 0) / 100
+        out.append(d)
+    return out
+
+
+async def get_traffic_stats(hours: int) -> Dict[str, Any]:
+    """Traffic-purchase stats — separate revenue/count + breakdown by
+    payment_method (column may be optional on older deploys)."""
+    pool = await get_pool()
+    if pool is None:
+        return {"count": 0, "revenue_rubles": 0.0, "total_gb": 0, "by_method": []}
+    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
+    async with pool.acquire() as conn:
+        try:
+            row = await conn.fetchrow(
+                """SELECT
+                       COUNT(*)::BIGINT AS count,
+                       COALESCE(SUM(price_rub), 0)::BIGINT AS revenue_rubles,
+                       COALESCE(SUM(gb_amount), 0)::BIGINT AS total_gb
+                   FROM traffic_purchases
+                   WHERE created_at >= $1""",
+                since,
+            )
+        except asyncpg.UndefinedTableError:
+            return {"count": 0, "revenue_rubles": 0.0, "total_gb": 0, "by_method": []}
+
+        by_method = []
+        try:
+            method_rows = await conn.fetch(
+                """SELECT
+                       COALESCE(payment_method, 'unknown') AS method,
+                       COUNT(*)::BIGINT AS count,
+                       COALESCE(SUM(price_rub), 0)::BIGINT AS revenue_rubles,
+                       COALESCE(SUM(gb_amount), 0)::BIGINT AS total_gb
+                   FROM traffic_purchases
+                   WHERE created_at >= $1
+                   GROUP BY method
+                   ORDER BY revenue_rubles DESC""",
+                since,
+            )
+            by_method = [
+                {
+                    "method": r["method"],
+                    "count": int(r["count"]),
+                    "revenue_rubles": int(r["revenue_rubles"]),
+                    "total_gb": int(r["total_gb"]),
+                }
+                for r in method_rows
+            ]
+        except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
+            by_method = []
+
+    return {
+        "count": int(row["count"]) if row else 0,
+        "revenue_rubles": int(row["revenue_rubles"]) if row else 0,
+        "total_gb": int(row["total_gb"]) if row else 0,
+        "by_method": by_method,
+    }
+
+
 async def get_purchase_breakdown() -> Dict[str, Any]:
     """Per-category purchase counts and revenue across time windows.
 

@@ -16,6 +16,7 @@ import { Referrals } from "@/pages/Referrals";
 import { BypassGifts } from "@/pages/BypassGifts";
 import { PromoCodes } from "@/pages/PromoCodes";
 import { Service } from "@/pages/Service";
+import { Payments } from "@/pages/Payments";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -68,6 +69,7 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="users" element={<Users />} />
               <Route path="analytics" element={<Analytics />} />
+              <Route path="payments" element={<Payments />} />
               <Route path="broadcasts" element={<Broadcasts />} />
               <Route path="broadcasts/new" element={<BroadcastCreate />} />
               <Route path="referrals" element={<Referrals />} />
