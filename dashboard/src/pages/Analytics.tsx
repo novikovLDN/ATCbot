@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Clock, TrendingUp } from "lucide-react";
-import { endpoints } from "@/lib/api";
+import { Clock, TrendingUp, Download, FileText } from "lucide-react";
+import { ApiError, downloadCsv, endpoints } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
 import { StatCard } from "@/components/StatCard";
 import { Spinner } from "@/components/Spinner";
+import { toast } from "@/store/toast";
 
 const RANGES = [
   { label: "24ч", hours: 24 },
@@ -126,7 +127,71 @@ export function Analytics() {
           </pre>
         ) : null}
       </section>
+
+      <ExportSection />
     </div>
+  );
+}
+
+function ExportSection() {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const download = async (path: string, filename: string, label: string) => {
+    setBusy(label);
+    try {
+      await downloadCsv(path, filename);
+      toast.success(`Скачан ${filename}`);
+    } catch (e: unknown) {
+      toast.error((e as ApiError)?.detail ?? "Не удалось скачать");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
+  return (
+    <section className="card p-5">
+      <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+        <FileText className="h-3 w-3" /> Экспорт данных
+      </div>
+      <p className="mb-4 text-sm text-fg-muted">
+        Стримит CSV прямо из базы с авторизованным запросом. Файл качается на
+        твою машину без захода токена в URL.
+      </p>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() =>
+            download("/export/users.csv", `users_${stamp}.csv`, "users")
+          }
+          disabled={busy !== null}
+          className="btn-secondary justify-start"
+        >
+          {busy === "users" ? <Spinner /> : <Download className="h-3.5 w-3.5" />}
+          Все пользователи (users.csv)
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            download(
+              "/export/subscriptions.csv",
+              `subscriptions_${stamp}.csv`,
+              "subscriptions",
+            )
+          }
+          disabled={busy !== null}
+          className="btn-secondary justify-start"
+        >
+          {busy === "subscriptions" ? (
+            <Spinner />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          Активные подписки (subscriptions.csv)
+        </button>
+      </div>
+    </section>
   );
 }
 

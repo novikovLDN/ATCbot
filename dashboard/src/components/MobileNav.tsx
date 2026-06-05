@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Users, TrendingUp, Megaphone, ScrollText } from "lucide-react";
+import { LayoutDashboard, Users, TrendingUp, Megaphone, Share2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 const items = [
@@ -7,7 +7,7 @@ const items = [
   { to: "/users", label: "Юзеры", icon: Users },
   { to: "/analytics", label: "Метрики", icon: TrendingUp },
   { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
-  { to: "/audit", label: "Аудит", icon: ScrollText },
+  { to: "/referrals", label: "Рефералы", icon: Share2 },
 ];
 
 export function MobileNav() {
