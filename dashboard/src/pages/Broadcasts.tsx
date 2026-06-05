@@ -192,8 +192,8 @@ function BroadcastDetail({ id }: { id: number }) {
     );
   }
 
-  const b = det.data;
-  const s = stats.data ?? {};
+  const b = det.data as BroadcastRow;
+  const s = (stats.data ?? {}) as BroadcastRow;
 
   return (
     <div className="card p-5 animate-fade-in">
