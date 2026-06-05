@@ -294,4 +294,6 @@ from database.admin import (  # noqa: F401
     get_gift_subscription,
     activate_gift_subscription,
     get_user_gifts,
+    get_premium_recovery_candidates,
+    get_user_paid_subscription_history,
 )
