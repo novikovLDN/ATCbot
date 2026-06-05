@@ -199,7 +199,7 @@ function UserCard({ telegramId }: { telegramId: number }) {
             label="Скидка"
             value={
               d.discount
-                ? `${(d.discount as Record<string, unknown>).discount_percent}%`
+                ? `${String((d.discount as Record<string, unknown>).discount_percent ?? "—")}%`
                 : "—"
             }
           />
@@ -307,7 +307,7 @@ function DiscountCard({
       </div>
       {existing && (
         <div className="mt-2 rounded-lg bg-bg-elevated px-3 py-2 text-sm text-fg">
-          <b>{existing.discount_percent}%</b> до{" "}
+          <b>{String(existing.discount_percent ?? "—")}%</b> до{" "}
           {fmtDate(existing.expires_at as string) || "бессрочно"}
         </div>
       )}
