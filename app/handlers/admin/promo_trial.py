@@ -53,6 +53,8 @@ import database
 from app.handlers.admin.keyboards import get_admin_back_keyboard
 from app.handlers.admin.broadcast import (
     BROADCAST_CONCURRENCY,
+    BROADCAST_BATCH_SIZE,
+    BROADCAST_BATCH_PAUSE,
     _safe_send_with_buttons,
 )
 from app.handlers.common.utils import safe_edit_text
@@ -97,13 +99,21 @@ def _make_promo_keyboard() -> InlineKeyboardMarkup:
 
 
 async def _sender_worker(admin_id: int, bot, user_ids: list):
-    """Background broadcast — reuses broadcast.py's _safe_send_with_buttons
-    so rate-limit and retry semantics match the rest of the admin
-    broadcasts."""
+    """Background broadcast — same delivery model as the custom-broadcast
+    pipeline in broadcast.py:
+      - Semaphore(BROADCAST_CONCURRENCY=15) — Telegram-safe 30 msg/s
+      - Batches of BROADCAST_BATCH_SIZE=200, BROADCAST_BATCH_PAUSE=2s
+        between batches, so a hot loop never piles tasks into memory
+      - return_exceptions=True per batch, so one user's failure can't
+        cancel its siblings
+      - Per-user retry (RetryAfter / generic) lives inside
+        _safe_send_with_buttons — inherited automatically.
+    """
     state = _runs[admin_id]
     state["total"] = len(user_ids)
     state["sent"] = 0
     state["failed"] = 0
+    state["done"] = 0
 
     sem = asyncio.Semaphore(BROADCAST_CONCURRENCY)
     keyboard = _make_promo_keyboard()
@@ -113,15 +123,35 @@ async def _sender_worker(admin_id: int, bot, user_ids: list):
             bot, uid, PROMO_TEXT_HTML, sem,
             reply_markup=keyboard,
         )
-        if msg_id is not None:
-            state["sent"] += 1
-        else:
-            state["failed"] += 1
-        state["done"] += 1
+        return uid, msg_id
 
-    state["done"] = 0
     try:
-        await asyncio.gather(*[_send_one(uid) for uid in user_ids])
+        total = len(user_ids)
+        for i in range(0, total, BROADCAST_BATCH_SIZE):
+            batch = user_ids[i:i + BROADCAST_BATCH_SIZE]
+            results = await asyncio.gather(
+                *[_send_one(uid) for uid in batch],
+                return_exceptions=True,
+            )
+            for r in results:
+                if isinstance(r, Exception):
+                    state["failed"] += 1
+                    logger.warning("PROMO_TRIAL_TASK_ERROR admin=%s err=%s",
+                                   admin_id, r)
+                else:
+                    _uid, msg_id = r
+                    if msg_id is not None:
+                        state["sent"] += 1
+                    else:
+                        state["failed"] += 1
+                state["done"] += 1
+            logger.info(
+                "PROMO_TRIAL_PROGRESS admin=%s done=%s/%s sent=%s failed=%s",
+                admin_id, state["done"], total, state["sent"], state["failed"],
+            )
+            if i + BROADCAST_BATCH_SIZE < total:
+                await asyncio.sleep(BROADCAST_BATCH_PAUSE)
+
         state["status"] = "done"
         logger.info(
             "PROMO_TRIAL_DONE admin=%s total=%s sent=%s failed=%s",
@@ -325,10 +355,17 @@ async def callback_promo_trial_status(callback: CallbackQuery):
 # ────────────────────────────────────────────────────────────────────
 @admin_promo_trial_router.callback_query(F.data == "promo_trial_claim")
 async def callback_promo_trial_claim(callback: CallbackQuery, state):
-    """Activate 30%/24h personal discount + open tariff screen.
+    """Activate 30%/24h personal discount + open the standard tariff screen.
 
-    Idempotent: if an active discount already exists, we don't
-    downgrade — the existing one stays.
+    Behaviour:
+      - Always refreshes expires_at to NOW + PROMO_DISCOUNT_HOURS so the
+        user gets a fresh 24h window on every click.
+      - Never downgrades: discount_percent = max(existing_percent, 30).
+        If the user already has a 40% deal, they keep 40%; otherwise
+        they get 30%.
+      - calculate_final_price's personal_discount branch applies it
+        automatically across basic / plus / combo / biz at any period —
+        no tariff-specific code path needed.
     """
     try:
         await callback.answer()
@@ -343,26 +380,14 @@ async def callback_promo_trial_claim(callback: CallbackQuery, state):
         logger.exception("PROMO_TRIAL_CLAIM_LOOKUP_FAIL user=%s %s", telegram_id, e)
         existing = None
 
-    if existing:
-        pct = int(existing.get("discount_percent") or 0)
-        await callback.answer(
-            f"У вас уже активна скидка {pct}%. "
-            "Откройте «Купить подписку» и выберите тариф — она применится "
-            "автоматически.",
-            show_alert=True,
-        )
-        try:
-            from app.handlers.common.screens import show_tariffs_main_screen
-            await show_tariffs_main_screen(callback, state)
-        except Exception:
-            pass
-        return
-
+    existing_pct = int((existing or {}).get("discount_percent") or 0)
+    final_pct = max(existing_pct, PROMO_DISCOUNT_PERCENT)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=PROMO_DISCOUNT_HOURS)
+
     try:
         ok = await database.create_user_discount(
             telegram_id=telegram_id,
-            discount_percent=PROMO_DISCOUNT_PERCENT,
+            discount_percent=final_pct,
             expires_at=expires_at,
             created_by=config.ADMIN_TELEGRAM_ID,
         )
@@ -378,8 +403,8 @@ async def callback_promo_trial_claim(callback: CallbackQuery, state):
         return
 
     logger.info(
-        "PROMO_TRIAL_CLAIM_OK user=%s percent=%s hours=%s expires=%s",
-        telegram_id, PROMO_DISCOUNT_PERCENT, PROMO_DISCOUNT_HOURS,
+        "PROMO_TRIAL_CLAIM_OK user=%s existing_pct=%s applied_pct=%s hours=%s expires=%s",
+        telegram_id, existing_pct, final_pct, PROMO_DISCOUNT_HOURS,
         expires_at.isoformat(),
     )
 
@@ -391,7 +416,7 @@ async def callback_promo_trial_claim(callback: CallbackQuery, state):
 
     try:
         await callback.message.answer(
-            f"🎁 <b>Скидка {PROMO_DISCOUNT_PERCENT}% активирована!</b>\n\n"
+            f"🎁 <b>Скидка {final_pct}% активирована!</b>\n\n"
             f"Действует {PROMO_DISCOUNT_HOURS} часа — выберите <b>любой тариф</b> "
             "(Basic, Plus, Combo) на любой срок, и скидка применится автоматически "
             "при оплате.",
