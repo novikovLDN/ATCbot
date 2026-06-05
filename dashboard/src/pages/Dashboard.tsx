@@ -59,11 +59,14 @@ export function Dashboard() {
         at: Date.now(),
       };
     } else if (e.type === "payment:approved") {
+      const until = e.expires_at
+        ? new Date(e.expires_at).toLocaleDateString("ru-RU")
+        : "—";
       entry = {
         id: ++liveCounter,
         kind: e.type,
         title: e.is_renewal ? "Продление подписки" : "Новая подписка",
-        subtitle: `tg:${e.telegram_id} · до ${new Date(e.expires_at).toLocaleDateString("ru-RU")}`,
+        subtitle: `tg:${e.telegram_id ?? "—"} · до ${until}`,
         at: Date.now(),
       };
     } else if (e.type === "admin:grant") {

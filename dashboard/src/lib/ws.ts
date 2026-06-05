@@ -1,17 +1,25 @@
 import { useEffect, useRef } from "react";
 import { auth } from "./auth";
 
-export type BusEvent =
-  | { type: "ping" }
-  | { type: "user:registered"; telegram_id: number; username?: string }
-  | { type: "payment:approved"; payment_id: number; telegram_id: number; is_renewal: boolean; expires_at: string }
-  | { type: "admin:grant"; telegram_id: number; by: number; days: number; tariff: string }
-  | { type: "admin:revoke"; telegram_id: number; by: number }
-  | { type: "admin:discount_create"; telegram_id: number; percent: number; by: number }
-  | { type: "admin:discount_delete"; telegram_id: number; by: number }
-  | { type: "admin:vip_grant"; telegram_id: number; by: number }
-  | { type: "admin:vip_revoke"; telegram_id: number; by: number }
-  | { type: string; [k: string]: unknown };
+// Single flexible shape. Discriminated unions don't combine well with a
+// catch-all branch (TS can't narrow via .startsWith()); instead we
+// expose every known field as optional and let the handler verify the
+// pieces it cares about. Runtime sources of truth are the bus.publish
+// calls in app/api/dashboard/routes/users.py and database/*.
+export type BusEvent = {
+  type: string;
+  telegram_id?: number;
+  username?: string;
+  payment_id?: number;
+  is_renewal?: boolean;
+  expires_at?: string;
+  by?: number;
+  days?: number;
+  tariff?: string;
+  percent?: number;
+  minutes?: number;
+  [k: string]: unknown;
+};
 
 type Handler = (e: BusEvent) => void;
 
