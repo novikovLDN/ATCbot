@@ -303,4 +303,5 @@ from database.admin import (  # noqa: F401
     get_active_premium_subscribers,
     get_subscriptions_with_far_future_expires,
     update_subscription_expires_at_bulk,
+    get_active_trial_telegram_ids,
 )

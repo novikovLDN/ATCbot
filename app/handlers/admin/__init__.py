@@ -17,6 +17,7 @@ from .migration import admin_migration_router
 from .recovery_premium import admin_premium_recovery_router
 from .audit_subs import admin_audit_subs_router
 from .audit_db_dates import admin_audit_db_dates_router
+from .promo_trial import admin_promo_trial_router
 from .bonus import admin_bonus_router
 from .stage_users import admin_stage_users_router
 from .farm_storm import admin_farm_storm_router
@@ -40,6 +41,7 @@ router.include_router(admin_migration_router)
 router.include_router(admin_premium_recovery_router)
 router.include_router(admin_audit_subs_router)
 router.include_router(admin_audit_db_dates_router)
+router.include_router(admin_promo_trial_router)
 router.include_router(admin_bonus_router)
 router.include_router(admin_stage_users_router)
 router.include_router(admin_farm_storm_router)

@@ -3001,3 +3001,50 @@ async def update_subscription_expires_at_bulk(updates: list) -> int:
                 rows,
             )
     return len(updates)
+
+
+async def get_active_trial_telegram_ids() -> list:
+    """Telegram IDs of users currently on an active trial — and ONLY
+    on a trial (no live PAID premium subscription).
+
+    Trial activation writes a `subscriptions` row with source='trial',
+    status='active', subscription_type='basic' (default tariff in
+    grant_access), expires_at = trial end, is_bypass_only=FALSE. That
+    means the "looks like an active paid sub" filter MUST exclude
+    source='trial' explicitly — otherwise the audience comes out
+    empty (every trial user gets filtered as if they were already
+    paying).
+
+    Filters:
+      - users.trial_expires_at > NOW                 → trial running
+      - NO subscriptions row with:
+          - status='active', expires_at > NOW
+          - source != 'trial'                        → really paid
+          - is_bypass_only=FALSE
+          - subscription_type IN paid tariffs
+
+    Returns sorted list of telegram_id integers.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT u.telegram_id
+               FROM users u
+               WHERE u.trial_expires_at IS NOT NULL
+                 AND u.trial_expires_at > NOW()
+                 AND NOT EXISTS (
+                     SELECT 1 FROM subscriptions s
+                     WHERE s.telegram_id = u.telegram_id
+                       AND s.status = 'active'
+                       AND s.expires_at > NOW()
+                       AND COALESCE(s.source, '') != 'trial'
+                       AND COALESCE(s.is_bypass_only, FALSE) = FALSE
+                       AND s.subscription_type IN (
+                           'basic', 'plus', 'biz_starter', 'biz_team',
+                           'biz_business', 'biz_pro', 'biz_enterprise',
+                           'biz_ultimate'
+                       )
+                 )
+               ORDER BY u.telegram_id"""
+        )
+    return [r["telegram_id"] for r in rows]
