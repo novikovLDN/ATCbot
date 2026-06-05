@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   Megaphone,
   RefreshCcw,
@@ -7,6 +8,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  Plus,
   Users as UsersIcon,
 } from "lucide-react";
 import { endpoints } from "@/lib/api";
@@ -49,30 +51,19 @@ export function Broadcasts() {
             Рассылки
           </h1>
         </div>
-        <button
-          type="button"
-          onClick={() => list.refetch()}
-          className="btn-secondary"
-        >
-          <RefreshCcw className="h-3.5 w-3.5" /> Обновить
-        </button>
-      </header>
-
-      <div className="rounded-2xl border border-accent/30 bg-accent/5 p-4 text-sm text-fg-muted">
-        <div className="flex items-start gap-3">
-          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-accent/15 text-accent">
-            <Megaphone className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="font-medium text-fg">Конструктор рассылок — в следующей фазе</div>
-            <div className="mt-1">
-              Создание новых рассылок и preset-шаблонов пока остаётся в боте (через
-              <code className="mx-1 rounded bg-bg-elevated px-1 py-0.5 font-mono text-xs">/admin</code>).
-              Здесь — журнал отправленных и доставки в realtime.
-            </div>
-          </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => list.refetch()}
+            className="btn-secondary"
+          >
+            <RefreshCcw className="h-3.5 w-3.5" /> Обновить
+          </button>
+          <Link to="/broadcasts/new" className="btn-primary">
+            <Plus className="h-3.5 w-3.5" /> Создать
+          </Link>
         </div>
-      </div>
+      </header>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_400px]">
         <div className="card p-5">
