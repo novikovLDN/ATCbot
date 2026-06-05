@@ -875,14 +875,16 @@ async def callback_admin_switch_confirm(callback: CallbackQuery, bot: Bot):
             return
         uuid_val = subscription["uuid"].strip()
         language = await resolve_user_language(callback.from_user.id)
+        # Tariffs are bot-side metadata only — Remnawave entity is the
+        # same for basic and plus.  Drop the legacy Xray upgrade /
+        # remove_plus_inbound calls (they 404 after the Remnawave
+        # cut-over) and flip subscription_type directly.  Existing
+        # vpn_key_plus is preserved (it's the bypass URL, tariff-agnostic).
         if tariff == "plus":
-            upgrade_result = await vpn_utils.upgrade_vless_user(uuid_val)
-            vpn_key_plus = upgrade_result.get("vless_url_plus")
-            await database.admin_switch_tariff(user_id, "plus", vpn_key_plus=vpn_key_plus)
+            await database.admin_switch_tariff(user_id, "plus")
             await database._log_audit_event_atomic_standalone("ADMIN_SWITCH_TO_PLUS", callback.from_user.id, user_id, "Tariff switched to Plus")
         else:
-            await vpn_utils.remove_plus_inbound(uuid_val)
-            await database.admin_switch_tariff(user_id, "basic", vpn_key_plus=None)
+            await database.admin_switch_tariff(user_id, "basic")
             await database._log_audit_event_atomic_standalone("ADMIN_SWITCH_TO_BASIC", callback.from_user.id, user_id, "Tariff switched to Basic")
         tariff_label = "Plus" if tariff == "plus" else "Basic"
         text = f"✅ Готово. Тариф изменён на {tariff_label}\n\nУведомить пользователя?"

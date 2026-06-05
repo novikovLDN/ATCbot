@@ -473,15 +473,15 @@ async def get_subscription_any(telegram_id: int) -> Optional[Dict[str, Any]]:
 
 
 async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Заменить тариф подписки (Basic↔Plus) без изменения срока. Только для активной подписки.
+    """Flip subscription_type (Basic↔Plus) for the active subscription.
 
-    Args:
-        telegram_id: ID пользователя
-        new_tariff: 'basic' или 'plus'
-        vpn_key_plus: для plus — ссылка White List; для basic — None (очищается)
+    Tariffs are bot-side metadata only — Remnawave serves both tariffs
+    from the same entity, so this is a pure DB-side flag flip. We do
+    NOT touch vpn_key_plus: that column holds the bypass subscription
+    URL (tariff-agnostic) under the Remnawave model.
 
-    Returns:
-        Обновлённая строка подписки или None, если активной подписки нет.
+    `vpn_key_plus` parameter is kept only for backward signature
+    compatibility and ignored.
     """
     if not _core.DB_READY:
         logger.warning("DB not ready, admin_switch_tariff skipped")
@@ -493,18 +493,11 @@ async def admin_switch_tariff(telegram_id: int, new_tariff: str, vpn_key_plus: O
     if tariff not in config.VALID_SUBSCRIPTION_TYPES:
         tariff = "basic"
     async with pool.acquire() as conn:
-        if vpn_key_plus is not None:
-            await conn.execute(
-                """UPDATE subscriptions SET subscription_type = $1, vpn_key_plus = $2
-                   WHERE telegram_id = $3 AND status = 'active'""",
-                tariff, vpn_key_plus, telegram_id
-            )
-        else:
-            await conn.execute(
-                """UPDATE subscriptions SET subscription_type = $1, vpn_key_plus = NULL
-                   WHERE telegram_id = $2 AND status = 'active'""",
-                tariff, telegram_id
-            )
+        await conn.execute(
+            """UPDATE subscriptions SET subscription_type = $1
+               WHERE telegram_id = $2 AND status = 'active'""",
+            tariff, telegram_id
+        )
         row = await conn.fetchrow(
             "SELECT * FROM subscriptions WHERE telegram_id = $1 AND status = 'active'",
             telegram_id
@@ -1428,17 +1421,19 @@ async def grant_access(
             current_sub_type = (subscription.get("subscription_type") or "basic").strip().lower()
             incoming_tariff = (tariff.strip().lower() if tariff else None) or current_sub_type
 
-            # Basic→Plus upgrade: same UUID, call upgrade_vless_user, update vpn_key, vpn_key_plus, subscription_type, extend dates
+            # Basic→Plus upgrade: tariffs live only in subscription_type
+            # (Remnawave entity is identical for both tariffs).  Just flip
+            # the column, extend dates, and let the standard renewal sync
+            # update Remnawave premium expireAt + top-up bypass with the
+            # plus-tier traffic limits.  NO legacy Xray call — the
+            # upgrade_vless_user path 404s after the Remnawave cut-over
+            # and was the root cause of "Basic→Plus upgrade failed:
+            # User not found for upgrade" alerts.
             if source == "payment" and incoming_tariff == "plus" and current_sub_type == "basic":
                 logger.info(
                     f"grant_access: BASIC_TO_PLUS_UPGRADE [user={telegram_id}, uuid={uuid[:8]}..., source={source}]"
                 )
                 try:
-                    upgrade_result = await vpn_utils.upgrade_vless_user(uuid)
-                    new_vpn_key = upgrade_result.get("vless_url")
-                    new_vpn_key_plus = upgrade_result.get("vless_url_plus")
-                    if not new_vpn_key:
-                        raise Exception("upgrade_vless_user did not return vless_url (basic_link)")
                     old_expires_at = expires_at
                     subscription_end = max(expires_at, now) + duration
                     _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
@@ -1447,72 +1442,112 @@ async def grant_access(
                         raise Exception(f"Invalid upgrade: new_end={subscription_end} <= old_end={old_expires_at}")
                     await conn.execute(
                         """UPDATE subscriptions
-                           SET expires_at = $1, vpn_key = $2, vpn_key_plus = $3, subscription_type = 'plus',
-                               status = 'active', source = $4,
+                           SET expires_at = $1, subscription_type = 'plus',
+                               status = 'active', source = $2,
                                reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
                                reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
-                           WHERE telegram_id = $5""",
-                        _to_db_utc(subscription_end), new_vpn_key, new_vpn_key_plus, source, telegram_id
+                           WHERE telegram_id = $3""",
+                        _to_db_utc(subscription_end), source, telegram_id
                     )
-                    await _log_subscription_history_atomic(conn, telegram_id, new_vpn_key, subscription_start, subscription_end, "renewal")
+                    vpn_key_existing = subscription.get("vpn_key")
+                    vpn_key_plus_existing = subscription.get("vpn_key_plus")
+                    await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
                     logger.info(
                         f"grant_access: BASIC_TO_PLUS_UPGRADE_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
                         f"new_expires={subscription_end.isoformat()}]"
                     )
-                    return {
+                    result_dict = {
                         "uuid": uuid,
-                        "vless_url": new_vpn_key,
-                        "vpn_key": new_vpn_key,
-                        "vpn_key_plus": new_vpn_key_plus,
+                        "vless_url": vpn_key_existing,
+                        "vpn_key": vpn_key_existing,
+                        "vpn_key_plus": vpn_key_plus_existing,
                         "subscription_end": subscription_end,
                         "action": "renewal",
                         "subscription_type": "plus",
                         "is_basic_to_plus_upgrade": True,
                     }
+                    # Same post-commit / inline Remnawave sync pattern as
+                    # the normal renewal branch below — passes the NEW
+                    # tariff so bypass top-up uses plus-tier limits.
+                    _upgrade_period_days = max(1, int(duration.total_seconds() // 86400))
+                    if _caller_holds_transaction:
+                        result_dict["renewal_xray_sync_after_commit"] = {
+                            "telegram_id": telegram_id,
+                            "uuid": uuid,
+                            "subscription_end": subscription_end,
+                            "tariff": "plus",
+                            "period_days": _upgrade_period_days,
+                        }
+                        return result_dict
+                    from app.services import purchase_flow
+                    await purchase_flow.sync_renewal_to_remnawave({
+                        "telegram_id": telegram_id,
+                        "uuid": uuid,
+                        "subscription_end": subscription_end,
+                        "tariff": "plus",
+                        "period_days": _upgrade_period_days,
+                    })
+                    return result_dict
                 except Exception as e:
                     logger.error(f"grant_access: BASIC_TO_PLUS_UPGRADE_FAILED [user={telegram_id}, error={e}]")
                     raise Exception(f"Basic→Plus upgrade failed: {e}") from e
 
-            # Plus→Basic downgrade: remove from plus inbound, set vpn_key_plus=NULL, subscription_type=basic, extend dates
+            # Plus→Basic downgrade: symmetric — bot-side tariff flip only,
+            # no panel-side change.  Remnawave entity stays identical.
             if source == "payment" and incoming_tariff == "basic" and current_sub_type == "plus":
                 logger.info(
                     f"grant_access: PLUS_TO_BASIC_DOWNGRADE [user={telegram_id}, uuid={uuid[:8]}..., source={source}]"
                 )
-                try:
-                    await vpn_utils.remove_plus_inbound(uuid)
-                except Exception as e:
-                    logger.error(f"grant_access: PLUS_TO_BASIC_DOWNGRADE remove_plus_inbound failed [user={telegram_id}, error={e}]")
-                    raise Exception(f"Plus→Basic downgrade (remove plus) failed: {e}") from e
                 old_expires_at = expires_at
                 subscription_end = max(expires_at, now) + duration
                 _start_raw = subscription.get("activated_at") or subscription.get("expires_at") or now
                 subscription_start = _ensure_utc(_start_raw) if _start_raw else now
                 if subscription_end <= old_expires_at:
                     raise Exception(f"Invalid downgrade: new_end={subscription_end} <= old_end={old_expires_at}")
-                vpn_key_basic = subscription.get("vpn_key")
+                vpn_key_existing = subscription.get("vpn_key")
+                vpn_key_plus_existing = subscription.get("vpn_key_plus")
                 await conn.execute(
                     """UPDATE subscriptions
-                       SET expires_at = $1, vpn_key_plus = NULL, subscription_type = 'basic',
+                       SET expires_at = $1, subscription_type = 'basic',
                            status = 'active', source = $2,
                            reminder_sent = FALSE, reminder_3d_sent = FALSE, reminder_24h_sent = FALSE,
                            reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
                        WHERE telegram_id = $3""",
                     _to_db_utc(subscription_end), source, telegram_id
                 )
-                await _log_subscription_history_atomic(conn, telegram_id, vpn_key_basic or uuid, subscription_start, subscription_end, "renewal")
+                await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
                 logger.info(
                     f"grant_access: PLUS_TO_BASIC_DOWNGRADE_SUCCESS [user={telegram_id}, uuid={uuid[:8]}..., "
                     f"new_expires={subscription_end.isoformat()}]"
                 )
-                return {
+                result_dict = {
                     "uuid": uuid,
-                    "vless_url": vpn_key_basic,
-                    "vpn_key": vpn_key_basic,
-                    "vpn_key_plus": None,
+                    "vless_url": vpn_key_existing,
+                    "vpn_key": vpn_key_existing,
+                    "vpn_key_plus": vpn_key_plus_existing,
                     "subscription_end": subscription_end,
                     "action": "renewal",
                     "subscription_type": "basic",
                 }
+                _downgrade_period_days = max(1, int(duration.total_seconds() // 86400))
+                if _caller_holds_transaction:
+                    result_dict["renewal_xray_sync_after_commit"] = {
+                        "telegram_id": telegram_id,
+                        "uuid": uuid,
+                        "subscription_end": subscription_end,
+                        "tariff": "basic",
+                        "period_days": _downgrade_period_days,
+                    }
+                    return result_dict
+                from app.services import purchase_flow
+                await purchase_flow.sync_renewal_to_remnawave({
+                    "telegram_id": telegram_id,
+                    "uuid": uuid,
+                    "subscription_end": subscription_end,
+                    "tariff": "basic",
+                    "period_days": _downgrade_period_days,
+                })
+                return result_dict
 
             # UUID СТАБИЛЕН - продлеваем подписку БЕЗ вызова VPN API (renewal same tariff)
             logger.info(
