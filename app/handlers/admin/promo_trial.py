@@ -24,20 +24,22 @@ limiting (BROADCAST_CONCURRENCY=15, retry on RetryAfter / generic
 errors), so we inherit the same proven behaviour as the existing
 custom broadcasts.
 
-CTA button under each broadcast message uses callback_data
-"broadcast_gift_3m" — the existing flow that opens the 4-tariff gift
-screen with 30% pre-applied (Basic 349 ₽, Plus 629 ₽, Combo Basic
-594 ₽, Combo Plus 909 ₽). No new payment plumbing required.
+CTA button under each broadcast message — "🎁 Забрать подарок" —
+writes a 24-hour personal_discount=30% row via
+database.create_user_discount, then opens the standard tariff screen.
+The discount is automatically applied by calculate_final_price's
+personal_discount branch, so it works for ANY tariff (basic / plus /
+combo / biz) and ANY period (1/3/6/12 mo). No tariff-specific plumbing.
 
 CREATIVE TEXT
 -------------
 The body of the broadcast lives in PROMO_TEXT_HTML at the top of this
 file as a placeholder. The admin approves the exact wording, then we
-replace it here. NO copy ships until that approval.
+replace it here.
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
 from aiogram.types import (
@@ -60,16 +62,17 @@ logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────────────────────────
 # PLACEHOLDER. Approve creative with the admin, then replace.
-# Keep PROMO_BUTTON_CALLBACK pointed at the existing 30%/3m flow so
-# the user lands in the working tariff screen without new plumbing.
 # ────────────────────────────────────────────────────────────────────
 PROMO_TEXT_HTML = (
     "🎁 <b>Спец-предложение только для тебя</b>\n\n"
     "<i>[черновик текста — заменим после утверждения]</i>\n\n"
     "Скидка <b>30%</b> на любой тариф. Действует ограниченное время."
 )
-PROMO_BUTTON_TEXT = "🎁 Активировать скидку 30%"
-PROMO_BUTTON_CALLBACK = "broadcast_gift_3m"
+PROMO_BUTTON_TEXT = "🎁 Забрать подарок"
+PROMO_BUTTON_CALLBACK = "promo_trial_claim"
+# How long the discount stays active once the user claims it.
+PROMO_DISCOUNT_PERCENT = 30
+PROMO_DISCOUNT_HOURS = 24
 
 # Seconds between live progress edits.
 _PROGRESS_INTERVAL = 5
@@ -197,7 +200,10 @@ async def callback_promo_trial(callback: CallbackQuery):
         f"{PROMO_TEXT_HTML}\n"
         "─────────────────\n\n"
         "Кнопка под сообщением: "
-        f"<i>{PROMO_BUTTON_TEXT}</i> → открывает экран 30%/3 месяца.\n\n"
+        f"<i>{PROMO_BUTTON_TEXT}</i> → активирует персональную скидку "
+        f"<b>{PROMO_DISCOUNT_PERCENT}%</b> на <b>{PROMO_DISCOUNT_HOURS} часов</b> "
+        "и открывает экран тарифов. Скидка применяется к любому тарифу "
+        "(Basic / Plus / Combo) на любой срок.\n\n"
         "<i>Текст можно поменять перед отправкой — скажи финал, заменю в коде.</i>"
     )
 
@@ -301,3 +307,87 @@ async def callback_promo_trial_status(callback: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         bot=callback.bot, parse_mode="HTML",
     )
+
+
+# ────────────────────────────────────────────────────────────────────
+# USER-FACING: "🎁 Забрать подарок" callback under every broadcast
+# message. Activates the 24h × 30% personal discount and routes the
+# user into the standard tariff screen — the existing pricing flow
+# applies the discount automatically.
+# ────────────────────────────────────────────────────────────────────
+@admin_promo_trial_router.callback_query(F.data == "promo_trial_claim")
+async def callback_promo_trial_claim(callback: CallbackQuery, state):
+    """Activate 30%/24h personal discount + open tariff screen.
+
+    Idempotent: if an active discount already exists, we don't
+    downgrade — the existing one stays.
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    telegram_id = callback.from_user.id
+
+    try:
+        existing = await database.get_user_discount(telegram_id)
+    except Exception as e:
+        logger.exception("PROMO_TRIAL_CLAIM_LOOKUP_FAIL user=%s %s", telegram_id, e)
+        existing = None
+
+    if existing:
+        pct = int(existing.get("discount_percent") or 0)
+        await callback.answer(
+            f"У вас уже активна скидка {pct}%. "
+            "Откройте «Купить подписку» и выберите тариф — она применится "
+            "автоматически.",
+            show_alert=True,
+        )
+        try:
+            from app.handlers.common.screens import show_tariffs_main_screen
+            await show_tariffs_main_screen(callback, state)
+        except Exception:
+            pass
+        return
+
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=PROMO_DISCOUNT_HOURS)
+    try:
+        ok = await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=PROMO_DISCOUNT_PERCENT,
+            expires_at=expires_at,
+            created_by=config.ADMIN_TELEGRAM_ID,
+        )
+    except Exception as e:
+        logger.exception("PROMO_TRIAL_CLAIM_CREATE_FAIL user=%s %s", telegram_id, e)
+        ok = False
+
+    if not ok:
+        await callback.answer(
+            "Не удалось активировать скидку. Попробуйте позже или напишите в поддержку.",
+            show_alert=True,
+        )
+        return
+
+    logger.info(
+        "PROMO_TRIAL_CLAIM_OK user=%s percent=%s hours=%s expires=%s",
+        telegram_id, PROMO_DISCOUNT_PERCENT, PROMO_DISCOUNT_HOURS,
+        expires_at.isoformat(),
+    )
+
+    try:
+        from app.handlers.common.screens import show_tariffs_main_screen
+        await show_tariffs_main_screen(callback, state)
+    except Exception as e:
+        logger.warning("PROMO_TRIAL_CLAIM_SHOW_TARIFFS_FAIL user=%s %s", telegram_id, e)
+
+    try:
+        await callback.message.answer(
+            f"🎁 <b>Скидка {PROMO_DISCOUNT_PERCENT}% активирована!</b>\n\n"
+            f"Действует {PROMO_DISCOUNT_HOURS} часа — выберите <b>любой тариф</b> "
+            "(Basic, Plus, Combo) на любой срок, и скидка применится автоматически "
+            "при оплате.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
