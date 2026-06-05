@@ -30,11 +30,18 @@ _TOKEN_TTL_MINUTES = 10
 
 
 def issue_login_token(admin_telegram_id: int) -> str:
-    """Sign a short-lived admin token. Called from the /admin bot handler."""
+    """Sign a short-lived admin token. Called from the /admin bot handler.
+
+    PyJWT 2.10+ enforces `sub` to be a string at decode time
+    (InvalidSubjectError otherwise). Encoding does NOT validate, so the
+    token gets issued fine — but every subsequent verify fails. Cast to
+    str here; callers that need the integer telegram_id read it as
+    `int(payload["sub"])` (users.py already does).
+    """
     if not config.JWT_SECRET:
         raise RuntimeError("JWT_SECRET is not configured")
     payload = {
-        "sub": admin_telegram_id,
+        "sub": str(admin_telegram_id),
         "role": "admin",
         "iat": datetime.now(timezone.utc),
         "exp": datetime.now(timezone.utc) + timedelta(minutes=_TOKEN_TTL_MINUTES),
@@ -43,12 +50,21 @@ def issue_login_token(admin_telegram_id: int) -> str:
 
 
 def verify_token(token: str) -> Optional[dict[str, Any]]:
-    """Decode + validate. Returns payload dict on success, None on any failure."""
+    """Decode + validate. Returns payload dict on success, None on any failure.
+
+    Logs the specific PyJWT error so misconfigurations (wrong secret,
+    clock skew, sub-claim format) surface in Railway logs instead of
+    being silently swallowed as a 401.
+    """
     if not config.JWT_SECRET:
         return None
     try:
         return jwt.decode(token, config.JWT_SECRET, algorithms=[_JWT_ALG])
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
+        import logging
+        logging.getLogger(__name__).info(
+            "DASHBOARD_JWT_VERIFY_FAIL %s: %s", type(e).__name__, e,
+        )
         return None
 
 
@@ -59,8 +75,13 @@ async def verify_endpoint(token: str):
     payload = verify_token(token)
     if not payload:
         raise HTTPException(401, "Invalid or expired token")
+    sub = payload.get("sub")
+    try:
+        telegram_id = int(sub) if sub is not None else None
+    except (TypeError, ValueError):
+        telegram_id = sub
     return {
-        "telegram_id": payload.get("sub"),
+        "telegram_id": telegram_id,
         "role": payload.get("role"),
         "expires_at": payload.get("exp"),
     }

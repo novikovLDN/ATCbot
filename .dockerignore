@@ -45,3 +45,9 @@ scripts/
 # Audit reports
 *_AUDIT.md
 *_PLAN.md
+
+# Dashboard build artifacts — built INSIDE the Dockerfile (stage 1),
+# not copied from the host. Always exclude the host's local
+# node_modules/dist; they would slow the build and waste image space.
+dashboard/node_modules
+dashboard/dist

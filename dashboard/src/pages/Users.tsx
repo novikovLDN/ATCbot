@@ -1,0 +1,473 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Search,
+  ShieldCheck,
+  Crown,
+  Wallet,
+  Percent,
+  Calendar,
+  Hash,
+  UserCircle2,
+  RefreshCcw,
+  Plus,
+  Minus,
+  Trash2,
+} from "lucide-react";
+import { endpoints, ApiError, type UserDetail } from "@/lib/api";
+import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
+import { toast } from "@/store/toast";
+import { Spinner } from "@/components/Spinner";
+import { EmptyState } from "@/components/EmptyState";
+
+export function Users() {
+  const [query, setQuery] = useState("");
+  const [submitted, setSubmitted] = useState("");
+
+  const search = useQuery({
+    queryKey: ["users", "search", submitted],
+    queryFn: () => endpoints.userSearch(submitted),
+    enabled: submitted.length > 0,
+    retry: false,
+  });
+
+  const telegramId =
+    search.data && typeof search.data.telegram_id === "number"
+      ? (search.data.telegram_id as number)
+      : null;
+
+  return (
+    <div className="space-y-6">
+      <header>
+        <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+          Управление
+        </div>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
+          Пользователи
+        </h1>
+      </header>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          setSubmitted(query.trim());
+        }}
+        className="card flex items-center gap-2 p-2"
+      >
+        <Search className="ml-2 h-4 w-4 text-fg-subtle" />
+        <input
+          className="flex-1 bg-transparent px-2 py-2 text-sm text-fg placeholder:text-fg-subtle outline-none"
+          placeholder="Поиск по Telegram ID или @username"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
+        />
+        <button type="submit" className="btn-primary" disabled={!query.trim()}>
+          Найти
+        </button>
+      </form>
+
+      {submitted && search.isLoading && (
+        <div className="card flex items-center gap-3 p-6 text-sm text-fg-muted">
+          <Spinner /> Ищу...
+        </div>
+      )}
+
+      {submitted && search.isError && (
+        <EmptyState
+          icon={UserCircle2}
+          title={
+            (search.error as ApiError)?.status === 404
+              ? "Пользователь не найден"
+              : "Не удалось выполнить поиск"
+          }
+          description={
+            (search.error as ApiError)?.status === 404
+              ? `По запросу «${submitted}» ничего не нашлось`
+              : (search.error as ApiError)?.detail
+          }
+        />
+      )}
+
+      {telegramId && <UserCard telegramId={telegramId} />}
+    </div>
+  );
+}
+
+function UserCard({ telegramId }: { telegramId: number }) {
+  const qc = useQueryClient();
+  const detail = useQuery({
+    queryKey: ["users", "detail", telegramId],
+    queryFn: () => endpoints.userDetail(telegramId),
+  });
+
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: ["users", "detail", telegramId] });
+
+  if (detail.isLoading) {
+    return (
+      <div className="card flex items-center gap-3 p-6 text-sm text-fg-muted">
+        <Spinner /> Загружаю карточку...
+      </div>
+    );
+  }
+
+  if (detail.isError || !detail.data) {
+    return (
+      <EmptyState
+        icon={UserCircle2}
+        title="Не удалось загрузить"
+        description={(detail.error as ApiError)?.detail}
+      />
+    );
+  }
+
+  const d = detail.data;
+  const u = d.user as Record<string, unknown>;
+  const sub = d.subscription;
+
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="card p-5 lg:col-span-2">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-xs uppercase tracking-wider text-fg-subtle">Карточка</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h2 className="text-xl font-semibold text-fg">
+                {typeof u.username === "string" && u.username
+                  ? `@${u.username}`
+                  : `tg:${telegramId}`}
+              </h2>
+              {d.is_vip && (
+                <span className="badge-warning">
+                  <Crown className="h-3 w-3" /> VIP
+                </span>
+              )}
+              {sub && (sub as Record<string, unknown>).status === "active" ? (
+                <span className="badge-success">
+                  <ShieldCheck className="h-3 w-3" /> active
+                </span>
+              ) : (
+                <span className="badge-muted">no sub</span>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-fg-muted">
+              <span className="inline-flex items-center gap-1.5">
+                <Hash className="h-3 w-3" /> {telegramId}
+              </span>
+              {typeof u.created_at === "string" && (
+                <span className="inline-flex items-center gap-1.5">
+                  <Calendar className="h-3 w-3" /> зарегистрирован {fmtDate(u.created_at)}
+                </span>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => detail.refetch()}
+            className="btn-ghost"
+            aria-label="Обновить"
+          >
+            <RefreshCcw className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Cell
+            icon={Wallet}
+            label="Баланс"
+            value={fmtRub(d.balance_rubles)}
+          />
+          <Cell
+            icon={ShieldCheck}
+            label="Тариф"
+            value={
+              sub
+                ? String((sub as Record<string, unknown>).subscription_type ?? "—")
+                : "—"
+            }
+          />
+          <Cell
+            icon={Calendar}
+            label="Истекает"
+            value={fmtDate(
+              sub ? String((sub as Record<string, unknown>).expires_at ?? "") : null,
+            )}
+          />
+          <Cell
+            icon={Percent}
+            label="Скидка"
+            value={
+              d.discount
+                ? `${(d.discount as Record<string, unknown>).discount_percent}%`
+                : "—"
+            }
+          />
+        </div>
+
+        <Actions telegramId={telegramId} detail={d} onChange={invalidate} />
+      </div>
+
+      <div className="space-y-4">
+        <TrialCard detail={d} />
+        <DiscountCard
+          telegramId={telegramId}
+          detail={d}
+          onChange={invalidate}
+        />
+      </div>
+    </div>
+  );
+}
+
+function Cell({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Wallet;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle/60 p-3">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-fg-subtle">
+        <Icon className="h-3 w-3" /> {label}
+      </div>
+      <div className="mt-1 truncate text-sm font-semibold text-fg">{value}</div>
+    </div>
+  );
+}
+
+function TrialCard({ detail }: { detail: UserDetail }) {
+  const t = detail.trial as Record<string, unknown> | null;
+  return (
+    <div className="card p-4">
+      <div className="text-xs uppercase tracking-wider text-fg-subtle">Триал</div>
+      {!t ? (
+        <div className="mt-2 text-sm text-fg-muted">Не использовался</div>
+      ) : (
+        <div className="mt-2 space-y-1.5 text-sm">
+          <Row label="Активирован" value={fmtDate(t.trial_used_at as string)} />
+          <Row label="Истекает" value={fmtDate(t.trial_expires_at as string)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiscountCard({
+  telegramId,
+  detail,
+  onChange,
+}: {
+  telegramId: number;
+  detail: UserDetail;
+  onChange: () => void;
+}) {
+  const [percent, setPercent] = useState(30);
+  const [hours, setHours] = useState<number | "">(24);
+  const create = useMutation({
+    mutationFn: () =>
+      endpoints.userDiscountCreate(telegramId, {
+        percent,
+        expires_in_hours: typeof hours === "number" ? hours : null,
+      }),
+    onSuccess: () => {
+      toast.success("Скидка создана");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+  const del = useMutation({
+    mutationFn: () => endpoints.userDiscountDelete(telegramId),
+    onSuccess: () => {
+      toast.success("Скидка удалена");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  const existing = detail.discount as Record<string, unknown> | null;
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wider text-fg-subtle">Персональная скидка</div>
+        {existing && (
+          <button
+            type="button"
+            onClick={() => del.mutate()}
+            className="btn-ghost text-danger hover:text-danger"
+            disabled={del.isPending}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {existing && (
+        <div className="mt-2 rounded-lg bg-bg-elevated px-3 py-2 text-sm text-fg">
+          <b>{existing.discount_percent}%</b> до{" "}
+          {fmtDate(existing.expires_at as string) || "бессрочно"}
+        </div>
+      )}
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={100}
+          value={percent}
+          onChange={(e) => setPercent(Number(e.target.value) || 0)}
+          placeholder="%"
+        />
+        <input
+          className="input"
+          type="number"
+          min={1}
+          value={hours}
+          onChange={(e) =>
+            setHours(e.target.value === "" ? "" : Number(e.target.value))
+          }
+          placeholder="часов"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={() => create.mutate()}
+        className="btn-primary mt-2 w-full"
+        disabled={create.isPending || percent < 1 || percent > 100}
+      >
+        {create.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+        Применить
+      </button>
+    </div>
+  );
+}
+
+function Actions({
+  telegramId,
+  detail,
+  onChange,
+}: {
+  telegramId: number;
+  detail: UserDetail;
+  onChange: () => void;
+}) {
+  const [days, setDays] = useState(30);
+  const [tariff, setTariff] = useState("basic");
+
+  const grant = useMutation({
+    mutationFn: () => endpoints.userGrant(telegramId, { days, tariff }),
+    onSuccess: () => {
+      toast.success(`Выдано ${days} дн (${tariff})`);
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  const revoke = useMutation({
+    mutationFn: () => endpoints.userRevoke(telegramId),
+    onSuccess: () => {
+      toast.success("Доступ отозван");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  const vipGrant = useMutation({
+    mutationFn: () => endpoints.userVipGrant(telegramId),
+    onSuccess: () => {
+      toast.success("VIP выдан");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  const vipRevoke = useMutation({
+    mutationFn: () => endpoints.userVipRevoke(telegramId),
+    onSuccess: () => {
+      toast.success("VIP снят");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  return (
+    <div className="mt-6 rounded-2xl border border-border bg-bg-subtle/40 p-4">
+      <div className="text-xs uppercase tracking-wider text-fg-subtle">Действия</div>
+
+      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
+        <label className="flex items-center gap-2 rounded-xl border border-border bg-bg-card px-3">
+          <span className="text-xs text-fg-subtle">Дней</span>
+          <input
+            type="number"
+            min={1}
+            max={3650}
+            value={days}
+            onChange={(e) => setDays(Math.max(1, Number(e.target.value) || 1))}
+            className="w-full bg-transparent py-2 text-sm text-fg outline-none"
+          />
+        </label>
+        <select
+          value={tariff}
+          onChange={(e) => setTariff(e.target.value)}
+          className="input"
+        >
+          <option value="basic">Basic</option>
+          <option value="plus">Plus</option>
+        </select>
+        <button
+          type="button"
+          onClick={() => grant.mutate()}
+          className="btn-primary"
+          disabled={grant.isPending}
+        >
+          {grant.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+          Выдать
+        </button>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            if (confirm("Отозвать подписку?")) revoke.mutate();
+          }}
+          className="btn-danger"
+          disabled={revoke.isPending}
+        >
+          <Minus className="h-3.5 w-3.5" /> Отозвать доступ
+        </button>
+        {detail.is_vip ? (
+          <button
+            type="button"
+            onClick={() => vipRevoke.mutate()}
+            className="btn-secondary"
+            disabled={vipRevoke.isPending}
+          >
+            <Crown className="h-3.5 w-3.5" /> Снять VIP
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => vipGrant.mutate()}
+            className="btn-secondary"
+            disabled={vipGrant.isPending}
+          >
+            <Crown className="h-3.5 w-3.5" /> Выдать VIP
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-fg-muted">{label}</span>
+      <span className="font-medium text-fg">{value}</span>
+    </div>
+  );
+}
