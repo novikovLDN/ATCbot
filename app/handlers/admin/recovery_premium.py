@@ -342,7 +342,6 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
         bot=callback.bot, parse_mode="HTML",
     )
 
-    sem = asyncio.Semaphore(_FIX_CONCURRENCY)
     progress: dict = {"done": 0, "ok": 0, "gone": 0, "failed": 0}
 
     async def _fix_one(p: dict) -> bool:
@@ -352,75 +351,79 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
         # ~10 s on renew_premium_user pushing PATCH against 5 endpoints
         # × 3 retries that will all 404. Only entities that exist on
         # the panel get the full PATCH path.
-        async with sem:
-            uuid = p["panel_uuid"]
-            exists = False
+        uuid = p["panel_uuid"]
+        exists = False
+        try:
+            user = await remnawave_api.get_user(uuid)
+            exists = user is not None
+        except Exception as e:
+            logger.warning(
+                "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
+                p["telegram_id"], uuid[:8],
+                type(e).__name__, e,
+            )
+            # Treat probe error as "unsure" — try the PATCH anyway.
+            exists = True
+
+        if not exists:
+            progress["gone"] += 1
+            logger.info(
+                "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (404 on probe)",
+                p["telegram_id"], uuid[:8],
+            )
+        else:
+            ok = False
             try:
-                user = await remnawave_api.get_user(uuid)
-                exists = user is not None
+                ok = await remnawave_premium.renew_premium_user(
+                    p["telegram_id"], p["real_end"],
+                )
             except Exception as e:
                 logger.warning(
-                    "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
+                    "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
                     p["telegram_id"], uuid[:8],
                     type(e).__name__, e,
                 )
-                # Treat probe error as "unsure" — try the PATCH anyway.
-                exists = True
-
-            if not exists:
-                progress["gone"] += 1
+            if ok:
+                progress["ok"] += 1
                 logger.info(
-                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (404 on probe)",
+                    "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
                     p["telegram_id"], uuid[:8],
+                    p["real_end"].isoformat(), p["source"],
                 )
             else:
-                ok = False
-                try:
-                    ok = await remnawave_premium.renew_premium_user(
-                        p["telegram_id"], p["real_end"],
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
-                        p["telegram_id"], uuid[:8],
-                        type(e).__name__, e,
-                    )
-                if ok:
-                    progress["ok"] += 1
-                    logger.info(
-                        "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
-                        p["telegram_id"], uuid[:8],
-                        p["real_end"].isoformat(), p["source"],
-                    )
-                else:
-                    progress["failed"] += 1
-                    logger.warning(
-                        "PREMIUM_RECOVERY_PATCH_FAIL tg=%s uuid=%s (entity exists but PATCH failed)",
-                        p["telegram_id"], uuid[:8],
-                    )
-            # Spread requests so the panel stays calm.
-            await asyncio.sleep(_FIX_THROTTLE_S)
-        progress["done"] += 1
+                progress["failed"] += 1
+                logger.warning(
+                    "PREMIUM_RECOVERY_PATCH_FAIL tg=%s uuid=%s (entity exists but PATCH failed)",
+                    p["telegram_id"], uuid[:8],
+                )
         return True
 
-    async def _fix_one_guarded(p: dict) -> bool:
-        # Wrap each record in a hard wall-clock budget so one stuck
-        # GET/PATCH can't park the slot. On timeout we count as
-        # 'failed' and move on — the operator can re-run later, the
-        # PATCH itself is idempotent.
-        try:
-            return await asyncio.wait_for(_fix_one(p), timeout=_FIX_RECORD_TIMEOUT_S)
-        except asyncio.TimeoutError:
-            progress["failed"] += 1
-            progress["done"] += 1
-            logger.warning(
-                "PREMIUM_RECOVERY_TIMEOUT tg=%s uuid=%s after %ds",
-                p["telegram_id"], p["panel_uuid"][:8], _FIX_RECORD_TIMEOUT_S,
-            )
-            return False
-
     async def _run_all_fixes():
-        return await asyncio.gather(*[_fix_one_guarded(p) for p in actionable])
+        # Strictly sequential. NO asyncio.gather, NO Semaphore.
+        # Lesson learned: gather schedules every task at t=0, so any
+        # outer asyncio.wait_for timer starts running for tasks still
+        # waiting in a Semaphore queue — they all expire en masse before
+        # the worker reaches them. The simple for-loop has no such race:
+        # the timeout only starts ticking when we actually begin a record.
+        for p in actionable:
+            try:
+                await asyncio.wait_for(_fix_one(p), timeout=_FIX_RECORD_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                progress["failed"] += 1
+                logger.warning(
+                    "PREMIUM_RECOVERY_TIMEOUT tg=%s uuid=%s after %ds",
+                    p["telegram_id"], p["panel_uuid"][:8], _FIX_RECORD_TIMEOUT_S,
+                )
+            except Exception as e:
+                progress["failed"] += 1
+                logger.exception(
+                    "PREMIUM_RECOVERY_UNEXPECTED tg=%s uuid=%s: %s",
+                    p["telegram_id"], p["panel_uuid"][:8], e,
+                )
+            progress["done"] += 1
+            # Throttle between records so other workers and the bot UI
+            # keep getting their share of the event loop and the panel.
+            await asyncio.sleep(_FIX_THROTTLE_S)
 
     fix_task = asyncio.create_task(_run_all_fixes())
     while not fix_task.done():
