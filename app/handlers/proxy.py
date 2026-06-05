@@ -31,6 +31,19 @@ logger = logging.getLogger(__name__)
 _LAVA_INVOICE_TIMEOUT = 15 * 60  # seconds
 
 
+# Numbered MTProto proxy endpoints shown on the delivery screen, in
+# display order. Buttons are rendered "🔌 Подключить прокси N" so the
+# user can fall back to the next entry if one host is throttled / dead.
+# The last entry (config.PROXY_HTTPS_LINK) is the canonical link we've
+# always shipped — keep it last so existing users have a stable choice.
+_PROXY_LINKS = [
+    "https://t.me/proxy?server=mtg.mynewllcw.com&port=2087&secret=eed92d10544c97352961368b33287f00596d61696c2e7275",
+    "https://t.me/proxy?server=mtg.mynewllcw.com&port=2096&secret=ee565462f0c7dd6c4919e82deba0a80dbc636c6f7564666c6172652e636f6d",
+    "https://t.me/proxy?server=mtg.mynewllcw.com&port=443&secret=eeb877dde94f5f1ddae7cb178244dc707879616e6465782e7275",
+    config.PROXY_HTTPS_LINK,
+]
+
+
 # ── Texts ───────────────────────────────────────────────────────────────
 
 def _sales_text() -> str:
@@ -52,8 +65,9 @@ def _delivery_text() -> str:
     return (
         "![🧩](tg://emoji?id=5213306719215577669) <b>Ваш Telegram-прокси готов</b>\n\n"
         "Как подключить:\n"
-        "![1️⃣](tg://emoji?id=5382322671679708881) Нажмите кнопку "
-        "«🔌 Подключить прокси» ниже\n"
+        "![1️⃣](tg://emoji?id=5382322671679708881) Нажмите любую из кнопок "
+        "«🔌 Подключить прокси №» ниже (если одна тормозит — попробуйте "
+        "следующую)\n"
         "![2️⃣](tg://emoji?id=5381990043642502553) В открывшемся окне "
         "Telegram нажмите «Подключить»\n"
         "![3️⃣](tg://emoji?id=5381879959335738545) Готово — Telegram "
@@ -77,13 +91,15 @@ def _sales_keyboard() -> InlineKeyboardMarkup:
 
 
 def _delivery_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [InlineKeyboardButton(
-            text="🔌 Подключить прокси", url=config.PROXY_HTTPS_LINK,
-        )],
-        [InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn")],
-        [InlineKeyboardButton(text="← Назад", callback_data="menu_main")],
-    ])
+            text=f"🔌 Подключить прокси {idx}", url=link,
+        )]
+        for idx, link in enumerate(_PROXY_LINKS, start=1)
+    ]
+    rows.append([InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn")])
+    rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu_main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── Handlers ────────────────────────────────────────────────────────────
