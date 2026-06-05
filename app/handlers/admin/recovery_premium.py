@@ -46,14 +46,19 @@ logger = logging.getLogger(__name__)
 # as already correct, no patch needed.
 _TOLERANCE_SECONDS = 3600
 # Concurrent panel PATCH calls during apply.
-# Lowered to 3 (was 8) because Remnawave starts dropping connections
-# at higher concurrency on a loaded panel.
-_FIX_CONCURRENCY = 3
-# Sleep between PATCH calls inside each worker — keeps total RPS to
-# Remnawave under ~10/s so the panel stays responsive.
-_FIX_THROTTLE_S = 0.2
-# How many retry attempts per PATCH (panel hiccups under load).
-_FIX_RETRY = 3
+# Set to 1 (sequential) so we don't compete with the bot's regular
+# workers (auto_renewal, fast_expiry_cleanup, traffic_monitor, lazy
+# heal on /profile clicks) for Remnawave bandwidth. Recovery is a
+# background hygiene job — there's no rush; correctness > speed.
+_FIX_CONCURRENCY = 1
+# Sleep between PATCH calls inside each worker — caps our total
+# Remnawave RPS at ~2 so the panel stays responsive for everything
+# else.
+_FIX_THROTTLE_S = 0.5
+# Hard per-record timeout — if a single GET/PATCH cycle stalls
+# (panel stuck on a particular uuid, network blip) we abandon it
+# after this many seconds instead of holding the slot indefinitely.
+_FIX_RECORD_TIMEOUT_S = 15
 # Seconds between live progress updates.
 _PROGRESS_INTERVAL = 4
 # Hard ceiling on scan size (sanity guard).
@@ -341,46 +346,81 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     progress: dict = {"done": 0, "ok": 0, "gone": 0, "failed": 0}
 
     async def _fix_one(p: dict) -> bool:
-        # ONE call to renew_premium_user (it already retries 3x
-        # internally across 5 endpoints). If it returns False it
-        # almost always means the entity was deleted from the panel
-        # (404 on every endpoint, every retry) — which is fine for
-        # us: a missing entity grants no premium. So we count those
-        # as "gone" (effectively succeeded), not "failed".
+        # Fast path for entities that have been deleted from the panel:
+        # do a cheap GET first. 404 → entity is gone → done (premium
+        # not active anyway, our goal is achieved), no need to spend
+        # ~10 s on renew_premium_user pushing PATCH against 5 endpoints
+        # × 3 retries that will all 404. Only entities that exist on
+        # the panel get the full PATCH path.
         async with sem:
-            ok = False
+            uuid = p["panel_uuid"]
+            exists = False
             try:
-                ok = await remnawave_premium.renew_premium_user(
-                    p["telegram_id"], p["real_end"],
-                )
+                user = await remnawave_api.get_user(uuid)
+                exists = user is not None
             except Exception as e:
                 logger.warning(
-                    "PREMIUM_RECOVERY: tg=%s uuid=%s %s: %s",
-                    p["telegram_id"], p["panel_uuid"][:8],
+                    "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
+                    p["telegram_id"], uuid[:8],
                     type(e).__name__, e,
                 )
-            if ok:
-                progress["ok"] += 1
-                logger.info(
-                    "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
-                    p["telegram_id"], p["panel_uuid"][:8],
-                    p["real_end"].isoformat(), p["source"],
-                )
-            else:
-                # Treat as "entity absent or unreachable" — premium is
-                # not active either way, our goal is achieved.
+                # Treat probe error as "unsure" — try the PATCH anyway.
+                exists = True
+
+            if not exists:
                 progress["gone"] += 1
                 logger.info(
-                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (entity missing or panel rejected)",
-                    p["telegram_id"], p["panel_uuid"][:8],
+                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (404 on probe)",
+                    p["telegram_id"], uuid[:8],
                 )
+            else:
+                ok = False
+                try:
+                    ok = await remnawave_premium.renew_premium_user(
+                        p["telegram_id"], p["real_end"],
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
+                        p["telegram_id"], uuid[:8],
+                        type(e).__name__, e,
+                    )
+                if ok:
+                    progress["ok"] += 1
+                    logger.info(
+                        "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
+                        p["telegram_id"], uuid[:8],
+                        p["real_end"].isoformat(), p["source"],
+                    )
+                else:
+                    progress["failed"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY_PATCH_FAIL tg=%s uuid=%s (entity exists but PATCH failed)",
+                        p["telegram_id"], uuid[:8],
+                    )
             # Spread requests so the panel stays calm.
             await asyncio.sleep(_FIX_THROTTLE_S)
         progress["done"] += 1
         return True
 
+    async def _fix_one_guarded(p: dict) -> bool:
+        # Wrap each record in a hard wall-clock budget so one stuck
+        # GET/PATCH can't park the slot. On timeout we count as
+        # 'failed' and move on — the operator can re-run later, the
+        # PATCH itself is idempotent.
+        try:
+            return await asyncio.wait_for(_fix_one(p), timeout=_FIX_RECORD_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            progress["failed"] += 1
+            progress["done"] += 1
+            logger.warning(
+                "PREMIUM_RECOVERY_TIMEOUT tg=%s uuid=%s after %ds",
+                p["telegram_id"], p["panel_uuid"][:8], _FIX_RECORD_TIMEOUT_S,
+            )
+            return False
+
     async def _run_all_fixes():
-        return await asyncio.gather(*[_fix_one(p) for p in actionable])
+        return await asyncio.gather(*[_fix_one_guarded(p) for p in actionable])
 
     fix_task = asyncio.create_task(_run_all_fixes())
     while not fix_task.done():
