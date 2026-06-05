@@ -20,9 +20,20 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 async def stats_overview():
     """Single-shot blob for the dashboard home page.
     Wraps get_extended_bot_stats() — returns total_users,
-    active_subs, pending_payments, business_metrics, referral stats."""
+    active_subs, pending_payments, business_metrics, referral stats.
+
+    Adds active_paid_subscriptions — same shape as active_subscriptions
+    but excludes trials, bypass-only and biz-tariff rows so the number
+    reflects only currently-paying-for-VPN users."""
     try:
-        return await database.get_extended_bot_stats()
+        data = await database.get_extended_bot_stats()
+        try:
+            data["active_paid_subscriptions"] = (
+                await database.get_active_paid_subscriptions_count()
+            )
+        except Exception:
+            data["active_paid_subscriptions"] = data.get("active_subscriptions")
+        return data
     except Exception as e:
         raise HTTPException(500, f"stats_overview_failed: {e}")
 

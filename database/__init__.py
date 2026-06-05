@@ -251,6 +251,7 @@ from database.admin import (  # noqa: F401
     save_broadcast_discount,
     get_broadcast_discount,
     get_analytics_by_period,
+    get_active_paid_subscriptions_count,
     get_revenue_for_period,
     get_payments_by_provider,
     get_recent_payments_feed,
