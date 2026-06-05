@@ -42,7 +42,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 import config
 import database
-from app.services import remnawave_api
+from app.services import remnawave_api, remnawave_premium
 from app.handlers.admin.keyboards import get_admin_back_keyboard
 from app.handlers.common.utils import safe_edit_text
 
@@ -185,12 +185,19 @@ async def _audit_worker(admin_id: int):
 
             buckets = state["buckets"]
             samples = state["samples"]
+            samples_full = state["samples_full"]
+            # Buckets we want to keep EVERY record for, so the operator
+            # can review the full list before/after fix.
+            _FULL_KEEP = {"panel_behind_paid", "panel_missing",
+                          "panel_ahead_of_paid"}
 
             def _sample(bucket_key):
                 buckets[bucket_key] = buckets.get(bucket_key, 0) + 1
                 lst = samples.setdefault(bucket_key, [])
                 if len(lst) < 5:
                     lst.append(rec)
+                if bucket_key in _FULL_KEEP:
+                    samples_full.setdefault(bucket_key, []).append(rec)
 
             if panel_error == "timeout":
                 _sample("panel_timeout")
@@ -262,7 +269,17 @@ _BUCKET_LABELS = {
 }
 
 
-def _format_report(state: dict, limit_samples: int = 3) -> str:
+def _actionable_records(state: dict) -> list:
+    """Records we can auto-fix in the panel: behind-paid or missing."""
+    out = []
+    for key in ("panel_behind_paid", "panel_missing"):
+        for s in state.get("samples_full", {}).get(key, []):
+            out.append((key, s))
+    return out
+
+
+def _format_report(state: dict, limit_samples: int = 3,
+                   full_list: bool = False) -> str:
     total = state.get("total", 0)
     done = state.get("done", 0)
     buckets = state.get("buckets", {})
@@ -298,7 +315,31 @@ def _format_report(state: dict, limit_samples: int = 3) -> str:
         label = _BUCKET_LABELS.get(key, key)
         lines.append(f"  {label}: <b>{n}</b>")
 
-    # Samples of the most actionable bucket only.
+    # When showing the full actionable list (for review before fix),
+    # dump every panel_behind_paid + panel_missing record.
+    if full_list:
+        for key, label_prefix in (
+            ("panel_behind_paid", "⚠️ Панель ПОЗАДИ оплаты"),
+            ("panel_missing", "👻 Entity нет на панели"),
+        ):
+            recs = state.get("samples_full", {}).get(key, [])
+            if not recs:
+                continue
+            lines.append("")
+            lines.append(f"<i>{label_prefix} (всего {len(recs)}):</i>")
+            for s in recs:
+                tg = s["telegram_id"]
+                db_str = s["db_expires_at"].strftime("%Y-%m-%d") if s["db_expires_at"] else "—"
+                exp_str = s["expected_end"].strftime("%Y-%m-%d") if s["expected_end"] else "—"
+                pan_str = s["panel_expires"].strftime("%Y-%m-%d") if s["panel_expires"] else "—"
+                tariff = s.get("tariff") or "?"
+                lines.append(
+                    f"  <code>{tg}</code> · {tariff} · "
+                    f"БД:{db_str} · paid:{exp_str} · panel:{pan_str}"
+                )
+        return "\n".join(lines)
+
+    # Compact: just a few examples of the most actionable bucket.
     for key in ("panel_ahead_of_paid", "db_ahead_of_paid",
                 "panel_missing", "no_paid_signal_but_db_active"):
         sample = state.get("samples", {}).get(key, [])[:limit_samples]
@@ -344,13 +385,23 @@ async def callback_audit_subs(callback: CallbackQuery):
         return
 
     if existing and existing.get("status") in ("done", "failed"):
-        # Show last report; offer restart.
+        # Show last report; offer the full list, fix, or restart.
+        actionable = _actionable_records(existing)
+        rows = []
+        if actionable:
+            rows.append([InlineKeyboardButton(
+                text=f"📋 Список ({len(actionable)})",
+                callback_data="admin:audit_subs_list",
+            )])
+            rows.append([InlineKeyboardButton(
+                text=f"🔧 Исправить ({len(actionable)})",
+                callback_data="admin:audit_subs_fix",
+            )])
+        rows.append([InlineKeyboardButton(text="🔁 Запустить заново", callback_data="admin:audit_subs_start")])
+        rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")])
         await safe_edit_text(
             callback.message, _format_report(existing, limit_samples=5),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔁 Запустить заново", callback_data="admin:audit_subs_start")],
-                [InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")],
-            ]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
             bot=callback.bot, parse_mode="HTML",
         )
         return
@@ -372,6 +423,314 @@ async def callback_audit_subs_start(callback: CallbackQuery):
     await _start_audit(callback, callback.from_user.id)
 
 
+@admin_audit_subs_router.callback_query(F.data == "admin:audit_subs_list")
+async def callback_audit_subs_list(callback: CallbackQuery):
+    """Dump the full actionable list for review."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    state = _audits.get(callback.from_user.id)
+    if not state or state.get("status") != "done":
+        await safe_edit_text(
+            callback.message,
+            "🔍 Сначала запустите аудит.",
+            reply_markup=get_admin_back_keyboard(),
+            bot=callback.bot, parse_mode="HTML",
+        )
+        return
+
+    actionable = _actionable_records(state)
+    rows = []
+    if actionable:
+        rows.append([InlineKeyboardButton(
+            text=f"🔧 Исправить ({len(actionable)})",
+            callback_data="admin:audit_subs_fix",
+        )])
+    rows.append([InlineKeyboardButton(text="◀ К отчёту", callback_data="admin:audit_subs")])
+
+    await safe_edit_text(
+        callback.message,
+        _format_report(state, full_list=True),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        bot=callback.bot, parse_mode="HTML",
+    )
+
+
+@admin_audit_subs_router.callback_query(F.data == "admin:audit_subs_fix")
+async def callback_audit_subs_fix(callback: CallbackQuery):
+    """Auto-fix actionable records (panel_behind_paid + panel_missing).
+
+    Strict premium-only:
+      - Username check is enforced at PATCH time (only `tg_<id>_premium`).
+      - PATCH/create flows go through remnawave_premium.* which only
+        touches the premium entity. Bypass entities are NOT touched.
+    """
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    state = _audits.get(callback.from_user.id)
+    if not state or state.get("status") != "done":
+        await safe_edit_text(
+            callback.message,
+            "🔍 Сначала запустите аудит.",
+            reply_markup=get_admin_back_keyboard(),
+            bot=callback.bot, parse_mode="HTML",
+        )
+        return
+
+    actionable = _actionable_records(state)
+    if not actionable:
+        await safe_edit_text(
+            callback.message,
+            "✅ Исправлять нечего — все active premium-подписки в порядке.",
+            reply_markup=get_admin_back_keyboard(),
+            bot=callback.bot, parse_mode="HTML",
+        )
+        return
+
+    if state.get("fix_status") == "running":
+        await safe_edit_text(
+            callback.message,
+            f"🔧 Исправление уже выполняется: "
+            f"{state['fix_done']} / {state['fix_total']}.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:audit_subs_fix_status")],
+            ]),
+            bot=callback.bot, parse_mode="HTML",
+        )
+        return
+
+    state["fix_status"] = "running"
+    state["fix_total"] = len(actionable)
+    state["fix_done"] = 0
+    state["fix_ok"] = 0
+    state["fix_skipped"] = 0
+    state["fix_failed"] = 0
+    asyncio.create_task(_fix_worker(callback.from_user.id, actionable))
+
+    await safe_edit_text(
+        callback.message,
+        f"🔧 <b>Исправление {len(actionable)} подписок запущено</b>\n\n"
+        "Работа идёт в фоне. Только premium — bypass entities <b>не трогаются</b>.\n"
+        "Защита по username и через premium-only функции.\n\n"
+        "Нажмите «🔄 Обновить» через минуту, чтобы увидеть результат.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="admin:audit_subs_fix_status")],
+            [InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")],
+        ]),
+        bot=callback.bot, parse_mode="HTML",
+    )
+
+
+@admin_audit_subs_router.callback_query(F.data == "admin:audit_subs_fix_status")
+async def callback_audit_subs_fix_status(callback: CallbackQuery):
+    """Show progress / final report of the running or finished fix."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    state = _audits.get(callback.from_user.id)
+    if not state or not state.get("fix_status"):
+        await safe_edit_text(
+            callback.message,
+            "🔧 Нет данных по исправлению.",
+            reply_markup=get_admin_back_keyboard(),
+            bot=callback.bot, parse_mode="HTML",
+        )
+        return
+
+    status = state.get("fix_status")
+    total = state.get("fix_total", 0)
+    done = state.get("fix_done", 0)
+    ok = state.get("fix_ok", 0)
+    skipped = state.get("fix_skipped", 0)
+    failed = state.get("fix_failed", 0)
+
+    if status == "running":
+        text = (
+            "🔧 <b>Исправление в процессе</b>\n\n"
+            f"Обработано: <b>{done}</b> / {total}\n"
+            f"  ✅ Исправлено: {ok}\n"
+            f"  🛡 Пропущено (защита): {skipped}\n"
+            f"  ❌ Сбой: {failed}"
+        )
+        rows = [
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:audit_subs_fix_status")],
+            [InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")],
+        ]
+    else:
+        text = (
+            "🔧 <b>Исправление завершено</b>\n\n"
+            f"✅ Исправлено: <b>{ok}</b> / {total}\n"
+            f"🛡 Пропущено (защита по username/типу): <b>{skipped}</b>\n"
+            f"❌ Сбой (ручной разбор): <b>{failed}</b>\n\n"
+            "<i>Bypass entities остались нетронутыми.</i>\n"
+            "Запустите аудит повторно, чтобы убедиться."
+        )
+        rows = [
+            [InlineKeyboardButton(text="🔍 Повторный аудит", callback_data="admin:audit_subs_start")],
+            [InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")],
+        ]
+
+    await safe_edit_text(
+        callback.message, text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        bot=callback.bot, parse_mode="HTML",
+    )
+
+
+async def _fix_worker(admin_id: int, actionable: list):
+    """Background fixer for panel_behind_paid + panel_missing.
+
+    Strict guarantees:
+      - For panel_behind_paid: we GET the entity to verify username
+        == f"tg_{tg}_premium" before PATCHing. No PATCH if mismatch.
+      - For panel_missing: we call create_premium_user_entity which
+        internally writes the username `tg_{tg}_premium`. Cannot affect
+        the user's bypass entity (different username, different uuid
+        column in the DB).
+    """
+    state = _audits[admin_id]
+    sem = asyncio.Semaphore(_AUDIT_CONCURRENCY)
+
+    target_squad = getattr(
+        config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None,
+    ) or None
+
+    def _iso_z(dt) -> str:
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    async def _fix_behind(rec):
+        """PATCH expireAt to expected_end. Strict username check."""
+        tg = rec["telegram_id"]
+        expected_username = f"tg_{tg}_premium"
+        try:
+            user = await asyncio.wait_for(
+                remnawave_api.find_user_by_username(expected_username),
+                timeout=_AUDIT_HTTP_TIMEOUT_S,
+            )
+        except Exception as e:
+            state["fix_failed"] += 1
+            logger.warning("AUDIT_FIX: lookup tg=%s %s", tg, e)
+            return
+        if user is None:
+            # Username lookup says no entity — that's panel_missing
+            # territory. Skip; the missing-bucket path would handle it.
+            state["fix_skipped"] += 1
+            logger.info("AUDIT_FIX_SKIP_NO_USERNAME tg=%s username=%s",
+                        tg, expected_username)
+            return
+        actual_username = (user.get("username") or "").strip()
+        if actual_username != expected_username:
+            state["fix_skipped"] += 1
+            logger.warning(
+                "AUDIT_FIX_SKIP_WRONG_USERNAME tg=%s expected=%s got=%r",
+                tg, expected_username, actual_username,
+            )
+            return
+        uuid = user.get("uuid")
+        if not uuid:
+            state["fix_skipped"] += 1
+            return
+        fields = {"expireAt": _iso_z(rec["expected_end"]), "status": "ACTIVE"}
+        if target_squad:
+            fields["externalSquadUuid"] = target_squad
+        try:
+            result = await asyncio.wait_for(
+                remnawave_api.update_user(uuid, **fields),
+                timeout=_AUDIT_HTTP_TIMEOUT_S,
+            )
+        except Exception as e:
+            state["fix_failed"] += 1
+            logger.warning("AUDIT_FIX: patch tg=%s %s", tg, e)
+            return
+        if result is not None:
+            state["fix_ok"] += 1
+            logger.info(
+                "AUDIT_FIX_PATCHED tg=%s uuid=%s to=%s",
+                tg, uuid[:8], rec["expected_end"].isoformat(),
+            )
+        else:
+            state["fix_failed"] += 1
+
+    async def _fix_missing(rec):
+        """Create the premium entity. Goes via remnawave_premium.create_premium_user_entity
+        which writes username `tg_{tg}_premium` — cannot affect bypass."""
+        tg = rec["telegram_id"]
+        try:
+            result = await asyncio.wait_for(
+                remnawave_premium.create_premium_user_entity(
+                    tg,
+                    requested_uuid=None,
+                    expire_at=rec["expected_end"],
+                ),
+                timeout=_AUDIT_HTTP_TIMEOUT_S * 3,
+            )
+        except Exception as e:
+            state["fix_failed"] += 1
+            logger.warning("AUDIT_FIX: create tg=%s %s", tg, e)
+            return
+        if result and getattr(result, "ok", False):
+            state["fix_ok"] += 1
+            logger.info(
+                "AUDIT_FIX_CREATED tg=%s uuid=%s to=%s",
+                tg, (getattr(result, "panel_uuid", "") or "")[:8],
+                rec["expected_end"].isoformat(),
+            )
+        else:
+            state["fix_failed"] += 1
+            logger.warning(
+                "AUDIT_FIX: create-fail tg=%s status=%s err=%s",
+                tg, getattr(result, "status", None),
+                getattr(result, "error", None),
+            )
+
+    async def _one(item):
+        bucket, rec = item
+        async with sem:
+            try:
+                if bucket == "panel_behind_paid":
+                    await _fix_behind(rec)
+                elif bucket == "panel_missing":
+                    await _fix_missing(rec)
+                else:
+                    state["fix_skipped"] += 1
+            except Exception as e:
+                state["fix_failed"] += 1
+                logger.exception("AUDIT_FIX_UNEXPECTED tg=%s %s",
+                                 rec.get("telegram_id"), e)
+            state["fix_done"] += 1
+            try:
+                await asyncio.sleep(_AUDIT_THROTTLE_S)
+            except Exception:
+                pass
+
+    try:
+        await asyncio.gather(*[_one(item) for item in actionable])
+        state["fix_status"] = "done"
+        logger.info(
+            "AUDIT_FIX_DONE admin=%s ok=%s skipped=%s failed=%s",
+            admin_id, state["fix_ok"], state["fix_skipped"], state["fix_failed"],
+        )
+    except Exception as e:
+        state["fix_status"] = "failed"
+        logger.exception("AUDIT_FIX_FATAL admin=%s %s", admin_id, e)
+
+
 async def _start_audit(callback: CallbackQuery, admin_id: int):
     state = {
         "status": "running",
@@ -379,8 +738,16 @@ async def _start_audit(callback: CallbackQuery, admin_id: int):
         "done": 0,
         "buckets": {},
         "samples": {},
+        "samples_full": {},
         "error": None,
         "task": None,
+        # Set on completion of a fix run.
+        "fix_status": None,
+        "fix_total": 0,
+        "fix_done": 0,
+        "fix_ok": 0,
+        "fix_skipped": 0,
+        "fix_failed": 0,
     }
     _audits[admin_id] = state
     task = asyncio.create_task(_audit_worker(admin_id))
