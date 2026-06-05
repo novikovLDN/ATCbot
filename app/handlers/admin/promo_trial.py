@@ -190,6 +190,8 @@ def _format_progress(state: dict) -> str:
 async def callback_promo_trial(callback: CallbackQuery):
     """Preview: show audience size + the exact message we'll send,
     plus a confirm button."""
+    logger.info("PROMO_TRIAL_OPEN admin=%s data=%s",
+                callback.from_user.id, callback.data)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
@@ -213,14 +215,26 @@ async def callback_promo_trial(callback: CallbackQuery):
 
     try:
         user_ids = await database.get_active_trial_telegram_ids()
+        logger.info("PROMO_TRIAL_AUDIENCE_OK admin=%s count=%s",
+                    admin_id, len(user_ids))
     except Exception as e:
         logger.exception("PROMO_TRIAL_AUDIENCE_FAIL: %s", e)
-        await safe_edit_text(
-            callback.message,
-            f"❌ Не удалось собрать аудиторию: <code>{e}</code>",
-            reply_markup=get_admin_back_keyboard(),
-            bot=callback.bot, parse_mode="HTML",
-        )
+        try:
+            await callback.message.answer(
+                f"❌ Не удалось собрать аудиторию: <code>{type(e).__name__}: {e}</code>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        try:
+            await safe_edit_text(
+                callback.message,
+                f"❌ Не удалось собрать аудиторию: <code>{type(e).__name__}: {e}</code>",
+                reply_markup=get_admin_back_keyboard(),
+                bot=callback.bot, parse_mode="HTML",
+            )
+        except Exception:
+            pass
         return
 
     # Stash so the confirm step doesn't requery.
@@ -252,12 +266,37 @@ async def callback_promo_trial(callback: CallbackQuery):
             callback_data="admin:promo_trial_confirm",
         )])
     rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
 
-    await safe_edit_text(
-        callback.message, preview,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-        bot=callback.bot, parse_mode="HTML",
-    )
+    # Edit-then-fallback-send: if the dashboard message can't be edited
+    # (photo source / inaccessible / parse error swallowed inside
+    # safe_edit_text), the admin must STILL see the preview — send a
+    # fresh message as a backup.
+    edited_ok = False
+    try:
+        await safe_edit_text(
+            callback.message, preview,
+            reply_markup=keyboard,
+            bot=callback.bot, parse_mode="HTML",
+        )
+        edited_ok = True
+    except Exception as e:
+        logger.exception("PROMO_TRIAL_EDIT_FAIL admin=%s: %s", admin_id, e)
+
+    if not edited_ok:
+        try:
+            await callback.message.answer(
+                preview, reply_markup=keyboard, parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.exception("PROMO_TRIAL_ANSWER_FAIL admin=%s: %s", admin_id, e)
+            try:
+                await callback.message.answer(
+                    f"❌ Не удалось показать превью: <code>{type(e).__name__}: {e}</code>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
 
 @admin_promo_trial_router.callback_query(F.data == "admin:promo_trial_confirm")

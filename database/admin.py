@@ -3015,10 +3015,18 @@ async def get_active_trial_telegram_ids() -> list:
     empty (every trial user gets filtered as if they were already
     paying).
 
+    Time comparison uses an explicit `$1` parameter (not NOW()):
+    `users.trial_expires_at` is TIMESTAMP without tz in this DB while
+    `subscriptions.expires_at` is TIMESTAMPTZ. Mixing NOW() with a
+    naive TIMESTAMP column triggers `operator does not exist`
+    failures — the same class of error we hit before in this repo.
+    `_to_db_utc` produces the naive-UTC datetime asyncpg can compare
+    against both columns.
+
     Filters:
-      - users.trial_expires_at > NOW                 → trial running
+      - users.trial_expires_at > $1                  → trial running
       - NO subscriptions row with:
-          - status='active', expires_at > NOW
+          - status='active', expires_at > $1
           - source != 'trial'                        → really paid
           - is_bypass_only=FALSE
           - subscription_type IN paid tariffs
@@ -3026,17 +3034,18 @@ async def get_active_trial_telegram_ids() -> list:
     Returns sorted list of telegram_id integers.
     """
     pool = await get_pool()
+    now = _to_db_utc(datetime.now(timezone.utc))
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT u.telegram_id
                FROM users u
                WHERE u.trial_expires_at IS NOT NULL
-                 AND u.trial_expires_at > NOW()
+                 AND u.trial_expires_at > $1
                  AND NOT EXISTS (
                      SELECT 1 FROM subscriptions s
                      WHERE s.telegram_id = u.telegram_id
                        AND s.status = 'active'
-                       AND s.expires_at > NOW()
+                       AND s.expires_at > $1
                        AND COALESCE(s.source, '') != 'trial'
                        AND COALESCE(s.is_bypass_only, FALSE) = FALSE
                        AND s.subscription_type IN (
@@ -3045,6 +3054,7 @@ async def get_active_trial_telegram_ids() -> list:
                            'biz_ultimate'
                        )
                  )
-               ORDER BY u.telegram_id"""
+               ORDER BY u.telegram_id""",
+            now,
         )
     return [r["telegram_id"] for r in rows]
