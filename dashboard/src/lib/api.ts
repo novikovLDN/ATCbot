@@ -171,7 +171,83 @@ export const endpoints = {
       "/broadcasts",
       body,
     ),
+
+  referralsOverall: () =>
+    api.get<Record<string, unknown>>("/referrals/overall"),
+  referralsTop: (params: {
+    sort_by?: "total_revenue" | "invited_count" | "cashback_paid";
+    sort_order?: "ASC" | "DESC";
+    limit?: number;
+    offset?: number;
+    q?: string;
+  } = {}) => {
+    const usp = new URLSearchParams();
+    if (params.sort_by) usp.set("sort_by", params.sort_by);
+    if (params.sort_order) usp.set("sort_order", params.sort_order);
+    if (params.limit !== undefined) usp.set("limit", String(params.limit));
+    if (params.offset !== undefined) usp.set("offset", String(params.offset));
+    if (params.q) usp.set("q", params.q);
+    const qs = usp.toString();
+    return api.get<Array<Record<string, unknown>>>(
+      "/referrals/top" + (qs ? `?${qs}` : ""),
+    );
+  },
+  referrerDetail: (id: number) =>
+    api.get<Record<string, unknown>>(`/referrals/${id}`),
+  referrerHistory: (id: number, limit = 50) =>
+    api.get<{ rows: Array<Record<string, unknown>>; total: number }>(
+      `/referrals/${id}/history?limit=${limit}`,
+    ),
+
+  bgiftSummary: () =>
+    api.get<Record<string, unknown>>("/bgift/summary"),
+  bgiftList: (page = 0, page_size = 20, include_deleted = false) =>
+    api.get<Array<Record<string, unknown>>>(
+      `/bgift/list?page=${page}&page_size=${page_size}&include_deleted=${include_deleted}`,
+    ),
+  bgiftDetail: (id: number) =>
+    api.get<Record<string, unknown>>(`/bgift/${id}`),
+  bgiftRedemptions: (id: number, limit = 100) =>
+    api.get<{ rows: Array<Record<string, unknown>>; total: number }>(
+      `/bgift/${id}/redemptions?limit=${limit}`,
+    ),
+  bgiftCreate: (body: {
+    gb_amount: number;
+    validity_days: number;
+    max_uses: number;
+  }) => api.post<Record<string, unknown>>("/bgift", body),
+  bgiftDelete: (id: number) => api.del<{ ok: boolean }>(`/bgift/${id}`),
 };
+
+// Auth-aware CSV download via fetch + blob. Returns nothing; triggers
+// a browser download. We can't use a plain <a href="..."> because the
+// Authorization header is required and browsers won't attach it to
+// raw link clicks.
+export async function downloadCsv(path: string, filename: string) {
+  const token = auth.get();
+  const res = await fetch(`/dashboard/api${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      //
+    }
+    throw new ApiError(res.status, detail);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 // Multipart upload — special case, can't use api.post (JSON-only).
 export async function uploadBroadcastPhoto(file: File): Promise<{ file_id: string }> {
