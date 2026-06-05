@@ -46,14 +46,19 @@ logger = logging.getLogger(__name__)
 # as already correct, no patch needed.
 _TOLERANCE_SECONDS = 3600
 # Concurrent panel PATCH calls during apply.
-# Lowered to 3 (was 8) because Remnawave starts dropping connections
-# at higher concurrency on a loaded panel.
-_FIX_CONCURRENCY = 3
-# Sleep between PATCH calls inside each worker — keeps total RPS to
-# Remnawave under ~10/s so the panel stays responsive.
-_FIX_THROTTLE_S = 0.2
-# How many retry attempts per PATCH (panel hiccups under load).
-_FIX_RETRY = 3
+# Set to 1 (sequential) so we don't compete with the bot's regular
+# workers (auto_renewal, fast_expiry_cleanup, traffic_monitor, lazy
+# heal on /profile clicks) for Remnawave bandwidth. Recovery is a
+# background hygiene job — there's no rush; correctness > speed.
+_FIX_CONCURRENCY = 1
+# Sleep between PATCH calls inside each worker — caps our total
+# Remnawave RPS at ~2 so the panel stays responsive for everything
+# else.
+_FIX_THROTTLE_S = 0.5
+# Hard per-record timeout — if a single GET/PATCH cycle stalls
+# (panel stuck on a particular uuid, network blip) we abandon it
+# after this many seconds instead of holding the slot indefinitely.
+_FIX_RECORD_TIMEOUT_S = 15
 # Seconds between live progress updates.
 _PROGRESS_INTERVAL = 4
 # Hard ceiling on scan size (sanity guard).
@@ -398,8 +403,24 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
         progress["done"] += 1
         return True
 
+    async def _fix_one_guarded(p: dict) -> bool:
+        # Wrap each record in a hard wall-clock budget so one stuck
+        # GET/PATCH can't park the slot. On timeout we count as
+        # 'failed' and move on — the operator can re-run later, the
+        # PATCH itself is idempotent.
+        try:
+            return await asyncio.wait_for(_fix_one(p), timeout=_FIX_RECORD_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            progress["failed"] += 1
+            progress["done"] += 1
+            logger.warning(
+                "PREMIUM_RECOVERY_TIMEOUT tg=%s uuid=%s after %ds",
+                p["telegram_id"], p["panel_uuid"][:8], _FIX_RECORD_TIMEOUT_S,
+            )
+            return False
+
     async def _run_all_fixes():
-        return await asyncio.gather(*[_fix_one(p) for p in actionable])
+        return await asyncio.gather(*[_fix_one_guarded(p) for p in actionable])
 
     fix_task = asyncio.create_task(_run_all_fixes())
     while not fix_task.done():
