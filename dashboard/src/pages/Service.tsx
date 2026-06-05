@@ -424,3 +424,12 @@ function PendingPaymentsSection() {
     </section>
   );
 }
+
+function asNum(v: unknown): number | undefined {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
