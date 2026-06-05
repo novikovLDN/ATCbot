@@ -2912,3 +2912,37 @@ async def get_paid_payments_via_purchases_bulk(telegram_ids: list) -> dict:
         })
     return out
 
+
+
+async def get_active_premium_subscribers() -> list:
+    """All subscriptions currently considered active premium (NOT bypass-only).
+
+    For the audit-tool: we want users whose premium subscription is
+    nominally active in the bot's DB so we can cross-check it against
+    payments and the Remnawave panel.
+
+    Filters:
+      - status='active' AND expires_at > NOW (still in their paid window)
+      - NOT is_bypass_only (we never audit bypass-only rows, those are
+        traffic-pack only and live on +10y by design)
+      - subscription_type in the real premium tariffs
+
+    Returns list of dicts: telegram_id, remnawave_premium_uuid,
+    expires_at, subscription_type.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, remnawave_premium_uuid,
+                      expires_at, subscription_type
+               FROM subscriptions
+               WHERE status = 'active'
+                 AND expires_at > NOW()
+                 AND COALESCE(is_bypass_only, FALSE) = FALSE
+                 AND subscription_type IN
+                     ('basic', 'plus', 'biz_starter', 'biz_team',
+                      'biz_business', 'biz_pro', 'biz_enterprise',
+                      'biz_ultimate')
+               ORDER BY telegram_id"""
+        )
+    return [dict(r) for r in rows]

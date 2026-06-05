@@ -300,4 +300,5 @@ from database.admin import (  # noqa: F401
     get_activated_gifts_bulk,
     get_max_subscription_end_bulk,
     get_paid_payments_via_purchases_bulk,
+    get_active_premium_subscribers,
 )
