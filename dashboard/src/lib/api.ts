@@ -133,4 +133,24 @@ export const endpoints = {
   userDiscountDelete: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}/discount`),
   userVipGrant: (tg: number) => api.post<{ ok: boolean }>(`/users/${tg}/vip`),
   userVipRevoke: (tg: number) => api.del<{ ok: boolean }>(`/users/${tg}/vip`),
+  userBalanceChange: (
+    tg: number,
+    body: { delta_rubles: number; reason?: string },
+  ) =>
+    api.post<{ ok: boolean; new_balance_rubles: number }>(
+      `/users/${tg}/balance`,
+      body,
+    ),
+  userPayments: (tg: number, limit = 20) =>
+    api.get<Array<Record<string, unknown>>>(`/users/${tg}/payments?limit=${limit}`),
+
+  auditRecent: (limit = 50) =>
+    api.get<Array<Record<string, unknown>>>(`/audit/recent?limit=${limit}`),
+
+  broadcastsRecent: (limit = 20) =>
+    api.get<Array<Record<string, unknown>>>(`/broadcasts/recent?limit=${limit}`),
+  broadcastDetail: (id: number) =>
+    api.get<Record<string, unknown>>(`/broadcasts/${id}`),
+  broadcastStats: (id: number) =>
+    api.get<Record<string, unknown>>(`/broadcasts/${id}/stats`),
 };

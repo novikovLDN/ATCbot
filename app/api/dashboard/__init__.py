@@ -17,6 +17,8 @@ from fastapi import APIRouter
 
 from app.api.dashboard.routes import stats as _stats
 from app.api.dashboard.routes import users as _users
+from app.api.dashboard.routes import audit as _audit
+from app.api.dashboard.routes import broadcasts as _broadcasts
 from app.api.dashboard import auth as _auth
 from app.api.dashboard import ws as _ws
 
@@ -25,6 +27,8 @@ router = APIRouter()
 router.include_router(_auth.router, prefix="/auth", tags=["auth"])
 router.include_router(_stats.router, prefix="/stats", tags=["stats"])
 router.include_router(_users.router, prefix="/users", tags=["users"])
+router.include_router(_audit.router, prefix="/audit", tags=["audit"])
+router.include_router(_broadcasts.router, prefix="/broadcasts", tags=["broadcasts"])
 
 # Separate router for the WebSocket endpoint — FastAPI requires WS
 # routes to be on a router (or app) that hasn't had a `prefix` applied

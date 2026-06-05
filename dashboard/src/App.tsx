@@ -9,7 +9,8 @@ import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Users } from "@/pages/Users";
 import { Analytics } from "@/pages/Analytics";
-import { ComingSoon } from "@/pages/ComingSoon";
+import { Audit } from "@/pages/Audit";
+import { Broadcasts } from "@/pages/Broadcasts";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -62,11 +63,8 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="users" element={<Users />} />
               <Route path="analytics" element={<Analytics />} />
-              <Route
-                path="broadcasts"
-                element={<ComingSoon title="Рассылки" />}
-              />
-              <Route path="audit" element={<ComingSoon title="Аудит" />} />
+              <Route path="broadcasts" element={<Broadcasts />} />
+              <Route path="audit" element={<Audit />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

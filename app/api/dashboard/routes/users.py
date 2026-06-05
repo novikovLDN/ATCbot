@@ -94,6 +94,45 @@ async def user_extended_stats(telegram_id: int = Path(..., gt=0)):
         raise HTTPException(500, f"extended_stats_failed: {e}")
 
 
+@router.get("/{telegram_id}/payments")
+async def user_payments(
+    telegram_id: int = Path(..., gt=0),
+    limit: int = Query(20, gt=0, le=200),
+):
+    """Settled + pending payments for a user. Pulled directly from the
+    payments table — there's no DB helper for "by user" yet and inlining
+    keeps the surface area small."""
+    from database.core import get_pool
+    pool = await get_pool()
+    if pool is None:
+        raise HTTPException(503, "db_unavailable")
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, telegram_id, tariff, amount, status, source,
+                      created_at, updated_at
+               FROM payments
+               WHERE telegram_id = $1
+               ORDER BY created_at DESC
+               LIMIT $2""",
+            telegram_id, limit,
+        )
+    return [_serialize(dict(r)) for r in rows]
+
+
+def _serialize(row: dict) -> dict:
+    """Make datetimes / Decimals JSON-friendly without pulling in a
+    custom encoder. Bytes values are skipped (none expected here)."""
+    out: dict = {}
+    for k, v in row.items():
+        if hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+        elif isinstance(v, (bytes, bytearray)):
+            continue
+        else:
+            out[k] = v
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────────
 # WRITE endpoints — all go through the same atomic helpers as the
 # in-bot admin handlers. Side effects: DB updates, audit log,
@@ -303,3 +342,57 @@ async def user_vip_revoke(
         "by": admin.get("sub"),
     })
     return {"ok": bool(ok)}
+
+
+class BalanceRequest(BaseModel):
+    delta_rubles: float = Field(..., description="Positive credits, negative debits")
+    reason: Optional[str] = Field(None, max_length=200)
+
+    @field_validator("delta_rubles")
+    @classmethod
+    def _nonzero(cls, v: float) -> float:
+        if v == 0:
+            raise ValueError("delta cannot be zero")
+        if abs(v) > 1_000_000:
+            raise ValueError("absolute value too large")
+        return v
+
+
+@router.post("/{telegram_id}/balance")
+async def user_balance_change(
+    telegram_id: int = Path(..., gt=0),
+    body: BalanceRequest = ...,
+    admin: dict = Depends(require_admin),
+):
+    """Credit (positive) or debit (negative) the user's balance.
+    Routes through increase_balance / decrease_balance with source='admin'
+    so the change appears in balance_transactions with proper attribution.
+    """
+    reason = body.reason or f"Web dashboard adjustment by admin {admin.get('sub')}"
+    try:
+        if body.delta_rubles > 0:
+            ok = await database.increase_balance(
+                telegram_id, body.delta_rubles,
+                source="admin", description=reason,
+            )
+        else:
+            ok = await database.decrease_balance(
+                telegram_id, abs(body.delta_rubles),
+                source="admin", description=reason,
+            )
+    except Exception as e:
+        raise HTTPException(500, f"balance_change_failed: {e}")
+    if not ok:
+        raise HTTPException(400, "balance_change_rejected")
+    bus.publish({
+        "type": "admin:balance_change",
+        "telegram_id": telegram_id,
+        "delta": body.delta_rubles,
+        "by": admin.get("sub"),
+    })
+    new_balance = 0.0
+    try:
+        new_balance = await database.get_user_balance(telegram_id)
+    except Exception:
+        pass
+    return {"ok": True, "new_balance_rubles": new_balance}
