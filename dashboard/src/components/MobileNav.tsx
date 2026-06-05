@@ -12,7 +12,10 @@ const items = [
 
 export function MobileNav() {
   return (
-    <nav className="fixed inset-x-2 bottom-2 z-30 flex justify-around rounded-2xl border border-border bg-bg-card/80 px-2 py-1.5 backdrop-blur-md md:hidden">
+    <nav
+      className="fixed inset-x-2 z-30 flex justify-around rounded-2xl border border-border bg-bg-card/80 px-2 py-1.5 backdrop-blur-md md:hidden"
+      style={{ bottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+    >
       {items.map((it) => (
         <NavLink
           key={it.to}

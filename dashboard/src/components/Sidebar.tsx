@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
+import { endpoints } from "@/lib/api";
 
 interface NavItem {
   to: string;
@@ -89,7 +90,12 @@ export function Sidebar() {
 
       <button
         type="button"
-        onClick={() => {
+        onClick={async () => {
+          try {
+            await endpoints.authLogout();
+          } catch {
+            //
+          }
           auth.clear();
           window.location.assign("/dashboard/");
         }}

@@ -3,14 +3,21 @@ import { ShieldCheck, Bot, Lock, User, Eye, EyeOff } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { Spinner } from "@/components/Spinner";
 
-export function Login({ onDone }: { onDone: () => void }) {
+export function SetupPassword({ bootstrapToken, onDone }: {
+  bootstrapToken: string;
+  onDone: () => void;
+}) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const canSubmit = username.trim().length > 0 && password.length > 0 && !busy;
+  const usernameOk = /^[a-zA-Z0-9._-]{3,40}$/.test(username);
+  const passwordOk = password.length >= 8;
+  const confirmOk = confirm === password && password.length > 0;
+  const canSubmit = usernameOk && passwordOk && confirmOk && !busy;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,16 +25,20 @@ export function Login({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      await endpoints.authLogin({ username: username.trim(), password });
+      await endpoints.authSetup({
+        username: username.trim(),
+        password,
+        bootstrap_token: bootstrapToken,
+      });
       onDone();
     } catch (e: unknown) {
       const ae = e as ApiError;
-      if (ae?.status === 401) {
-        setErr("Неверный логин или пароль");
-      } else if (ae?.status === 409) {
-        setErr("Пароль ещё не установлен. Зайди по ссылке из /admin.");
+      if (ae?.status === 409) {
+        setErr("Пароль уже установлен. Сбрось его через /admin → «Сбросить пароль» в боте.");
+      } else if (ae?.status === 401) {
+        setErr("Ссылка недействительна. Жми /admin в боте заново.");
       } else {
-        setErr(ae?.detail ?? "Не удалось войти");
+        setErr(ae?.detail ?? "Не удалось сохранить");
       }
     } finally {
       setBusy(false);
@@ -44,10 +55,12 @@ export function Login({ onDone }: { onDone: () => void }) {
           </div>
 
           <h1 className="text-2xl font-semibold tracking-tight text-fg">
-            Atlas Admin
+            Первая настройка
           </h1>
           <p className="mt-2 text-sm text-fg-muted">
-            Войди по логину и паролю. Сессия будет действовать <b>5 дней</b>.
+            Придумай <b>логин</b> и <b>пароль</b>. После сохранения этим
+            логином/паролем будут открываться все будущие визиты — даже на
+            этом же устройстве через 5 дней, когда сессия истечёт.
           </p>
 
           <form onSubmit={submit} className="mt-6 space-y-3">
@@ -56,23 +69,32 @@ export function Login({ onDone }: { onDone: () => void }) {
                 className="input pl-9"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                placeholder="например, atlas"
                 autoCapitalize="none"
                 autoCorrect="off"
                 autoComplete="username"
                 spellCheck={false}
                 required
-                autoFocus
+                minLength={3}
+                maxLength={40}
               />
             </Field>
+            {username && !usernameOk && (
+              <Hint kind="error">
+                3-40 символов, латиница / цифры / <code>._-</code>
+              </Hint>
+            )}
 
-            <Field icon={Lock} label="Пароль">
+            <Field icon={Lock} label="Пароль (мин. 8)">
               <input
                 className="input pl-9 pr-9"
                 type={showPwd ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
+                autoComplete="new-password"
                 required
+                minLength={8}
+                maxLength={200}
               />
               <button
                 type="button"
@@ -84,11 +106,21 @@ export function Login({ onDone }: { onDone: () => void }) {
               </button>
             </Field>
 
-            {err && (
-              <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
-                {err}
-              </div>
+            <Field icon={Lock} label="Подтверди пароль">
+              <input
+                className="input pl-9"
+                type={showPwd ? "text" : "password"}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                autoComplete="new-password"
+                required
+              />
+            </Field>
+            {confirm && !confirmOk && (
+              <Hint kind="error">Пароли не совпадают</Hint>
             )}
+
+            {err && <Hint kind="error">{err}</Hint>}
 
             <button
               type="submit"
@@ -96,7 +128,7 @@ export function Login({ onDone }: { onDone: () => void }) {
               className="btn-primary w-full"
             >
               {busy ? <Spinner /> : <ShieldCheck className="h-3.5 w-3.5" />}
-              Войти
+              Создать аккаунт и войти
             </button>
           </form>
 
@@ -106,10 +138,9 @@ export function Login({ onDone }: { onDone: () => void }) {
                 <Bot className="h-4 w-4" />
               </div>
               <div className="text-xs text-fg-muted">
-                Забыл пароль? Открой бота, напиши{" "}
-                <code className="rounded bg-bg-elevated px-1 py-0.5 font-mono">/admin</code>{" "}
-                и нажми <b>«Сбросить пароль»</b>. Дальше открой
-                magic-ссылку и придумай новый.
+                Magic-ссылка из /admin перестанет автоматически впускать
+                в дашборд после этой настройки — даже у тебя. С этого
+                момента: логин + пароль.
               </div>
             </div>
           </div>
@@ -138,5 +169,25 @@ function Field({
         {children}
       </div>
     </label>
+  );
+}
+
+function Hint({
+  kind,
+  children,
+}: {
+  kind: "error" | "info";
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={
+        kind === "error"
+          ? "rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+          : "rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-fg-muted"
+      }
+    >
+      {children}
+    </div>
   );
 }

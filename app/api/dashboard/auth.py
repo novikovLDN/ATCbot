@@ -1,62 +1,65 @@
-"""
-Dashboard auth — JWT issued by /admin bot command, verified here.
+"""Dashboard auth endpoints.
 
 Flow:
-  1. Admin types /admin in Telegram chat.
-  2. Bot handler (app.handlers.admin.base) checks ADMIN_TELEGRAM_ID,
-     calls `issue_login_token()`, builds URL `{DASHBOARD_BASE_URL}/dashboard/?login=<jwt>`,
-     sends as inline-button.
-  3. Browser opens URL, JS captures `?login=` and stores token in
-     localStorage.
-  4. Every REST call sends Authorization: Bearer <token>.
-  5. WebSocket passes the token via `?token=` query param.
+  /admin (bot)  ─→  magic-link URL  ─→  browser opens /dashboard/
+        │
+        ▼
+        - GET /api/auth/status                       (no auth required)
+            { has_password, has_session }
+        ▼
+   ┌─ no password ─────┐    ┌─ has password ────┐
+   │ Setup form        │    │ Login form        │
+   │ POST /auth/setup  │    │ POST /auth/login  │
+   │ (bearer JWT       │    │ (username,        │
+   │  bootstrap)       │    │  password)        │
+   └────────┬──────────┘    └────────┬──────────┘
+            └─────── HttpOnly cookie ───────┘
+                            │
+                            ▼
+                       Dashboard
 
-Tokens are short-lived (10 min). Refresh = press /admin again. The
-audience is one person — the project admin — so we don't need a
-refresh-token dance.
+After password is set, magic-link tokens NO LONGER let anyone in. They
+only work as a one-time bootstrap (when no creds exist) or as an
+admin-side recovery bridge (after pressing "Восстановить пароль" in
+the bot, which clears creds → setup form reappears).
 """
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import jwt
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, Field, field_validator
 
 import config
+from app.services import admin_auth
 
 router = APIRouter()
 
 _JWT_ALG = "HS256"
-_TOKEN_TTL_MINUTES = 10
+# Magic-link is intentionally long-lived: it's a bootstrap link that
+# only does anything when there's no password set (or right after
+# the admin pressed "Восстановить пароль"). Outside those windows
+# it's inert, so giving it a long TTL just saves the admin from
+# re-pressing /admin if they delay setup.
+_MAGIC_TTL_DAYS = 30
 
 
 def issue_login_token(admin_telegram_id: int) -> str:
-    """Sign a short-lived admin token. Called from the /admin bot handler.
-
-    PyJWT 2.10+ enforces `sub` to be a string at decode time
-    (InvalidSubjectError otherwise). Encoding does NOT validate, so the
-    token gets issued fine — but every subsequent verify fails. Cast to
-    str here; callers that need the integer telegram_id read it as
-    `int(payload["sub"])` (users.py already does).
-    """
+    """Sign a long-lived bootstrap token. Called from the /admin
+    bot handler."""
     if not config.JWT_SECRET:
         raise RuntimeError("JWT_SECRET is not configured")
     payload = {
         "sub": str(admin_telegram_id),
         "role": "admin",
         "iat": datetime.now(timezone.utc),
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=_TOKEN_TTL_MINUTES),
+        "exp": datetime.now(timezone.utc) + timedelta(days=_MAGIC_TTL_DAYS),
     }
     return jwt.encode(payload, config.JWT_SECRET, algorithm=_JWT_ALG)
 
 
 def verify_token(token: str) -> Optional[dict[str, Any]]:
-    """Decode + validate. Returns payload dict on success, None on any failure.
-
-    Logs the specific PyJWT error so misconfigurations (wrong secret,
-    clock skew, sub-claim format) surface in Railway logs instead of
-    being silently swallowed as a 401.
-    """
-    if not config.JWT_SECRET:
+    if not config.JWT_SECRET or not token:
         return None
     try:
         return jwt.decode(token, config.JWT_SECRET, algorithms=[_JWT_ALG])
@@ -68,10 +71,151 @@ def verify_token(token: str) -> Optional[dict[str, Any]]:
         return None
 
 
+# ── Models ────────────────────────────────────────────────────────────
+
+
+class SetupRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=40)
+    password: str = Field(..., min_length=8, max_length=200)
+    bootstrap_token: str = Field(..., min_length=10)
+
+    @field_validator("username")
+    @classmethod
+    def _u(cls, v: str) -> str:
+        v = v.strip()
+        if not v.replace("_", "").replace("-", "").replace(".", "").isalnum():
+            raise ValueError("username must be alphanumeric (._- allowed)")
+        return v
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=40)
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    # SameSite=Lax keeps the cookie around across normal navigations
+    # but not on cross-site POSTs — fine for a same-origin SPA.
+    # secure=True is required on iOS PWA + most browsers since
+    # standalone PWAs always run over HTTPS.
+    response.set_cookie(
+        key=admin_auth.COOKIE_NAME,
+        value=token,
+        max_age=admin_auth.SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/dashboard/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=admin_auth.COOKIE_NAME, path="/dashboard/",
+    )
+
+
+# ── Endpoints ────────────────────────────────────────────────────────
+
+
+@router.get("/status")
+async def auth_status(
+    request: Request,
+    atlas_admin_session: Optional[str] = Cookie(default=None),
+):
+    """Public — used by the SPA on mount to decide which screen to
+    render. NEVER requires auth, but tells the SPA whether it has a
+    valid session and whether a password is set globally."""
+    has_password = await admin_auth.credentials_exist()
+    has_session = False
+    if atlas_admin_session:
+        tg = await admin_auth.lookup_session(atlas_admin_session)
+        has_session = tg is not None and admin_auth.is_admin(tg)
+    return {
+        "has_password": has_password,
+        "has_session": has_session,
+    }
+
+
+@router.post("/setup")
+async def auth_setup(body: SetupRequest, response: Response):
+    """Set username + password. Only allowed when (a) no password
+    is set yet OR (b) the password has just been cleared by the bot's
+    reset button. In both cases the caller must present a valid
+    bootstrap JWT (from /admin) so a stranger who hits /api/auth/setup
+    without ever having received the magic-link can't take over."""
+    payload = verify_token(body.bootstrap_token)
+    if not payload or payload.get("role") != "admin":
+        raise HTTPException(401, "invalid_bootstrap_token")
+    sub = payload.get("sub")
+    try:
+        tg = int(sub) if sub is not None else 0
+    except (TypeError, ValueError):
+        tg = 0
+    if not admin_auth.is_admin(tg):
+        raise HTTPException(403, "not_admin")
+
+    if await admin_auth.credentials_exist():
+        # Setup is one-shot. To change creds, the bot must reset first.
+        raise HTTPException(409, "already_setup")
+
+    ok = await admin_auth.set_credentials(body.username, body.password)
+    if not ok:
+        raise HTTPException(500, "setup_failed")
+
+    token = await admin_auth.create_session(tg)
+    _set_session_cookie(response, token)
+    return {"ok": True}
+
+
+@router.post("/login")
+async def auth_login(body: LoginRequest, response: Response):
+    creds = await admin_auth.get_credentials()
+    if not creds:
+        raise HTTPException(409, "password_not_set")
+    # Constant-time-ish compare: always do the hash check even if the
+    # username is wrong so timing doesn't leak info.
+    username_ok = body.username.strip().lower() == str(creds["username"]).strip().lower()
+    password_ok = admin_auth.verify_password(body.password, str(creds["password_hash"]))
+    if not (username_ok and password_ok):
+        raise HTTPException(401, "invalid_credentials")
+
+    token = await admin_auth.create_session(config.ADMIN_TELEGRAM_ID)
+    _set_session_cookie(response, token)
+    return {"ok": True}
+
+
+@router.post("/logout")
+async def auth_logout(
+    response: Response,
+    atlas_admin_session: Optional[str] = Cookie(default=None),
+):
+    if atlas_admin_session:
+        await admin_auth.revoke_session(atlas_admin_session)
+    _clear_session_cookie(response)
+    return {"ok": True}
+
+
+@router.get("/me")
+async def auth_me(
+    atlas_admin_session: Optional[str] = Cookie(default=None),
+):
+    if not atlas_admin_session:
+        raise HTTPException(401, "no_session")
+    tg = await admin_auth.lookup_session(atlas_admin_session)
+    if tg is None or not admin_auth.is_admin(tg):
+        raise HTTPException(401, "invalid_session")
+    return {"telegram_id": tg}
+
+
+# Backwards-compatibility for the original /verify endpoint — kept so
+# existing magic-link URLs from previous deploys don't break before
+# the SPA reload.
 @router.get("/verify")
 async def verify_endpoint(token: str):
-    """Browser uses this once after grabbing ?login=<token> from URL —
-    sanity-checks the token is well-formed before stashing in localStorage."""
     payload = verify_token(token)
     if not payload:
         raise HTTPException(401, "Invalid or expired token")

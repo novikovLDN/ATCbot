@@ -286,6 +286,17 @@ async def main():
     healthcheck_task = asyncio.create_task(healthcheck.health_check_task(bot))
     background_tasks.append(healthcheck_task)
     logger.info("Health check task started")
+
+    # Admin notifier — fans the app.events.bus out to admin Telegram DMs
+    # (payment errors, broadcast completions, daily revenue milestones).
+    # Cheap to run: it just subscribes to the in-process bus.
+    try:
+        from app.services.admin_notifier import run_admin_notifier
+        admin_notifier_task = asyncio.create_task(run_admin_notifier(bot))
+        background_tasks.append(admin_notifier_task)
+        logger.info("Admin notifier task started")
+    except Exception as e:
+        logger.warning("admin_notifier failed to start: %s", e)
     
     # ====================================================================================
     # HTTP Health Check Server

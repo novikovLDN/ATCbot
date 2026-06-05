@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { auth, captureMagicLink } from "@/lib/auth";
@@ -6,6 +6,7 @@ import { endpoints, ApiError } from "@/lib/api";
 import { Layout } from "@/components/Layout";
 import { Toaster } from "@/components/Toaster";
 import { Login } from "@/pages/Login";
+import { SetupPassword } from "@/pages/SetupPassword";
 import { Dashboard } from "@/pages/Dashboard";
 import { Users } from "@/pages/Users";
 import { Analytics } from "@/pages/Analytics";
@@ -30,40 +31,68 @@ const qc = new QueryClient({
   },
 });
 
+type Stage =
+  | { kind: "loading" }
+  | { kind: "setup"; bootstrapToken: string }
+  | { kind: "login" }
+  | { kind: "ready" };
+
 export default function App() {
-  // Capture ?login=<jwt> exactly once before the rest of the tree mounts.
-  // Doing it inside main.tsx before render also works; we duplicate here
-  // for safety on hot-reload during dev.
   useEffect(() => {
     captureMagicLink();
   }, []);
 
-  const [ready, setReady] = useState<null | boolean>(null);
+  const [stage, setStage] = useState<Stage>({ kind: "loading" });
+
+  const refresh = useCallback(async () => {
+    try {
+      const status = await endpoints.authStatus();
+      if (status.has_session) {
+        setStage({ kind: "ready" });
+        return;
+      }
+      if (!status.has_password) {
+        // Bootstrap setup needs a magic-link JWT
+        const token = auth.get();
+        if (!token) {
+          setStage({ kind: "login" }); // no token, no setup — bot must issue link
+          return;
+        }
+        setStage({ kind: "setup", bootstrapToken: token });
+        return;
+      }
+      // Password exists; bearer JWT (if any) is no longer auto-login.
+      setStage({ kind: "login" });
+    } catch {
+      setStage({ kind: "login" });
+    }
+  }, []);
 
   useEffect(() => {
-    const t = auth.get();
-    if (!t) {
-      setReady(false);
-      return;
-    }
-    // Single verify-call on app start. /auth/verify confirms signature
-    // is valid and the bot's JWT_SECRET matches. On failure we clear
-    // local storage and route to the login screen.
-    endpoints
-      .authVerify(t)
-      .then(() => setReady(true))
-      .catch(() => {
-        auth.clear();
-        setReady(false);
-      });
-  }, []);
+    refresh();
+  }, [refresh]);
 
   return (
     <QueryClientProvider client={qc}>
       <BrowserRouter basename="/dashboard">
-        {ready === null ? (
+        {stage.kind === "loading" ? (
           <Splash />
-        ) : ready ? (
+        ) : stage.kind === "setup" ? (
+          <SetupPassword
+            bootstrapToken={stage.bootstrapToken}
+            onDone={() => {
+              auth.clear(); // bootstrap token no longer needed
+              refresh();
+            }}
+          />
+        ) : stage.kind === "login" ? (
+          <Login
+            onDone={() => {
+              auth.clear();
+              refresh();
+            }}
+          />
+        ) : (
           <Routes>
             <Route element={<Layout />}>
               <Route index element={<Dashboard />} />
@@ -74,15 +103,11 @@ export default function App() {
               <Route path="broadcasts/new" element={<BroadcastCreate />} />
               <Route path="referrals" element={<Referrals />} />
               <Route path="bgift" element={<BypassGifts />} />
+              <Route path="audit" element={<Audit />} />
               <Route path="promo" element={<PromoCodes />} />
               <Route path="service" element={<Service />} />
-              <Route path="audit" element={<Audit />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
-          </Routes>
-        ) : (
-          <Routes>
-            <Route path="*" element={<Login />} />
           </Routes>
         )}
         <Toaster />
