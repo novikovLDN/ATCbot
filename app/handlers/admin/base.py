@@ -32,6 +32,25 @@ async def cmd_admin(message: Message):
     text = i18n_get_text(language, "admin.dashboard_title")
     await message.answer(text, reply_markup=get_admin_dashboard_keyboard(language), parse_mode="HTML")
 
+    # When the web dashboard is configured, send a separate magic-link message
+    # so the admin can choose between the in-bot menu (above) and the browser
+    # UI. The link is a short-lived JWT — re-issue by typing /admin again.
+    if getattr(config, "DASHBOARD_ENABLED", False):
+        try:
+            from app.api.dashboard.auth import issue_login_token
+            token = issue_login_token(message.from_user.id)
+            url = f"{config.DASHBOARD_BASE_URL.rstrip('/')}/dashboard/?login={token}"
+            await message.answer(
+                "🌐 <b>Веб-дашборд</b>\n\n"
+                "Ссылка действует <b>10 минут</b>. Если истечёт — снова жми /admin.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🛡 Открыть дашборд", url=url)],
+                ]),
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning("DASHBOARD_LINK_FAIL admin=%s err=%s", message.from_user.id, e)
+
 
 @admin_base_router.callback_query(F.data == "admin:dashboard")
 @admin_only
