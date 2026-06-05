@@ -241,6 +241,15 @@ export const endpoints = {
     api.get<Array<Record<string, unknown>>>("/payments/pending"),
   paymentDetail: (id: number) =>
     api.get<Record<string, unknown>>(`/payments/${id}`),
+
+  activationsPending: (limit = 100) =>
+    api.get<{ total: number; rows: Array<Record<string, unknown>> }>(
+      `/activations/pending?limit=${limit}`,
+    ),
+  activationRetry: (subscriptionId: number) =>
+    api.post<{ ok: boolean; subscription_id: number; vpn_key?: string; error_message?: string }>(
+      `/activations/${subscriptionId}/retry`,
+    ),
 };
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers

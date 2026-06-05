@@ -25,6 +25,7 @@ from app.api.dashboard.routes import bgift as _bgift
 from app.api.dashboard.routes import incident as _incident
 from app.api.dashboard.routes import promo as _promo
 from app.api.dashboard.routes import payments as _payments
+from app.api.dashboard.routes import activations as _activations
 from app.api.dashboard import auth as _auth
 from app.api.dashboard import ws as _ws
 
@@ -41,6 +42,7 @@ router.include_router(_bgift.router, prefix="/bgift", tags=["bgift"])
 router.include_router(_incident.router, prefix="/incident", tags=["incident"])
 router.include_router(_promo.router, prefix="/promo", tags=["promo"])
 router.include_router(_payments.router, prefix="/payments", tags=["payments"])
+router.include_router(_activations.router, prefix="/activations", tags=["activations"])
 
 # Separate router for the WebSocket endpoint — FastAPI requires WS
 # routes to be on a router (or app) that hasn't had a `prefix` applied
