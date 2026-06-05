@@ -14,15 +14,18 @@ UX
 --
 Admin clicks "🎁 Trial → −30%" in the dashboard:
   1. Preview screen: count of trial users + the message template.
-  2. Confirm button → background sender starts.
-  3. Status button polls progress.
+  2. Optional: attach a photo — admin sends a picture in this chat, it
+     gets stored and prepended to every broadcast message.
+  3. Confirm button → background sender starts.
+  4. Status button polls progress.
 
 DELIVERY
 --------
 Reuses broadcast.py's _safe_send_with_buttons() — Telegram-safe rate
 limiting (BROADCAST_CONCURRENCY=15, retry on RetryAfter / generic
 errors), so we inherit the same proven behaviour as the existing
-custom broadcasts.
+custom broadcasts. Photo path uses bot.send_photo with caption when
+photo_file_id is set.
 
 CTA button under each broadcast message — "🎁 Забрать подарок" —
 writes a 24-hour personal_discount=30% row via
@@ -30,22 +33,19 @@ database.create_user_discount, then opens the standard tariff screen.
 The discount is automatically applied by calculate_final_price's
 personal_discount branch, so it works for ANY tariff (basic / plus /
 combo / biz) and ANY period (1/3/6/12 mo). No tariff-specific plumbing.
-
-CREATIVE TEXT
--------------
-The body of the broadcast lives in PROMO_TEXT_HTML at the top of this
-file as a placeholder. The admin approves the exact wording, then we
-replace it here.
 """
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router, F
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    Message,
 )
 
 import config
@@ -62,30 +62,37 @@ from app.handlers.common.utils import safe_edit_text
 admin_promo_trial_router = Router()
 logger = logging.getLogger(__name__)
 
-# ────────────────────────────────────────────────────────────────────
-# PLACEHOLDER. Approve creative with the admin, then replace.
-# ────────────────────────────────────────────────────────────────────
+
+class PromoTrialFSM(StatesGroup):
+    waiting_for_photo = State()
+
+
+# Approved creative (variant 3 — clubby tone) with the tg-emoji IDs
+# the admin verified from Telegram Ads. Plain emoji fallback inside
+# each <tg-emoji> tag means non-premium clients still see a glyph.
 PROMO_TEXT_HTML = (
-    "⭐️ <b>Персональное предложение</b>\n\n"
+    "<tg-emoji emoji-id=\"5438496463044752972\">⭐️</tg-emoji> "
+    "<b>Персональное предложение</b>\n\n"
     "Ты попал в небольшой список пользователей, которым мы открыли "
     "доступ к скидке <b>−30%</b> на всю линейку Atlas.\n\n"
-    "<b>Условия простые:</b>\n"
+    "<blockquote><b>Условия простые:</b>\n"
     "— скидка действует <b>24 часа</b> после активации\n"
     "— применяется к <b>любому тарифу</b> (Basic, Plus, Combo)\n"
-    "— на <b>любой срок</b> подписки\n\n"
-    "🎁 Жми кнопку ниже — забираем подарок и выбираем тариф. Цена со "
-    "скидкой подставится автоматически."
+    "— на <b>любой срок</b> подписки</blockquote>\n\n"
+    "<tg-emoji emoji-id=\"5359527944505041421\">🎁</tg-emoji> Жми кнопку "
+    "ниже — забираем подарок и выбираем тариф. Цена со скидкой "
+    "подставится автоматически."
 )
 PROMO_BUTTON_TEXT = "🎁 Забрать подарок"
 PROMO_BUTTON_CALLBACK = "promo_trial_claim"
-# How long the discount stays active once the user claims it.
 PROMO_DISCOUNT_PERCENT = 30
 PROMO_DISCOUNT_HOURS = 24
 
-# Seconds between live progress edits.
-_PROGRESS_INTERVAL = 5
-
-# In-memory state per admin id while a broadcast is running.
+# In-memory state per admin id. Fields:
+#   status:        "ready" | "running" | "done" | "failed"
+#   audience:      list[int]
+#   photo_file_id: Optional[str]  — Telegram file_id of attached photo
+#   total/sent/failed/done/error/started_at — set by sender_worker
 _runs: dict[int, dict] = {}
 
 
@@ -96,7 +103,10 @@ def _make_promo_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-async def _sender_worker(admin_id: int, bot, user_ids: list):
+async def _sender_worker(
+    admin_id: int, bot, user_ids: list,
+    photo_file_id: str | None = None,
+):
     """Background broadcast — same delivery model as the custom-broadcast
     pipeline in broadcast.py:
       - Semaphore(BROADCAST_CONCURRENCY=15) — Telegram-safe 30 msg/s
@@ -106,6 +116,8 @@ async def _sender_worker(admin_id: int, bot, user_ids: list):
         cancel its siblings
       - Per-user retry (RetryAfter / generic) lives inside
         _safe_send_with_buttons — inherited automatically.
+      - When photo_file_id is set, each delivery is bot.send_photo with
+        PROMO_TEXT_HTML as the caption.
     """
     state = _runs[admin_id]
     state["total"] = len(user_ids)
@@ -117,10 +129,18 @@ async def _sender_worker(admin_id: int, bot, user_ids: list):
     keyboard = _make_promo_keyboard()
 
     async def _send_one(uid: int):
-        msg_id = await _safe_send_with_buttons(
-            bot, uid, PROMO_TEXT_HTML, sem,
-            reply_markup=keyboard,
-        )
+        if photo_file_id:
+            msg_id = await _safe_send_with_buttons(
+                bot, uid, PROMO_TEXT_HTML, sem,
+                reply_markup=keyboard,
+                photo_file_id=photo_file_id,
+                caption=PROMO_TEXT_HTML,
+            )
+        else:
+            msg_id = await _safe_send_with_buttons(
+                bot, uid, PROMO_TEXT_HTML, sem,
+                reply_markup=keyboard,
+            )
         return uid, msg_id
 
     try:
@@ -152,8 +172,9 @@ async def _sender_worker(admin_id: int, bot, user_ids: list):
 
         state["status"] = "done"
         logger.info(
-            "PROMO_TRIAL_DONE admin=%s total=%s sent=%s failed=%s",
+            "PROMO_TRIAL_DONE admin=%s total=%s sent=%s failed=%s photo=%s",
             admin_id, state["total"], state["sent"], state["failed"],
+            bool(photo_file_id),
         )
     except Exception as e:
         state["status"] = "failed"
@@ -184,10 +205,99 @@ def _format_progress(state: dict) -> str:
     )
 
 
+def _preview_text(audience_count: int, photo_attached: bool) -> str:
+    photo_line = (
+        "📸 Фото: <b>прикреплено</b> — придёт у каждого как фото с подписью.\n"
+        if photo_attached else
+        "📸 Фото: <i>не прикреплено</i> — будет обычное текстовое сообщение.\n"
+    )
+    return (
+        "🎁 <b>Спец-предложение для trial-юзеров</b>\n\n"
+        f"Аудитория: <b>{audience_count}</b> пользователей с активным "
+        "пробным периодом (без активной paid-подписки).\n"
+        f"{photo_line}\n"
+        "<b>Текст рассылки:</b>\n"
+        "─────────────────\n"
+        f"{PROMO_TEXT_HTML}\n"
+        "─────────────────\n\n"
+        "Кнопка под сообщением: "
+        f"<i>{PROMO_BUTTON_TEXT}</i> → активирует персональную скидку "
+        f"<b>{PROMO_DISCOUNT_PERCENT}%</b> на <b>{PROMO_DISCOUNT_HOURS} часов</b> "
+        "и открывает экран тарифов. Скидка применяется к любому тарифу "
+        "(Basic / Plus / Combo) на любой срок."
+    )
+
+
+def _preview_keyboard(
+    audience_count: int, photo_attached: bool
+) -> InlineKeyboardMarkup:
+    rows = []
+    if audience_count:
+        rows.append([InlineKeyboardButton(
+            text=f"📤 Отправить ({audience_count})",
+            callback_data="admin:promo_trial_confirm",
+        )])
+    if photo_attached:
+        rows.append([
+            InlineKeyboardButton(
+                text="🖼 Заменить фото",
+                callback_data="admin:promo_trial_add_photo",
+            ),
+            InlineKeyboardButton(
+                text="❌ Убрать фото",
+                callback_data="admin:promo_trial_remove_photo",
+            ),
+        ])
+    else:
+        rows.append([InlineKeyboardButton(
+            text="📸 Добавить фото",
+            callback_data="admin:promo_trial_add_photo",
+        )])
+    rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_preview(callback: CallbackQuery, admin_id: int):
+    """Re-render the preview screen from the current _runs state, with
+    edit-then-fallback-send so a parse error or photo-source dashboard
+    can't swallow the response."""
+    state = _runs.get(admin_id) or {}
+    audience = state.get("audience") or []
+    photo_file_id = state.get("photo_file_id")
+    text = _preview_text(len(audience), bool(photo_file_id))
+    keyboard = _preview_keyboard(len(audience), bool(photo_file_id))
+
+    edited_ok = False
+    try:
+        await safe_edit_text(
+            callback.message, text,
+            reply_markup=keyboard,
+            bot=callback.bot, parse_mode="HTML",
+        )
+        edited_ok = True
+    except Exception as e:
+        logger.exception("PROMO_TRIAL_EDIT_FAIL admin=%s: %s", admin_id, e)
+
+    if not edited_ok:
+        try:
+            await callback.message.answer(
+                text, reply_markup=keyboard, parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.exception("PROMO_TRIAL_ANSWER_FAIL admin=%s: %s", admin_id, e)
+            try:
+                await callback.message.answer(
+                    f"❌ Не удалось показать превью: <code>{type(e).__name__}: {e}</code>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+
+
 @admin_promo_trial_router.callback_query(F.data == "admin:promo_trial")
-async def callback_promo_trial(callback: CallbackQuery):
+async def callback_promo_trial(callback: CallbackQuery, state: FSMContext):
     """Preview: show audience size + the exact message we'll send,
-    plus a confirm button."""
+    plus confirm / photo buttons."""
     logger.info("PROMO_TRIAL_OPEN admin=%s data=%s",
                 callback.from_user.id, callback.data)
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
@@ -197,6 +307,7 @@ async def callback_promo_trial(callback: CallbackQuery):
         await callback.answer()
     except Exception:
         pass
+    await state.clear()
 
     admin_id = callback.from_user.id
     existing = _runs.get(admin_id)
@@ -224,82 +335,24 @@ async def callback_promo_trial(callback: CallbackQuery):
             )
         except Exception:
             pass
-        try:
-            await safe_edit_text(
-                callback.message,
-                f"❌ Не удалось собрать аудиторию: <code>{type(e).__name__}: {e}</code>",
-                reply_markup=get_admin_back_keyboard(),
-                bot=callback.bot, parse_mode="HTML",
-            )
-        except Exception:
-            pass
         return
 
-    # Stash so the confirm step doesn't requery.
+    # Preserve a previously-attached photo across re-openings within
+    # this admin session.
+    prev_photo = (_runs.get(admin_id) or {}).get("photo_file_id")
     _runs[admin_id] = {
         "status": "ready",
         "audience": user_ids,
+        "photo_file_id": prev_photo,
     }
 
-    preview = (
-        "🎁 <b>Спец-предложение для trial-юзеров</b>\n\n"
-        f"Аудитория: <b>{len(user_ids)}</b> пользователей с активным "
-        "пробным периодом (без активной paid-подписки).\n\n"
-        "<b>Текст рассылки (черновик):</b>\n"
-        "─────────────────\n"
-        f"{PROMO_TEXT_HTML}\n"
-        "─────────────────\n\n"
-        "Кнопка под сообщением: "
-        f"<i>{PROMO_BUTTON_TEXT}</i> → активирует персональную скидку "
-        f"<b>{PROMO_DISCOUNT_PERCENT}%</b> на <b>{PROMO_DISCOUNT_HOURS} часов</b> "
-        "и открывает экран тарифов. Скидка применяется к любому тарифу "
-        "(Basic / Plus / Combo) на любой срок.\n\n"
-        "<i>Текст можно поменять перед отправкой — скажи финал, заменю в коде.</i>"
-    )
-
-    rows = []
-    if user_ids:
-        rows.append([InlineKeyboardButton(
-            text=f"📤 Отправить ({len(user_ids)})",
-            callback_data="admin:promo_trial_confirm",
-        )])
-    rows.append([InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
-
-    # Edit-then-fallback-send: if the dashboard message can't be edited
-    # (photo source / inaccessible / parse error swallowed inside
-    # safe_edit_text), the admin must STILL see the preview — send a
-    # fresh message as a backup.
-    edited_ok = False
-    try:
-        await safe_edit_text(
-            callback.message, preview,
-            reply_markup=keyboard,
-            bot=callback.bot, parse_mode="HTML",
-        )
-        edited_ok = True
-    except Exception as e:
-        logger.exception("PROMO_TRIAL_EDIT_FAIL admin=%s: %s", admin_id, e)
-
-    if not edited_ok:
-        try:
-            await callback.message.answer(
-                preview, reply_markup=keyboard, parse_mode="HTML",
-            )
-        except Exception as e:
-            logger.exception("PROMO_TRIAL_ANSWER_FAIL admin=%s: %s", admin_id, e)
-            try:
-                await callback.message.answer(
-                    f"❌ Не удалось показать превью: <code>{type(e).__name__}: {e}</code>",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
+    await _render_preview(callback, admin_id)
 
 
-@admin_promo_trial_router.callback_query(F.data == "admin:promo_trial_confirm")
-async def callback_promo_trial_confirm(callback: CallbackQuery):
-    """Confirm + kick off the background broadcast."""
+@admin_promo_trial_router.callback_query(F.data == "admin:promo_trial_add_photo")
+async def callback_promo_trial_add_photo(callback: CallbackQuery, state: FSMContext):
+    """Switch FSM to waiting_for_photo and prompt the admin to send a
+    picture. Photo arrives in the message handler below."""
     if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
         await callback.answer("Недостаточно прав", show_alert=True)
         return
@@ -309,8 +362,123 @@ async def callback_promo_trial_confirm(callback: CallbackQuery):
         pass
 
     admin_id = callback.from_user.id
-    state = _runs.get(admin_id)
-    if not state or state.get("status") not in ("ready",):
+    if admin_id not in _runs:
+        await callback.message.answer(
+            "🎁 Сначала откройте превью из админ-панели.",
+            parse_mode="HTML",
+        )
+        return
+
+    await state.set_state(PromoTrialFSM.waiting_for_photo)
+    try:
+        await callback.message.answer(
+            "📸 <b>Пришли фото одним сообщением.</b>\n\n"
+            "Картинка прикрепится к рассылке как фото с подписью "
+            "(сам текст останется неизменным).\n\n"
+            "Если передумал — нажми «◀ Назад» в превью.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@admin_promo_trial_router.message(
+    PromoTrialFSM.waiting_for_photo, F.photo,
+)
+async def message_promo_trial_photo(message: Message, state: FSMContext):
+    """Admin sent a photo while we were waiting for one — store the
+    largest size's file_id and re-render the preview."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+
+    admin_id = message.from_user.id
+    file_id = message.photo[-1].file_id
+    run = _runs.get(admin_id)
+    if not run:
+        await state.clear()
+        await message.answer(
+            "🎁 Сессия превью утеряна — открой меню заново.",
+            parse_mode="HTML",
+        )
+        return
+
+    run["photo_file_id"] = file_id
+    await state.clear()
+    logger.info(
+        "PROMO_TRIAL_PHOTO_ATTACHED admin=%s file_id=%s", admin_id, file_id,
+    )
+
+    audience = run.get("audience") or []
+    text = _preview_text(len(audience), True)
+    keyboard = _preview_keyboard(len(audience), True)
+    try:
+        await message.answer_photo(
+            photo=file_id, caption=text,
+            reply_markup=keyboard, parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.exception("PROMO_TRIAL_PHOTO_PREVIEW_FAIL admin=%s: %s", admin_id, e)
+        await message.answer(
+            f"✅ Фото прикреплено, но превью не отрисовалось: "
+            f"<code>{type(e).__name__}: {e}</code>\n\n"
+            "Открой «🎁 Trial → промо −30%» из админ-меню — там покажется "
+            "обновлённое превью.",
+            parse_mode="HTML",
+        )
+
+
+@admin_promo_trial_router.message(
+    PromoTrialFSM.waiting_for_photo,
+)
+async def message_promo_trial_photo_other(message: Message, state: FSMContext):
+    """Anything other than a photo while waiting — gentle nudge, keep
+    the state alive so the admin can retry."""
+    if message.from_user.id != config.ADMIN_TELEGRAM_ID:
+        return
+    try:
+        await message.answer(
+            "📸 Жду <b>фотографию</b> — пришли картинку одним сообщением, "
+            "или вернись в превью кнопкой «◀ Назад».",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@admin_promo_trial_router.callback_query(F.data == "admin:promo_trial_remove_photo")
+async def callback_promo_trial_remove_photo(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+    try:
+        await callback.answer("Фото убрано")
+    except Exception:
+        pass
+    await state.clear()
+
+    admin_id = callback.from_user.id
+    run = _runs.get(admin_id)
+    if run:
+        run["photo_file_id"] = None
+        logger.info("PROMO_TRIAL_PHOTO_REMOVED admin=%s", admin_id)
+    await _render_preview(callback, admin_id)
+
+
+@admin_promo_trial_router.callback_query(F.data == "admin:promo_trial_confirm")
+async def callback_promo_trial_confirm(callback: CallbackQuery, state: FSMContext):
+    """Confirm + kick off the background broadcast."""
+    if callback.from_user.id != config.ADMIN_TELEGRAM_ID:
+        await callback.answer("Недостаточно прав", show_alert=True)
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    await state.clear()
+
+    admin_id = callback.from_user.id
+    run = _runs.get(admin_id)
+    if not run or run.get("status") not in ("ready",):
         await safe_edit_text(
             callback.message,
             "🎁 Сначала откройте превью предложения.",
@@ -319,7 +487,7 @@ async def callback_promo_trial_confirm(callback: CallbackQuery):
         )
         return
 
-    user_ids = state.get("audience") or []
+    user_ids = run.get("audience") or []
     if not user_ids:
         await safe_edit_text(
             callback.message,
@@ -329,14 +497,19 @@ async def callback_promo_trial_confirm(callback: CallbackQuery):
         )
         return
 
-    state["status"] = "running"
-    state["started_at"] = datetime.now(timezone.utc)
-    asyncio.create_task(_sender_worker(admin_id, callback.bot, list(user_ids)))
+    photo_file_id = run.get("photo_file_id")
+    run["status"] = "running"
+    run["started_at"] = datetime.now(timezone.utc)
+    asyncio.create_task(_sender_worker(
+        admin_id, callback.bot, list(user_ids),
+        photo_file_id=photo_file_id,
+    ))
 
+    photo_note = "с фото" if photo_file_id else "без фото"
     await safe_edit_text(
         callback.message,
         "🎁 <b>Trial-промо отправляется в фоне</b>\n\n"
-        f"Аудитория: <b>{len(user_ids)}</b>.\n"
+        f"Аудитория: <b>{len(user_ids)}</b> ({photo_note}).\n"
         "Кнопка «🔄 Обновить» — текущий прогресс и финальный отчёт.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:promo_trial_status")],
@@ -356,8 +529,8 @@ async def callback_promo_trial_status(callback: CallbackQuery):
     except Exception:
         pass
 
-    state = _runs.get(callback.from_user.id)
-    if not state:
+    run = _runs.get(callback.from_user.id)
+    if not run:
         await safe_edit_text(
             callback.message,
             "🎁 Нет активной рассылки.",
@@ -366,8 +539,8 @@ async def callback_promo_trial_status(callback: CallbackQuery):
         )
         return
 
-    text = _format_progress(state)
-    if state.get("status") == "running":
+    text = _format_progress(run)
+    if run.get("status") == "running":
         rows = [
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:promo_trial_status")],
             [InlineKeyboardButton(text="◀ Назад", callback_data="admin:main")],
