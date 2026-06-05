@@ -2717,3 +2717,58 @@ async def get_user_gifts(telegram_id: int) -> list:
             telegram_id,
         )
     return [dict(r) for r in rows]
+
+
+# ====================================================================
+# RECOVERY: rollback of premium expireAt accidentally pushed to ~2036
+#
+# Bug (introduced by the admin reconcile tool): bypass-only rows in
+# `subscriptions` carry expires_at = NOW + 10 years AND the original
+# remnawave_premium_uuid (it's never cleared on transition). The earlier
+# version of the scan treated them as active premium and PATCHed the
+# panel's expireAt to 2036 — granting users a decade of free premium.
+#
+# To roll back, we need each user's REAL last paid premium end date,
+# computed from pending_purchases (paid status, non-bypass tariff).
+# ====================================================================
+
+async def get_premium_recovery_candidates() -> list:
+    """Users whose bypass-only row is still pinned to a premium uuid AND
+    whose expires_at is parked in the far future (the 10-year marker).
+
+    Returns dicts with: telegram_id, remnawave_premium_uuid, db_expires_at.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT telegram_id, remnawave_premium_uuid, expires_at
+               FROM subscriptions
+               WHERE is_bypass_only = TRUE
+                 AND remnawave_premium_uuid IS NOT NULL
+                 AND expires_at > NOW() + INTERVAL '5 years'"""
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_user_paid_subscription_history(telegram_id: int) -> list:
+    """Chronological list of the user's PAID subscription purchases
+    (excludes balance top-ups, traffic packs, and pending/expired rows).
+
+    Returns list of {created_at, period_days, tariff} in ascending order.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT created_at, period_days, tariff
+               FROM pending_purchases
+               WHERE telegram_id = $1
+                 AND status = 'paid'
+                 AND period_days > 0
+                 AND tariff IN ('basic', 'plus', 'biz_starter', 'biz_team',
+                                'biz_business', 'biz_pro', 'biz_enterprise',
+                                'biz_ultimate')
+               ORDER BY created_at ASC""",
+            telegram_id,
+        )
+    return [dict(r) for r in rows]
+
