@@ -26,9 +26,22 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 
 @router.get("/search")
 async def users_search(q: str = Query(..., min_length=1)):
-    """Find by telegram_id (int) or @username (str)."""
+    """Find by telegram_id (digits) or @username (anything else).
+
+    database.find_user_by_id_or_username takes either telegram_id (int)
+    or username (str) via keyword. We sniff the input and dispatch
+    accordingly — strip a leading @, try int() else fall through to
+    username.
+    """
+    raw = q.strip().lstrip("@")
     try:
-        user = await database.find_user_by_id_or_username(q)
+        tg_id = int(raw)
+        user = await database.find_user_by_id_or_username(telegram_id=tg_id)
+    except ValueError:
+        try:
+            user = await database.find_user_by_id_or_username(username=raw)
+        except Exception as e:
+            raise HTTPException(500, f"search_failed: {e}")
     except Exception as e:
         raise HTTPException(500, f"search_failed: {e}")
     if not user:

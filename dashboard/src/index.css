@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+
+  body {
+    font-feature-settings: "cv11", "ss01", "ss03";
+    background:
+      radial-gradient(ellipse 80% 50% at 20% 0%, rgba(99, 102, 241, 0.08), transparent 60%),
+      radial-gradient(ellipse 60% 50% at 90% 100%, rgba(139, 92, 246, 0.05), transparent 50%),
+      rgb(9 11 16);
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background-color: rgb(99 102 241 / 0.35);
+    color: white;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(38 42 54);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(56 60 72);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-border bg-bg-card/70 backdrop-blur-sm shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_8px_24px_-12px_rgba(0,0,0,0.5)];
+  }
+  .card-hover {
+    @apply transition-all duration-200 hover:border-border hover:bg-bg-elevated/80;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white shadow-[0_1px_0_rgba(255,255,255,0.2)_inset,0_4px_12px_-2px_rgba(99,102,241,0.4)] hover:bg-accent-hover active:translate-y-px;
+  }
+  .btn-secondary {
+    @apply btn border border-border bg-bg-card text-fg hover:bg-bg-elevated hover:border-fg-subtle;
+  }
+  .btn-danger {
+    @apply btn border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20 hover:border-danger/50;
+  }
+  .btn-ghost {
+    @apply btn text-fg-muted hover:bg-bg-card hover:text-fg;
+  }
+  .input {
+    @apply w-full rounded-xl border border-border bg-bg-card px-4 py-2.5 text-sm text-fg placeholder:text-fg-subtle outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent/30;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+  .badge-success {
+    @apply badge bg-success/12 text-success ring-1 ring-success/20;
+  }
+  .badge-danger {
+    @apply badge bg-danger/12 text-danger ring-1 ring-danger/20;
+  }
+  .badge-warning {
+    @apply badge bg-warning/12 text-warning ring-1 ring-warning/20;
+  }
+  .badge-muted {
+    @apply badge bg-bg-elevated text-fg-muted ring-1 ring-border;
+  }
+}
