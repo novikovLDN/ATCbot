@@ -2868,3 +2868,47 @@ async def get_max_subscription_end_bulk(telegram_ids: list) -> dict:
         out[r["telegram_id"]] = r["last_end"]
     return out
 
+
+async def get_paid_payments_via_purchases_bulk(telegram_ids: list) -> dict:
+    """Bulk-fetch settled `payments` rows joined onto pending_purchases.
+
+    A user paid through a provider can have rows in `payments` even
+    when pending_purchases status didn't flip to 'paid' for some reason
+    (legacy flows, admin approve, edge-case webhooks). Joining on
+    purchase_id reconstructs period_days from pending_purchases so we
+    can still compute an end date.
+
+    Returns dict: telegram_id -> [{created_at, period_days, tariff}, ...]
+    ordered ascending. Used as belt-and-suspenders fallback in recovery.
+    """
+    if not telegram_ids:
+        return {}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT p.telegram_id,
+                      COALESCE(p.paid_at, p.created_at) AS created_at,
+                      pp.period_days,
+                      COALESCE(p.tariff, pp.tariff) AS tariff
+               FROM payments p
+               LEFT JOIN pending_purchases pp ON pp.purchase_id = p.purchase_id
+               WHERE p.telegram_id = ANY($1::bigint[])
+                 AND p.status IN ('paid', 'approved')
+                 AND pp.period_days IS NOT NULL
+                 AND pp.period_days > 0
+                 AND COALESCE(p.tariff, pp.tariff) IN
+                     ('basic', 'plus', 'biz_starter', 'biz_team',
+                      'biz_business', 'biz_pro', 'biz_enterprise',
+                      'biz_ultimate')
+               ORDER BY p.telegram_id, COALESCE(p.paid_at, p.created_at) ASC""",
+            telegram_ids,
+        )
+    out: dict = {tg: [] for tg in telegram_ids}
+    for r in rows:
+        out[r["telegram_id"]].append({
+            "created_at": r["created_at"],
+            "period_days": r["period_days"],
+            "tariff": r["tariff"],
+        })
+    return out
+

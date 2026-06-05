@@ -128,40 +128,64 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
     history_ends = await database.get_max_subscription_end_bulk(tg_ids)
     paid = await database.get_paid_subscription_history_bulk(tg_ids)
     gifts = await database.get_activated_gifts_bulk(tg_ids)
+    payments_hist = await database.get_paid_payments_via_purchases_bulk(tg_ids)
 
     plan: list = []
     now = datetime.now(timezone.utc)
+    # Remnawave panel won't accept a past expireAt — set tomorrow as the
+    # floor so an entity that "should be expired" still gets a valid
+    # date the panel will swallow. One extra day grace; the next
+    # fast_expiry_cleanup tick will expire the row anyway.
+    floor_end = now + timedelta(days=1)
+
     for cand in candidates:
         if progress is not None:
             progress["done"] += 1
         tg = cand["telegram_id"]
         panel_uuid = cand["remnawave_premium_uuid"]
 
-        hist_end = history_ends.get(tg)
-        if hist_end is not None and hist_end.tzinfo is None:
-            hist_end = hist_end.replace(tzinfo=timezone.utc)
+        # Gather every signal we can find — we'll take the MAX so we
+        # never accidentally shorten a user who paid through any path.
+        signals: list = []
 
+        hist_end = history_ends.get(tg)
         if hist_end is not None:
-            real_end = hist_end
-            source = "history"
-        else:
-            # Belt-and-suspenders fallback if subscription_history is
-            # missing the row (very old data / pre-history table).
-            gift_end = _compute_real_end([
-                {"created_at": g["activated_at"], "period_days": g["period_days"]}
-                for g in gifts.get(tg, [])
-            ])
-            paid_end = _compute_real_end(paid.get(tg, []))
-            candidates_end = [d for d in (gift_end, paid_end) if d is not None]
-            if candidates_end:
-                real_end = max(candidates_end)
-                source = "gift" if gift_end == real_end else "paid"
+            if hist_end.tzinfo is None:
+                hist_end = hist_end.replace(tzinfo=timezone.utc)
+            signals.append(("history", hist_end))
+
+        gift_end = _compute_real_end([
+            {"created_at": g["activated_at"], "period_days": g["period_days"]}
+            for g in gifts.get(tg, [])
+        ])
+        if gift_end is not None:
+            signals.append(("gift", gift_end))
+
+        paid_end = _compute_real_end(paid.get(tg, []))
+        if paid_end is not None:
+            signals.append(("paid", paid_end))
+
+        payments_end = _compute_real_end(payments_hist.get(tg, []))
+        if payments_end is not None:
+            signals.append(("payments", payments_end))
+
+        if signals:
+            # Take the MAX across all sources so we never accidentally
+            # cut a user short. Whichever signal gave the latest date wins.
+            best_source, real_end = max(signals, key=lambda s: s[1])
+            # If the user's real end is already in the past, the panel
+            # won't accept it either — floor at tomorrow.
+            if real_end < floor_end:
+                real_end = floor_end
+                source = "%s+floor" % best_source
             else:
-                # No signal anywhere — user has no legitimate claim on
-                # premium time. Roll expireAt back to NOW so the panel
-                # entity expires immediately.
-                real_end = now
-                source = "none"
+                source = best_source
+        else:
+            # No paid/gift/history/payments signal anywhere — user has
+            # no legitimate claim. Panel won't accept a past date, so
+            # set expireAt to tomorrow (one-day grace).
+            real_end = floor_end
+            source = "none"
 
         plan.append({
             "telegram_id": tg, "panel_uuid": panel_uuid,
@@ -177,34 +201,58 @@ def _format_dry_run(checked: int, plan: list) -> str:
     for p in plan:
         by_source.setdefault(p["source"], []).append(p)
 
-    n_hist = len(by_source.get("history", []))
-    n_paid = len(by_source.get("paid", []))
-    n_gift = len(by_source.get("gift", []))
-    n_none = len(by_source.get("none", []))
-    n_total = n_hist + n_paid + n_gift + n_none
+    # Group raw counts by the primary source (strip +floor suffix).
+    def _base(src: str) -> str:
+        return src.replace("+floor", "")
+
+    n_hist = sum(1 for p in plan if _base(p["source"]) == "history")
+    n_paid = sum(1 for p in plan if _base(p["source"]) == "paid")
+    n_gift = sum(1 for p in plan if _base(p["source"]) == "gift")
+    n_pay = sum(1 for p in plan if _base(p["source"]) == "payments")
+    n_none = sum(1 for p in plan if p["source"] == "none")
+    n_floored = sum(1 for p in plan if p["source"].endswith("+floor"))
+    n_total = n_hist + n_paid + n_gift + n_pay + n_none
 
     lines = [
         "🩹 <b>Откат premium-подписок (Dry-run)</b>",
         "",
         f"Кандидатов в БД: <b>{checked}</b>",
         "",
-        f"  📜 <b>{n_hist}</b> — subscription_history → реальный последний end_date",
-        f"  💳 <b>{n_paid}</b> — fallback на pending_purchases (paid)",
-        f"  🎁 <b>{n_gift}</b> — fallback на gift_subscriptions",
-        f"  ⛔ <b>{n_none}</b> — нет ни одного сигнала → expireAt = сейчас",
+        "<i>По источнику истины (берём MAX по всем):</i>",
+        f"  📜 <b>{n_hist}</b> — subscription_history (главный ledger)",
+        f"  💳 <b>{n_paid}</b> — pending_purchases (paid)",
+        f"  🧾 <b>{n_pay}</b> — payments table (через join purchase_id)",
+        f"  🎁 <b>{n_gift}</b> — gift_subscriptions (activated)",
+        f"  ⛔ <b>{n_none}</b> — нет ни одного сигнала",
+        "",
+        f"<i>Из них <b>{n_floored}</b> подтянуты к завтрашней дате</i>",
+        "<i>(их реальный срок уже в прошлом; Remnawave не принимает</i>",
+        "<i>прошлое в expireAt, ставим +1 день как минимум).</i>",
     ]
 
+    # Group samples by primary source label.
+    samples_by: dict = {"history": [], "paid": [], "payments": [],
+                        "gift": [], "none": []}
+    for p in plan:
+        base = _base(p["source"])
+        if base in samples_by and len(samples_by[base]) < 3:
+            samples_by[base].append(p)
     samples: list = []
     for src, emoji in (("history", "📜"), ("paid", "💳"),
-                       ("gift", "🎁"), ("none", "⛔")):
-        for s in by_source.get(src, [])[:3]:
+                       ("payments", "🧾"), ("gift", "🎁"),
+                       ("none", "⛔")):
+        for s in samples_by[src]:
             samples.append((emoji, s))
     if samples:
         lines.append("")
         lines.append("<i>Примеры:</i>")
         for emoji, s in samples:
             stamp = s["real_end"].strftime("%Y-%m-%d")
-            extra = " (now)" if s["source"] == "none" else ""
+            extra = ""
+            if s["source"].endswith("+floor"):
+                extra = " (floored)"
+            elif s["source"] == "none":
+                extra = " (tomorrow)"
             lines.append(f"  {emoji} <code>{s['telegram_id']}</code> → {stamp}{extra}")
 
     if n_total == 0:
