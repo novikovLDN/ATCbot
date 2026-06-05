@@ -45,10 +45,21 @@ logger = logging.getLogger(__name__)
 # Tolerance for "the panel matches DB-real" — within an hour we treat it
 # as already correct, no patch needed.
 _TOLERANCE_SECONDS = 3600
-# Concurrent panel PATCH calls during apply.
-# Matches reconcile's pattern — high enough to finish in minutes,
-# low enough to keep Remnawave responsive.
-_FIX_CONCURRENCY = 8
+# Concurrent panel calls during apply.
+# Lowered to 4 (was 8) — Remnawave starts dropping/queueing after a few
+# hundred requests on a loaded panel, which manifested as the apply
+# stalling at ~300/1347. Lower concurrency + small throttle keeps the
+# panel responsive end-to-end.
+_FIX_CONCURRENCY = 4
+# Sleep after each record. Gives the panel breathing room AND yields
+# the event loop to the bot's other workers / aiogram callbacks.
+_FIX_THROTTLE_S = 0.3
+# Per-HTTP-call timeout. Wrapped around each individual GET/PATCH so a
+# stuck call can't hold its semaphore slot for minutes.
+# IMPORTANT: this wait_for is INSIDE the worker, AFTER it has the
+# semaphore — so no race like the previous version where all 1k tasks
+# were timing out at once while queued behind a Semaphore(1).
+_FIX_HTTP_TIMEOUT_S = 10
 # Seconds between live progress updates.
 _PROGRESS_INTERVAL = 4
 # Hard ceiling on scan size (sanity guard).
@@ -403,100 +414,119 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
             tg = p["telegram_id"]
             expected_username = f"tg_{tg}_premium"
 
-            # SAFETY CHECK 1: GET the entity to verify it's the premium
-            # one for THIS user. Two reasons:
-            #   (a) If BD has a stale remnawave_premium_uuid that now
-            #       points at a different entity (bypass / someone
-            #       else's premium / migrated), we MUST NOT patch it.
-            #   (b) If panel returned 404, the entity is already gone
-            #       — count as already-achieved and skip the PATCH.
             try:
-                user = await remnawave_api.get_user(uuid)
-            except Exception as e:
-                progress["failed"] += 1
+                # SAFETY CHECK 1: GET (wrapped in wait_for so a stuck
+                # call drops the slot instead of holding it forever).
+                try:
+                    user = await asyncio.wait_for(
+                        remnawave_api.get_user(uuid),
+                        timeout=_FIX_HTTP_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    progress["failed"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY_TIMEOUT_GET tg=%s uuid=%s after %ds",
+                        tg, uuid[:8], _FIX_HTTP_TIMEOUT_S,
+                    )
+                    return False
+                except Exception as e:
+                    progress["failed"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
+                        tg, uuid[:8], type(e).__name__, e,
+                    )
+                    return False
+
+                if user is None:
+                    progress["gone"] += 1
+                    logger.info(
+                        "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (not found on panel)",
+                        tg, uuid[:8],
+                    )
+                    return True
+
+                # SAFETY CHECK 2: username must match.
+                actual_username = (user.get("username") or "").strip()
+                if actual_username != expected_username:
+                    progress["skipped"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY_SKIP_WRONG_USERNAME tg=%s uuid=%s "
+                        "expected=%s got=%r — entity not patched",
+                        tg, uuid[:8], expected_username, actual_username,
+                    )
+                    return False
+
+                # SAFETY CHECK 3: entity's current expireAt must be in
+                # the far future (+10y bucket). If it's already inside
+                # ~5 years, this entity was NOT one of the affected ones
+                # — don't shorten it.
+                try:
+                    existing_expire_str = user.get("expireAt") or ""
+                    if existing_expire_str:
+                        s = existing_expire_str
+                        if s.endswith("Z"):
+                            s = s[:-1] + "+00:00"
+                        existing_dt = datetime.fromisoformat(s)
+                        if existing_dt.tzinfo is None:
+                            existing_dt = existing_dt.replace(tzinfo=timezone.utc)
+                        if existing_dt < datetime.now(timezone.utc) + timedelta(days=365 * 5):
+                            progress["skipped"] += 1
+                            logger.info(
+                                "PREMIUM_RECOVERY_SKIP_NOT_AFFECTED tg=%s uuid=%s "
+                                "expireAt=%s — already within sane range",
+                                tg, uuid[:8], existing_expire_str,
+                            )
+                            return False
+                except Exception:
+                    pass
+
+                # All clear — PATCH (also wrapped).
+                fields = {"expireAt": _iso_z(p["real_end"]), "status": "ACTIVE"}
+                if external_squad:
+                    fields["externalSquadUuid"] = external_squad
+                try:
+                    result = await asyncio.wait_for(
+                        remnawave_api.update_user(uuid, **fields),
+                        timeout=_FIX_HTTP_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    progress["failed"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY_TIMEOUT_PATCH tg=%s uuid=%s after %ds",
+                        tg, uuid[:8], _FIX_HTTP_TIMEOUT_S,
+                    )
+                    return False
+                except Exception as e:
+                    progress["failed"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
+                        tg, uuid[:8], type(e).__name__, e,
+                    )
+                    return False
+
+                if result is not None:
+                    progress["ok"] += 1
+                    logger.info(
+                        "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s username=%s to=%s source=%s",
+                        tg, uuid[:8], actual_username,
+                        p["real_end"].isoformat(), p["source"],
+                    )
+                    return True
+                else:
+                    progress["failed"] += 1
+                    logger.warning(
+                        "PREMIUM_RECOVERY_FAIL tg=%s uuid=%s username=%s (PATCH rejected)",
+                        tg, uuid[:8], actual_username,
+                    )
+                    return False
+            finally:
+                # Always count toward total and throttle before next
+                # record takes our semaphore slot.
                 progress["done"] += 1
-                logger.warning(
-                    "PREMIUM_RECOVERY: GET tg=%s uuid=%s %s: %s",
-                    tg, uuid[:8], type(e).__name__, e,
-                )
-                return False
-
-            if user is None:
-                # 404 / not found on the panel.
-                progress["gone"] += 1
-                progress["done"] += 1
-                logger.info(
-                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (not found on panel)",
-                    tg, uuid[:8],
-                )
-                return True
-
-            actual_username = (user.get("username") or "").strip()
-            if actual_username != expected_username:
-                # NOT our premium entity for this user. Refuse to touch.
-                progress["skipped"] += 1
-                progress["done"] += 1
-                logger.warning(
-                    "PREMIUM_RECOVERY_SKIP_WRONG_USERNAME tg=%s uuid=%s "
-                    "expected=%s got=%r — entity not patched",
-                    tg, uuid[:8], expected_username, actual_username,
-                )
-                return False
-
-            # SAFETY CHECK 2 (paranoid double-check): if the entity has
-            # an `expireAt` that ISN'T in the +10y far-future bucket
-            # already, then somehow it's already fine — skip the PATCH
-            # to avoid shortening a legitimately-active subscription.
-            try:
-                existing_expire_str = user.get("expireAt") or ""
-                if existing_expire_str:
-                    s = existing_expire_str
-                    if s.endswith("Z"):
-                        s = s[:-1] + "+00:00"
-                    existing_dt = datetime.fromisoformat(s)
-                    if existing_dt.tzinfo is None:
-                        existing_dt = existing_dt.replace(tzinfo=timezone.utc)
-                    # If existing expireAt is < NOW+5y, this entity was
-                    # NOT one we accidentally extended. Leave alone.
-                    if existing_dt < datetime.now(timezone.utc) + timedelta(days=365 * 5):
-                        progress["skipped"] += 1
-                        progress["done"] += 1
-                        logger.info(
-                            "PREMIUM_RECOVERY_SKIP_NOT_AFFECTED tg=%s uuid=%s "
-                            "expireAt=%s — already within sane range",
-                            tg, uuid[:8], existing_expire_str,
-                        )
-                        return False
-            except Exception:
-                pass
-
-            # All clear — patch.
-            fields = {"expireAt": _iso_z(p["real_end"]), "status": "ACTIVE"}
-            if external_squad:
-                fields["externalSquadUuid"] = external_squad
-            result = None
-            try:
-                result = await remnawave_api.update_user(uuid, **fields)
-            except Exception as e:
-                logger.warning(
-                    "PREMIUM_RECOVERY: PATCH tg=%s uuid=%s %s: %s",
-                    tg, uuid[:8], type(e).__name__, e,
-                )
-            if result is not None:
-                progress["ok"] += 1
-                logger.info(
-                    "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s username=%s to=%s source=%s",
-                    tg, uuid[:8], actual_username,
-                    p["real_end"].isoformat(), p["source"],
-                )
-            else:
-                progress["failed"] += 1
-                logger.warning(
-                    "PREMIUM_RECOVERY_FAIL tg=%s uuid=%s username=%s (PATCH rejected)",
-                    tg, uuid[:8], actual_username,
-                )
-        progress["done"] += 1
-        return True
+                try:
+                    await asyncio.sleep(_FIX_THROTTLE_S)
+                except Exception:
+                    pass
 
     async def _run_all_fixes():
         return await asyncio.gather(*[_fix_one(p) for p in actionable])
