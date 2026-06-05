@@ -153,4 +153,45 @@ export const endpoints = {
     api.get<Record<string, unknown>>(`/broadcasts/${id}`),
   broadcastStats: (id: number) =>
     api.get<Record<string, unknown>>(`/broadcasts/${id}/stats`),
+  broadcastSegments: () =>
+    api.get<Array<{ key: string; label: string; count: number }>>(
+      "/broadcasts/segments",
+    ),
+  broadcastCreate: (body: {
+    title: string;
+    message: string;
+    segment: string;
+    photo_file_id?: string | null;
+    buttons: string[];
+    discount_percent?: number | null;
+    discount_hours?: number | null;
+    discount_label?: string | null;
+  }) =>
+    api.post<{ ok: boolean; broadcast_id: number; audience: number }>(
+      "/broadcasts",
+      body,
+    ),
 };
+
+// Multipart upload — special case, can't use api.post (JSON-only).
+export async function uploadBroadcastPhoto(file: File): Promise<{ file_id: string }> {
+  const token = auth.get();
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch("/dashboard/api/broadcasts/upload-photo", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      //
+    }
+    throw new ApiError(res.status, detail);
+  }
+  return res.json();
+}
