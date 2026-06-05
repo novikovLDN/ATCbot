@@ -46,6 +46,13 @@ export default {
         danger: "rgb(239 68 68)",
         warning: "rgb(250 204 21)",
       },
+      opacity: {
+        // Custom mid-stops — Tailwind's default scale skips 12/15/35
+        // but the dashboard uses them liberally for subtle tints.
+        "12": "0.12",
+        "15": "0.15",
+        "35": "0.35",
+      },
       animation: {
         "pulse-glow": "pulse-glow 2.5s ease-in-out infinite",
         "fade-in": "fade-in 0.3s ease-out",
