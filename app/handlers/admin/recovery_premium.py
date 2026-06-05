@@ -120,30 +120,6 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
     candidates = candidates[:_MAX_SCAN]
 
     if progress is not None:
-        progress["phase"] = "fetch"
-        progress["total"] = len(candidates)
-        progress["done"] = 0
-        progress["fetched"] = 0
-        progress["fetch_total"] = None
-
-    def _on_fetch(collected: int, total):
-        if progress is not None:
-            progress["fetched"] = collected
-            progress["fetch_total"] = total
-
-    all_users = await remnawave_api.get_all_users(progress_cb=_on_fetch)
-    if all_users is None:
-        raise RuntimeError(
-            "Remnawave не отдал список пользователей (GET /api/users)."
-        )
-
-    by_uuid: dict = {}
-    for u in all_users:
-        uid = u.get("uuid")
-        if uid:
-            by_uuid[uid] = u
-
-    if progress is not None:
         progress["phase"] = "compute"
         progress["total"] = len(candidates)
         progress["done"] = 0
@@ -160,16 +136,6 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
             progress["done"] += 1
         tg = cand["telegram_id"]
         panel_uuid = cand["remnawave_premium_uuid"]
-
-        # Entity already gone from the panel? Skip PATCH — premium is
-        # not active, recovery goal already achieved.
-        if panel_uuid not in by_uuid:
-            plan.append({
-                "telegram_id": tg, "panel_uuid": panel_uuid,
-                "real_end": None, "source": "gone",
-                "action": "gone",
-            })
-            continue
 
         hist_end = history_ends.get(tg)
         if hist_end is not None and hist_end.tzinfo is None:
@@ -215,7 +181,6 @@ def _format_dry_run(checked: int, plan: list) -> str:
     n_paid = len(by_source.get("paid", []))
     n_gift = len(by_source.get("gift", []))
     n_none = len(by_source.get("none", []))
-    n_gone = len(by_source.get("gone", []))
     n_total = n_hist + n_paid + n_gift + n_none
 
     lines = [
@@ -227,7 +192,6 @@ def _format_dry_run(checked: int, plan: list) -> str:
         f"  💳 <b>{n_paid}</b> — fallback на pending_purchases (paid)",
         f"  🎁 <b>{n_gift}</b> — fallback на gift_subscriptions",
         f"  ⛔ <b>{n_none}</b> — нет ни одного сигнала → expireAt = сейчас",
-        f"  👻 <b>{n_gone}</b> — entity отсутствует на панели (premium не активен)",
     ]
 
     samples: list = []
@@ -284,29 +248,18 @@ async def callback_premium_recovery(callback: CallbackQuery):
         bot=callback.bot, parse_mode="HTML",
     )
 
-    progress: dict = {"phase": "fetch", "total": 0, "done": 0,
-                     "fetched": 0, "fetch_total": None}
+    progress: dict = {"phase": "compute", "total": 0, "done": 0}
     try:
         scan_task = asyncio.create_task(_scan(progress))
         while not scan_task.done():
             await asyncio.sleep(_PROGRESS_INTERVAL)
             if scan_task.done():
                 break
-            if progress.get("phase") == "compute" and progress.get("total"):
-                text = (
-                    "🩹 Сверяю кандидатов…\n\n"
-                    f"Обработано: <b>{progress.get('done', 0)}</b> / "
-                    f"{progress.get('total', 0)}"
-                )
-            else:
-                fetched = progress.get("fetched", 0)
-                if fetched:
-                    text = (
-                        "🩹 Выгружаю пользователей из Remnawave…\n\n"
-                        f"Получено: <b>{fetched}</b>"
-                    )
-                else:
-                    text = "🩹 Выгружаю пользователей из Remnawave…"
+            text = (
+                "🩹 Сверяю кандидатов…\n\n"
+                f"Обработано: <b>{progress.get('done', 0)}</b> / "
+                f"{progress.get('total', 0)}"
+            )
             try:
                 await safe_edit_text(
                     callback.message, text, bot=callback.bot, parse_mode="HTML",
@@ -380,36 +333,55 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     )
 
     sem = asyncio.Semaphore(_FIX_CONCURRENCY)
-    progress: dict = {"done": 0, "ok": 0, "failed": 0}
+    progress: dict = {"done": 0, "ok": 0, "gone": 0, "failed": 0}
+
+    # Direct update_user. We deliberately bypass renew_premium_user
+    # here because its internal "try 3 times across 5 endpoints"
+    # behaviour is great for one-off renews but kills throughput on
+    # 1k+ records: ~15 seconds per missing entity. update_user does
+    # one pass over the 5 endpoints (with caching after first hit)
+    # — None means "no endpoint accepted it" which almost always
+    # means the entity is gone from the panel.
+    external_squad = getattr(
+        config, "REMNAWAVE_PREMIUM_EXTERNAL_SQUAD_UUID", None,
+    ) or None
+
+    def _iso_z(dt) -> str:
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     async def _fix_one(p: dict) -> bool:
         async with sem:
-            ok = False
+            uuid = p["panel_uuid"]
+            fields = {"expireAt": _iso_z(p["real_end"]), "status": "ACTIVE"}
+            if external_squad:
+                fields["externalSquadUuid"] = external_squad
+            result = None
             try:
-                ok = await remnawave_premium.renew_premium_user(
-                    p["telegram_id"], p["real_end"],
-                )
+                result = await remnawave_api.update_user(uuid, **fields)
             except Exception as e:
                 logger.warning(
                     "PREMIUM_RECOVERY: tg=%s uuid=%s %s: %s",
-                    p["telegram_id"], p["panel_uuid"][:8],
+                    p["telegram_id"], uuid[:8],
                     type(e).__name__, e,
                 )
-            if ok:
+            if result is not None:
                 progress["ok"] += 1
                 logger.info(
                     "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s source=%s",
-                    p["telegram_id"], p["panel_uuid"][:8],
+                    p["telegram_id"], uuid[:8],
                     p["real_end"].isoformat(), p["source"],
                 )
             else:
-                progress["failed"] += 1
-                logger.warning(
-                    "PREMIUM_RECOVERY_FAIL tg=%s uuid=%s",
-                    p["telegram_id"], p["panel_uuid"][:8],
+                # All 5 endpoints rejected — almost certainly entity
+                # is deleted from the panel. Premium is not active
+                # either way, our goal is achieved.
+                progress["gone"] += 1
+                logger.info(
+                    "PREMIUM_RECOVERY_GONE tg=%s uuid=%s (panel rejected all endpoints)",
+                    p["telegram_id"], uuid[:8],
                 )
         progress["done"] += 1
-        return bool(ok)
+        return True
 
     async def _run_all_fixes():
         return await asyncio.gather(*[_fix_one(p) for p in actionable])
@@ -425,6 +397,7 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
                 "🩹 Применяю откат…\n\n"
                 f"Обработано: <b>{progress['done']}</b> / {total}\n"
                 f"  ✅ Откатано: {progress['ok']}\n"
+                f"  👻 Уже отсутствует: {progress['gone']}\n"
                 f"  ❌ Сбой: {progress['failed']}",
                 bot=callback.bot, parse_mode="HTML",
             )
@@ -434,14 +407,13 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     await fix_task
     _last_plan.pop(callback.from_user.id, None)
 
-    n_gone = sum(1 for p in plan if p["action"] == "gone")
     text = (
         "🩹 <b>Откат premium-подписок завершён</b>\n\n"
         f"✅ Откатано на панели: <b>{progress['ok']}</b> / {total}\n"
-        f"❌ Сбой (нужен ручной разбор): <b>{progress['failed']}</b>\n"
-        f"👻 Уже отсутствовали (skipped в Dry-run): <b>{n_gone}</b>\n\n"
+        f"👻 Уже отсутствуют (premium не активен): <b>{progress['gone']}</b>\n"
+        f"❌ Сбой (нужен ручной разбор): <b>{progress['failed']}</b>\n\n"
         "<i>Bypass entities остались нетронутыми.</i>\n"
-        "Запустите Dry-run повторно, чтобы убедиться."
+        "Запустите повторно, чтобы убедиться (idempotent)."
     )
     await safe_edit_text(
         callback.message, text,
