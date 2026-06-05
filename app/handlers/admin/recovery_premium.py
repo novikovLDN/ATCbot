@@ -46,7 +46,14 @@ logger = logging.getLogger(__name__)
 # as already correct, no patch needed.
 _TOLERANCE_SECONDS = 3600
 # Concurrent panel PATCH calls during apply.
-_FIX_CONCURRENCY = 8
+# Lowered to 3 (was 8) because Remnawave starts dropping connections
+# at higher concurrency on a loaded panel.
+_FIX_CONCURRENCY = 3
+# Sleep between PATCH calls inside each worker — keeps total RPS to
+# Remnawave under ~10/s so the panel stays responsive.
+_FIX_THROTTLE_S = 0.2
+# How many retry attempts per PATCH (panel hiccups under load).
+_FIX_RETRY = 3
 # Seconds between live progress updates.
 _PROGRESS_INTERVAL = 4
 # Hard ceiling on scan size (sanity guard).
@@ -99,80 +106,40 @@ def _compute_real_end(history: list) -> "datetime | None":
 
 
 async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
-    """Build the recovery plan.
+    """Build the recovery plan from DB only — no panel fetch.
+
+    Fetching ~1300 entities from Remnawave (full pagination OR per-UUID
+    GET) reliably triggers their rate-limit / connection reset around
+    300-10000 requests on a loaded panel, stalling the scan. For recovery
+    we don't *need* the panel state up front — `renew_premium_user`
+    PATCH is idempotent (same expireAt sent twice is a no-op), so we can
+    plan from DB alone and just send the PATCH during Apply.
 
     Each item:
-      {telegram_id, panel_uuid, panel_expires, real_end, action}
+      {telegram_id, panel_uuid, real_end, action}
     where `action` is one of:
-      - 'patch'    — panel expireAt > real_end + tolerance → roll back
-      - 'expire'   — real_end already in the past → set panel to real_end
-                     (the entity will simply be expired on the panel)
-      - 'ok'       — panel is already aligned, no work
-      - 'no_history'  — no paid premium history found; user shouldn't
-                        have premium at all. Skipped from auto-fix
+      - 'patch'   — has a real paid end date → roll expireAt back to it
+      - 'no_history'  — no paid premium history. Skipped from auto-fix
                         (manual review).
-      - 'panel_missing' — entity not found on the panel anymore. Skipped.
     """
     candidates = await database.get_premium_recovery_candidates()
     candidates = candidates[:_MAX_SCAN]
-
-    if progress is not None:
-        progress["phase"] = "fetch"
-        progress["total"] = len(candidates)
-        progress["done"] = 0
-        progress["fetched"] = 0
-        progress["fetch_total"] = len(candidates)
-
-    # Fetch panel state per UUID with bounded concurrency.
-    #
-    # Earlier version did a full paginated `get_all_users` pull — but
-    # the panel stalls/loops past ~10k entities and we don't need the
-    # other ~9k anyway. Direct GET /api/users/{uuid} per candidate is
-    # both cheaper and bounded by our own input size.
-    sem = asyncio.Semaphore(8)
-    panel_by_uuid: dict = {}
-
-    async def _fetch_one(uuid: str):
-        async with sem:
-            try:
-                user = await remnawave_api.get_user(uuid)
-            except Exception as e:
-                logger.warning("PREMIUM_RECOVERY: panel fetch failed for %s: %s", uuid[:8], e)
-                user = None
-        panel_by_uuid[uuid] = user
-        if progress is not None:
-            progress["fetched"] = len(panel_by_uuid)
-
-    await asyncio.gather(*[_fetch_one(c["remnawave_premium_uuid"]) for c in candidates])
 
     if progress is not None:
         progress["phase"] = "compute"
         progress["total"] = len(candidates)
         progress["done"] = 0
 
-    # ONE bulk query for the entire candidate list instead of N
-    # roundtrips — the per-user version was overloading the pool and
-    # stalling the scan on large cohorts (1k+).
+    # ONE bulk query for the entire candidate list.
     tg_ids = [c["telegram_id"] for c in candidates]
     histories = await database.get_paid_subscription_history_bulk(tg_ids)
 
     plan: list = []
-    now = datetime.now(timezone.utc)
     for cand in candidates:
         if progress is not None:
             progress["done"] += 1
         tg = cand["telegram_id"]
         panel_uuid = cand["remnawave_premium_uuid"]
-
-        rmn = panel_by_uuid.get(panel_uuid)
-        if rmn is None:
-            plan.append({
-                "telegram_id": tg, "panel_uuid": panel_uuid,
-                "panel_expires": None, "real_end": None,
-                "action": "panel_missing",
-            })
-            continue
-        panel_expires = _parse_rmn_dt(rmn.get("expireAt"))
 
         history = histories.get(tg, [])
         real_end = _compute_real_end(history)
@@ -180,32 +147,13 @@ async def _scan(progress: "dict | None" = None) -> "tuple[int, list]":
         if real_end is None:
             plan.append({
                 "telegram_id": tg, "panel_uuid": panel_uuid,
-                "panel_expires": panel_expires, "real_end": None,
-                "action": "no_history",
+                "real_end": None, "action": "no_history",
             })
             continue
-
-        # Already aligned?
-        if panel_expires and abs((panel_expires - real_end).total_seconds()) <= _TOLERANCE_SECONDS:
-            plan.append({
-                "telegram_id": tg, "panel_uuid": panel_uuid,
-                "panel_expires": panel_expires, "real_end": real_end,
-                "action": "ok",
-            })
-            continue
-
-        # Panel further than reality → roll back.
-        if panel_expires and panel_expires > real_end + timedelta(seconds=_TOLERANCE_SECONDS):
-            action = "expire" if real_end < now else "patch"
-        else:
-            # Panel earlier than DB-real (rare) — leave alone, not this
-            # tool's job to grant time.
-            action = "ok"
 
         plan.append({
             "telegram_id": tg, "panel_uuid": panel_uuid,
-            "panel_expires": panel_expires, "real_end": real_end,
-            "action": action,
+            "real_end": real_end, "action": "patch",
         })
 
     return len(candidates), plan
@@ -217,40 +165,37 @@ def _format_dry_run(checked: int, plan: list) -> str:
         by_action.setdefault(p["action"], []).append(p)
 
     n_patch = len(by_action.get("patch", []))
-    n_expire = len(by_action.get("expire", []))
-    n_ok = len(by_action.get("ok", []))
     n_no_hist = len(by_action.get("no_history", []))
-    n_missing = len(by_action.get("panel_missing", []))
 
     lines = [
         "🩹 <b>Откат premium-подписок (Dry-run)</b>",
         "",
         f"Кандидатов в БД: <b>{checked}</b>",
         "",
-        f"  • <b>{n_patch}</b> — будет уменьшено expireAt (в будущее, но < 2036)",
-        f"  • <b>{n_expire}</b> — реальный срок уже истёк → expireAt = реальная дата",
-        f"  • <b>{n_ok}</b> — уже в порядке, пропускаем",
-        f"  • <b>{n_no_hist}</b> — нет paid-истории (требуют ручного решения)",
-        f"  • <b>{n_missing}</b> — entity не найдена на панели (пропускаем)",
+        f"  • <b>{n_patch}</b> — будет откатано (по реальной paid-истории)",
+        f"  • <b>{n_no_hist}</b> — нет paid-истории (пропуск, ручное решение)",
     ]
 
-    sample = (by_action.get("patch", []) + by_action.get("expire", []))[:10]
+    sample = by_action.get("patch", [])[:10]
     if sample:
         lines.append("")
         lines.append("<i>Примеры (до 10):</i>")
         for s in sample:
             tg = s["telegram_id"]
-            from_ = s["panel_expires"].strftime("%Y-%m-%d") if s["panel_expires"] else "—"
             to_ = s["real_end"].strftime("%Y-%m-%d") if s["real_end"] else "—"
-            lines.append(f"  <code>{tg}</code>: {from_} → {to_}")
+            lines.append(f"  <code>{tg}</code> → expireAt = {to_}")
 
-    if n_patch + n_expire == 0:
+    if n_patch == 0:
         lines.append("\n✅ Изменений не требуется.")
     else:
         lines.append(
-            f"\nПри подтверждении: <b>{n_patch + n_expire}</b> панель-записей "
-            "будут откатаны под их реальный paid-срок. Bypass entities "
-            "<b>не трогаются</b>."
+            f"\nПри подтверждении: <b>{n_patch}</b> панель-записей будут "
+            "откатаны под их реальный paid-срок (idempotent — повторный "
+            "запуск ничего не сломает). Bypass entities <b>не трогаются</b>."
+        )
+        lines.append(
+            f"\n⏱ Apply займёт ~{max(1, n_patch * (_FIX_THROTTLE_S + 0.2) / _FIX_CONCURRENCY / 60):.0f} мин "
+            f"(throttle {_FIX_CONCURRENCY} parallel, {int(_FIX_THROTTLE_S*1000)}ms между запросами)."
         )
 
     return "\n".join(lines)
@@ -281,35 +226,18 @@ async def callback_premium_recovery(callback: CallbackQuery):
         bot=callback.bot, parse_mode="HTML",
     )
 
-    progress: dict = {"phase": "fetch", "total": 0, "done": 0,
-                     "fetched": 0, "fetch_total": None}
+    progress: dict = {"phase": "compute", "total": 0, "done": 0}
     try:
         scan_task = asyncio.create_task(_scan(progress))
         while not scan_task.done():
             await asyncio.sleep(_PROGRESS_INTERVAL)
             if scan_task.done():
                 break
-            if progress.get("phase") == "compute" and progress.get("total"):
-                text = (
-                    "🩹 Сверяю кандидатов…\n\n"
-                    f"Обработано: <b>{progress.get('done', 0)}</b> / {progress['total']}"
-                )
-            else:
-                fetched = progress.get("fetched", 0)
-                ftotal = progress.get("fetch_total")
-                if fetched:
-                    if ftotal:
-                        text = (
-                            "🩹 Выгружаю кандидатов из Remnawave…\n\n"
-                            f"Получено: <b>{fetched}</b> / {ftotal}"
-                        )
-                    else:
-                        text = (
-                            "🩹 Выгружаю кандидатов из Remnawave…\n\n"
-                            f"Получено: <b>{fetched}</b>"
-                        )
-                else:
-                    text = "🩹 Выгружаю кандидатов из Remnawave…"
+            text = (
+                "🩹 Сверяю кандидатов…\n\n"
+                f"Обработано: <b>{progress.get('done', 0)}</b> / "
+                f"{progress.get('total', 0)}"
+            )
             try:
                 await safe_edit_text(
                     callback.message, text, bot=callback.bot, parse_mode="HTML",
@@ -365,7 +293,7 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
         )
         return
 
-    actionable = [p for p in plan if p["action"] in ("patch", "expire")]
+    actionable = [p for p in plan if p["action"] == "patch"]
     total = len(actionable)
     if total == 0:
         await safe_edit_text(
@@ -386,29 +314,40 @@ async def callback_premium_recovery_apply(callback: CallbackQuery):
     progress: dict = {"done": 0, "ok": 0, "failed": 0}
 
     async def _fix_one(p: dict) -> bool:
+        # Throttled, retried PATCH. renew_premium_user already retries
+        # internally 3x; we add another outer pass with backoff so a
+        # broader hiccup (panel cold) doesn't drop the record.
         async with sem:
             ok = False
-            try:
-                ok = await remnawave_premium.renew_premium_user(
-                    p["telegram_id"], p["real_end"],
-                )
-                if ok:
-                    progress["ok"] += 1
-                    logger.info(
-                        "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s from=%s to=%s action=%s",
-                        p["telegram_id"], p["panel_uuid"][:8],
-                        p["panel_expires"].isoformat() if p["panel_expires"] else "—",
-                        p["real_end"].isoformat() if p["real_end"] else "—",
-                        p["action"],
+            for attempt in range(1, _FIX_RETRY + 1):
+                try:
+                    ok = await remnawave_premium.renew_premium_user(
+                        p["telegram_id"], p["real_end"],
                     )
-            except Exception as e:
-                logger.warning(
-                    "PREMIUM_RECOVERY: tg=%s uuid=%s failed: %s",
-                    p["telegram_id"], p["panel_uuid"][:8], e,
-                )
-                ok = False
+                    if ok:
+                        progress["ok"] += 1
+                        logger.info(
+                            "PREMIUM_RECOVERY_PATCHED tg=%s uuid=%s to=%s attempt=%d",
+                            p["telegram_id"], p["panel_uuid"][:8],
+                            p["real_end"].isoformat(), attempt,
+                        )
+                        break
+                except Exception as e:
+                    logger.warning(
+                        "PREMIUM_RECOVERY: tg=%s uuid=%s attempt %d/%d %s: %s",
+                        p["telegram_id"], p["panel_uuid"][:8],
+                        attempt, _FIX_RETRY, type(e).__name__, e,
+                    )
+                if attempt < _FIX_RETRY:
+                    await asyncio.sleep(1.5 ** attempt)  # 1.5s, 2.25s
             if not ok:
                 progress["failed"] += 1
+                logger.error(
+                    "PREMIUM_RECOVERY_GIVE_UP tg=%s uuid=%s after %d attempts",
+                    p["telegram_id"], p["panel_uuid"][:8], _FIX_RETRY,
+                )
+            # Spread requests so the panel stays calm.
+            await asyncio.sleep(_FIX_THROTTLE_S)
         progress["done"] += 1
         return bool(ok)
 
