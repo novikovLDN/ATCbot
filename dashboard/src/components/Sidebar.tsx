@@ -22,8 +22,8 @@ const items: NavItem[] = [
   { to: "/", label: "Главная", icon: LayoutDashboard },
   { to: "/users", label: "Пользователи", icon: Users },
   { to: "/analytics", label: "Аналитика", icon: TrendingUp },
-  { to: "/broadcasts", label: "Рассылки", icon: Megaphone, badge: "Скоро" },
-  { to: "/audit", label: "Аудит", icon: ScrollText, badge: "Скоро" },
+  { to: "/broadcasts", label: "Рассылки", icon: Megaphone },
+  { to: "/audit", label: "Аудит", icon: ScrollText },
 ];
 
 export function Sidebar() {

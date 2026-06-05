@@ -210,11 +210,20 @@ function UserCard({ telegramId }: { telegramId: number }) {
 
       <div className="space-y-4">
         <TrialCard detail={d} />
+        <BalanceCard
+          telegramId={telegramId}
+          balance={d.balance_rubles}
+          onChange={invalidate}
+        />
         <DiscountCard
           telegramId={telegramId}
           detail={d}
           onChange={invalidate}
         />
+      </div>
+
+      <div className="lg:col-span-3">
+        <PaymentsCard telegramId={telegramId} />
       </div>
     </div>
   );
@@ -470,4 +479,174 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="font-medium text-fg">{value}</span>
     </div>
   );
+}
+
+function BalanceCard({
+  telegramId,
+  balance,
+  onChange,
+}: {
+  telegramId: number;
+  balance: number;
+  onChange: () => void;
+}) {
+  const [delta, setDelta] = useState<number | "">("");
+  const [reason, setReason] = useState("");
+
+  const change = useMutation({
+    mutationFn: () =>
+      endpoints.userBalanceChange(telegramId, {
+        delta_rubles: typeof delta === "number" ? delta : 0,
+        reason: reason || undefined,
+      }),
+    onSuccess: (data) => {
+      toast.success(
+        `Баланс ${(typeof delta === "number" ? delta : 0) > 0 ? "пополнен" : "списан"}: ${fmtRub(
+          data.new_balance_rubles,
+        )}`,
+      );
+      setDelta("");
+      setReason("");
+      onChange();
+    },
+    onError: (e: unknown) => toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between">
+        <div className="text-xs uppercase tracking-wider text-fg-subtle">Баланс</div>
+        <span className="font-mono text-sm font-semibold text-fg">
+          {fmtRub(balance)}
+        </span>
+      </div>
+      <div className="mt-3 space-y-2">
+        <input
+          className="input"
+          type="number"
+          step="0.01"
+          placeholder="± рублей (плюс — начисление, минус — списание)"
+          value={delta}
+          onChange={(e) =>
+            setDelta(e.target.value === "" ? "" : Number(e.target.value))
+          }
+        />
+        <input
+          className="input"
+          type="text"
+          maxLength={200}
+          placeholder="Причина (необязательно)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof delta !== "number" || delta === 0) return;
+              change.mutate();
+            }}
+            disabled={
+              change.isPending || typeof delta !== "number" || delta <= 0
+            }
+            className="btn-primary"
+          >
+            <Plus className="h-3.5 w-3.5" /> Пополнить
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof delta !== "number" || delta === 0) return;
+              const v = -Math.abs(delta);
+              setDelta(v);
+              window.setTimeout(() => change.mutate(), 0);
+            }}
+            disabled={
+              change.isPending || typeof delta !== "number" || delta === 0
+            }
+            className="btn-secondary"
+          >
+            <Minus className="h-3.5 w-3.5" /> Списать
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PaymentsCard({ telegramId }: { telegramId: number }) {
+  const payments = useQuery({
+    queryKey: ["users", "payments", telegramId],
+    queryFn: () => endpoints.userPayments(telegramId, 20),
+  });
+
+  return (
+    <div className="card p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-fg-subtle">
+            История платежей
+          </div>
+          <h3 className="text-base font-semibold text-fg">Последние 20</h3>
+        </div>
+        {payments.isFetching && <Spinner />}
+      </div>
+
+      {payments.isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-fg-muted">
+          <Spinner /> Загружаю...
+        </div>
+      ) : !payments.data || payments.data.length === 0 ? (
+        <EmptyState
+          icon={Wallet}
+          title="Платежей нет"
+          description="Пользователь ещё ничего не покупал"
+        />
+      ) : (
+        <div className="-mx-2 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
+                <th className="px-2 py-2 font-medium">Дата</th>
+                <th className="px-2 py-2 font-medium">Тариф</th>
+                <th className="px-2 py-2 font-medium">Сумма</th>
+                <th className="px-2 py-2 font-medium">Статус</th>
+                <th className="px-2 py-2 font-medium">Источник</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/60">
+              {payments.data.map((p) => (
+                <tr key={String(p.id ?? Math.random())} className="hover:bg-bg-elevated/40">
+                  <td className="px-2 py-2 text-fg-muted">
+                    {fmtDate(String(p.created_at ?? ""))}
+                  </td>
+                  <td className="px-2 py-2 text-fg">{String(p.tariff ?? "—")}</td>
+                  <td className="px-2 py-2 text-fg">
+                    {typeof p.amount === "number"
+                      ? fmtRub(p.amount / 100)
+                      : String(p.amount ?? "—")}
+                  </td>
+                  <td className="px-2 py-2">
+                    <PaymentStatus status={String(p.status ?? "")} />
+                  </td>
+                  <td className="px-2 py-2 text-fg-muted">{String(p.source ?? "—")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PaymentStatus({ status }: { status: string }) {
+  const s = status.toLowerCase();
+  if (s === "approved" || s === "paid")
+    return <span className="badge-success">{status}</span>;
+  if (s === "pending" || s === "processing")
+    return <span className="badge-warning">{status}</span>;
+  if (s === "failed" || s === "rejected" || s === "cancelled")
+    return <span className="badge-danger">{status}</span>;
+  return <span className="badge-muted">{status || "—"}</span>;
 }
