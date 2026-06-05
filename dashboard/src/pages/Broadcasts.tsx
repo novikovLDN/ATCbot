@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   Megaphone,
@@ -9,9 +9,12 @@ import {
   AlertCircle,
   Clock,
   Plus,
+  Trash2,
   Users as UsersIcon,
 } from "lucide-react";
-import { endpoints } from "@/lib/api";
+import { ApiError, endpoints } from "@/lib/api";
+import { useEventStream, type BusEvent } from "@/lib/ws";
+import { toast } from "@/store/toast";
 import { fmtDate, fmtNum, truncate } from "@/lib/format";
 import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
@@ -188,8 +191,11 @@ function BroadcastDetail({ id }: { id: number }) {
 
   return (
     <div className="card p-5 animate-fade-in">
-      <div className="mb-3 text-xs uppercase tracking-wider text-fg-subtle">
-        Рассылка #{id}
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="text-xs uppercase tracking-wider text-fg-subtle">
+          Рассылка #{id}
+        </div>
+        <DeleteFromUsersControl broadcastId={id} />
       </div>
       <h3 className="text-lg font-semibold text-fg">
         {truncate(String(b.title ?? "Без названия"), 80)}
@@ -289,4 +295,157 @@ function sanitize(html: string): string {
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
     .replace(/on\w+="[^"]*"/gi, "")
     .replace(/javascript:/gi, "");
+}
+
+interface DeleteProgress {
+  processed?: number;
+  total?: number;
+  deleted?: number;
+  failed?: number;
+  status?: "running" | "done" | "failed";
+  error?: string;
+}
+
+/**
+ * "Удалить у пользователей" — calls bot.delete_message for every
+ * recorded (telegram_id, message_id) pair. Confirmation in two clicks
+ * (the second confirms) so it's not a one-tap mistake. Live progress
+ * via the bus stream.
+ */
+function DeleteFromUsersControl({ broadcastId }: { broadcastId: number }) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const [progress, setProgress] = useState<DeleteProgress | null>(null);
+
+  const mut = useMutation({
+    mutationFn: () => endpoints.broadcastDeleteFromUsers(broadcastId),
+    onSuccess: (data) => {
+      toast.info(`Удаляю ${data.total_messages} сообщений из чатов...`);
+      setProgress({
+        processed: 0,
+        total: data.total_messages,
+        deleted: 0,
+        failed: 0,
+        status: "running",
+      });
+      setConfirming(false);
+    },
+    onError: (e: unknown) => {
+      const err = e as ApiError;
+      toast.error(err?.detail ?? "Не удалось запустить удаление");
+      setConfirming(false);
+    },
+  });
+
+  useEventStream((e: BusEvent) => {
+    const bid = Number(e.broadcast_id ?? 0);
+    if (bid !== broadcastId) return;
+    if (e.type === "broadcast:delete_progress") {
+      setProgress({
+        processed: Number(e.processed ?? 0),
+        total: Number(e.total ?? 0),
+        deleted: Number(e.deleted ?? 0),
+        failed: Number(e.failed ?? 0),
+        status: "running",
+      });
+    } else if (e.type === "broadcast:delete_done") {
+      setProgress({
+        processed: Number(e.total ?? 0),
+        total: Number(e.total ?? 0),
+        deleted: Number(e.deleted ?? 0),
+        failed: Number(e.failed ?? 0),
+        status: "done",
+      });
+      toast.success(
+        `Удалено ${Number(e.deleted ?? 0)} / ${Number(e.total ?? 0)}`,
+      );
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+    } else if (e.type === "broadcast:delete_failed") {
+      setProgress((p) => ({
+        ...(p ?? {}),
+        status: "failed",
+        error: String(e.error ?? ""),
+      }));
+      toast.error(String(e.error ?? "Ошибка удаления"));
+    }
+  });
+
+  // Auto-clear the inline progress after `done` so the card returns
+  // to its default state on next open.
+  useEffect(() => {
+    if (progress?.status === "done") {
+      const t = window.setTimeout(() => setProgress(null), 8000);
+      return () => window.clearTimeout(t);
+    }
+  }, [progress?.status]);
+
+  if (progress) {
+    const total = progress.total ?? 0;
+    const done = progress.processed ?? 0;
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    return (
+      <div className="flex min-w-[180px] flex-col items-stretch gap-1.5 text-right">
+        <div className="text-[11px] text-fg-muted">
+          {progress.status === "done"
+            ? "Готово"
+            : progress.status === "failed"
+            ? "Сбой"
+            : "Удаляю..."}{" "}
+          <span className="font-mono">
+            {done}/{total}
+          </span>
+          {(progress.failed ?? 0) > 0 && (
+            <span className="ml-1 text-danger">· {progress.failed} fail</span>
+          )}
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
+          <div
+            className={
+              progress.status === "failed"
+                ? "h-full bg-danger transition-all"
+                : progress.status === "done"
+                ? "h-full bg-success transition-all"
+                : "h-full bg-accent transition-all"
+            }
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        className="btn-ghost text-danger hover:text-danger"
+        title="Удалить эту рассылку из чатов пользователей"
+      >
+        <Trash2 className="h-3.5 w-3.5" /> Удалить у юзеров
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-danger">Точно удалить?</span>
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="btn-ghost"
+        disabled={mut.isPending}
+      >
+        Нет
+      </button>
+      <button
+        type="button"
+        onClick={() => mut.mutate()}
+        disabled={mut.isPending}
+        className="btn-danger"
+      >
+        <Trash2 className="h-3.5 w-3.5" /> Да, удалить
+      </button>
+    </div>
+  );
 }

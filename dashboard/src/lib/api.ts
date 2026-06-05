@@ -157,6 +157,10 @@ export const endpoints = {
     api.get<Array<{ key: string; label: string; count: number }>>(
       "/broadcasts/segments",
     ),
+  broadcastDeleteFromUsers: (id: number) =>
+    api.post<{ ok: boolean; broadcast_id: number; total_messages: number }>(
+      `/broadcasts/${id}/delete-from-users`,
+    ),
   broadcastCreate: (body: {
     title: string;
     message: string;
