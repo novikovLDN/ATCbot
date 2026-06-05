@@ -358,6 +358,30 @@ class BalanceRequest(BaseModel):
         return v
 
 
+@router.delete("/{telegram_id}")
+async def user_delete(
+    telegram_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """Cascade-delete a user across all related tables. Irreversible.
+    Routes through admin_delete_user_complete which also cleans up
+    Remnawave entities + writes the audit log."""
+    try:
+        ok = await database.admin_delete_user_complete(
+            telegram_id, int(admin["sub"]),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"delete_failed: {e}")
+    if not ok:
+        raise HTTPException(404, "User not found or delete blocked")
+    bus.publish({
+        "type": "admin:user_deleted",
+        "telegram_id": telegram_id,
+        "by": admin.get("sub"),
+    })
+    return {"ok": True}
+
+
 @router.post("/{telegram_id}/balance")
 async def user_balance_change(
     telegram_id: int = Path(..., gt=0),

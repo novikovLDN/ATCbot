@@ -468,6 +468,87 @@ function Actions({
           </button>
         )}
       </div>
+
+      <DeleteUserSection telegramId={telegramId} />
+    </div>
+  );
+}
+
+function DeleteUserSection({ telegramId }: { telegramId: number }) {
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState("");
+
+  const del = useMutation({
+    mutationFn: () => endpoints.userDelete(telegramId),
+    onSuccess: () => {
+      toast.success("Пользователь полностью удалён");
+      // Hard-reload — карточка больше не существует.
+      window.location.assign("/dashboard/users");
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось удалить"),
+  });
+
+  if (!confirming) {
+    return (
+      <div className="mt-6 flex items-center justify-end">
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          className="btn-ghost text-danger hover:text-danger"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Удалить пользователя
+        </button>
+      </div>
+    );
+  }
+
+  const required = String(telegramId);
+  const ok = typed === required;
+
+  return (
+    <div className="mt-6 rounded-2xl border border-danger/40 bg-danger/10 p-4">
+      <div className="text-xs font-medium uppercase tracking-wider text-danger">
+        Полное удаление
+      </div>
+      <div className="mt-1 text-sm text-fg">
+        Каскадно сотрёт: подписки, платежи, баланс, рефералы, гифты, VIP,
+        скидки — и удалит entity в Remnawave. <b>Это необратимо.</b>
+      </div>
+      <div className="mt-3">
+        <div className="mb-1 text-xs text-fg-muted">
+          Введи Telegram ID <span className="font-mono text-fg">{required}</span>{" "}
+          для подтверждения:
+        </div>
+        <input
+          className="input"
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder={required}
+        />
+      </div>
+      <div className="mt-3 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setConfirming(false);
+            setTyped("");
+          }}
+          className="btn-ghost"
+          disabled={del.isPending}
+        >
+          Отмена
+        </button>
+        <button
+          type="button"
+          onClick={() => del.mutate()}
+          disabled={!ok || del.isPending}
+          className="btn-danger"
+        >
+          {del.isPending ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
+          Подтвердить удаление
+        </button>
+      </div>
     </div>
   );
 }

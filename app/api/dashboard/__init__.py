@@ -22,6 +22,9 @@ from app.api.dashboard.routes import broadcasts as _broadcasts
 from app.api.dashboard.routes import export as _export
 from app.api.dashboard.routes import referrals as _referrals
 from app.api.dashboard.routes import bgift as _bgift
+from app.api.dashboard.routes import incident as _incident
+from app.api.dashboard.routes import promo as _promo
+from app.api.dashboard.routes import payments as _payments
 from app.api.dashboard import auth as _auth
 from app.api.dashboard import ws as _ws
 
@@ -35,6 +38,9 @@ router.include_router(_broadcasts.router, prefix="/broadcasts", tags=["broadcast
 router.include_router(_export.router, prefix="/export", tags=["export"])
 router.include_router(_referrals.router, prefix="/referrals", tags=["referrals"])
 router.include_router(_bgift.router, prefix="/bgift", tags=["bgift"])
+router.include_router(_incident.router, prefix="/incident", tags=["incident"])
+router.include_router(_promo.router, prefix="/promo", tags=["promo"])
+router.include_router(_payments.router, prefix="/payments", tags=["payments"])
 
 # Separate router for the WebSocket endpoint — FastAPI requires WS
 # routes to be on a router (or app) that hasn't had a `prefix` applied
