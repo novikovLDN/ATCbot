@@ -65,8 +65,13 @@ async def _write_setting(key: str, value: str) -> bool:
 
 
 def _generate_vapid_keys() -> dict[str, str]:
-    """Generate a fresh EC SECP256R1 keypair. Returns base64url public
-    + PEM private encoded as strings."""
+    """Generate a fresh EC SECP256R1 keypair. Returns:
+       - public:        base64url-encoded uncompressed point (65 bytes)
+       - private_pem:   PKCS8 PEM (kept for backwards-compat / debugging)
+       - private_raw:   base64url-encoded 32-byte EC scalar
+                        (RFC8292 §2, what pywebpush 2.x / py-vapid actually
+                        wants — feeding it PEM trips an ASN.1 parser bug
+                        on some cryptography versions)."""
     priv = ec.generate_private_key(ec.SECP256R1())
     priv_pem = priv.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -79,17 +84,51 @@ def _generate_vapid_keys() -> dict[str, str]:
         format=serialization.PublicFormat.UncompressedPoint,
     )
     pub_b64 = base64.urlsafe_b64encode(pub_raw).rstrip(b"=").decode("ascii")
-    return {"public": pub_b64, "private_pem": priv_pem}
+    priv_raw_bytes = priv.private_numbers().private_value.to_bytes(32, "big")
+    priv_raw_b64 = (
+        base64.urlsafe_b64encode(priv_raw_bytes).rstrip(b"=").decode("ascii")
+    )
+    return {
+        "public": pub_b64,
+        "private_pem": priv_pem,
+        "private_raw": priv_raw_b64,
+    }
+
+
+def _raw_from_pem(pem: str) -> Optional[str]:
+    """Recover the base64url-encoded 32-byte EC scalar from a PEM
+    private key — used to migrate VAPID keys that were created before
+    we started storing private_raw."""
+    try:
+        key = serialization.load_pem_private_key(pem.encode(), password=None)
+        if not isinstance(key, ec.EllipticCurvePrivateKey):
+            return None
+        raw = key.private_numbers().private_value.to_bytes(32, "big")
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    except Exception as e:
+        logger.warning("VAPID PEM→raw migration failed: %s", e)
+        return None
 
 
 async def get_vapid_keys() -> dict[str, str]:
     """Return existing keys or auto-generate on first call. Keys
-    persist in app_settings."""
+    persist in app_settings. Auto-migrates older records that only
+    have PEM (no private_raw) on first read."""
     raw = await _read_setting("vapid_keys")
     if raw:
         try:
             data = json.loads(raw)
-            if isinstance(data, dict) and "public" in data and "private_pem" in data:
+            if (
+                isinstance(data, dict)
+                and "public" in data
+                and "private_pem" in data
+            ):
+                if "private_raw" not in data:
+                    derived = _raw_from_pem(data["private_pem"])
+                    if derived:
+                        data["private_raw"] = derived
+                        await _write_setting("vapid_keys", json.dumps(data))
+                        logger.info("VAPID keys migrated: added private_raw")
                 return data
         except Exception:
             pass
@@ -254,14 +293,22 @@ async def send_to_all(
     removed = 0
     errors: list[dict] = []
 
+    # py-vapid 1.9+ / pywebpush 2.x: prefer the 32-byte raw base64url
+    # private key. PEM goes through an ASN.1 parser that's fragile on
+    # some cryptography versions ("ASN.1 parsing error: invalid").
+    vapid_pk = keys.get("private_raw") or keys["private_pem"]
+
     def _do_send(endpoint: str, p256dh: str, auth: str) -> None:
+        # vapid_claims must be a fresh dict each call — pywebpush
+        # mutates it in place to add "aud"/"exp", and reusing one
+        # cross-endpoint would leak the previous aud.
         webpush(
             subscription_info={
                 "endpoint": endpoint,
                 "keys": {"p256dh": p256dh, "auth": auth},
             },
             data=data_str,
-            vapid_private_key=keys["private_pem"],
+            vapid_private_key=vapid_pk,
             vapid_claims={"sub": claim_sub},
             ttl=60,
         )
