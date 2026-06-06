@@ -172,7 +172,7 @@ function PromoRowItem({
   });
 
   return (
-    <tr className="hover:bg-bg-elevated/40">
+    <tr className="hover:bg-accent/[0.04]">
       <td className="px-2 py-2">
         <button
           type="button"

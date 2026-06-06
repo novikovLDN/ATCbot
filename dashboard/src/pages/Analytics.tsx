@@ -251,7 +251,7 @@ function BreakdownTable({
             </thead>
             <tbody className="divide-y divide-border/60">
               {rows.map((row) => (
-                <tr key={row.category} className="hover:bg-bg-elevated/30">
+                <tr key={row.category} className="hover:bg-accent/[0.04]">
                   <td className="px-2 py-2.5 text-fg">
                     {TARIFF_LABELS[row.category] ?? row.category}
                   </td>

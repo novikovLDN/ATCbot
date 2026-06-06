@@ -621,7 +621,7 @@ function PaymentRowItem({ p }: { p: PaymentRow }) {
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-start gap-3 py-3 text-left transition hover:bg-bg-elevated/30"
+        className="flex w-full items-start gap-3 py-3 text-left transition hover:bg-accent/[0.04]"
       >
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
           {expanded ? (
