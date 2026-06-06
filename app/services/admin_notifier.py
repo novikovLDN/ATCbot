@@ -157,6 +157,9 @@ async def _send(bot: Bot, text: str) -> None:
 
 
 async def _on_payment_error(bot: Bot, e: dict[str, Any]) -> None:
+    from app.services import admin_settings
+    if not await admin_settings.is_enabled("payment_error"):
+        return
     stage = str(e.get("stage") or "")
     provider = str(e.get("provider") or "")
     key = (stage, provider)
@@ -175,6 +178,9 @@ async def _on_payment_error(bot: Bot, e: dict[str, Any]) -> None:
 
 
 async def _on_broadcast_done(bot: Bot, e: dict[str, Any]) -> None:
+    from app.services import admin_settings
+    if not await admin_settings.is_enabled("broadcast_done"):
+        return
     bid = e.get("broadcast_id")
     sent = int(e.get("sent") or 0)
     failed = int(e.get("failed") or 0)
@@ -192,6 +198,9 @@ async def _on_payment_approved(bot: Bot, _e: dict[str, Any]) -> None:
     """Recompute today's revenue and announce any newly-crossed
     milestones. We pull fresh numbers from DB rather than aggregating
     here so the totals match the dashboard exactly."""
+    from app.services import admin_settings
+    if not await admin_settings.is_enabled("revenue_milestone"):
+        return
     try:
         import database
         # 24h trailing != today; we want today-since-midnight-UTC.

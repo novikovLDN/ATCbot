@@ -103,7 +103,11 @@ export interface UserDetail {
 
 export const endpoints = {
   authStatus: () =>
-    api.get<{ has_password: boolean; has_session: boolean }>("/auth/status"),
+    api.get<{
+      has_password: boolean;
+      has_session: boolean;
+      has_passkey?: boolean;
+    }>("/auth/status"),
   authSetup: (body: { username: string; password: string; bootstrap_token: string }) =>
     api.post<{ ok: boolean }>("/auth/setup", body),
   authLogin: (body: { username: string; password: string }) =>
@@ -321,6 +325,23 @@ export const endpoints = {
   activationRetry: (subscriptionId: number) =>
     api.post<{ ok: boolean; subscription_id: number; vpn_key?: string; error_message?: string }>(
       `/activations/${subscriptionId}/retry`,
+    ),
+
+  settingsNotificationsGet: () =>
+    api.get<{
+      payment_error: boolean;
+      broadcast_done: boolean;
+      revenue_milestone: boolean;
+    }>("/settings/notifications"),
+  settingsNotificationsPatch: (key: string, enabled: boolean) =>
+    api.post<{
+      payment_error: boolean;
+      broadcast_done: boolean;
+      revenue_milestone: boolean;
+    }>("/settings/notifications", { key, enabled }),
+  settingsTestNotifications: () =>
+    api.post<{ ok: boolean; count: number; delay_seconds: number }>(
+      "/settings/notifications/test",
     ),
 };
 

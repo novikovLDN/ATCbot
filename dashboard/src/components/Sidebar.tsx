@@ -12,6 +12,7 @@ import {
   Tag,
   Wrench,
   CreditCard,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { auth } from "@/lib/auth";
@@ -35,6 +36,7 @@ const items: NavItem[] = [
   { to: "/bgift", label: "Гифт-ГБ", icon: Gift },
   { to: "/audit", label: "Аудит", icon: ScrollText },
   { to: "/service", label: "Сервис", icon: Wrench },
+  { to: "/settings", label: "Настройки", icon: SettingsIcon },
 ];
 
 export function Sidebar() {

@@ -171,7 +171,7 @@ export function Referrals() {
                           <span className="truncate font-medium text-fg">
                             {r.username ? `@${String(r.username)}` : `tg:${id}`}
                           </span>
-                          {r.username && (
+                          {typeof r.username === "string" && r.username && (
                             <span className="font-mono text-[11px] text-fg-subtle">
                               tg:{id}
                             </span>
