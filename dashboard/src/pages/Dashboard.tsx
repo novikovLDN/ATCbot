@@ -301,20 +301,33 @@ export function Dashboard() {
   );
 }
 
+function Tile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "accent" | "success";
+}) {
+  const wrapClass =
+    tone === "accent"
+      ? "rounded-xl border border-accent/20 bg-accent/5 px-4 py-3 transition-colors hover:border-accent/40"
+      : tone === "success"
+      ? "rounded-xl border border-success/20 bg-success/5 px-4 py-3 transition-colors hover:border-success/40"
+      : "rounded-xl border border-border bg-bg-subtle/60 px-4 py-3 transition-colors hover:border-fg-subtle";
+  const numClass =
+    tone === "accent"
+      ? "mt-1 text-xl font-semibold tracking-tight text-accent md:text-2xl"
+      : tone === "success"
+      ? "mt-1 text-xl font-semibold tracking-tight text-success md:text-2xl"
+      : "mt-1 text-xl font-semibold tracking-tight text-fg md:text-2xl";
+  return (
+    <div className={wrapClass}>
       <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
         {label}
       </div>
-      <div
-        className={
-          tone === "accent"
-            ? "mt-1 text-xl font-semibold tracking-tight text-accent md:text-2xl"
-            : tone === "success"
-            ? "mt-1 text-xl font-semibold tracking-tight text-success md:text-2xl"
-            : "mt-1 text-xl font-semibold tracking-tight text-fg md:text-2xl"
-        }
-      >
-        {value}
-      </div>
+      <div className={numClass}>{value}</div>
     </div>
   );
 }
