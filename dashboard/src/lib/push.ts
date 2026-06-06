@@ -25,6 +25,34 @@ export function getPushPermission(): NotificationPermission {
   return Notification.permission;
 }
 
+export function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return (
+    /iPhone|iPod/i.test(ua) ||
+    /iPad/i.test(ua) ||
+    (navigator.platform === "MacIntel" &&
+      (navigator as { maxTouchPoints?: number }).maxTouchPoints !== undefined &&
+      ((navigator as unknown as { maxTouchPoints: number }).maxTouchPoints ?? 0) > 1)
+  );
+}
+
+export function isStandalonePWA(): boolean {
+  if (typeof window === "undefined") return false;
+  if ((window.navigator as unknown as { standalone?: boolean }).standalone) return true;
+  if (window.matchMedia?.("(display-mode: standalone)").matches) return true;
+  return false;
+}
+
+/**
+ * iOS Safari only supports Web Push from PWAs installed to Home
+ * Screen (iOS 16.4+). In a regular Safari tab, subscribe() will throw
+ * even though the feature-detect passes.
+ */
+export function iosNeedsHomeScreen(): boolean {
+  return isIOS() && !isStandalonePWA();
+}
+
 function urlBase64ToArrayBuffer(base64String: string): ArrayBuffer {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");

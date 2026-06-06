@@ -16,11 +16,14 @@ import { toast } from "@/store/toast";
 import {
   disablePushOnThisDevice,
   enablePush,
+  iosNeedsHomeScreen,
   isPushSupported,
+  isStandalonePWA,
   isSubscribedHere,
   listPushSubscriptions,
   sendPushTest,
 } from "@/lib/push";
+import { Share } from "lucide-react";
 
 interface FlagDescriptor {
   key: "payment_error" | "broadcast_done" | "revenue_milestone";
@@ -188,6 +191,8 @@ export function Settings() {
 function PushSection() {
   const qc = useQueryClient();
   const supported = isPushSupported();
+  const iosBlocker = iosNeedsHomeScreen();
+  const standalone = isStandalonePWA();
   const [permission, setPermission] = useState<NotificationPermission>(
     supported ? Notification.permission : "denied",
   );
@@ -215,7 +220,13 @@ function PushSection() {
     onError: (e: unknown) => {
       const msg = (e as Error).message;
       if (msg === "permission_denied") {
-        toast.error("Разрешение на уведомления не дано");
+        if (iosBlocker) {
+          toast.error(
+            "На iPhone сначала «Поделиться → На экран Домой», затем открой иконку и подключи push оттуда.",
+          );
+        } else {
+          toast.error("Разрешение на уведомления не дано");
+        }
       } else if (msg === "not_supported") {
         toast.error("Браузер не поддерживает push");
       } else {
@@ -304,6 +315,28 @@ function PushSection() {
         устройства: телефон, ноутбук, планшет.
       </p>
 
+      {iosBlocker && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
+          <Share className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="space-y-1">
+            <div className="font-semibold">Нужно установить как приложение</div>
+            <div className="text-warning/90">
+              iPhone Safari не умеет push в обычной вкладке. В Safari нажми
+              «Поделиться» → «На экран Домой». Затем открой иконку Atlas
+              Admin с домашнего экрана и подключи push отсюда.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {standalone && (
+        <div className="mb-4 flex items-center gap-2 text-xs text-success">
+          <span className="badge-success">
+            <Smartphone className="h-3 w-3" /> Запущено как приложение
+          </span>
+        </div>
+      )}
+
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {hereSubscribed ? (
           <>
@@ -325,8 +358,9 @@ function PushSection() {
             <button
               type="button"
               onClick={() => enable.mutate()}
-              disabled={enable.isPending}
+              disabled={enable.isPending || iosBlocker}
               className="btn-primary"
+              title={iosBlocker ? "Сначала добавь на экран Домой" : undefined}
             >
               {enable.isPending ? <Spinner /> : <BellRing className="h-3.5 w-3.5" />}
               Подключить на этом устройстве

@@ -14,6 +14,7 @@ Flow:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -252,21 +253,26 @@ async def send_to_all(
     failed = 0
     removed = 0
 
+    def _do_send(endpoint: str, p256dh: str, auth: str) -> None:
+        webpush(
+            subscription_info={
+                "endpoint": endpoint,
+                "keys": {"p256dh": p256dh, "auth": auth},
+            },
+            data=data_str,
+            vapid_private_key=keys["private_pem"],
+            vapid_claims={"sub": claim_sub},
+            ttl=60,
+        )
+
     for sub in subs:
         endpoint = sub["endpoint"]
         try:
-            webpush(
-                subscription_info={
-                    "endpoint": endpoint,
-                    "keys": {
-                        "p256dh": sub["p256dh"],
-                        "auth": sub["auth"],
-                    },
-                },
-                data=data_str,
-                vapid_private_key=keys["private_pem"],
-                vapid_claims={"sub": claim_sub},
-                ttl=60,
+            # pywebpush is synchronous (uses requests). Push services like
+            # Apple's mutualtls.push.apple.com can hang for seconds — never
+            # block the event loop.
+            await asyncio.to_thread(
+                _do_send, endpoint, sub["p256dh"], sub["auth"],
             )
             sent += 1
             await _touch_last_used(endpoint)

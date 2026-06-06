@@ -50,11 +50,11 @@ export function StatCard({
           <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
             {label}
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
+          <div className="mt-2 flex min-w-0 items-baseline gap-2">
             {loading ? (
               <span className="inline-block h-8 w-28 rounded-md bg-bg-elevated" />
             ) : (
-              <span className="stat-num truncate">{value}</span>
+              <span className="stat-num block min-w-0 truncate">{value}</span>
             )}
             {pill && !loading && (
               <span className="stat-pill shrink-0">{pill}</span>
