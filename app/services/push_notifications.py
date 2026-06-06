@@ -252,6 +252,7 @@ async def send_to_all(
     sent = 0
     failed = 0
     removed = 0
+    errors: list[dict] = []
 
     def _do_send(endpoint: str, p256dh: str, auth: str) -> None:
         webpush(
@@ -267,6 +268,12 @@ async def send_to_all(
 
     for sub in subs:
         endpoint = sub["endpoint"]
+        host = ""
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(endpoint).netloc
+        except Exception:
+            host = endpoint[:60]
         try:
             # pywebpush is synchronous (uses requests). Push services like
             # Apple's mutualtls.push.apple.com can hang for seconds — never
@@ -276,25 +283,51 @@ async def send_to_all(
             )
             sent += 1
             await _touch_last_used(endpoint)
+            logger.info("PUSH_SEND_OK host=%s", host)
         except WebPushException as e:
             status = getattr(getattr(e, "response", None), "status_code", 0)
+            resp_text = ""
+            try:
+                resp_text = (getattr(e, "response", None).text or "")[:200]
+            except Exception:
+                pass
             if status in (404, 410):
                 # Subscription has been revoked by the user / the push
                 # service. Drop it so we don't keep retrying.
                 await remove_subscription(endpoint)
                 removed += 1
                 logger.info(
-                    "PUSH_SUB_GONE status=%s endpoint=%s — removed",
-                    status, endpoint[:80],
+                    "PUSH_SUB_GONE status=%s host=%s — removed",
+                    status, host,
                 )
+                errors.append({
+                    "host": host, "status": status,
+                    "reason": "subscription_gone", "detail": resp_text,
+                })
             else:
                 failed += 1
                 logger.warning(
-                    "PUSH_SEND_FAIL status=%s endpoint=%s err=%s",
-                    status, endpoint[:80], e,
+                    "PUSH_SEND_FAIL status=%s host=%s err=%s body=%s",
+                    status, host, e, resp_text,
                 )
+                errors.append({
+                    "host": host, "status": status,
+                    "reason": "webpush_error",
+                    "detail": (str(e) + " " + resp_text).strip()[:240],
+                })
         except Exception as e:
             failed += 1
-            logger.warning("PUSH_SEND_UNEXPECTED endpoint=%s err=%s", endpoint[:80], e)
+            logger.exception("PUSH_SEND_UNEXPECTED host=%s err=%s", host, e)
+            errors.append({
+                "host": host, "status": 0,
+                "reason": type(e).__name__,
+                "detail": str(e)[:240],
+            })
 
-    return {"sent": sent, "failed": failed, "removed": removed, "total": len(subs)}
+    return {
+        "sent": sent,
+        "failed": failed,
+        "removed": removed,
+        "total": len(subs),
+        "errors": errors,
+    }
