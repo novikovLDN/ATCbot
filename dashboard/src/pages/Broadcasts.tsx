@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -11,6 +11,8 @@ import {
   Plus,
   Trash2,
   Users as UsersIcon,
+  ArrowLeft,
+  Send,
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
@@ -34,7 +36,18 @@ interface BroadcastRow extends Record<string, unknown> {
   status?: string;
 }
 
+interface SendProgress {
+  processed: number;
+  total: number;
+  sent: number;
+  failed: number;
+  status: "running" | "done" | "failed";
+  error?: string;
+  ts: number;
+}
+
 export function Broadcasts() {
+  const qc = useQueryClient();
   const list = useQuery({
     queryKey: ["broadcasts", "recent"],
     queryFn: () => endpoints.broadcastsRecent(50) as Promise<BroadcastRow[]>,
@@ -42,6 +55,90 @@ export function Broadcasts() {
   });
 
   const [selected, setSelected] = useState<number | null>(null);
+  // Map broadcast_id → live progress so the list row and the detail
+  // panel can render the same up-to-date status. Cleared 8s after `done`.
+  const [sending, setSending] = useState<Record<number, SendProgress>>({});
+  const detailRef = useRef<HTMLDivElement | null>(null);
+
+  useEventStream((e: BusEvent) => {
+    const bid = Number(e.broadcast_id ?? 0);
+    if (!bid) return;
+    if (e.type === "broadcast:created") {
+      // A new broadcast just kicked off — pull the row into the list
+      // immediately rather than waiting for the 30s poll.
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      setSending((prev) => ({
+        ...prev,
+        [bid]: {
+          processed: 0,
+          total: Number(e.audience ?? 0),
+          sent: 0,
+          failed: 0,
+          status: "running",
+          ts: Date.now(),
+        },
+      }));
+    } else if (e.type === "broadcast:progress") {
+      setSending((prev) => ({
+        ...prev,
+        [bid]: {
+          processed: Number(e.processed ?? 0),
+          total: Number(e.total ?? 0),
+          sent: Number(e.sent ?? 0),
+          failed: Number(e.failed ?? 0),
+          status: "running",
+          ts: Date.now(),
+        },
+      }));
+    } else if (e.type === "broadcast:done") {
+      setSending((prev) => ({
+        ...prev,
+        [bid]: {
+          processed: Number(e.total ?? 0),
+          total: Number(e.total ?? 0),
+          sent: Number(e.sent ?? 0),
+          failed: Number(e.failed ?? 0),
+          status: "done",
+          ts: Date.now(),
+        },
+      }));
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      // Auto-clear so the row goes back to the default look.
+      window.setTimeout(() => {
+        setSending((prev) => {
+          if (prev[bid]?.status !== "done") return prev;
+          const { [bid]: _, ...rest } = prev;
+          return rest;
+        });
+      }, 8000);
+    } else if (e.type === "broadcast:failed") {
+      setSending((prev) => ({
+        ...prev,
+        [bid]: {
+          processed: prev[bid]?.processed ?? 0,
+          total: prev[bid]?.total ?? 0,
+          sent: prev[bid]?.sent ?? 0,
+          failed: prev[bid]?.failed ?? 0,
+          status: "failed",
+          error: String(e.error ?? ""),
+          ts: Date.now(),
+        },
+      }));
+    }
+  });
+
+  // Mobile: when a row is tapped, smoothly scroll the detail card into
+  // view so the admin sees something happen. Desktop keeps the
+  // side-by-side layout and skips the scroll.
+  useEffect(() => {
+    if (selected === null) return;
+    if (typeof window === "undefined") return;
+    if (window.innerWidth >= 1024) return;
+    const t = window.setTimeout(() => {
+      detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [selected]);
 
   return (
     <div className="space-y-6">
@@ -91,6 +188,7 @@ export function Broadcasts() {
             <ul className="divide-y divide-border/60">
               {list.data.map((b) => {
                 const id = Number(b.id ?? 0);
+                const prog = sending[id];
                 return (
                   <li key={id}>
                     <button
@@ -118,6 +216,22 @@ export function Broadcasts() {
                               {String(b.broadcast_type)}
                             </span>
                           )}
+                          {prog?.status === "running" && (
+                            <span className="badge-accent">
+                              <Send className="h-3 w-3 animate-pulse" />
+                              отправляется
+                            </span>
+                          )}
+                          {prog?.status === "done" && (
+                            <span className="badge-success">
+                              <CheckCircle2 className="h-3 w-3" /> готово
+                            </span>
+                          )}
+                          {prog?.status === "failed" && (
+                            <span className="badge-danger">
+                              <AlertCircle className="h-3 w-3" /> сбой
+                            </span>
+                          )}
                         </div>
                         {typeof b.message === "string" && (
                           <div className="mt-1 truncate text-xs text-fg-muted">
@@ -132,6 +246,11 @@ export function Broadcasts() {
                             <span>· сегмент {String(b.segment)}</span>
                           )}
                         </div>
+                        {prog && prog.total > 0 && (
+                          <div className="mt-2">
+                            <SendProgressBar prog={prog} />
+                          </div>
+                        )}
                       </div>
                       <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
                     </button>
@@ -142,23 +261,70 @@ export function Broadcasts() {
           )}
         </div>
 
-        {selected !== null ? (
-          <BroadcastDetail id={selected} />
-        ) : (
-          <div className="card hidden p-6 lg:block">
-            <EmptyState
-              icon={Megaphone}
-              title="Выбери рассылку"
-              description="Кликни по строке слева, чтобы посмотреть деталь и статистику отправки."
+        <div ref={detailRef}>
+          {selected !== null ? (
+            <BroadcastDetail
+              id={selected}
+              progress={sending[selected]}
+              onBack={() => setSelected(null)}
             />
-          </div>
-        )}
+          ) : (
+            <div className="card hidden p-6 lg:block">
+              <EmptyState
+                icon={Megaphone}
+                title="Выбери рассылку"
+                description="Кликни по строке слева, чтобы посмотреть деталь и статистику отправки."
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function BroadcastDetail({ id }: { id: number }) {
+function SendProgressBar({ prog }: { prog: SendProgress }) {
+  const pct =
+    prog.total > 0
+      ? Math.min(100, Math.round((prog.processed / prog.total) * 100))
+      : prog.status === "done"
+      ? 100
+      : 0;
+  const bar =
+    prog.status === "failed"
+      ? "h-full bg-danger transition-all"
+      : prog.status === "done"
+      ? "h-full bg-success transition-all"
+      : "h-full bg-accent transition-all";
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[10px] text-fg-muted">
+        <span className="font-mono">
+          {prog.processed}/{prog.total} · {pct}%
+        </span>
+        <span className="font-mono">
+          ✓ {prog.sent}
+          {prog.failed > 0 && (
+            <span className="ml-1 text-danger">· ✗ {prog.failed}</span>
+          )}
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
+        <div className={bar} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function BroadcastDetail({
+  id,
+  progress,
+  onBack,
+}: {
+  id: number;
+  progress?: SendProgress;
+  onBack?: () => void;
+}) {
   const det = useQuery({
     queryKey: ["broadcasts", "detail", id],
     queryFn: () => endpoints.broadcastDetail(id),
@@ -166,7 +332,9 @@ function BroadcastDetail({ id }: { id: number }) {
   const stats = useQuery({
     queryKey: ["broadcasts", "stats", id],
     queryFn: () => endpoints.broadcastStats(id),
-    refetchInterval: 5_000,
+    // Poll faster while a live send is in progress — every second so
+    // the admin sees delivered/failed climb in real time. Idle: 5s.
+    refetchInterval: progress?.status === "running" ? 1_000 : 5_000,
   });
 
   if (det.isLoading) {
@@ -192,14 +360,76 @@ function BroadcastDetail({ id }: { id: number }) {
   return (
     <div className="card p-5 animate-fade-in">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="text-xs uppercase tracking-wider text-fg-subtle">
-          Рассылка #{id}
+        <div className="flex items-center gap-2">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="btn-ghost lg:hidden"
+              aria-label="Назад к списку"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> К списку
+            </button>
+          )}
+          <div className="text-xs uppercase tracking-wider text-fg-subtle">
+            Рассылка #{id}
+          </div>
         </div>
         <DeleteFromUsersControl broadcastId={id} />
       </div>
       <h3 className="text-lg font-semibold text-fg">
         {truncate(String(b.title ?? "Без названия"), 80)}
       </h3>
+
+      {progress && (
+        <div
+          className={
+            progress.status === "running"
+              ? "mt-3 rounded-xl border border-accent/30 bg-accent/10 p-3"
+              : progress.status === "done"
+              ? "mt-3 rounded-xl border border-success/30 bg-success/10 p-3"
+              : "mt-3 rounded-xl border border-danger/30 bg-danger/10 p-3"
+          }
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+            <span
+              className={
+                progress.status === "running"
+                  ? "inline-flex items-center gap-1.5 font-semibold text-accent"
+                  : progress.status === "done"
+                  ? "inline-flex items-center gap-1.5 font-semibold text-success"
+                  : "inline-flex items-center gap-1.5 font-semibold text-danger"
+              }
+            >
+              {progress.status === "running" && (
+                <>
+                  <Send className="h-3.5 w-3.5 animate-pulse" /> Отправляю...
+                </>
+              )}
+              {progress.status === "done" && (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Готово
+                </>
+              )}
+              {progress.status === "failed" && (
+                <>
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  Сбой отправки
+                </>
+              )}
+            </span>
+            <span className="font-mono text-[11px] text-fg-muted">
+              {progress.processed}/{progress.total}
+            </span>
+          </div>
+          <SendProgressBar prog={progress} />
+          {progress.status === "failed" && progress.error && (
+            <div className="mt-2 break-all text-[11px] text-danger">
+              {progress.error}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-3 gap-2">
         <Tile
