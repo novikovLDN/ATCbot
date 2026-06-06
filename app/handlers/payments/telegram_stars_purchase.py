@@ -524,7 +524,7 @@ async def send_stars_success(
         f"Если звёзды не поступили, напишите нам:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     try:

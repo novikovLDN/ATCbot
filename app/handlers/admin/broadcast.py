@@ -170,7 +170,7 @@ def _build_broadcast_reply_markup(
         elif btn == "channel":
             rows.append([InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/ATC_VPN")])
         elif btn == "support":
-            rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")])
+            rows.append([InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")])
         elif btn == "referral":
             rows.append([InlineKeyboardButton(text="👥 Пригласить друга", callback_data="menu_referral")])
         elif btn == "happ_ios":

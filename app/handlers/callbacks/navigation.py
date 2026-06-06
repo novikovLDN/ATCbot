@@ -751,7 +751,7 @@ async def callback_setup_step2(callback: CallbackQuery):
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
-        url="https://t.me/Atlas_SupportSecurity",
+        url="https://t.me/atlas_suppbot",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
@@ -1659,7 +1659,7 @@ async def callback_faq_answer(callback: CallbackQuery):
     language = await resolve_user_language(callback.from_user.id)
     text = i18n_get_text(language, f"help.faq_a{n}")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/atlas_suppbot")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="faq")],
     ])
     await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
@@ -1840,7 +1840,7 @@ async def send_apple_id_success(bot, telegram_id: int, region: str, nominal: int
         region=region_label, nominal=nominal_str, price=price_str,
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text="💬 Поддержка", url="https://t.me/atlas_suppbot")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")],
     ])
     try:
