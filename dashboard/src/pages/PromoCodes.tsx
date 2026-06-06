@@ -154,7 +154,17 @@ function PromoRowItem({
   const deact = useMutation({
     mutationFn: () => endpoints.promoDeactivate(Number(p.id ?? 0)),
     onSuccess: () => {
-      toast.success("Промокод деактивирован");
+      toast.success("Промокод отключён");
+      onChange();
+    },
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Ошибка"),
+  });
+
+  const react = useMutation({
+    mutationFn: () => endpoints.promoReactivate(Number(p.id ?? 0)),
+    onSuccess: () => {
+      toast.success("Промокод включён");
       onChange();
     },
     onError: (e: unknown) =>
@@ -205,11 +215,11 @@ function PromoRowItem({
         )}
       </td>
       <td className="px-2 py-2 text-right">
-        {active && (
+        {active ? (
           <button
             type="button"
             onClick={() => {
-              if (confirm(`Деактивировать ${code}?`)) deact.mutate();
+              if (confirm(`Отключить ${code}?`)) deact.mutate();
             }}
             disabled={deact.isPending}
             className="btn-ghost text-danger hover:text-danger"
@@ -217,7 +227,21 @@ function PromoRowItem({
             {deact.isPending ? <Spinner /> : <Power className="h-3.5 w-3.5" />}
             Отключить
           </button>
-        )}
+        ) : !exhausted && !expired ? (
+          // Currently disabled and could be re-enabled (still within
+          // expiry window and not max-uses-out).
+          <button
+            type="button"
+            onClick={() => {
+              if (confirm(`Включить ${code}?`)) react.mutate();
+            }}
+            disabled={react.isPending}
+            className="btn-ghost text-success hover:text-success"
+          >
+            {react.isPending ? <Spinner /> : <Power className="h-3.5 w-3.5" />}
+            Включить
+          </button>
+        ) : null}
       </td>
     </tr>
   );

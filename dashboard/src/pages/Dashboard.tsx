@@ -136,7 +136,19 @@ export function Dashboard() {
         />
         <StatCard
           label="Активные подписки"
-          value={fmtNum(asNum(overview.data?.active_subscriptions))}
+          value={fmtNum(
+            asNum(
+              overview.data?.active_paid_subscriptions ??
+                overview.data?.active_subscriptions,
+            ),
+          )}
+          hint={
+            overview.data?.active_subscriptions != null &&
+            overview.data?.active_paid_subscriptions != null &&
+            overview.data.active_subscriptions !== overview.data.active_paid_subscriptions
+              ? `всего с триалами ${fmtNum(asNum(overview.data.active_subscriptions))}`
+              : undefined
+          }
           icon={ShieldCheck}
           tone="success"
           loading={overview.isLoading}

@@ -10,7 +10,11 @@ import {
   Zap,
   ShieldOff,
   PlayCircle,
+  Fingerprint,
+  Plus,
+  Trash2,
 } from "lucide-react";
+import { isPasskeySupported, passkeyList, passkeyDelete, registerPasskey, type PasskeyRow } from "@/lib/passkey";
 import { ApiError, endpoints } from "@/lib/api";
 import { fmtDate, fmtNum, fmtRub } from "@/lib/format";
 import { toast } from "@/store/toast";
@@ -29,6 +33,7 @@ export function Service() {
         </h1>
       </header>
 
+      <PasskeysSection />
       <IncidentSection />
       <PendingActivationsSection />
       <PendingPaymentsSection />
@@ -432,4 +437,148 @@ function asNum(v: unknown): number | undefined {
     return Number.isFinite(n) ? n : undefined;
   }
   return undefined;
+}
+
+function PasskeysSection() {
+  const qc = useQueryClient();
+  const supported = isPasskeySupported();
+
+  const list = useQuery({
+    queryKey: ["passkeys", "list"],
+    queryFn: passkeyList,
+    enabled: supported,
+  });
+
+  const [label, setLabel] = useState("");
+  const add = useMutation({
+    mutationFn: () => registerPasskey(label.trim() || undefined),
+    onSuccess: () => {
+      toast.success("Passkey добавлен");
+      setLabel("");
+      qc.invalidateQueries({ queryKey: ["passkeys"] });
+    },
+    onError: (e: unknown) => {
+      const detail = (e as { detail?: string })?.detail;
+      if (detail !== "cancelled") {
+        toast.error(detail ?? "Не удалось добавить");
+      }
+    },
+  });
+
+  const del = useMutation({
+    mutationFn: (id: number) => passkeyDelete(id),
+    onSuccess: () => {
+      toast.success("Удалён");
+      qc.invalidateQueries({ queryKey: ["passkeys"] });
+    },
+    onError: () => toast.error("Не удалось удалить"),
+  });
+
+  if (!supported) {
+    return (
+      <section className="card p-5">
+        <div className="flex items-start gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
+            <Fingerprint className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Passkey
+            </div>
+            <h2 className="text-lg font-semibold text-fg">Браузер не поддерживает</h2>
+            <p className="mt-1 text-sm text-fg-muted">
+              Открой дашборд в Safari (iOS / macOS) или Chrome — там доступны
+              Face ID / Touch ID / системные ключи.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card p-5">
+      <div className="mb-3 flex items-center gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
+          <Fingerprint className="h-4 w-4" />
+        </div>
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+            Passkey
+          </div>
+          <h2 className="text-lg font-semibold text-fg">
+            Face ID / Touch ID
+          </h2>
+        </div>
+      </div>
+
+      <p className="mb-3 text-sm text-fg-muted">
+        Добавь passkey — и в следующий раз войдёшь одним касанием без
+        пароля. Привяжется к этому устройству / iCloud Keychain.
+      </p>
+
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto]">
+        <input
+          className="input"
+          maxLength={64}
+          placeholder='Метка — напр. "iPhone 15", "MacBook Air"'
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={() => add.mutate()}
+          disabled={add.isPending}
+          className="btn-primary"
+        >
+          {add.isPending ? <Spinner /> : <Plus className="h-3.5 w-3.5" />}
+          Добавить passkey
+        </button>
+      </div>
+
+      {list.isLoading ? (
+        <div className="mt-4 flex items-center gap-2 text-sm text-fg-muted">
+          <Spinner /> Загружаю...
+        </div>
+      ) : list.data && list.data.length > 0 ? (
+        <ul className="mt-4 divide-y divide-border/60">
+          {list.data.map((p: PasskeyRow) => (
+            <li
+              key={p.id}
+              className="flex items-center justify-between gap-2 py-3 text-sm"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium text-fg">
+                  {p.label || "Passkey"}
+                </div>
+                <div className="mt-0.5 text-xs text-fg-muted">
+                  {p.transports && p.transports.length > 0 ? (
+                    <span>{p.transports.join(" · ")} · </span>
+                  ) : null}
+                  Добавлен {p.created_at ? new Date(p.created_at).toLocaleDateString("ru-RU") : "—"}
+                  {p.last_used_at
+                    ? ` · последний вход ${new Date(p.last_used_at).toLocaleDateString("ru-RU")}`
+                    : " · ещё не использовался"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm(`Удалить «${p.label || "passkey"}»?`)) del.mutate(p.id);
+                }}
+                disabled={del.isPending}
+                className="btn-ghost text-danger hover:text-danger"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mt-4 text-sm text-fg-muted">
+          Ещё ни одного passkey не привязано.
+        </div>
+      )}
+    </section>
+  );
 }

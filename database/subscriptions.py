@@ -2874,6 +2874,49 @@ async def create_promocode_atomic(
                 return None
 
 
+async def reactivate_promocode(promo_id: Optional[int] = None, code: Optional[str] = None) -> bool:
+    """Re-enable a previously deactivated promocode: UPDATE is_active=true,
+    deleted_at=NULL. Counterpart of deactivate_promocode."""
+    if not _core.DB_READY:
+        return False
+    pool = await get_pool()
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        has_deleted_at = await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'promo_codes' AND column_name = 'deleted_at'"
+        )
+        if promo_id is not None:
+            if has_deleted_at:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true, deleted_at = NULL WHERE id = $1 RETURNING code",
+                    promo_id,
+                )
+            else:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true WHERE id = $1 RETURNING code",
+                    promo_id,
+                )
+        elif code:
+            code_n = code.upper().strip()
+            if has_deleted_at:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true, deleted_at = NULL WHERE UPPER(code) = UPPER($1) RETURNING code",
+                    code_n,
+                )
+            else:
+                row = await conn.fetchrow(
+                    "UPDATE promo_codes SET is_active = true WHERE UPPER(code) = UPPER($1) RETURNING code",
+                    code_n,
+                )
+        else:
+            return False
+        if row:
+            logger.info("PROMO_REACTIVATED code=%s", row.get("code"))
+            return True
+        return False
+
+
 async def deactivate_promocode(promo_id: Optional[int] = None, code: Optional[str] = None) -> bool:
     """
     Деактивировать промокод: UPDATE is_active=false, deleted_at=now().

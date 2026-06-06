@@ -1,6 +1,15 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Clock, TrendingUp, Download, FileText } from "lucide-react";
+import {
+  Clock,
+  TrendingUp,
+  Download,
+  FileText,
+  Gauge,
+  Wallet,
+  CreditCard,
+  Users as UsersIcon,
+} from "lucide-react";
 import { ApiError, downloadCsv, endpoints } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
 import { StatCard } from "@/components/StatCard";
@@ -15,12 +24,38 @@ const RANGES = [
   { label: "1г", hours: 8760 },
 ];
 
+const TARIFF_LABELS: Record<string, string> = {
+  basic: "Basic",
+  plus: "Plus",
+  basic_combo: "Basic + Combo",
+  plus_combo: "Plus + Combo",
+  combo_basic: "Basic + Combo",
+  combo_plus: "Plus + Combo",
+  proxy: "MTProxy",
+  trial: "Триал",
+  subscription: "Подписки",
+  traffic: "Трафик ГБ",
+  balance_topup: "Пополнение",
+  farm: "Ферма",
+};
+
+const WINDOW_LABELS: Record<string, string> = {
+  "24h": "24ч",
+  "7d": "7д",
+  "30d": "30д",
+  "180d": "180д",
+  "365d": "1г",
+  "1y": "1г",
+  all: "Всё время",
+};
+
 export function Analytics() {
   const [hours, setHours] = useState(720);
 
   const period = useQuery({
-    queryKey: ["stats", "period", hours],
-    queryFn: () => endpoints.statsPeriod(hours),
+    queryKey: ["payments", "revenue", hours],
+    queryFn: () => endpoints.paymentsRevenue(hours),
+    refetchInterval: 60_000,
   });
 
   const revenue = useQuery({
@@ -66,25 +101,28 @@ export function Analytics() {
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard
           label="Платежей"
-          value={fmtNum(asNum(period.data?.payment_count ?? period.data?.payments))}
+          value={fmtNum(period.data?.payments_count)}
           icon={Clock}
           loading={period.isLoading}
         />
         <StatCard
-          label="Доход за период"
-          value={fmtRub(asNum(period.data?.revenue))}
+          label="Доход"
+          value={fmtRub(period.data?.revenue_rubles)}
           tone="success"
+          icon={Wallet}
           loading={period.isLoading}
         />
         <StatCard
-          label="Новых юзеров"
-          value={fmtNum(asNum(period.data?.new_users))}
+          label="Средний чек"
+          value={fmtRub(period.data?.avg_check_rubles)}
           tone="accent"
+          icon={Gauge}
           loading={period.isLoading}
         />
         <StatCard
-          label="Новых подписок"
-          value={fmtNum(asNum(period.data?.new_subscriptions))}
+          label="Типов покупок"
+          value={fmtNum(Object.keys(period.data?.by_type ?? {}).length)}
+          icon={CreditCard}
           loading={period.isLoading}
         />
       </section>
@@ -99,6 +137,7 @@ export function Analytics() {
         <StatCard
           label="Платящих юзеров"
           value={fmtNum(revenue.data?.paying_users)}
+          icon={UsersIcon}
           loading={revenue.isLoading}
         />
         <StatCard
@@ -113,23 +152,143 @@ export function Analytics() {
         />
       </section>
 
-      <section className="card p-5">
-        <div className="mb-3 text-xs font-medium uppercase tracking-wider text-fg-subtle">
-          Разбивка покупок
-        </div>
-        {breakdown.isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-fg-muted">
-            <Spinner /> Загружаю...
-          </div>
-        ) : breakdown.data ? (
-          <pre className="max-h-[500px] overflow-auto rounded-xl border border-border bg-bg-subtle/60 p-4 text-xs leading-relaxed text-fg-muted">
-            {JSON.stringify(breakdown.data, null, 2)}
-          </pre>
-        ) : null}
-      </section>
+      <BreakdownTable data={breakdown.data} loading={breakdown.isLoading} />
 
       <ExportSection />
     </div>
+  );
+}
+
+interface BreakdownPayload {
+  [category: string]: {
+    [window: string]: { count?: number; revenue?: number } | undefined;
+  };
+}
+
+function BreakdownTable({
+  data,
+  loading,
+}: {
+  data: unknown;
+  loading: boolean;
+}) {
+  // Normalise the back-end shape (per-tariff dict of per-window dicts)
+  // to a 2-D table. We don't trust the field name for the inner
+  // revenue (kopecks vs rubles vary across legacy callers) — we
+  // detect by magnitude.
+  const { categories, windows, rows } = useMemo(() => {
+    const empty = { categories: [] as string[], windows: [] as string[], rows: [] as Array<{ category: string; cells: Array<{ window: string; count: number; revenue: number }> }> };
+    if (!data || typeof data !== "object") return empty;
+    const payload = data as BreakdownPayload;
+    const cats = Object.keys(payload).filter(
+      (c) => payload[c] && typeof payload[c] === "object",
+    );
+    const winsSet = new Set<string>();
+    for (const c of cats) {
+      const inner = payload[c] || {};
+      Object.keys(inner).forEach((w) => winsSet.add(w));
+    }
+    const winOrder = ["24h", "7d", "30d", "180d", "365d", "1y", "all"];
+    const wins = Array.from(winsSet).sort(
+      (a, b) => winOrder.indexOf(a) - winOrder.indexOf(b),
+    );
+    const rows = cats.map((cat) => {
+      const inner = payload[cat] || {};
+      return {
+        category: cat,
+        cells: wins.map((w) => {
+          const v = inner[w] ?? {};
+          const rawRev = typeof v.revenue === "number" ? v.revenue : 0;
+          const revenue = rawRev >= 100_000 ? rawRev / 100 : rawRev;
+          return {
+            window: w,
+            count: typeof v.count === "number" ? v.count : 0,
+            revenue,
+          };
+        }),
+      };
+    });
+    return { categories: cats, windows: wins, rows };
+  }, [data]);
+
+  const totalsPerWindow = useMemo(() => {
+    const t = new Map<string, { count: number; revenue: number }>();
+    for (const w of windows) t.set(w, { count: 0, revenue: 0 });
+    for (const row of rows) {
+      for (const c of row.cells) {
+        const cur = t.get(c.window) ?? { count: 0, revenue: 0 };
+        cur.count += c.count;
+        cur.revenue += c.revenue;
+        t.set(c.window, cur);
+      }
+    }
+    return t;
+  }, [rows, windows]);
+
+  return (
+    <section className="card p-5">
+      <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-fg-subtle">
+        <CreditCard className="h-3 w-3" /> Покупки по тарифам
+      </div>
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-fg-muted">
+          <Spinner /> Загружаю...
+        </div>
+      ) : categories.length === 0 || windows.length === 0 ? (
+        <div className="text-sm text-fg-muted">Нет данных</div>
+      ) : (
+        <div className="overflow-x-auto -mx-2">
+          <table className="w-full min-w-[600px] text-sm">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
+                <th className="px-2 py-2 font-medium">Тариф</th>
+                {windows.map((w) => (
+                  <th key={w} className="px-2 py-2 font-medium text-right">
+                    {WINDOW_LABELS[w] ?? w}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/60">
+              {rows.map((row) => (
+                <tr key={row.category} className="hover:bg-bg-elevated/30">
+                  <td className="px-2 py-2.5 text-fg">
+                    {TARIFF_LABELS[row.category] ?? row.category}
+                  </td>
+                  {row.cells.map((c) => (
+                    <td
+                      key={c.window}
+                      className="px-2 py-2.5 text-right align-top"
+                    >
+                      <div className="font-medium text-fg">
+                        {fmtRub(c.revenue)}
+                      </div>
+                      <div className="text-[11px] text-fg-subtle">
+                        {fmtNum(c.count)} шт
+                      </div>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+              <tr className="bg-bg-subtle/40 font-medium">
+                <td className="px-2 py-2.5 text-fg">Итого</td>
+                {windows.map((w) => {
+                  const t = totalsPerWindow.get(w) ?? { count: 0, revenue: 0 };
+                  return (
+                    <td key={w} className="px-2 py-2.5 text-right">
+                      <div className="text-success">{fmtRub(t.revenue)}</div>
+                      <div className="text-[11px] text-fg-muted">
+                        {fmtNum(t.count)} шт
+                      </div>
+                    </td>
+                  );
+                })}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -193,13 +352,4 @@ function ExportSection() {
       </div>
     </section>
   );
-}
-
-function asNum(v: unknown): number | undefined {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return undefined;
 }

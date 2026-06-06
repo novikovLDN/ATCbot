@@ -372,6 +372,36 @@ async def get_analytics_by_period(hours: int) -> Dict[str, Any]:
         }
 
 
+async def get_active_paid_subscriptions_count() -> int:
+    """Count of subscriptions that are paid, not bypass-only, not trial,
+    with expires_at in the future. This is the number an admin actually
+    cares about — get_extended_bot_stats's active_subscriptions also
+    includes trial rows and bypass-only entries, which inflates it."""
+    pool = await get_pool()
+    if pool is None:
+        return 0
+    now = _to_db_utc(datetime.now(timezone.utc))
+    try:
+        async with pool.acquire() as conn:
+            n = await conn.fetchval(
+                """SELECT COUNT(*) FROM subscriptions
+                   WHERE status = 'active'
+                     AND expires_at > $1
+                     AND COALESCE(is_bypass_only, FALSE) = FALSE
+                     AND COALESCE(source, '') != 'trial'
+                     AND subscription_type IN (
+                         'basic', 'plus', 'biz_starter', 'biz_team',
+                         'biz_business', 'biz_pro', 'biz_enterprise',
+                         'biz_ultimate'
+                     )""",
+                now,
+            )
+            return int(n or 0)
+    except Exception as e:
+        logger.warning("get_active_paid_subscriptions_count failed: %s", e)
+        return 0
+
+
 async def get_revenue_for_period(hours: int) -> Dict[str, Any]:
     """Money in over the last N hours from paid pending_purchases.
 

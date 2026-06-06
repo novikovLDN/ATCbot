@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   Search,
   ShieldCheck,
@@ -21,8 +22,21 @@ import { Spinner } from "@/components/Spinner";
 import { EmptyState } from "@/components/EmptyState";
 
 export function Users() {
-  const [query, setQuery] = useState("");
-  const [submitted, setSubmitted] = useState("");
+  const [params] = useSearchParams();
+  const initialTg = params.get("tg") || "";
+  const [query, setQuery] = useState(initialTg);
+  const [submitted, setSubmitted] = useState(initialTg);
+
+  // Re-trigger search if the ?tg=… changes (e.g. user clicks
+  // multiple "Полная карточка" links from the payments feed).
+  useEffect(() => {
+    const tg = params.get("tg") || "";
+    if (tg && tg !== submitted) {
+      setQuery(tg);
+      setSubmitted(tg);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
   const search = useQuery({
     queryKey: ["users", "search", submitted],
@@ -60,7 +74,10 @@ export function Users() {
           placeholder="Поиск по Telegram ID или @username"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          autoFocus
+          inputMode="search"
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
         />
         <button type="submit" className="btn-primary" disabled={!query.trim()}>
           Найти
@@ -138,6 +155,9 @@ function UserCard({ telegramId }: { telegramId: number }) {
                   ? `@${u.username}`
                   : `tg:${telegramId}`}
               </h2>
+              {typeof u.username === "string" && u.username && (
+                <span className="badge-muted font-mono">tg:{telegramId}</span>
+              )}
               {d.is_vip && (
                 <span className="badge-warning">
                   <Crown className="h-3 w-3" /> VIP

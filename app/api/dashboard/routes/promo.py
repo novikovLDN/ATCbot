@@ -88,3 +88,24 @@ async def promo_deactivate(
         "by": admin.get("sub"),
     })
     return {"ok": True}
+
+
+@router.post("/{promo_id}/activate")
+async def promo_reactivate(
+    promo_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """Re-enable a previously deactivated promocode. Clears the
+    deleted_at marker and flips is_active back to true."""
+    try:
+        ok = await database.reactivate_promocode(promo_id=promo_id)
+    except Exception as e:
+        raise HTTPException(500, f"promo_reactivate_failed: {e}")
+    if not ok:
+        raise HTTPException(404, "Promo not found")
+    bus.publish({
+        "type": "promo:reactivated",
+        "promo_id": promo_id,
+        "by": admin.get("sub"),
+    })
+    return {"ok": True}
