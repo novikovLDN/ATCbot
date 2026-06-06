@@ -15,8 +15,48 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Optional
 
 from aiogram import Bot
+
+# Running task registry — broadcast_id → asyncio.Task. Allows the
+# /broadcasts/{id}/delete-from-users/cancel endpoint to call .cancel()
+# on the worker; finished tasks evict themselves.
+_RUNNING: dict[int, asyncio.Task] = {}
+
+
+def get_running_task(broadcast_id: int) -> Optional[asyncio.Task]:
+    t = _RUNNING.get(broadcast_id)
+    if t and t.done():
+        _RUNNING.pop(broadcast_id, None)
+        return None
+    return t
+
+
+def is_running(broadcast_id: int) -> bool:
+    return get_running_task(broadcast_id) is not None
+
+
+def register_task(broadcast_id: int, task: asyncio.Task) -> None:
+    _RUNNING[broadcast_id] = task
+
+    def _cleanup(_t):
+        # Drop ourselves once we're done, no matter why (cancelled,
+        # exception, success).
+        if _RUNNING.get(broadcast_id) is task:
+            _RUNNING.pop(broadcast_id, None)
+
+    task.add_done_callback(_cleanup)
+
+
+def cancel_running(broadcast_id: int) -> bool:
+    """Stop the in-progress deleter for this broadcast. Returns True if
+    a cancellation was actually sent."""
+    t = get_running_task(broadcast_id)
+    if t is None:
+        return False
+    t.cancel()
+    return True
 
 import database
 from app.events import bus
@@ -132,6 +172,33 @@ async def delete_broadcast_from_users(
         )
         return {"ok": True, "deleted": deleted, "failed": failed, "total": total}
 
+    except asyncio.CancelledError:
+        # Admin pressed Стоп. Persist the partial progress so the row
+        # status is honest, publish the final delta and re-raise so
+        # the task is marked cancelled in the registry.
+        logger.info(
+            "BROADCAST_DELETE_CANCELLED bid=%s processed=%s/%s deleted=%s failed=%s",
+            broadcast_id, processed, total, deleted, failed,
+        )
+        try:
+            await database._log_audit_event_atomic_standalone(
+                "broadcast_delete_cancelled",
+                admin_telegram_id,
+                None,
+                f"Broadcast {broadcast_id}: processed={processed}/{total}, "
+                f"deleted={deleted}, failed={failed}",
+            )
+        except Exception:
+            pass
+        bus.publish({
+            "type": "broadcast:delete_cancelled",
+            "broadcast_id": broadcast_id,
+            "processed": processed,
+            "total": total,
+            "deleted": deleted,
+            "failed": failed,
+        })
+        raise
     except Exception as e:
         logger.exception("BROADCAST_DELETE_FATAL bid=%s: %s", broadcast_id, e)
         bus.publish({

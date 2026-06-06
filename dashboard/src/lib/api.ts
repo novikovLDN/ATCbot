@@ -181,6 +181,8 @@ export const endpoints = {
     api.post<{ ok: boolean; broadcast_id: number; total_messages: number }>(
       `/broadcasts/${id}/delete-from-users`,
     ),
+  broadcastDeleteCancel: (id: number) =>
+    api.post<{ ok: boolean }>(`/broadcasts/${id}/delete-from-users/cancel`),
   broadcastCreate: (body: {
     title: string;
     message: string;
