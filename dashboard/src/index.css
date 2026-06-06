@@ -151,7 +151,10 @@
   /* Big stat number — matches the +2.3h / 15.1 h / 8h 35m feel.
      Lighter optical weight than ui-text via tightened tracking. */
   .stat-num {
-    @apply text-3xl font-semibold tracking-[-0.04em] text-fg md:text-4xl;
+    /* Was text-3xl/4xl — too big for long Russian ruble values on
+       cards, the number truncated to "65 4..." on Payments / 24h
+       tiles. text-2xl/3xl reads as a hero KPI without overflow. */
+    @apply text-2xl font-semibold tracking-[-0.03em] text-fg md:text-3xl;
   }
   .stat-pill {
     @apply inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5
