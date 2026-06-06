@@ -144,10 +144,23 @@ export interface PushSubscriptionRow {
 export const listPushSubscriptions = () =>
   api.get<PushSubscriptionRow[]>("/settings/push/subscriptions");
 
+export interface PushTestError {
+  host: string;
+  status: number;
+  reason: string;
+  detail?: string;
+}
+
+export interface PushTestResult {
+  sent: number;
+  failed: number;
+  removed: number;
+  total: number;
+  errors?: PushTestError[];
+}
+
 export const sendPushTest = () =>
-  api.post<{ sent: number; failed: number; removed: number; total: number }>(
-    "/settings/push/test",
-  );
+  api.post<PushTestResult>("/settings/push/test");
 
 function deriveDeviceLabel(): string {
   const ua = navigator.userAgent;

@@ -261,16 +261,47 @@ function PushSection() {
   const test = useMutation({
     mutationFn: () => sendPushTest(),
     onSuccess: (r) => {
-      if (r.sent === 0 && r.total === 0) {
+      if (r.total === 0) {
         toast.info("Нет подключённых устройств");
-      } else {
+        return;
+      }
+      if (r.sent > 0) {
         toast.success(
           `Отправлено ${r.sent} / ${r.total}` +
             (r.removed > 0 ? ` · покинутых ${r.removed}` : ""),
         );
+        if (r.failed > 0 && r.errors?.length) {
+          const first = r.errors[0];
+          toast.error(
+            `Часть упала: ${first.host} → ${first.reason}${
+              first.status ? ` (${first.status})` : ""
+            }`,
+          );
+        }
+        return;
+      }
+      // sent === 0 — everything failed. Surface the first error so
+      // the admin can diagnose (404/410 = "пересоздай подписку",
+      // 401/403 = VAPID mismatch, etc.)
+      const first = r.errors?.[0];
+      if (first) {
+        const summary = `${first.host || "push"} → ${first.reason}${
+          first.status ? ` (HTTP ${first.status})` : ""
+        }`;
+        if (r.removed > 0) {
+          toast.error(
+            "Подписка устарела — переподключи push на этом устройстве. " +
+              summary,
+          );
+        } else {
+          toast.error("Push не прошёл: " + summary);
+        }
+      } else {
+        toast.error(`Отправлено 0 / ${r.total}`);
       }
     },
-    onError: () => toast.error("Не удалось отправить"),
+    onError: (e: unknown) =>
+      toast.error("Не удалось отправить: " + ((e as Error)?.message ?? "")),
   });
 
   if (!supported) {
