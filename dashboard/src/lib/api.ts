@@ -123,6 +123,10 @@ export const endpoints = {
   statsRevenue: () => api.get<RevenueStats>("/stats/revenue"),
   statsPeriod: (hours: number) =>
     api.get<Record<string, number>>(`/stats/period?hours=${hours}`),
+  statsPeriodSince: (sinceIso: string) =>
+    api.get<Record<string, number>>(
+      `/stats/period?since=${encodeURIComponent(sinceIso)}`,
+    ),
   statsBreakdown: () => api.get<Record<string, unknown>>("/stats/purchase-breakdown"),
   statsPromo: () => api.get<unknown[]>("/stats/promo"),
 
@@ -274,6 +278,13 @@ export const endpoints = {
       avg_check_rubles: number;
       by_type: Record<string, { count: number; revenue_rubles: number }>;
     }>(`/payments/revenue?hours=${hours}`),
+  paymentsRevenueSince: (sinceIso: string) =>
+    api.get<{
+      revenue_rubles: number;
+      payments_count: number;
+      avg_check_rubles: number;
+      by_type: Record<string, { count: number; revenue_rubles: number }>;
+    }>(`/payments/revenue?since=${encodeURIComponent(sinceIso)}`),
   paymentsByProvider: (hours: number) =>
     api.get<Array<{ provider: string; count: number; revenue_rubles: number }>>(
       `/payments/by-provider?hours=${hours}`,

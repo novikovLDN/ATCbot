@@ -6,14 +6,30 @@ and `database.subscriptions`. We don't compute anything new here —
 the bot already has full coverage, we just expose it over HTTP.
 
 Time-range params accept a trailing-window in hours: `?hours=24`,
-`?hours=720` etc. The DB layer already handles aggregation.
+`?hours=720` etc. Routes that need a calendar-day window also accept
+`?since=<ISO datetime>` which overrides `hours` and uses that as an
+absolute lower bound (used for the "Сегодня (МСК)" dashboard tile).
 """
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 import database
 from app.api.dashboard.deps import require_admin
 
 router = APIRouter(dependencies=[Depends(require_admin)])
+
+
+def _parse_since(since: str | None) -> datetime | None:
+    if not since:
+        return None
+    try:
+        dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "invalid_since")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 @router.get("/overview")
@@ -67,10 +83,17 @@ async def stats_revenue():
 
 
 @router.get("/period")
-async def stats_period(hours: int = Query(24, gt=0, le=8760)):
-    """Trailing-window aggregates. `hours` capped at one year."""
+async def stats_period(
+    hours: int = Query(24, gt=0, le=8760),
+    since: str | None = Query(None),
+):
+    """Aggregates over [since, now) or trailing `hours` window.
+    `hours` capped at one year. `since` is an ISO datetime — when
+    supplied it overrides `hours`."""
     try:
-        return await database.get_analytics_by_period(hours)
+        return await database.get_analytics_by_period(
+            hours, since=_parse_since(since),
+        )
     except Exception as e:
         raise HTTPException(500, f"period_failed: {e}")
 

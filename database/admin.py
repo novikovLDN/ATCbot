@@ -325,8 +325,15 @@ async def get_broadcast_discount(broadcast_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
-async def get_analytics_by_period(hours: int) -> Dict[str, Any]:
-    """Получить аналитику за указанный период (в часах).
+async def get_analytics_by_period(
+    hours: int,
+    since: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Получить аналитику за указанный период.
+
+    Если `since` задан — окно [since, now). Иначе trailing `hours` часов
+    от текущего момента (старое поведение). `since` нужен дашборду,
+    чтобы считать «сегодня по МСК» (UTC+3) — окно с 00:00 МСК.
 
     Returns:
         Словарь с ключами:
@@ -338,8 +345,8 @@ async def get_analytics_by_period(hours: int) -> Dict[str, Any]:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        now = datetime.now(timezone.utc)
-        since = now - timedelta(hours=hours)
+        if since is None:
+            since = datetime.now(timezone.utc) - timedelta(hours=hours)
         since_db = _to_db_utc(since)
 
         new_users = await conn.fetchval(
@@ -402,8 +409,14 @@ async def get_active_paid_subscriptions_count() -> int:
         return 0
 
 
-async def get_revenue_for_period(hours: int) -> Dict[str, Any]:
-    """Money in over the last N hours from paid pending_purchases.
+async def get_revenue_for_period(
+    hours: int,
+    since: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Money in over the window from paid pending_purchases.
+
+    If `since` is given, the lower bound is that exact moment (used for
+    "today MSK" tile on the dashboard). Otherwise — trailing N hours.
 
     Returns totals (rubles) + counts split by purchase_type so the
     UI can render a single KPI for the period plus a small breakdown.
@@ -416,7 +429,9 @@ async def get_revenue_for_period(hours: int) -> Dict[str, Any]:
             "avg_check_rubles": 0.0,
             "by_type": {},
         }
-    since = _to_db_utc(datetime.now(timezone.utc) - timedelta(hours=hours))
+    if since is None:
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    since = _to_db_utc(since)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """SELECT
