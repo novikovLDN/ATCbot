@@ -114,15 +114,15 @@ export function Dashboard() {
     <div className="space-y-6">
       <header className="flex items-end justify-between gap-4">
         <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Дашборд
-          </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg md:text-3xl">
+          <div className="text-[11px] font-medium uppercase tracking-[0.15em] text-fg-subtle">
             Atlas Secure
+          </div>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-fg md:text-[40px] md:leading-[1.05]">
+            Добро пожаловать
           </h1>
-        </div>
-        <div className="hidden text-right text-xs text-fg-muted md:block">
-          Данные обновляются автоматически
+          <p className="mt-2 text-sm text-fg-muted">
+            Сводка по боту обновляется в реальном времени.
+          </p>
         </div>
       </header>
 

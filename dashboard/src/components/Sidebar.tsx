@@ -43,7 +43,7 @@ export function Sidebar() {
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-bg-subtle/40 px-4 py-6 md:flex">
       <div className="mb-8 flex items-center gap-3 px-2">
-        <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-accent to-violet-500 text-white shadow-[0_4px_12px_-2px_rgba(99,102,241,0.4)]">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-accent to-secondary text-bg shadow-glow-sm">
           <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={2.5} />
         </div>
         <div>
@@ -52,6 +52,9 @@ export function Sidebar() {
         </div>
       </div>
 
+      <div className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-fg-subtle">
+        Main
+      </div>
       <nav className="flex flex-1 flex-col gap-1">
         {items.map((it) => (
           <NavLink
@@ -62,7 +65,10 @@ export function Sidebar() {
               cn(
                 "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
                 isActive
-                  ? "bg-accent/15 text-fg shadow-[inset_0_0_0_1px_rgba(99,102,241,0.25)]"
+                  // Holo-style highlight: horizontal lime→cyan gradient
+                  // with soft glow underneath. Foreground stays dark so
+                  // the icon + label read crisp on the bright fill.
+                  ? "bg-gradient-to-r from-accent/85 via-accent/40 to-secondary/35 text-bg shadow-glow-sm ring-1 ring-accent/40"
                   : "text-fg-muted hover:bg-bg-card hover:text-fg",
               )
             }
@@ -72,17 +78,17 @@ export function Sidebar() {
                 <it.icon
                   className={cn(
                     "h-4 w-4 transition-colors",
-                    isActive ? "text-accent" : "text-fg-subtle group-hover:text-fg-muted",
+                    isActive ? "text-bg" : "text-fg-subtle group-hover:text-fg-muted",
                   )}
+                  strokeWidth={isActive ? 2.5 : 2}
                 />
-                <span className="flex-1">{it.label}</span>
+                <span className={cn("flex-1", isActive && "font-semibold")}>
+                  {it.label}
+                </span>
                 {it.badge && (
                   <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-fg-subtle">
                     {it.badge}
                   </span>
-                )}
-                {isActive && (
-                  <span className="absolute -left-4 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-accent" />
                 )}
               </>
             )}

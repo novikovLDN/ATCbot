@@ -29,13 +29,13 @@ export function LiveIndicator() {
       <span
         className={
           status === "live"
-            ? "h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow"
+            ? "h-1.5 w-1.5 rounded-full bg-accent animate-pulse-glow"
             : status === "offline"
             ? "h-1.5 w-1.5 rounded-full bg-danger"
             : "h-1.5 w-1.5 rounded-full bg-warning"
         }
       />
-      <span className="text-fg-muted">
+      <span className={status === "live" ? "text-accent" : "text-fg-muted"}>
         {status === "live" ? "Live" : status === "offline" ? "Offline" : "..."}
       </span>
     </div>

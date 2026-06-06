@@ -11,16 +11,19 @@
 
   body {
     font-feature-settings: "cv11", "ss01", "ss03";
+    /* Subtle lime-tinged glow off the top-left to mimic the Holo
+       reference's "soft halo" canvas. */
     background:
-      radial-gradient(ellipse 80% 50% at 20% 0%, rgba(99, 102, 241, 0.08), transparent 60%),
-      radial-gradient(ellipse 60% 50% at 90% 100%, rgba(139, 92, 246, 0.05), transparent 50%),
-      rgb(9 11 16);
+      radial-gradient(ellipse 80% 60% at 18% -10%, rgba(171, 244, 63, 0.06), transparent 60%),
+      radial-gradient(ellipse 60% 60% at 90% 100%, rgba(63, 244, 229, 0.04), transparent 50%),
+      rgb(9 9 9);
     min-height: 100vh;
+    letter-spacing: -0.01em;
   }
 
   ::selection {
-    background-color: rgb(99 102 241 / 0.35);
-    color: white;
+    background-color: rgba(171, 244, 63, 0.3);
+    color: rgb(245 245 247);
   }
 
   /* Scrollbar */
@@ -32,45 +35,72 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgb(38 42 54);
+    background: rgb(38 38 42);
     border-radius: 8px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgb(56 60 72);
+    background: rgb(56 56 64);
     background-clip: padding-box;
     border: 2px solid transparent;
+  }
+
+  /* Big headlines feel right in the reference — tighter tracking,
+     heavier optical weight. */
+  h1, h2, h3 {
+    letter-spacing: -0.02em;
   }
 }
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-border bg-bg-card/70 backdrop-blur-sm shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_8px_24px_-12px_rgba(0,0,0,0.5)];
+    @apply rounded-2xl border border-border bg-bg-card/70 backdrop-blur-sm
+           shadow-card;
   }
   .card-hover {
     @apply transition-all duration-200 hover:border-border hover:bg-bg-elevated/80;
   }
+
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2
+           text-sm font-medium tracking-tight transition-all duration-150
+           disabled:cursor-not-allowed disabled:opacity-50;
   }
+  /* Lime-on-dark primary — matches the Holo "Add Event", "Try AI Time
+     Estimation", "Review AI Tip" CTAs. Glow shadow underneath. */
   .btn-primary {
-    @apply btn bg-accent text-white shadow-[0_1px_0_rgba(255,255,255,0.2)_inset,0_4px_12px_-2px_rgba(99,102,241,0.4)] hover:bg-accent-hover active:translate-y-px;
+    @apply btn bg-accent text-bg font-semibold
+           shadow-glow-sm
+           hover:bg-accent-hover hover:shadow-glow
+           active:translate-y-px;
   }
   .btn-secondary {
-    @apply btn border border-border bg-bg-card text-fg hover:bg-bg-elevated hover:border-fg-subtle;
+    @apply btn border border-border bg-bg-card text-fg
+           hover:bg-bg-elevated hover:border-fg-subtle;
   }
   .btn-danger {
-    @apply btn border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20 hover:border-danger/50;
+    @apply btn border border-danger/30 bg-danger/10 text-danger
+           hover:bg-danger/20 hover:border-danger/50;
   }
   .btn-ghost {
     @apply btn text-fg-muted hover:bg-bg-card hover:text-fg;
   }
-  .input {
-    @apply w-full rounded-xl border border-border bg-bg-card px-4 py-2.5 text-sm text-fg placeholder:text-fg-subtle outline-none transition-colors focus:border-accent focus:ring-1 focus:ring-accent/30;
+  /* Cyan-tinted action — for AI/info-style CTAs ("AI Insights", info chips). */
+  .btn-info {
+    @apply btn border border-secondary/30 bg-secondary/10 text-secondary
+           hover:bg-secondary/20 hover:border-secondary/50;
   }
+
+  .input {
+    @apply w-full rounded-xl border border-border bg-bg-card px-4 py-2.5
+           text-sm text-fg placeholder:text-fg-subtle outline-none
+           transition-colors focus:border-accent focus:ring-1 focus:ring-accent/30;
+  }
+
   .badge {
-    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1
+           text-xs font-medium;
   }
   .badge-success {
     @apply badge bg-success/12 text-success ring-1 ring-success/20;
@@ -85,6 +115,35 @@
     @apply badge bg-bg-elevated text-fg-muted ring-1 ring-border;
   }
   .badge-accent {
-    @apply badge bg-accent/12 text-accent ring-1 ring-accent/20;
+    @apply badge bg-accent/15 text-accent ring-1 ring-accent/25;
+  }
+  .badge-info {
+    @apply badge bg-secondary/12 text-secondary ring-1 ring-secondary/25;
+  }
+  /* Holo-style category tags — used for tariff / status / segment chips. */
+  .tag-purple {
+    @apply badge bg-tagpurple/15 text-tagpurple ring-1 ring-tagpurple/25;
+  }
+  .tag-blue {
+    @apply badge bg-tagblue/15 text-tagblue ring-1 ring-tagblue/25;
+  }
+  .tag-green {
+    @apply badge bg-taggreen/15 text-taggreen ring-1 ring-taggreen/25;
+  }
+  .tag-amber {
+    @apply badge bg-tagamber/15 text-tagamber ring-1 ring-tagamber/25;
+  }
+  .tag-rose {
+    @apply badge bg-tagrose/15 text-tagrose ring-1 ring-tagrose/25;
+  }
+
+  /* Big stat number — matches the +2.3h / 15.1 h / 8h 35m feel.
+     Lighter optical weight than ui-text via tightened tracking. */
+  .stat-num {
+    @apply text-3xl font-semibold tracking-[-0.04em] text-fg md:text-4xl;
+  }
+  .stat-pill {
+    @apply inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5
+           text-[11px] font-semibold text-bg shadow-glow-sm;
   }
 }

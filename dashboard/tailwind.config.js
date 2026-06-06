@@ -6,6 +6,7 @@ export default {
     extend: {
       fontFamily: {
         sans: [
+          "Fustat",
           "Inter",
           "system-ui",
           "-apple-system",
@@ -23,35 +24,57 @@ export default {
         ],
       },
       colors: {
+        // Deep black canvas, near-black surfaces. The reference uses
+        // pure #090909 background with extremely subtle layering;
+        // surfaces only step up by ~5-8 lightness.
         bg: {
-          DEFAULT: "rgb(9 11 16)",
-          subtle: "rgb(14 17 24)",
-          card: "rgb(20 23 32)",
-          elevated: "rgb(28 32 42)",
+          DEFAULT: "rgb(9 9 9)",
+          subtle: "rgb(14 14 14)",
+          card: "rgb(20 20 22)",
+          elevated: "rgb(28 28 32)",
         },
         border: {
-          DEFAULT: "rgb(38 42 54)",
-          subtle: "rgb(28 32 42)",
+          DEFAULT: "rgb(38 38 42)",
+          subtle: "rgb(28 28 32)",
         },
         fg: {
-          DEFAULT: "rgb(237 240 245)",
-          muted: "rgb(156 163 175)",
-          subtle: "rgb(107 114 128)",
+          DEFAULT: "rgb(245 245 247)",
+          muted: "rgb(160 160 165)",
+          subtle: "rgb(110 110 115)",
         },
+        // Lime green primary — bright, almost neon. Pairs with dark
+        // text (text-bg) for legibility on filled buttons.
         accent: {
-          DEFAULT: "rgb(99 102 241)",
-          hover: "rgb(129 140 248)",
+          DEFAULT: "#ABF43F",
+          hover: "#BDF55F",
+          dark: "#7CCC10",
         },
-        success: "rgb(34 197 94)",
-        danger: "rgb(239 68 68)",
-        warning: "rgb(250 204 21)",
+        // Cyan secondary for ai/info accents.
+        secondary: {
+          DEFAULT: "#3FF4E5",
+          hover: "#5DF7EA",
+        },
+        success: "#22C55E",
+        danger: "#EF4444",
+        warning: "#FACC15",
+        // Category tag tints — used by tag-* badges so different
+        // segments get a distinct vibe without screaming.
+        tagpurple: "#A855F7",
+        tagblue: "#3B82F6",
+        taggreen: "#22C55E",
+        tagamber: "#F59E0B",
+        tagrose: "#F43F5E",
       },
       opacity: {
-        // Custom mid-stops — Tailwind's default scale skips 12/15/35
-        // but the dashboard uses them liberally for subtle tints.
         "12": "0.12",
         "15": "0.15",
+        "18": "0.18",
         "35": "0.35",
+      },
+      boxShadow: {
+        glow: "0 4px 24px -2px rgba(171,244,63,0.45)",
+        "glow-sm": "0 2px 12px -2px rgba(171,244,63,0.35)",
+        card: "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -12px rgba(0,0,0,0.6)",
       },
       animation: {
         "pulse-glow": "pulse-glow 2.5s ease-in-out infinite",
@@ -60,8 +83,14 @@ export default {
       },
       keyframes: {
         "pulse-glow": {
-          "0%, 100%": { opacity: "1", boxShadow: "0 0 0 0 rgba(99,102,241,0.4)" },
-          "50%": { opacity: "0.8", boxShadow: "0 0 0 8px rgba(99,102,241,0)" },
+          "0%, 100%": {
+            opacity: "1",
+            boxShadow: "0 0 0 0 rgba(171,244,63,0.5)",
+          },
+          "50%": {
+            opacity: "0.8",
+            boxShadow: "0 0 0 10px rgba(171,244,63,0)",
+          },
         },
         "fade-in": {
           from: { opacity: "0" },
