@@ -144,7 +144,7 @@ async def _open_help_screen(event: Union[Message, CallbackQuery], bot: Bot):
         [InlineKeyboardButton(text="📖 Ответы на частые вопросы", callback_data="faq")],
         [InlineKeyboardButton(text="📲 Инструкции по сервису", callback_data="connect_instruction")],
         [InlineKeyboardButton(text="📞 Контакты", callback_data="help_contacts")],
-        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/Atlas_SupportSecurity")],
+        [InlineKeyboardButton(text="💬 Помощь", url="https://t.me/atlas_suppbot")],
         [InlineKeyboardButton(text=i18n_get_text(language, "common.back"), callback_data="menu_main")],
     ])
     await _send_screen_photo(
