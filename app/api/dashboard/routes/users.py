@@ -108,26 +108,18 @@ async def user_extended_stats(telegram_id: int = Path(..., gt=0)):
 @router.get("/{telegram_id}/payments")
 async def user_payments(
     telegram_id: int = Path(..., gt=0),
-    limit: int = Query(20, gt=0, le=200),
+    limit: int = Query(100, gt=0, le=500),
 ):
-    """Settled + pending payments for a user. Pulled directly from the
-    payments table — there's no DB helper for "by user" yet and inlining
-    keeps the surface area small."""
-    from database.core import get_pool
-    pool = await get_pool()
-    if pool is None:
-        raise HTTPException(503, "db_unavailable")
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT id, telegram_id, tariff, amount, status, source,
-                      created_at, updated_at
-               FROM payments
-               WHERE telegram_id = $1
-               ORDER BY created_at DESC
-               LIMIT $2""",
-            telegram_id, limit,
-        )
-    return [_serialize(dict(r)) for r in rows]
+    """Все покупки пользователя — paid / pending / expired —
+    из pending_purchases (там лежат подписки, traffic-паки, balance,
+    telegram premium, steam, прокси, фарм-участки). Старая таблица
+    `payments` тут не используется: она устарела и пропускает большую
+    часть потоков."""
+    try:
+        rows = await database.get_user_purchases(telegram_id, limit=limit)
+    except Exception as e:
+        raise HTTPException(500, f"payments_failed: {e}")
+    return [_serialize(r) for r in rows]
 
 
 def _serialize(row: dict) -> dict:

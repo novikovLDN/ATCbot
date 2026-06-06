@@ -561,6 +561,55 @@ async def get_recent_payments_feed(
     return out
 
 
+async def get_user_purchases(telegram_id: int, limit: int = 100) -> list:
+    """Все покупки одного пользователя из pending_purchases.
+
+    Этот стол — источник правды для всего, что юзер покупал в боте:
+    подписки (basic / plus / биз-тарифы), trafic-паки, балансовые
+    пополнения, telegram premium, steam, прокси, фарм-участки.
+    Старая таблица payments тоже была, но она устарела и не покрывает
+    весь поток — поэтому в карточке юзера показываем именно
+    pending_purchases.
+
+    Возвращает все строки (paid + pending + expired) свежие первые.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return []
+    sql = """
+        SELECT
+            pp.id, pp.purchase_id, pp.tariff,
+            pp.purchase_type, pp.period_days, pp.price_kopecks,
+            pp.status, pp.created_at, pp.expires_at, pp.promo_code,
+            pp.is_combo, pp.country, pp.farm_plot_id,
+            COALESCE(pp.payment_provider, 'unknown') AS payment_provider,
+            pp.provider_invoice_id
+        FROM pending_purchases pp
+        WHERE pp.telegram_id = $1
+        ORDER BY pp.created_at DESC NULLS LAST
+        LIMIT $2
+    """
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(sql, telegram_id, limit)
+        except asyncpg.UndefinedColumnError:
+            sql_fb = sql.replace(
+                "COALESCE(pp.payment_provider, 'unknown') AS payment_provider,",
+                "'unknown' AS payment_provider,",
+            )
+            rows = await conn.fetch(sql_fb, telegram_id, limit)
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("created_at"):
+            d["created_at"] = _from_db_utc(d["created_at"])
+        if d.get("expires_at"):
+            d["expires_at"] = _from_db_utc(d["expires_at"])
+        d["price_rubles"] = (d.get("price_kopecks") or 0) / 100
+        out.append(d)
+    return out
+
+
 async def log_payment_error(
     *,
     stage: str,

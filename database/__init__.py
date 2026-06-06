@@ -257,6 +257,7 @@ from database.admin import (  # noqa: F401
     get_revenue_for_period,
     get_payments_by_provider,
     get_recent_payments_feed,
+    get_user_purchases,
     get_traffic_stats,
     log_payment_error,
     get_recent_payment_errors,

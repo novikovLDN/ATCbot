@@ -803,30 +803,53 @@ function BalanceCard({
 function PaymentsCard({ telegramId }: { telegramId: number }) {
   const payments = useQuery({
     queryKey: ["users", "payments", telegramId],
-    queryFn: () => endpoints.userPayments(telegramId, 20),
+    queryFn: () => endpoints.userPayments(telegramId, 100),
   });
+
+  const rows = (payments.data ?? []) as PurchaseRow[];
+  const paidTotal = rows
+    .filter((p) => p.status === "paid")
+    .reduce((s, p) => s + (p.price_rubles ?? 0), 0);
+  const paidCount = rows.filter((p) => p.status === "paid").length;
+  const pendingCount = rows.filter((p) => p.status === "pending").length;
 
   return (
     <div className="card p-5">
-      <div className="mb-3 flex items-center justify-between">
-        <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
           <div className="text-xs uppercase tracking-wider text-fg-subtle">
-            История платежей
+            История покупок
           </div>
-          <h3 className="text-base font-semibold text-fg">Последние 20</h3>
+          <h3 className="text-base font-semibold text-fg">
+            Все операции в боте
+          </h3>
+          <div className="mt-1 text-xs text-fg-muted">
+            оплачено {paidCount} · потрачено {fmtRub(paidTotal)}
+            {pendingCount > 0 && ` · в ожидании ${pendingCount}`}
+          </div>
         </div>
-        {payments.isFetching && <Spinner />}
+        <div className="flex shrink-0 items-center gap-2">
+          {payments.isFetching && <Spinner />}
+          <button
+            type="button"
+            onClick={() => payments.refetch()}
+            className="btn-ghost"
+            aria-label="Обновить"
+          >
+            <RefreshCcw className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {payments.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-fg-muted">
           <Spinner /> Загружаю...
         </div>
-      ) : !payments.data || payments.data.length === 0 ? (
+      ) : rows.length === 0 ? (
         <EmptyState
           icon={Wallet}
-          title="Платежей нет"
-          description="Пользователь ещё ничего не покупал"
+          title="Покупок нет"
+          description="Пользователь ещё ничего не покупал — ни подписку, ни traffic-паки, ни пополнение баланса."
         />
       ) : (
         <div className="-mx-2 overflow-x-auto">
@@ -834,28 +857,57 @@ function PaymentsCard({ telegramId }: { telegramId: number }) {
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-fg-subtle">
                 <th className="px-2 py-2 font-medium">Дата</th>
-                <th className="px-2 py-2 font-medium">Тариф</th>
+                <th className="px-2 py-2 font-medium">Что куплено</th>
                 <th className="px-2 py-2 font-medium">Сумма</th>
+                <th className="px-2 py-2 font-medium">Провайдер</th>
+                <th className="px-2 py-2 font-medium">Промо</th>
                 <th className="px-2 py-2 font-medium">Статус</th>
-                <th className="px-2 py-2 font-medium">Источник</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
-              {payments.data.map((p) => (
-                <tr key={String(p.id ?? Math.random())} className="hover:bg-accent/[0.04]">
-                  <td className="px-2 py-2 text-fg-muted">
-                    {fmtDate(String(p.created_at ?? ""))}
+              {rows.map((p) => (
+                <tr
+                  key={String(p.id ?? p.purchase_id ?? Math.random())}
+                  className="hover:bg-accent/[0.04]"
+                >
+                  <td className="px-2 py-2 align-top text-fg-muted whitespace-nowrap">
+                    {fmtDate(p.created_at)}
                   </td>
-                  <td className="px-2 py-2 text-fg">{String(p.tariff ?? "—")}</td>
-                  <td className="px-2 py-2 text-fg">
-                    {typeof p.amount === "number"
-                      ? fmtRub(p.amount / 100)
-                      : String(p.amount ?? "—")}
+                  <td className="px-2 py-2 align-top">
+                    <div className="font-medium text-fg">
+                      {purchaseLabel(p)}
+                    </div>
+                    {p.purchase_id && (
+                      <div
+                        className="mt-0.5 font-mono text-[10px] text-fg-subtle"
+                        title={p.purchase_id}
+                      >
+                        {p.purchase_id.length > 22
+                          ? p.purchase_id.slice(0, 22) + "…"
+                          : p.purchase_id}
+                      </div>
+                    )}
                   </td>
-                  <td className="px-2 py-2">
-                    <PaymentStatus status={String(p.status ?? "")} />
+                  <td className="px-2 py-2 align-top font-mono text-fg whitespace-nowrap">
+                    {typeof p.price_rubles === "number"
+                      ? fmtRub(p.price_rubles)
+                      : "—"}
                   </td>
-                  <td className="px-2 py-2 text-fg-muted">{String(p.source ?? "—")}</td>
+                  <td className="px-2 py-2 align-top text-fg-muted whitespace-nowrap">
+                    {providerLabel(p.payment_provider)}
+                  </td>
+                  <td className="px-2 py-2 align-top">
+                    {p.promo_code ? (
+                      <span className="badge-accent font-mono text-[10px]">
+                        {p.promo_code}
+                      </span>
+                    ) : (
+                      <span className="text-fg-subtle">—</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 align-top">
+                    <PaymentStatus status={p.status ?? ""} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -866,12 +918,83 @@ function PaymentsCard({ telegramId }: { telegramId: number }) {
   );
 }
 
+interface PurchaseRow {
+  id?: number;
+  purchase_id?: string;
+  tariff?: string | null;
+  purchase_type?: string | null;
+  period_days?: number | null;
+  price_kopecks?: number | null;
+  price_rubles?: number | null;
+  status?: string;
+  created_at?: string | null;
+  expires_at?: string | null;
+  promo_code?: string | null;
+  is_combo?: boolean | null;
+  country?: string | null;
+  farm_plot_id?: number | null;
+  payment_provider?: string | null;
+  provider_invoice_id?: string | null;
+}
+
+const TARIFF_RU: Record<string, string> = {
+  basic: "Basic",
+  plus: "Plus",
+  biz_starter: "Biz Starter",
+  biz_team: "Biz Team",
+  biz_business: "Biz Business",
+  biz_pro: "Biz Pro",
+  biz_enterprise: "Biz Enterprise",
+  biz_ultimate: "Biz Ultimate",
+};
+
+function purchaseLabel(p: PurchaseRow): string {
+  const t = p.purchase_type ?? "subscription";
+  if (t === "subscription") {
+    const tariff = p.tariff ? TARIFF_RU[p.tariff] ?? p.tariff : "Подписка";
+    const period = p.period_days ? ` · ${p.period_days} дн` : "";
+    const combo = p.is_combo ? " (комбо)" : "";
+    return `${tariff}${period}${combo}`;
+  }
+  if (t === "traffic_pack") {
+    return p.country
+      ? `Traffic-пак · ${p.country.toUpperCase()}`
+      : "Traffic-пак";
+  }
+  if (t === "balance_topup") return "Пополнение баланса";
+  if (t === "telegram_premium") return "Telegram Premium";
+  if (t === "steam") return "Steam пополнение";
+  if (t === "proxy") return "Прокси";
+  if (t === "farm_plot") {
+    return p.farm_plot_id
+      ? `Фарм-участок #${p.farm_plot_id}`
+      : "Фарм-участок";
+  }
+  return t;
+}
+
+const PROVIDER_RU: Record<string, string> = {
+  platega: "Platega",
+  cryptobot: "CryptoBot",
+  telegram_stars: "Stars",
+  lava: "Lava",
+  balance: "С баланса",
+  unknown: "—",
+};
+
+function providerLabel(p: string | null | undefined): string {
+  if (!p) return "—";
+  return PROVIDER_RU[p] ?? p;
+}
+
 function PaymentStatus({ status }: { status: string }) {
   const s = status.toLowerCase();
   if (s === "approved" || s === "paid")
-    return <span className="badge-success">{status}</span>;
+    return <span className="badge-success">оплачено</span>;
   if (s === "pending" || s === "processing")
-    return <span className="badge-warning">{status}</span>;
+    return <span className="badge-warning">ожидает</span>;
+  if (s === "expired")
+    return <span className="badge-muted">истёк</span>;
   if (s === "failed" || s === "rejected" || s === "cancelled")
     return <span className="badge-danger">{status}</span>;
   return <span className="badge-muted">{status || "—"}</span>;
