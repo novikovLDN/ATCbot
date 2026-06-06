@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Users as UsersIcon,
@@ -12,7 +12,13 @@ import {
 } from "lucide-react";
 import { endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
-import { fmtNum, fmtRub, fmtRelative } from "@/lib/format";
+import {
+  fmtNum,
+  fmtRub,
+  fmtRelative,
+  mskDayKey,
+  mskTodayStartIso,
+} from "@/lib/format";
 import { StatCard } from "@/components/StatCard";
 import { EmptyState } from "@/components/EmptyState";
 
@@ -38,17 +44,30 @@ export function Dashboard() {
     queryFn: endpoints.statsRevenue,
     refetchInterval: 60000,
   });
+  // "Сегодня (МСК)" — calendar day window from 00:00 to 23:59 Europe/Moscow.
+  // Resets daily at MSK midnight: the queryKey segment flips when the
+  // MSK day changes, which forces a fresh fetch even if the user keeps
+  // the tab open overnight.
+  const [todayKey, setTodayKey] = useState(mskDayKey());
+  useEffect(() => {
+    const t = setInterval(() => {
+      const k = mskDayKey();
+      setTodayKey((prev) => (prev === k ? prev : k));
+    }, 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const todaySince = mskTodayStartIso();
   const today = useQuery({
-    queryKey: ["stats", "period", 24],
-    queryFn: () => endpoints.statsPeriod(24),
+    queryKey: ["stats", "period", "msk-today", todayKey],
+    queryFn: () => endpoints.statsPeriodSince(todaySince),
     refetchInterval: 60000,
   });
   // get_analytics_by_period doesn't compute revenue / payments — pull
-  // those from /payments/revenue so the 24h tile matches what's on
+  // those from /payments/revenue so the "today" tile matches what's on
   // the Payments page rather than reading missing fields.
   const today24Revenue = useQuery({
-    queryKey: ["payments", "revenue", 24],
-    queryFn: () => endpoints.paymentsRevenue(24),
+    queryKey: ["payments", "revenue", "msk-today", todayKey],
+    queryFn: () => endpoints.paymentsRevenueSince(todaySince),
     refetchInterval: 60000,
   });
 
@@ -174,9 +193,12 @@ export function Dashboard() {
           <div className="mb-4 flex items-center justify-between">
             <div>
               <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-                За 24 часа
+                Сегодня · МСК
               </div>
               <h2 className="text-lg font-semibold text-fg">Активность</h2>
+              <div className="mt-0.5 text-[11px] text-fg-subtle">
+                с 00:00 до 23:59 по Москве · сброс ежедневно в 00:00 МСК
+              </div>
             </div>
             <Clock className="h-4 w-4 text-fg-subtle" />
           </div>

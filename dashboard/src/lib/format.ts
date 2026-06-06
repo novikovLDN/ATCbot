@@ -60,3 +60,27 @@ export function truncate(s: string, max = 32): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + "…";
 }
+
+/** Today's 00:00 Europe/Moscow as a UTC instant.
+ * Moscow is fixed at UTC+3 (no DST since 2014), so we just take
+ * the current UTC time, add 3 hours, floor to the day, subtract
+ * 3 hours back. Returned as an ISO string the backend parses with
+ * datetime.fromisoformat. */
+export function mskTodayStartIso(now: Date = new Date()): string {
+  const mskMs = now.getTime() + 3 * 3600 * 1000;
+  const mskDay = Math.floor(mskMs / 86400000);
+  const startUtcMs = mskDay * 86400000 - 3 * 3600 * 1000;
+  return new Date(startUtcMs).toISOString();
+}
+
+/** Cache key that flips at MSK midnight — "2026-06-06" etc. Use this
+ * as a React Query key segment so the cache invalidates at 00:00 МСК
+ * even if the user keeps the dashboard open overnight. */
+export function mskDayKey(now: Date = new Date()): string {
+  const mskMs = now.getTime() + 3 * 3600 * 1000;
+  const d = new Date(mskMs);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}

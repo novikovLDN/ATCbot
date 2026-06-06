@@ -1,4 +1,5 @@
 """Payments endpoints — KPIs, breakdowns, recent feed, single lookup."""
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
@@ -7,6 +8,18 @@ import database
 from app.api.dashboard.deps import require_admin
 
 router = APIRouter(dependencies=[Depends(require_admin)])
+
+
+def _parse_since(since: Optional[str]) -> Optional[datetime]:
+    if not since:
+        return None
+    try:
+        dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "invalid_since")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _serialize(value):
@@ -33,11 +46,20 @@ async def payments_pending():
 
 
 @router.get("/revenue")
-async def payments_revenue(hours: int = Query(24, gt=0, le=8760)):
-    """Total + per-type revenue for the trailing N hours.
+async def payments_revenue(
+    hours: int = Query(24, gt=0, le=8760),
+    since: Optional[str] = Query(None),
+):
+    """Total + per-type revenue over the window. `since` (ISO datetime)
+    overrides `hours` when present — used by the dashboard "Сегодня (МСК)"
+    tile that resets every day at 00:00 Europe/Moscow.
     Source of truth: pending_purchases (status='paid')."""
     try:
-        return _serialize(await database.get_revenue_for_period(hours))
+        return _serialize(
+            await database.get_revenue_for_period(
+                hours, since=_parse_since(since),
+            )
+        )
     except Exception as e:
         raise HTTPException(500, f"revenue_failed: {e}")
 
