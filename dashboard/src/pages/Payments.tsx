@@ -634,6 +634,11 @@ function PaymentRowItem({ p }: { p: PaymentRow }) {
             <span className="font-medium text-fg">
               {p.username ? `@${String(p.username)}` : `tg:${tg}`}
             </span>
+            {p.username && tg > 0 && (
+              <span className="font-mono text-[11px] text-fg-subtle">
+                tg:{tg}
+              </span>
+            )}
             <StatusBadge status={String(p.status ?? "")} />
             <span className="badge-muted">
               {String(p.purchase_type ?? "—")}

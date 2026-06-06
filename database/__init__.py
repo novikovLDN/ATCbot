@@ -146,6 +146,7 @@ from database.subscriptions import (  # noqa: F401
     generate_promo_code,
     create_promocode_atomic,
     deactivate_promocode,
+    reactivate_promocode,
     _consume_promo_in_transaction,
     validate_promocode_atomic,
     consume_promocode_atomic,

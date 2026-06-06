@@ -256,6 +256,8 @@ export const endpoints = {
     api.post<{ ok: boolean; promo_id: number; code: string }>("/promo", body),
   promoDeactivate: (id: number) =>
     api.del<{ ok: boolean }>(`/promo/${id}`),
+  promoReactivate: (id: number) =>
+    api.post<{ ok: boolean }>(`/promo/${id}/activate`),
 
   paymentsPending: () =>
     api.get<Array<Record<string, unknown>>>("/payments/pending"),

@@ -171,6 +171,11 @@ export function Referrals() {
                           <span className="truncate font-medium text-fg">
                             {r.username ? `@${String(r.username)}` : `tg:${id}`}
                           </span>
+                          {r.username && (
+                            <span className="font-mono text-[11px] text-fg-subtle">
+                              tg:{id}
+                            </span>
+                          )}
                           <span className="badge-muted">
                             {fmtNum(asNum(r.invited_count))} пригл.
                           </span>
