@@ -101,9 +101,77 @@ async def _send_test_sequence(bot):
 
 @router.post("/notifications/test")
 async def settings_test_notifications():
-    """Send one sample of every admin-DM notification we have, with
+    """Send one sample of every admin notification we have, with
     a 1-second pause between them. Returns immediately; the actual
     send is fired as a background task."""
     bot = _get_bot()
     asyncio.create_task(_send_test_sequence(bot))
     return {"ok": True, "count": 3, "delay_seconds": 1.0}
+
+
+# ── Web Push (browser notifications) ────────────────────────────────
+
+
+@router.get("/push/vapid-key")
+async def settings_push_vapid_key():
+    """Public VAPID key for PushManager.subscribe(applicationServerKey)."""
+    from app.services import push_notifications
+    try:
+        return {"publicKey": await push_notifications.get_public_key()}
+    except Exception as e:
+        raise HTTPException(500, f"vapid_key_failed: {e}")
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str = Field(..., min_length=10, max_length=2000)
+    p256dh: str = Field(..., min_length=10, max_length=1000)
+    auth: str = Field(..., min_length=4, max_length=500)
+    user_agent: str = Field("", max_length=300)
+    label: str = Field("", max_length=60)
+
+
+@router.post("/push/subscribe")
+async def settings_push_subscribe(body: PushSubscribeRequest):
+    from app.services import push_notifications
+    ok = await push_notifications.upsert_subscription(
+        endpoint=body.endpoint,
+        p256dh=body.p256dh,
+        auth=body.auth,
+        user_agent=body.user_agent or None,
+        label=body.label or None,
+    )
+    if not ok:
+        raise HTTPException(500, "subscribe_failed")
+    return {"ok": True}
+
+
+class PushUnsubscribeRequest(BaseModel):
+    endpoint: str = Field(..., min_length=10, max_length=2000)
+
+
+@router.post("/push/unsubscribe")
+async def settings_push_unsubscribe(body: PushUnsubscribeRequest):
+    from app.services import push_notifications
+    await push_notifications.remove_subscription(body.endpoint)
+    return {"ok": True}
+
+
+@router.get("/push/subscriptions")
+async def settings_push_subscriptions():
+    from app.services import push_notifications
+    return await push_notifications.list_subscriptions()
+
+
+@router.post("/push/test")
+async def settings_push_test():
+    """Send a single test push to every registered device."""
+    from app.services import push_notifications
+    try:
+        result = await push_notifications.send_to_all(
+            title="🧪 Тестовое уведомление",
+            body="Atlas Admin — пуш-уведомления работают.",
+            tag="atlas-test",
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(500, f"push_test_failed: {e}")

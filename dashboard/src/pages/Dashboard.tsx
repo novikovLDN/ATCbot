@@ -187,10 +187,12 @@ export function Dashboard() {
             />
             <Tile
               label="Доход"
+              tone="success"
               value={fmtRub(today24Revenue.data?.revenue_rubles)}
             />
             <Tile
               label="Средний чек"
+              tone="accent"
               value={fmtRub(today24Revenue.data?.avg_check_rubles)}
             />
             <Tile
@@ -299,11 +301,20 @@ export function Dashboard() {
   );
 }
 
-function Tile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-bg-subtle/60 px-4 py-3">
-      <div className="text-[11px] uppercase tracking-wider text-fg-subtle">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-fg">{value}</div>
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+        {label}
+      </div>
+      <div
+        className={
+          tone === "accent"
+            ? "mt-1 text-xl font-semibold tracking-tight text-accent md:text-2xl"
+            : tone === "success"
+            ? "mt-1 text-xl font-semibold tracking-tight text-success md:text-2xl"
+            : "mt-1 text-xl font-semibold tracking-tight text-fg md:text-2xl"
+        }
+      >
+        {value}
+      </div>
     </div>
   );
 }

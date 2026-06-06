@@ -59,7 +59,18 @@
            shadow-card;
   }
   .card-hover {
-    @apply transition-all duration-200 hover:border-border hover:bg-bg-elevated/80;
+    @apply transition-all duration-200
+           hover:border-accent/30 hover:bg-bg-elevated/80
+           hover:shadow-[0_2px_24px_-12px_rgba(171,244,63,0.25)];
+  }
+  .row-hover {
+    @apply transition-colors hover:bg-accent/[0.04];
+  }
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-0;
+  }
+  .link-accent {
+    @apply text-accent transition-colors hover:text-accent-hover;
   }
 
   .btn {

@@ -1,14 +1,26 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
+  BellRing,
   AlertCircle,
   Megaphone,
   TrendingUp,
   Send,
+  Smartphone,
+  Trash2,
 } from "lucide-react";
 import { ApiError, endpoints } from "@/lib/api";
 import { Spinner } from "@/components/Spinner";
 import { toast } from "@/store/toast";
+import {
+  disablePushOnThisDevice,
+  enablePush,
+  isPushSupported,
+  isSubscribedHere,
+  listPushSubscriptions,
+  sendPushTest,
+} from "@/lib/push";
 
 interface FlagDescriptor {
   key: "payment_error" | "broadcast_done" | "revenue_milestone";
@@ -136,6 +148,8 @@ export function Settings() {
         )}
       </section>
 
+      <PushSection />
+
       <section className="card p-5">
         <div className="mb-3 flex items-center gap-3">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
@@ -146,28 +160,236 @@ export function Settings() {
               Проверка
             </div>
             <h2 className="text-lg font-semibold text-fg">
-              Тестовые уведомления
+              Тестовые уведомления (Telegram)
             </h2>
           </div>
         </div>
 
         <p className="mb-4 text-sm text-fg-muted">
-          Пришлю в личку по одному примеру каждого типа уведомления (ошибка
-          платежа, рассылка завершена, планка дохода) с интервалом 1 секунда.
-          Просто проверка — никаких событий в боте не происходит.
+          Пришлю в личку Telegram по одному примеру каждого типа уведомления
+          с интервалом 1 секунда. Просто проверка — никаких событий в боте
+          не происходит.
         </p>
 
         <button
           type="button"
           onClick={() => test.mutate()}
           disabled={test.isPending}
-          className="btn-primary"
+          className="btn-secondary"
         >
           {test.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
-          Прислать тестовые
+          Прислать в Telegram
         </button>
       </section>
     </div>
+  );
+}
+
+function PushSection() {
+  const qc = useQueryClient();
+  const supported = isPushSupported();
+  const [permission, setPermission] = useState<NotificationPermission>(
+    supported ? Notification.permission : "denied",
+  );
+  const [hereSubscribed, setHereSubscribed] = useState(false);
+
+  useEffect(() => {
+    if (!supported) return;
+    isSubscribedHere().then(setHereSubscribed);
+  }, [supported]);
+
+  const subs = useQuery({
+    queryKey: ["push", "subscriptions"],
+    queryFn: listPushSubscriptions,
+    enabled: supported,
+  });
+
+  const enable = useMutation({
+    mutationFn: () => enablePush(),
+    onSuccess: () => {
+      toast.success("Уведомления включены на этом устройстве");
+      setHereSubscribed(true);
+      setPermission(Notification.permission);
+      qc.invalidateQueries({ queryKey: ["push"] });
+    },
+    onError: (e: unknown) => {
+      const msg = (e as Error).message;
+      if (msg === "permission_denied") {
+        toast.error("Разрешение на уведомления не дано");
+      } else if (msg === "not_supported") {
+        toast.error("Браузер не поддерживает push");
+      } else {
+        toast.error("Не удалось подключить: " + msg);
+      }
+      setPermission(supported ? Notification.permission : "denied");
+    },
+  });
+
+  const disable = useMutation({
+    mutationFn: () => disablePushOnThisDevice(),
+    onSuccess: () => {
+      toast.success("Отключено на этом устройстве");
+      setHereSubscribed(false);
+      qc.invalidateQueries({ queryKey: ["push"] });
+    },
+    onError: () => toast.error("Не удалось отключить"),
+  });
+
+  const removeRemote = useMutation({
+    mutationFn: async (endpoint: string) => {
+      const { api } = await import("@/lib/api");
+      return api.post("/settings/push/unsubscribe", { endpoint });
+    },
+    onSuccess: () => {
+      toast.success("Удалено");
+      qc.invalidateQueries({ queryKey: ["push"] });
+    },
+    onError: () => toast.error("Не удалось удалить"),
+  });
+
+  const test = useMutation({
+    mutationFn: () => sendPushTest(),
+    onSuccess: (r) => {
+      if (r.sent === 0 && r.total === 0) {
+        toast.info("Нет подключённых устройств");
+      } else {
+        toast.success(
+          `Отправлено ${r.sent} / ${r.total}` +
+            (r.removed > 0 ? ` · покинутых ${r.removed}` : ""),
+        );
+      }
+    },
+    onError: () => toast.error("Не удалось отправить"),
+  });
+
+  if (!supported) {
+    return (
+      <section className="card p-5">
+        <div className="flex items-start gap-3">
+          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
+            <BellRing className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+              Браузерные уведомления
+            </div>
+            <h2 className="text-lg font-semibold text-fg">Не поддерживается</h2>
+            <p className="mt-1 text-sm text-fg-muted">
+              Этот браузер не умеет push. Открой в Safari (iOS / macOS) или
+              Chrome.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card p-5">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent">
+          <BellRing className="h-4 w-4" />
+        </div>
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+            Браузерные уведомления
+          </div>
+          <h2 className="text-lg font-semibold text-fg">Push в систему</h2>
+        </div>
+      </div>
+
+      <p className="mb-4 text-sm text-fg-muted">
+        Когда подключено — события приходят как нативные iOS / macOS / Android
+        уведомления. По клику открывается дашборд. Можно подключить разные
+        устройства: телефон, ноутбук, планшет.
+      </p>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {hereSubscribed ? (
+          <>
+            <span className="badge-success">
+              <BellRing className="h-3 w-3" /> Это устройство подключено
+            </span>
+            <button
+              type="button"
+              onClick={() => disable.mutate()}
+              disabled={disable.isPending}
+              className="btn-secondary"
+            >
+              {disable.isPending ? <Spinner /> : null}
+              Отключить здесь
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => enable.mutate()}
+              disabled={enable.isPending}
+              className="btn-primary"
+            >
+              {enable.isPending ? <Spinner /> : <BellRing className="h-3.5 w-3.5" />}
+              Подключить на этом устройстве
+            </button>
+            {permission === "denied" && (
+              <span className="badge-danger">Разрешение отозвано</span>
+            )}
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => test.mutate()}
+          disabled={test.isPending}
+          className="btn-secondary"
+        >
+          {test.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
+          Прислать тестовый push
+        </button>
+      </div>
+
+      {subs.data && subs.data.length > 0 && (
+        <ul className="divide-y divide-border/60">
+          {subs.data.map((s) => (
+            <li
+              key={s.id}
+              className="flex items-center gap-3 py-3 text-sm"
+            >
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated text-fg-muted ring-1 ring-border">
+                <Smartphone className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium text-fg">
+                  {s.label || "Устройство"}
+                </div>
+                <div className="mt-0.5 text-xs text-fg-muted">
+                  {s.user_agent
+                    ? s.user_agent.slice(0, 80)
+                    : new URL(s.endpoint).host}
+                  {s.created_at
+                    ? ` · добавлено ${new Date(s.created_at).toLocaleDateString("ru-RU")}`
+                    : ""}
+                  {s.last_used_at
+                    ? ` · использовано ${new Date(s.last_used_at).toLocaleDateString("ru-RU")}`
+                    : ""}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm("Удалить это устройство?")) {
+                    removeRemote.mutate(s.endpoint);
+                  }
+                }}
+                disabled={removeRemote.isPending}
+                className="btn-ghost text-danger hover:text-danger"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -144,16 +144,23 @@ class _State:
 _state = _State()
 
 
-async def _send(bot: Bot, text: str) -> None:
+async def _dashboard_url(path: str) -> str:
+    base = getattr(config, "DASHBOARD_BASE_URL", "") or ""
+    return base.rstrip("/") + path
+
+
+async def _send(bot: Bot, *, title: str, body: str, tag: str, url: str) -> None:
+    """Primary delivery is browser web-push (system notifications).
+    Telegram DM is intentionally NOT used here — admin opted into web
+    push as the channel. The /settings → "тестовые в Telegram" button
+    still uses the bot directly for the dry-run."""
+    from app.services import push_notifications
     try:
-        await bot.send_message(
-            chat_id=config.ADMIN_TELEGRAM_ID,
-            text=text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+        await push_notifications.send_to_all(
+            title=title, body=body, tag=tag, url=url,
         )
     except Exception as e:
-        logger.warning("admin_notifier send failed: %s", e)
+        logger.warning("admin_notifier push send failed: %s", e)
 
 
 async def _on_payment_error(bot: Bot, e: dict[str, Any]) -> None:
@@ -165,16 +172,20 @@ async def _on_payment_error(bot: Bot, e: dict[str, Any]) -> None:
     key = (stage, provider)
     if not _state.can_send_error(key):
         return
-    text = (
-        "⚠️ <b>Ошибка платежа</b>\n"
-        f"Стадия: <code>{_fmt_stage(stage)}</code>\n"
-        f"Провайдер: <b>{_fmt_provider(provider)}</b>"
-    )
+    body_parts = [
+        f"{_fmt_provider(provider)} · {_fmt_stage(stage)}",
+    ]
     tg = e.get("telegram_id")
     if isinstance(tg, int):
-        text += f"\nUser: <code>tg:{tg}</code>"
-    text += "\n\n<i>/admin → Платежи</i>"
-    await _send(bot, text)
+        body_parts.append(f"tg:{tg}")
+    body = " · ".join(body_parts)
+    await _send(
+        bot,
+        title="⚠️ Ошибка платежа",
+        body=body,
+        tag=f"payment_error:{stage}:{provider}",
+        url=await _dashboard_url("/dashboard/payments"),
+    )
 
 
 async def _on_broadcast_done(bot: Bot, e: dict[str, Any]) -> None:
@@ -185,13 +196,14 @@ async def _on_broadcast_done(bot: Bot, e: dict[str, Any]) -> None:
     sent = int(e.get("sent") or 0)
     failed = int(e.get("failed") or 0)
     total = int(e.get("total") or 0)
-    text = (
-        f"📣 <b>Рассылка #{bid} завершена</b>\n"
-        f"Доставлено: <b>{sent}</b> / {total}\n"
-        f"Не доставлено: <b>{failed}</b>\n\n"
-        "<i>/admin → Рассылки</i>"
+    body = f"Доставлено {sent}/{total}" + (f" · ошибок {failed}" if failed else "")
+    await _send(
+        bot,
+        title=f"📣 Рассылка #{bid} завершена",
+        body=body,
+        tag=f"broadcast_done:{bid}",
+        url=await _dashboard_url("/dashboard/broadcasts"),
     )
-    await _send(bot, text)
 
 
 async def _on_payment_approved(bot: Bot, _e: dict[str, Any]) -> None:
@@ -220,15 +232,16 @@ async def _on_payment_approved(bot: Bot, _e: dict[str, Any]) -> None:
     crossed = _state.milestones_to_fire(revenue_today)
     if not crossed:
         return
-    # Pick the highest crossed milestone — the message is louder and
-    # we don't spam multiple identical-shape congratulations.
     target = crossed[-1]
     phrase = random.choice(PHRASES.get(target, ["Ты молодец! 🦾"]))
-    text = (
-        f"💸 <b>{target:,} ₽ за день</b>\n"
-        f"{phrase}"
-    ).replace(",", " ")
-    await _send(bot, text)
+    title = f"💸 {target:,} ₽ за день".replace(",", " ")
+    await _send(
+        bot,
+        title=title,
+        body=phrase,
+        tag=f"revenue_milestone:{target}",
+        url=await _dashboard_url("/dashboard/payments"),
+    )
 
 
 async def run_admin_notifier(bot: Bot) -> None:
