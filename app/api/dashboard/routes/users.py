@@ -24,29 +24,40 @@ from app.events import bus
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 
-@router.get("/search")
-async def users_search(q: str = Query(..., min_length=1)):
-    """Find by telegram_id (digits) or @username (anything else).
+def _serialize_match(row: dict) -> dict:
+    out: dict = {}
+    for k, v in row.items():
+        if hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
 
-    database.find_user_by_id_or_username takes either telegram_id (int)
-    or username (str) via keyword. We sniff the input and dispatch
-    accordingly — strip a leading @, try int() else fall through to
-    username.
+
+@router.get("/search")
+async def users_search(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(25, gt=0, le=100),
+):
+    """Substring search across the whole users table.
+
+    Matches telegram_id (digits typed anywhere — as text, so prefixes
+    like "123" find tg:1234567890) and username (case-insensitive
+    substring, leading @ stripped). Returns up to `limit` ranked
+    matches as `{matches: [...], total: N}`.
+
+    Empty result returns 200 with `matches: []` rather than 404 so the
+    UI can render "ничего не нашлось" without an exception path.
     """
-    raw = q.strip().lstrip("@")
     try:
-        tg_id = int(raw)
-        user = await database.find_user_by_id_or_username(telegram_id=tg_id)
-    except ValueError:
-        try:
-            user = await database.find_user_by_id_or_username(username=raw)
-        except Exception as e:
-            raise HTTPException(500, f"search_failed: {e}")
+        rows = await database.search_users_dashboard(q, limit=limit)
     except Exception as e:
         raise HTTPException(500, f"search_failed: {e}")
-    if not user:
-        raise HTTPException(404, "User not found")
-    return user
+    return {
+        "query": q.strip(),
+        "matches": [_serialize_match(r) for r in rows],
+        "total": len(rows),
+    }
 
 
 @router.get("/{telegram_id}")

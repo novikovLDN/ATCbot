@@ -14,6 +14,7 @@ import {
   Plus,
   Minus,
   Trash2,
+  ChevronRight,
 } from "lucide-react";
 import { endpoints, ApiError, type UserDetail } from "@/lib/api";
 import { fmtNum, fmtRub, fmtDate } from "@/lib/format";
@@ -26,6 +27,11 @@ export function Users() {
   const initialTg = params.get("tg") || "";
   const [query, setQuery] = useState(initialTg);
   const [submitted, setSubmitted] = useState(initialTg);
+  // After the search returns >1 match the admin picks one from the
+  // list. After picking, we render the full card for that telegram_id.
+  const [picked, setPicked] = useState<number | null>(
+    initialTg && /^\d+$/.test(initialTg) ? Number(initialTg) : null,
+  );
 
   // Re-trigger search if the ?tg=… changes (e.g. user clicks
   // multiple "Полная карточка" links from the payments feed).
@@ -34,6 +40,7 @@ export function Users() {
     if (tg && tg !== submitted) {
       setQuery(tg);
       setSubmitted(tg);
+      setPicked(/^\d+$/.test(tg) ? Number(tg) : null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
@@ -45,10 +52,20 @@ export function Users() {
     retry: false,
   });
 
-  const telegramId =
-    search.data && typeof search.data.telegram_id === "number"
-      ? (search.data.telegram_id as number)
-      : null;
+  const matches = search.data?.matches ?? [];
+
+  // Auto-pick when search returns exactly one result so the admin
+  // doesn't have to click again — same UX as the old single-result
+  // endpoint. Multiple matches always need an explicit pick.
+  useEffect(() => {
+    if (!search.data) return;
+    if (matches.length === 1) {
+      setPicked(matches[0].telegram_id);
+    } else if (matches.length === 0) {
+      setPicked(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.data]);
 
   return (
     <div className="space-y-6">
@@ -64,14 +81,16 @@ export function Users() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          setSubmitted(query.trim());
+          const q = query.trim();
+          setSubmitted(q);
+          setPicked(null);
         }}
         className="card flex items-center gap-2 p-2"
       >
         <Search className="ml-2 h-4 w-4 text-fg-subtle" />
         <input
           className="flex-1 bg-transparent px-2 py-2 text-sm text-fg placeholder:text-fg-subtle outline-none"
-          placeholder="Поиск по Telegram ID или @username"
+          placeholder="Telegram ID, @username или часть имени"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           inputMode="search"
@@ -93,25 +112,120 @@ export function Users() {
       {submitted && search.isError && (
         <EmptyState
           icon={UserCircle2}
-          title={
-            (search.error as ApiError)?.status === 404
-              ? "Пользователь не найден"
-              : "Не удалось выполнить поиск"
-          }
-          description={
-            (search.error as ApiError)?.status === 404
-              ? `По запросу «${submitted}» ничего не нашлось`
-              : (search.error as ApiError)?.detail
-          }
+          title="Не удалось выполнить поиск"
+          description={(search.error as ApiError)?.detail}
         />
       )}
 
-      {telegramId && <UserCard telegramId={telegramId} />}
+      {submitted &&
+        !search.isLoading &&
+        !search.isError &&
+        matches.length === 0 && (
+          <EmptyState
+            icon={UserCircle2}
+            title="Никого не нашли"
+            description={`По запросу «${submitted}» нет совпадений ни по telegram_id, ни по username.`}
+          />
+        )}
+
+      {matches.length > 1 && picked === null && (
+        <SearchResultsList
+          query={submitted}
+          matches={matches}
+          onPick={setPicked}
+        />
+      )}
+
+      {picked !== null && (
+        <UserCard
+          telegramId={picked}
+          onBack={
+            matches.length > 1 ? () => setPicked(null) : undefined
+          }
+        />
+      )}
     </div>
   );
 }
 
-function UserCard({ telegramId }: { telegramId: number }) {
+function SearchResultsList({
+  query,
+  matches,
+  onPick,
+}: {
+  query: string;
+  matches: Array<{
+    telegram_id: number;
+    username: string | null;
+    language: string | null;
+    created_at: string | null;
+    has_active_sub: boolean;
+  }>;
+  onPick: (tg: number) => void;
+}) {
+  return (
+    <div className="card p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-fg-subtle">
+            Найдено
+          </div>
+          <h2 className="text-base font-semibold text-fg">
+            {matches.length} совпадений по «{query}»
+          </h2>
+        </div>
+      </div>
+      <ul className="divide-y divide-border/60">
+        {matches.map((m) => (
+          <li key={m.telegram_id}>
+            <button
+              type="button"
+              onClick={() => onPick(m.telegram_id)}
+              className="flex w-full items-center gap-3 py-3 text-left transition-colors hover:bg-accent/[0.04]"
+            >
+              <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-bg-elevated text-fg-muted ring-1 ring-border">
+                <UserCircle2 className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="truncate font-medium text-fg">
+                    {m.username ? `@${m.username}` : `tg:${m.telegram_id}`}
+                  </span>
+                  {m.username && (
+                    <span className="badge-muted font-mono text-[10px]">
+                      tg:{m.telegram_id}
+                    </span>
+                  )}
+                  {m.has_active_sub ? (
+                    <span className="badge-success text-[10px]">
+                      <ShieldCheck className="h-3 w-3" /> active
+                    </span>
+                  ) : (
+                    <span className="badge-muted text-[10px]">no sub</span>
+                  )}
+                </div>
+                {m.created_at && (
+                  <div className="mt-0.5 text-xs text-fg-muted">
+                    зарегистрирован {fmtDate(m.created_at)}
+                  </div>
+                )}
+              </div>
+              <ChevronRight className="h-4 w-4 shrink-0 text-fg-subtle" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function UserCard({
+  telegramId,
+  onBack,
+}: {
+  telegramId: number;
+  onBack?: () => void;
+}) {
   const qc = useQueryClient();
   const detail = useQuery({
     queryKey: ["users", "detail", telegramId],
@@ -182,14 +296,25 @@ function UserCard({ telegramId }: { telegramId: number }) {
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => detail.refetch()}
-            className="btn-ghost"
-            aria-label="Обновить"
-          >
-            <RefreshCcw className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="btn-ghost"
+              >
+                ← к списку
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => detail.refetch()}
+              className="btn-ghost"
+              aria-label="Обновить"
+            >
+              <RefreshCcw className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">

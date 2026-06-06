@@ -79,6 +79,7 @@ from database.users import (  # noqa: F401
     approve_withdrawal_request,
     reject_withdrawal_request,
     find_user_by_id_or_username,
+    search_users_dashboard,
     generate_referral_code,
     create_user,
     find_user_by_referral_code,

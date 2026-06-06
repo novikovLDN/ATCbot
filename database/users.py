@@ -603,14 +603,14 @@ async def reject_withdrawal_request(wid: int, processed_by: int) -> bool:
 
 async def find_user_by_id_or_username(telegram_id: Optional[int] = None, username: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Найти пользователя по Telegram ID или username
-    
+
     Args:
         telegram_id: Telegram ID пользователя (опционально)
         username: Username пользователя без @ (опционально)
-    
+
     Returns:
         Словарь с данными пользователя или None, если не найден
-    
+
     Note:
         Должен быть указан хотя бы один параметр. Если указаны оба, приоритет у telegram_id.
     """
@@ -630,6 +630,62 @@ async def find_user_by_id_or_username(telegram_id: Optional[int] = None, usernam
             return dict(row) if row else None
         else:
             return None
+
+
+async def search_users_dashboard(query: str, limit: int = 25) -> list:
+    """Substring search across all users for the admin dashboard.
+
+    Matches either telegram_id (treated as text, so prefix typing
+    works) or username (case-insensitive substring). Returns up to
+    `limit` rows ranked by relevance:
+        1. exact telegram_id  → top
+        2. exact username (case-insensitive)
+        3. telegram_id / username starting with `q`
+        4. anywhere-substring
+    Tie-break by newest first so freshly registered users surface
+    above stale ghosts.
+
+    Each row carries the minimum the UI needs to render a result
+    list: telegram_id, username, language, created_at, and a
+    has_active_sub flag so the admin sees "paying / not paying"
+    at a glance before opening the full card."""
+    pool = await get_pool()
+    if pool is None:
+        return []
+    q = (query or "").strip().lstrip("@")
+    if not q:
+        return []
+    pattern_any = f"%{q}%"
+    pattern_prefix = f"{q}%"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT
+                   u.telegram_id,
+                   u.username,
+                   u.language,
+                   u.created_at,
+                   EXISTS (
+                       SELECT 1 FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                         AND s.status = 'active'
+                         AND s.expires_at > NOW()
+                   ) AS has_active_sub
+               FROM users u
+               WHERE CAST(u.telegram_id AS TEXT) ILIKE $1
+                  OR u.username ILIKE $1
+               ORDER BY
+                   CASE
+                       WHEN CAST(u.telegram_id AS TEXT) = $2 THEN 0
+                       WHEN LOWER(u.username) = LOWER($2) THEN 1
+                       WHEN CAST(u.telegram_id AS TEXT) ILIKE $3 THEN 2
+                       WHEN u.username ILIKE $3 THEN 3
+                       ELSE 4
+                   END,
+                   u.created_at DESC NULLS LAST
+               LIMIT $4""",
+            pattern_any, q, pattern_prefix, limit,
+        )
+    return [dict(r) for r in rows]
 
 
 def generate_referral_code(telegram_id: int) -> str:

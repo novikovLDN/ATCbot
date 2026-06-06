@@ -131,7 +131,17 @@ export const endpoints = {
   statsPromo: () => api.get<unknown[]>("/stats/promo"),
 
   userSearch: (q: string) =>
-    api.get<Record<string, unknown>>(`/users/search?q=${encodeURIComponent(q)}`),
+    api.get<{
+      query: string;
+      total: number;
+      matches: Array<{
+        telegram_id: number;
+        username: string | null;
+        language: string | null;
+        created_at: string | null;
+        has_active_sub: boolean;
+      }>;
+    }>(`/users/search?q=${encodeURIComponent(q)}`),
   userDetail: (tg: number) => api.get<UserDetail>(`/users/${tg}`),
   userHistory: (tg: number, limit = 20) =>
     api.get<unknown[]>(`/users/${tg}/history?limit=${limit}`),
