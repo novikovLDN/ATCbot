@@ -49,15 +49,16 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Не определено",
 };
 
-// Indigo / violet / emerald / amber / red / cyan / slate
+// Lime → cyan → category colors → neutral. Lime first because it's
+// the brand accent and tends to land on the largest segment.
 const CHART_COLORS = [
-  "#6366f1",
-  "#a855f7",
-  "#10b981",
-  "#f59e0b",
-  "#ef4444",
-  "#06b6d4",
-  "#64748b",
+  "#ABF43F", // lime
+  "#3FF4E5", // cyan
+  "#A855F7", // purple
+  "#3B82F6", // blue
+  "#F59E0B", // amber
+  "#F43F5E", // rose
+  "#64748b", // slate fallback
 ];
 
 export function Payments() {
@@ -522,8 +523,8 @@ function TypeBar({
           iconType="circle"
           wrapperStyle={{ fontSize: 11, color: "rgb(156 163 175)" }}
         />
-        <Bar dataKey="revenue" name="Доход" fill="#6366f1" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="count" name="Штук" fill="#a855f7" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="revenue" name="Доход" fill="#ABF43F" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="count" name="Штук" fill="#3FF4E5" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -765,10 +766,10 @@ function Pair({ label, value }: { label: string; value: string }) {
 
 function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase();
-  if (s === "paid") return <span className="badge-success">оплачен</span>;
-  if (s === "pending") return <span className="badge-warning">ожидает</span>;
+  if (s === "paid") return <span className="tag-green">оплачен</span>;
+  if (s === "pending") return <span className="tag-amber">ожидает</span>;
   if (s === "expired") return <span className="badge-muted">истёк</span>;
-  if (s === "failed") return <span className="badge-danger">ошибка</span>;
+  if (s === "failed") return <span className="tag-rose">ошибка</span>;
   return <span className="badge-muted">{status || "—"}</span>;
 }
 

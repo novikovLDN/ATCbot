@@ -1,15 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a1d2e"/>
-      <stop offset="100%" stop-color="#090b10"/>
+      <stop offset="0%" stop-color="#1a1a1a"/>
+      <stop offset="100%" stop-color="#090909"/>
     </linearGradient>
     <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#818cf8"/>
-      <stop offset="100%" stop-color="#6366f1"/>
+      <stop offset="0%" stop-color="#BDF55F"/>
+      <stop offset="100%" stop-color="#ABF43F"/>
     </linearGradient>
     <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="20" result="blur"/>
+      <feGaussianBlur stdDeviation="22" result="blur"/>
       <feMerge>
         <feMergeNode in="blur"/>
         <feMergeNode in="SourceGraphic"/>
@@ -17,18 +17,18 @@
     </filter>
   </defs>
   <rect width="512" height="512" rx="112" ry="112" fill="url(#bg)"/>
-  <circle cx="256" cy="256" r="180" fill="#6366f1" opacity="0.10"/>
+  <circle cx="256" cy="256" r="180" fill="#ABF43F" opacity="0.10"/>
   <g transform="translate(256 256)" filter="url(#glow)">
     <path
       d="M0 -160 L130 -110 L130 30 C130 100 70 150 0 170 C-70 150 -130 100 -130 30 L-130 -110 Z"
       fill="url(#shield)"
-      stroke="#a5b4fc"
+      stroke="#DCFA9A"
       stroke-width="6"
       stroke-linejoin="round"
     />
     <path
       d="M-50 0 L-15 35 L60 -45"
-      stroke="#ffffff"
+      stroke="#090909"
       stroke-width="22"
       stroke-linecap="round"
       stroke-linejoin="round"
