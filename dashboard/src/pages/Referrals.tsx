@@ -159,8 +159,8 @@ export function Referrals() {
                       onClick={() => setSelected(id)}
                       className={
                         selected === id
-                          ? "flex w-full items-center gap-3 rounded-lg bg-bg-elevated/60 px-2 py-3 text-left transition"
-                          : "flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-bg-elevated/40"
+                          ? "flex w-full items-center gap-3 rounded-lg bg-accent/10 px-2 py-3 text-left text-fg shadow-[inset_0_0_0_1px_rgba(171,244,63,0.25)] transition"
+                          : "flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-accent/[0.04]"
                       }
                     >
                       <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-bg-elevated font-mono text-xs text-fg-muted ring-1 ring-border">

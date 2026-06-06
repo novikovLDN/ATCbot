@@ -271,7 +271,7 @@ function PendingActivationsSection() {
                 return (
                   <tr
                     key={id || Math.random()}
-                    className="hover:bg-bg-elevated/40"
+                    className="hover:bg-accent/[0.04]"
                   >
                     <td className="px-2 py-2 font-mono text-xs text-fg-muted">
                       {id}
@@ -391,7 +391,7 @@ function PendingPaymentsSection() {
               {list.data.map((p) => (
                 <tr
                   key={String(p.id ?? Math.random())}
-                  className="hover:bg-bg-elevated/40"
+                  className="hover:bg-accent/[0.04]"
                 >
                   <td className="px-2 py-2 font-mono text-xs text-fg-muted">
                     {String(p.id ?? "—")}
