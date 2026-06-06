@@ -82,7 +82,7 @@ def _resolve_public_base_url() -> str:
     return ""
 
 
-SUPPORT_URL = "https://t.me/Atlas_SupportSecurity"
+SUPPORT_URL = "https://t.me/atlas_suppbot"
 
 
 # ── Step 0: device select ─────────────────────────────────────────────

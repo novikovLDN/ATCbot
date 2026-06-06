@@ -350,7 +350,7 @@ def _build_reply_markup(
             )])
         elif btn == "support":
             rows.append([InlineKeyboardButton(
-                text="💬 Поддержка", url="https://t.me/Atlas_SupportSecurity",
+                text="💬 Поддержка", url="https://t.me/atlas_suppbot",
             )])
         elif btn == "channel":
             rows.append([InlineKeyboardButton(

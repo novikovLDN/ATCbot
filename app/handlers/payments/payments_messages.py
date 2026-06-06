@@ -227,7 +227,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
             )],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "main.support_button", "support_button"),
-                url="https://t.me/Atlas_SupportSecurity"
+                url="https://t.me/atlas_suppbot"
             )]
         ])
         
@@ -876,7 +876,7 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 )],
                 [InlineKeyboardButton(
                     text=i18n_get_text(language, "main.support"),
-                    url="https://t.me/Atlas_SupportSecurity"
+                    url="https://t.me/atlas_suppbot"
                 )]
             ])
             

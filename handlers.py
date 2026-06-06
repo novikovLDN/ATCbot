@@ -657,7 +657,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         ),
         InlineKeyboardButton(
             text=i18n_get_text(language, "main.help"),
-            url="https://t.me/Atlas_SupportSecurity"
+            url="https://t.me/atlas_suppbot"
         ),
     ])
     buttons.append([InlineKeyboardButton(
@@ -765,7 +765,7 @@ def get_service_status_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/Atlas_SupportSecurity"
+            url="https://t.me/atlas_suppbot"
         )],
     ])
     return keyboard

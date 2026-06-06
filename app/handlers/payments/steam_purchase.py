@@ -52,7 +52,7 @@ STEAM_AMOUNT_STEP = 200
 STEAM_AMOUNT_MIN = 200
 STEAM_AMOUNT_MAX = 12000
 STEAM_AMOUNTS_PER_PAGE = 12       # 2 rows × 6 buttons
-SUPPORT_URL = "https://t.me/Atlas_SupportSecurity"
+SUPPORT_URL = "https://t.me/atlas_suppbot"
 
 # Steam login: 3-32 chars, [A-Za-z0-9_-]. Steam allows additional characters
 # in display names but the login (account name) follows this stricter rule.

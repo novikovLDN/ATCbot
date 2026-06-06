@@ -101,7 +101,7 @@ The message body uses HTML and embeds the user's URL in
 clients.  The keyboard has 🔄 Обновить (HTTPS redirect to
 `{PUBLIC_BASE_URL}/open/happ?url=…` → opens the `happ://add/…`
 deeplink on the user's device) and 💬 Поддержка
-(`config.SUPPORT_URL`, defaults to `https://t.me/Atlas_SupportSecurity`).
+(`config.SUPPORT_URL`, defaults to `https://t.me/atlas_suppbot`).
 
 Idempotency: `subscriptions.migration_notice_sent_at` is stamped on
 successful delivery.  Subsequent broadcast runs skip stamped rows AND

@@ -420,7 +420,7 @@ async def send_premium_success(
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=i18n_get_text(language, "premium.support_button"),
-            url="https://t.me/Atlas_SupportSecurity",
+            url="https://t.me/atlas_suppbot",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "premium.back_button"),

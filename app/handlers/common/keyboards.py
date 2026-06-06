@@ -36,7 +36,7 @@ def get_connect_keyboard(language: str = "ru"):
         )],
         [InlineKeyboardButton(
             text="💬 Нужна помощь",
-            url="https://t.me/Atlas_SupportSecurity",
+            url="https://t.me/atlas_suppbot",
         )],
     ])
 
@@ -216,7 +216,7 @@ def _get_biz_main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
-            url="https://t.me/Atlas_SupportSecurity"
+            url="https://t.me/atlas_suppbot"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.settings", "main.settings"),
@@ -260,7 +260,7 @@ def get_biz_control_panel_keyboard(language: str) -> InlineKeyboardMarkup:
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "biz.btn_personal_manager"),
-            url="https://t.me/Atlas_SupportSecurity"
+            url="https://t.me/atlas_suppbot"
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
@@ -403,7 +403,7 @@ def get_payment_success_keyboard(
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "trial.activated_btn_support"),
-            url="https://t.me/Atlas_SupportSecurity",
+            url="https://t.me/atlas_suppbot",
         )],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -461,7 +461,7 @@ def get_service_status_keyboard(language: str):
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "main.support", "support"),
-            url="https://t.me/Atlas_SupportSecurity"
+            url="https://t.me/atlas_suppbot"
         )],
     ])
 
