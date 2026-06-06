@@ -32,6 +32,7 @@ from webauthn import (
 )
 from webauthn.helpers.cose import COSEAlgorithmIdentifier
 from webauthn.helpers.structs import (
+    AttestationConveyancePreference,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     PublicKeyCredentialType,
@@ -334,7 +335,11 @@ async def make_registration_options(
         user_id=_user_id_bytes(),
         user_name=username,
         user_display_name=display_name,
-        attestation="none",
+        # py-webauthn 2.x requires the enum here, not the bare string.
+        # A plain "none" trips an internal call to .value somewhere
+        # downstream — that's what produced
+        # "'str' object has no attribute 'value'".
+        attestation=AttestationConveyancePreference.NONE,
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.PREFERRED,
             user_verification=UserVerificationRequirement.PREFERRED,
