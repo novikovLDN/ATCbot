@@ -285,16 +285,18 @@ function PushSection() {
       // 401/403 = VAPID mismatch, etc.)
       const first = r.errors?.[0];
       if (first) {
-        const summary = `${first.host || "push"} → ${first.reason}${
+        const head = `${first.host || "push"} → ${first.reason}${
           first.status ? ` (HTTP ${first.status})` : ""
         }`;
+        const detail = first.detail ? `\n${first.detail}` : "";
         if (r.removed > 0) {
           toast.error(
             "Подписка устарела — переподключи push на этом устройстве. " +
-              summary,
+              head +
+              detail,
           );
         } else {
-          toast.error("Push не прошёл: " + summary);
+          toast.error("Push не прошёл: " + head + detail);
         }
       } else {
         toast.error(`Отправлено 0 / ${r.total}`);
