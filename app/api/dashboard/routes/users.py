@@ -24,29 +24,40 @@ from app.events import bus
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 
-@router.get("/search")
-async def users_search(q: str = Query(..., min_length=1)):
-    """Find by telegram_id (digits) or @username (anything else).
+def _serialize_match(row: dict) -> dict:
+    out: dict = {}
+    for k, v in row.items():
+        if hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
 
-    database.find_user_by_id_or_username takes either telegram_id (int)
-    or username (str) via keyword. We sniff the input and dispatch
-    accordingly — strip a leading @, try int() else fall through to
-    username.
+
+@router.get("/search")
+async def users_search(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(25, gt=0, le=100),
+):
+    """Substring search across the whole users table.
+
+    Matches telegram_id (digits typed anywhere — as text, so prefixes
+    like "123" find tg:1234567890) and username (case-insensitive
+    substring, leading @ stripped). Returns up to `limit` ranked
+    matches as `{matches: [...], total: N}`.
+
+    Empty result returns 200 with `matches: []` rather than 404 so the
+    UI can render "ничего не нашлось" without an exception path.
     """
-    raw = q.strip().lstrip("@")
     try:
-        tg_id = int(raw)
-        user = await database.find_user_by_id_or_username(telegram_id=tg_id)
-    except ValueError:
-        try:
-            user = await database.find_user_by_id_or_username(username=raw)
-        except Exception as e:
-            raise HTTPException(500, f"search_failed: {e}")
+        rows = await database.search_users_dashboard(q, limit=limit)
     except Exception as e:
         raise HTTPException(500, f"search_failed: {e}")
-    if not user:
-        raise HTTPException(404, "User not found")
-    return user
+    return {
+        "query": q.strip(),
+        "matches": [_serialize_match(r) for r in rows],
+        "total": len(rows),
+    }
 
 
 @router.get("/{telegram_id}")
@@ -97,26 +108,18 @@ async def user_extended_stats(telegram_id: int = Path(..., gt=0)):
 @router.get("/{telegram_id}/payments")
 async def user_payments(
     telegram_id: int = Path(..., gt=0),
-    limit: int = Query(20, gt=0, le=200),
+    limit: int = Query(100, gt=0, le=500),
 ):
-    """Settled + pending payments for a user. Pulled directly from the
-    payments table — there's no DB helper for "by user" yet and inlining
-    keeps the surface area small."""
-    from database.core import get_pool
-    pool = await get_pool()
-    if pool is None:
-        raise HTTPException(503, "db_unavailable")
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT id, telegram_id, tariff, amount, status, source,
-                      created_at, updated_at
-               FROM payments
-               WHERE telegram_id = $1
-               ORDER BY created_at DESC
-               LIMIT $2""",
-            telegram_id, limit,
-        )
-    return [_serialize(dict(r)) for r in rows]
+    """Все покупки пользователя — paid / pending / expired —
+    из pending_purchases (там лежат подписки, traffic-паки, balance,
+    telegram premium, steam, прокси, фарм-участки). Старая таблица
+    `payments` тут не используется: она устарела и пропускает большую
+    часть потоков."""
+    try:
+        rows = await database.get_user_purchases(telegram_id, limit=limit)
+    except Exception as e:
+        raise HTTPException(500, f"payments_failed: {e}")
+    return [_serialize(r) for r in rows]
 
 
 def _serialize(row: dict) -> dict:
