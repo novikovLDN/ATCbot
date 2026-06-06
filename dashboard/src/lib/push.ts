@@ -25,13 +25,16 @@ export function getPushPermission(): NotificationPermission {
   return Notification.permission;
 }
 
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
+function urlBase64ToArrayBuffer(base64String: string): ArrayBuffer {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
   const raw = atob(base64);
-  const buf = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
-  return buf;
+  // Explicitly construct ArrayBuffer (not SharedArrayBuffer) so the
+  // PushManager.subscribe applicationServerKey typecheck accepts it.
+  const ab = new ArrayBuffer(raw.length);
+  const view = new Uint8Array(ab);
+  for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
+  return ab;
 }
 
 export async function enablePush(label?: string): Promise<void> {
@@ -52,7 +55,7 @@ export async function enablePush(label?: string): Promise<void> {
     );
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
+      applicationServerKey: urlBase64ToArrayBuffer(publicKey),
     });
   }
 

@@ -184,13 +184,21 @@ async def broadcast_delete_from_users(
     broadcast_id: int = Path(..., gt=0),
     admin: dict = Depends(require_admin),
 ):
-    """Delete every message of this broadcast from each user's chat.
+    """Start deleting every message of this broadcast from each user's
+    chat.
 
     Background task — returns 202 immediately. Subscribe to
-    `broadcast:delete_progress` / `broadcast:delete_done` events
-    on the WS for live progress.
+    `broadcast:delete_progress` / `broadcast:delete_done` /
+    `broadcast:delete_cancelled` events on the WS for live progress.
+    Use POST /broadcasts/{id}/delete-from-users/cancel to stop it
+    mid-flight.
     """
     bot = _get_bot()
+
+    from app.services import broadcast_deleter
+    if broadcast_deleter.is_running(broadcast_id):
+        raise HTTPException(409, "delete_already_running")
+
     try:
         pairs = await database.get_broadcast_message_ids(broadcast_id)
     except Exception as e:
@@ -200,12 +208,12 @@ async def broadcast_delete_from_users(
             404, "no_messages_to_delete (broadcast log empty)",
         )
 
-    from app.services.broadcast_deleter import delete_broadcast_from_users
-    asyncio.create_task(delete_broadcast_from_users(
+    task = asyncio.create_task(broadcast_deleter.delete_broadcast_from_users(
         bot=bot,
         broadcast_id=broadcast_id,
         admin_telegram_id=int(admin["sub"]),
     ))
+    broadcast_deleter.register_task(broadcast_id, task)
 
     bus.publish({
         "type": "broadcast:delete_started",
@@ -218,6 +226,26 @@ async def broadcast_delete_from_users(
         "broadcast_id": broadcast_id,
         "total_messages": len(pairs),
     }
+
+
+@router.post("/{broadcast_id}/delete-from-users/cancel")
+async def broadcast_delete_cancel(
+    broadcast_id: int = Path(..., gt=0),
+    admin: dict = Depends(require_admin),
+):
+    """Stop an in-progress delete-from-users run. Already-deleted
+    messages stay deleted; the rest are left in their original state.
+    Publishes broadcast:delete_cancelled."""
+    from app.services import broadcast_deleter
+    cancelled = broadcast_deleter.cancel_running(broadcast_id)
+    if not cancelled:
+        raise HTTPException(409, "not_running")
+    bus.publish({
+        "type": "broadcast:delete_cancelled",
+        "broadcast_id": broadcast_id,
+        "by": admin.get("sub"),
+    })
+    return {"ok": True}
 
 
 @router.post("")

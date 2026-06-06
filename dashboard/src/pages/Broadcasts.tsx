@@ -302,7 +302,7 @@ interface DeleteProgress {
   total?: number;
   deleted?: number;
   failed?: number;
-  status?: "running" | "done" | "failed";
+  status?: "running" | "done" | "failed" | "cancelled";
   error?: string;
 }
 
@@ -367,7 +367,28 @@ function DeleteFromUsersControl({ broadcastId }: { broadcastId: number }) {
         error: String(e.error ?? ""),
       }));
       toast.error(String(e.error ?? "Ошибка удаления"));
+    } else if (e.type === "broadcast:delete_cancelled") {
+      setProgress((p) => ({
+        ...(p ?? {}),
+        processed: Number(e.processed ?? p?.processed ?? 0),
+        total: Number(e.total ?? p?.total ?? 0),
+        deleted: Number(e.deleted ?? p?.deleted ?? 0),
+        failed: Number(e.failed ?? p?.failed ?? 0),
+        status: "cancelled",
+      }));
+      toast.info(
+        `Остановлено: удалено ${Number(e.deleted ?? 0)} / ${Number(e.total ?? 0)}`,
+      );
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
     }
+  });
+
+  const cancel = useMutation({
+    mutationFn: () => endpoints.broadcastDeleteCancel(broadcastId),
+    onError: (e: unknown) => {
+      const err = e as ApiError;
+      toast.error(err?.detail ?? "Не удалось остановить");
+    },
   });
 
   // Auto-clear the inline progress after `done` so the card returns
@@ -383,32 +404,47 @@ function DeleteFromUsersControl({ broadcastId }: { broadcastId: number }) {
     const total = progress.total ?? 0;
     const done = progress.processed ?? 0;
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    const statusLabel =
+      progress.status === "done"
+        ? "Готово"
+        : progress.status === "failed"
+        ? "Сбой"
+        : progress.status === "cancelled"
+        ? "Остановлено"
+        : "Удаляю...";
+    const barClass =
+      progress.status === "failed"
+        ? "h-full bg-danger transition-all"
+        : progress.status === "done"
+        ? "h-full bg-success transition-all"
+        : progress.status === "cancelled"
+        ? "h-full bg-warning transition-all"
+        : "h-full bg-accent transition-all";
     return (
-      <div className="flex min-w-[180px] flex-col items-stretch gap-1.5 text-right">
-        <div className="text-[11px] text-fg-muted">
-          {progress.status === "done"
-            ? "Готово"
-            : progress.status === "failed"
-            ? "Сбой"
-            : "Удаляю..."}{" "}
-          <span className="font-mono">
-            {done}/{total}
+      <div className="flex min-w-[220px] flex-col items-stretch gap-1.5 text-right">
+        <div className="flex items-center justify-end gap-2 text-[11px] text-fg-muted">
+          <span>
+            {statusLabel}{" "}
+            <span className="font-mono">
+              {done}/{total}
+            </span>
+            {(progress.failed ?? 0) > 0 && (
+              <span className="ml-1 text-danger">· {progress.failed} fail</span>
+            )}
           </span>
-          {(progress.failed ?? 0) > 0 && (
-            <span className="ml-1 text-danger">· {progress.failed} fail</span>
+          {progress.status === "running" && (
+            <button
+              type="button"
+              onClick={() => cancel.mutate()}
+              disabled={cancel.isPending}
+              className="rounded-md border border-warning/40 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning hover:bg-warning/20 disabled:opacity-50"
+            >
+              {cancel.isPending ? "..." : "Стоп"}
+            </button>
           )}
         </div>
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-elevated">
-          <div
-            className={
-              progress.status === "failed"
-                ? "h-full bg-danger transition-all"
-                : progress.status === "done"
-                ? "h-full bg-success transition-all"
-                : "h-full bg-accent transition-all"
-            }
-            style={{ width: `${pct}%` }}
-          />
+          <div className={barClass} style={{ width: `${pct}%` }} />
         </div>
       </div>
     );
