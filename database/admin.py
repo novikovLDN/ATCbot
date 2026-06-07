@@ -1459,30 +1459,39 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
     duration = timedelta(days=days)
     now_pre = datetime.now(timezone.utc)
     subscription_end_pre = now_pre + duration
-    
-    # PHASE 1 (outside DB transaction): Provision UUID via VPN API if new issuance needed
-    pre_provisioned_uuid = None
-    uuid_to_cleanup_on_failure = None
+
     pool = await get_pool()
+    # Read existing sub once for the outer is_new_issuance heuristic. We
+    # don't lock it — that happens inside the Phase 2 tx via grant_access.
     async with pool.acquire() as conn_pre:
         sub_row = await conn_pre.fetchrow("SELECT * FROM subscriptions WHERE telegram_id = $1", telegram_id)
-        is_new_issuance = True
+        outer_is_new_issuance = True
         if sub_row:
             sub = dict(sub_row)
             exp_raw = sub.get("expires_at")
             exp = _from_db_utc(exp_raw) if exp_raw else None
-            is_new_issuance = (
+            outer_is_new_issuance = (
                 sub.get("status") != "active" or not exp or exp <= now_pre or not sub.get("uuid")
             )
         tariff_normalized = (tariff or "basic").strip().lower()
         if tariff_normalized not in config.VALID_SUBSCRIPTION_TYPES:
             tariff_normalized = "basic"
-        if is_new_issuance and config.VPN_ENABLED:
+
+    # Two-attempt loop. Attempt 1 trusts the outer `is_new_issuance` check.
+    # Attempt 2 only runs if Phase 2 raised the invariant — i.e. grant_access
+    # decided new issuance was needed even though the outer check said no
+    # (race: a background worker expired the sub between the two reads, or
+    # the row was stale). We force Phase 1 on the retry so pre_provisioned_uuid
+    # is set when entering the tx again.
+    last_error: Optional[BaseException] = None
+    for attempt in (1, 2):
+        force_provision = attempt == 2
+        pre_provisioned_uuid = None
+        uuid_to_cleanup_on_failure = None
+
+        # PHASE 1 (outside DB transaction): Provision UUID via VPN API if needed
+        if (force_provision or outer_is_new_issuance) and config.VPN_ENABLED:
             try:
-                # Task 2 cut-over: provision premium + bypass entities in
-                # Remnawave instead of the legacy samopis xray master.
-                # provision_subscription returns the same dict shape
-                # add_vless_user did, so Phase 2 (grant_access) is unchanged.
                 from app.services import purchase_flow
                 vless_result = await purchase_flow.provision_subscription(
                     telegram_id,
@@ -1501,62 +1510,118 @@ async def admin_grant_access_atomic(telegram_id: int, days: int, admin_telegram_
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(
                     f"admin_grant_access_atomic: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                    f"uuid={uuid_to_cleanup_on_failure[:8]}..., tariff={tariff_normalized}]"
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}..., tariff={tariff_normalized}, attempt={attempt}]"
                 )
             except Exception as phase1_err:
-                logger.warning(
-                    f"admin_grant_access_atomic: Phase 1 provisioning failed: user={telegram_id}, error={phase1_err}"
+                # Loud, with traceback, so admin can diagnose Remnawave
+                # outages directly from the bot logs without guessing.
+                logger.error(
+                    f"admin_grant_access_atomic: PHASE1_FAILED [user={telegram_id}, "
+                    f"attempt={attempt}, error={phase1_err}]",
+                    exc_info=True,
                 )
-                pre_provisioned_uuid = None
-                uuid_to_cleanup_on_failure = None
+                raise RuntimeError(
+                    f"VPN provisioning failed (Phase 1): {phase1_err}"
+                ) from phase1_err
 
-    ret_val = None
-    grant_result_for_removal = None
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            try:
-                grant_result_for_removal = result = await grant_access(
-                    telegram_id=telegram_id,
-                    duration=duration,
-                    source="admin",
-                    admin_telegram_id=admin_telegram_id,
-                    admin_grant_days=days,
-                    conn=conn,
-                    pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=True,
-                    tariff=tariff_normalized,
-                )
-                expires_at = result["subscription_end"]
-                if result.get("vless_url"):
-                    final_vpn_key = result["vless_url"]
-                else:
-                    subscription_row = await conn.fetchrow(
-                        "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
-                        telegram_id
+        # Defense in depth: if Phase 1 was supposed to run but didn't set
+        # a UUID for any reason, bail out cleanly instead of letting the
+        # invariant fire inside the tx with no actionable message.
+        if (force_provision or outer_is_new_issuance) and config.VPN_ENABLED and not pre_provisioned_uuid:
+            raise RuntimeError(
+                f"Phase 1 produced no UUID for user {telegram_id} — refusing to enter tx"
+            )
+
+        ret_val = None
+        grant_result_for_removal = None
+        invariant_hit = False
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                try:
+                    grant_result_for_removal = result = await grant_access(
+                        telegram_id=telegram_id,
+                        duration=duration,
+                        source="admin",
+                        admin_telegram_id=admin_telegram_id,
+                        admin_grant_days=days,
+                        conn=conn,
+                        pre_provisioned_uuid=pre_provisioned_uuid,
+                        _caller_holds_transaction=True,
+                        tariff=tariff_normalized,
                     )
-                    if subscription_row and subscription_row.get("vpn_key"):
-                        final_vpn_key = subscription_row["vpn_key"]
+                    expires_at = result["subscription_end"]
+                    if result.get("vless_url"):
+                        final_vpn_key = result["vless_url"]
                     else:
-                        final_vpn_key = result.get("uuid", "")
-                uuid_preview = f"{result['uuid'][:8]}..." if result.get('uuid') and len(result['uuid']) > 8 else (result.get('uuid') or "N/A")
-                logger.info(f"admin_grant_access_atomic: SUCCESS [admin={admin_telegram_id}, user={telegram_id}, days={days}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]")
-                ret_val = (expires_at, final_vpn_key)
-            except Exception as e:
-                if uuid_to_cleanup_on_failure:
-                    try:
-                        await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                        uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                        logger.critical(
-                            f"ORPHAN_PREVENTED uuid={uuid_preview} reason=admin_grant_access_atomic_tx_failed "
-                            f"user={telegram_id} error={e}"
+                        subscription_row = await conn.fetchrow(
+                            "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                            telegram_id
                         )
-                    except Exception as remove_err:
-                        uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                        logger.critical(
-                            f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
+                        if subscription_row and subscription_row.get("vpn_key"):
+                            final_vpn_key = subscription_row["vpn_key"]
+                        else:
+                            final_vpn_key = result.get("uuid", "")
+                    uuid_preview = f"{result['uuid'][:8]}..." if result.get('uuid') and len(result['uuid']) > 8 else (result.get('uuid') or "N/A")
+                    logger.info(f"admin_grant_access_atomic: SUCCESS [admin={admin_telegram_id}, user={telegram_id}, days={days}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]")
+                    ret_val = (expires_at, final_vpn_key)
+                except RuntimeError as e:
+                    last_error = e
+                    if "INVARIANT_VIOLATION" in str(e) and attempt == 1 and not pre_provisioned_uuid:
+                        # Race: outer check said no new issuance, but grant_access
+                        # inside the locked tx decided otherwise. Retry once with
+                        # forced Phase 1.
+                        invariant_hit = True
+                        logger.warning(
+                            f"admin_grant_access_atomic: INVARIANT_HIT_RETRYING [user={telegram_id}] — "
+                            "outer is_new_issuance was False but grant_access disagreed; "
+                            "forcing Phase 1 on attempt 2"
                         )
-                logger.exception(f"Error in admin_grant_access_atomic for user {telegram_id}, transaction rolled back")
-                raise
+                    else:
+                        if uuid_to_cleanup_on_failure:
+                            try:
+                                await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
+                                logger.critical(
+                                    f"ORPHAN_PREVENTED uuid={uuid_to_cleanup_on_failure[:8]}... "
+                                    f"reason=admin_grant_access_atomic_tx_failed user={telegram_id} error={e}"
+                                )
+                            except Exception as remove_err:
+                                logger.critical(
+                                    f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_to_cleanup_on_failure[:8]}... "
+                                    f"reason={remove_err} user={telegram_id}"
+                                )
+                        logger.exception(f"Error in admin_grant_access_atomic for user {telegram_id}, transaction rolled back")
+                        raise
+                except Exception as e:
+                    last_error = e
+                    if uuid_to_cleanup_on_failure:
+                        try:
+                            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
+                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
+                            logger.critical(
+                                f"ORPHAN_PREVENTED uuid={uuid_preview} reason=admin_grant_access_atomic_tx_failed "
+                                f"user={telegram_id} error={e}"
+                            )
+                        except Exception as remove_err:
+                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
+                            logger.critical(
+                                f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
+                            )
+                    logger.exception(f"Error in admin_grant_access_atomic for user {telegram_id}, transaction rolled back")
+                    raise
+
+        if invariant_hit:
+            # Loop body falls through, attempt=2 will force Phase 1.
+            continue
+        # ret_val is set when Phase 2 succeeded; break out of retry loop.
+        if ret_val is not None:
+            break
+
+    if ret_val is None:
+        # Both attempts failed. The exception from attempt 2 (or whatever
+        # last bubbled) has already been re-raised above; getting here
+        # means the retry loop fell through without a success. Surface
+        # whatever error we saved.
+        raise last_error or RuntimeError("admin_grant_access_atomic: unknown failure")
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
         old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
         try:
@@ -2100,26 +2165,30 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
     now_pre = datetime.now(timezone.utc)
     subscription_end_pre = now_pre + duration
 
-    # PHASE 1 (outside DB transaction): Provision UUID via VPN API if new issuance needed
-    pre_provisioned_uuid = None
-    uuid_to_cleanup_on_failure = None
     pool = await get_pool()
     async with pool.acquire() as conn_pre:
         sub_row = await conn_pre.fetchrow("SELECT * FROM subscriptions WHERE telegram_id = $1", telegram_id)
-        is_new_issuance = True
+        outer_is_new_issuance = True
         if sub_row:
             sub = dict(sub_row)
             exp_raw = sub.get("expires_at")
             exp = _from_db_utc(exp_raw) if exp_raw else None
-            is_new_issuance = (
+            outer_is_new_issuance = (
                 sub.get("status") != "active" or not exp or exp <= now_pre or not sub.get("uuid")
             )
-        if is_new_issuance and config.VPN_ENABLED:
+
+    # Two-attempt loop — same race-recovery pattern as the days-variant
+    # of this function (see admin_grant_access_atomic above for the why).
+    last_error: Optional[BaseException] = None
+    ret_val = None
+    grant_result_for_removal = None
+    for attempt in (1, 2):
+        force_provision = attempt == 2
+        pre_provisioned_uuid = None
+        uuid_to_cleanup_on_failure = None
+
+        if (force_provision or outer_is_new_issuance) and config.VPN_ENABLED:
             try:
-                # Task 2 cut-over: provision via Remnawave (premium + bypass)
-                # instead of the legacy samopis xray master.  Minutes-grants
-                # are a short admin/test issuance — period_days is rounded up
-                # to at least 1 for the bypass traffic-limit lookup.
                 from app.services import purchase_flow
                 vless_result = await purchase_flow.provision_subscription(
                     telegram_id,
@@ -2136,64 +2205,104 @@ async def admin_grant_access_minutes_atomic(telegram_id: int, minutes: int, admi
                 uuid_to_cleanup_on_failure = pre_provisioned_uuid["uuid"]
                 logger.info(
                     f"admin_grant_access_minutes_atomic: TWO_PHASE_PHASE1_DONE [user={telegram_id}, "
-                    f"uuid={uuid_to_cleanup_on_failure[:8]}...]"
+                    f"uuid={uuid_to_cleanup_on_failure[:8]}..., attempt={attempt}]"
                 )
             except Exception as phase1_err:
-                logger.warning(
-                    f"admin_grant_access_minutes_atomic: Phase 1 provisioning failed: user={telegram_id}, error={phase1_err}"
+                logger.error(
+                    f"admin_grant_access_minutes_atomic: PHASE1_FAILED [user={telegram_id}, "
+                    f"attempt={attempt}, error={phase1_err}]",
+                    exc_info=True,
                 )
-                pre_provisioned_uuid = None
-                uuid_to_cleanup_on_failure = None
+                raise RuntimeError(
+                    f"VPN provisioning failed (Phase 1): {phase1_err}"
+                ) from phase1_err
 
-    ret_val = None
-    grant_result_for_removal = None
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            try:
-                grant_result_for_removal = result = await grant_access(
-                    telegram_id=telegram_id,
-                    duration=duration,
-                    source="admin",
-                    admin_telegram_id=admin_telegram_id,
-                    admin_grant_days=None,
-                    conn=conn,
-                    pre_provisioned_uuid=pre_provisioned_uuid,
-                    _caller_holds_transaction=True
-                )
-                expires_at = result["subscription_end"]
-                if result.get("vless_url"):
-                    final_vpn_key = result["vless_url"]
-                else:
-                    subscription_row = await conn.fetchrow(
-                        "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
-                        telegram_id
+        if (force_provision or outer_is_new_issuance) and config.VPN_ENABLED and not pre_provisioned_uuid:
+            raise RuntimeError(
+                f"Phase 1 produced no UUID for user {telegram_id} — refusing to enter tx"
+            )
+
+        invariant_hit = False
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                try:
+                    grant_result_for_removal = result = await grant_access(
+                        telegram_id=telegram_id,
+                        duration=duration,
+                        source="admin",
+                        admin_telegram_id=admin_telegram_id,
+                        admin_grant_days=None,
+                        conn=conn,
+                        pre_provisioned_uuid=pre_provisioned_uuid,
+                        _caller_holds_transaction=True
                     )
-                    if subscription_row and subscription_row.get("vpn_key"):
-                        final_vpn_key = subscription_row["vpn_key"]
+                    expires_at = result["subscription_end"]
+                    if result.get("vless_url"):
+                        final_vpn_key = result["vless_url"]
                     else:
-                        final_vpn_key = result.get("uuid", "")
-                uuid_preview = f"{result['uuid'][:8]}..." if result.get('uuid') and len(result['uuid']) > 8 else (result.get('uuid') or "N/A")
-                logger.info(
-                    f"admin_grant_access_minutes_atomic: SUCCESS [admin={admin_telegram_id}, user={telegram_id}, "
-                    f"minutes={minutes}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]"
-                )
-                ret_val = (expires_at, final_vpn_key)
-            except Exception as e:
-                if uuid_to_cleanup_on_failure:
-                    try:
-                        await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
-                        uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                        logger.critical(
-                            f"ORPHAN_PREVENTED uuid={uuid_preview} reason=admin_grant_access_minutes_tx_failed "
-                            f"user={telegram_id} error={e}"
+                        subscription_row = await conn.fetchrow(
+                            "SELECT vpn_key FROM subscriptions WHERE telegram_id = $1",
+                            telegram_id
                         )
-                    except Exception as remove_err:
-                        uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
-                        logger.critical(
-                            f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
+                        if subscription_row and subscription_row.get("vpn_key"):
+                            final_vpn_key = subscription_row["vpn_key"]
+                        else:
+                            final_vpn_key = result.get("uuid", "")
+                    uuid_preview = f"{result['uuid'][:8]}..." if result.get('uuid') and len(result['uuid']) > 8 else (result.get('uuid') or "N/A")
+                    logger.info(
+                        f"admin_grant_access_minutes_atomic: SUCCESS [admin={admin_telegram_id}, user={telegram_id}, "
+                        f"minutes={minutes}, uuid={uuid_preview}, expires_at={expires_at.isoformat()}]"
+                    )
+                    ret_val = (expires_at, final_vpn_key)
+                except RuntimeError as e:
+                    last_error = e
+                    if "INVARIANT_VIOLATION" in str(e) and attempt == 1 and not pre_provisioned_uuid:
+                        invariant_hit = True
+                        logger.warning(
+                            f"admin_grant_access_minutes_atomic: INVARIANT_HIT_RETRYING [user={telegram_id}] — "
+                            "outer is_new_issuance was False but grant_access disagreed; "
+                            "forcing Phase 1 on attempt 2"
                         )
-                logger.exception(f"Error in admin_grant_access_minutes_atomic for user {telegram_id}, transaction rolled back")
-                raise
+                    else:
+                        if uuid_to_cleanup_on_failure:
+                            try:
+                                await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
+                                logger.critical(
+                                    f"ORPHAN_PREVENTED uuid={uuid_to_cleanup_on_failure[:8]}... "
+                                    f"reason=admin_grant_access_minutes_atomic_tx_failed user={telegram_id} error={e}"
+                                )
+                            except Exception as remove_err:
+                                logger.critical(
+                                    f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_to_cleanup_on_failure[:8]}... "
+                                    f"reason={remove_err} user={telegram_id}"
+                                )
+                        logger.exception(f"Error in admin_grant_access_minutes_atomic for user {telegram_id}, transaction rolled back")
+                        raise
+                except Exception as e:
+                    last_error = e
+                    if uuid_to_cleanup_on_failure:
+                        try:
+                            await vpn_utils.safe_remove_vless_user_with_retry(uuid_to_cleanup_on_failure)
+                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
+                            logger.critical(
+                                f"ORPHAN_PREVENTED uuid={uuid_preview} reason=admin_grant_access_minutes_tx_failed "
+                                f"user={telegram_id} error={e}"
+                            )
+                        except Exception as remove_err:
+                            uuid_preview = f"{uuid_to_cleanup_on_failure[:8]}..." if len(uuid_to_cleanup_on_failure) > 8 else "***"
+                            logger.critical(
+                                f"ORPHAN_PREVENTED_REMOVAL_FAILED uuid={uuid_preview} reason={remove_err} user={telegram_id}"
+                            )
+                    logger.exception(f"Error in admin_grant_access_minutes_atomic for user {telegram_id}, transaction rolled back")
+                    raise
+
+        if invariant_hit:
+            continue
+        if ret_val is not None:
+            break
+
+    if ret_val is None:
+        raise last_error or RuntimeError("admin_grant_access_minutes_atomic: unknown failure")
     if ret_val is not None and grant_result_for_removal and grant_result_for_removal.get("old_uuid_to_remove_after_commit"):
         old_uuid = grant_result_for_removal["old_uuid_to_remove_after_commit"]
         try:
