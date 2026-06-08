@@ -27,28 +27,30 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 # Plant types for Farm game
+# 2026-06-08: rewards uniformly reduced to 75% of the old values
+# (-25%), rounded to whole rubles so no kopeck tails leak into UI.
 PLANT_TYPES = {
-    # Existing 6 cultures — untouched balance, classic line-up
-    "tomato":    {"emoji": "🍅", "name": "Томаты",      "days": 3,  "reward": 500},
-    "potato":    {"emoji": "🥔", "name": "Картофель",   "days": 5,  "reward": 1000},
-    "carrot":    {"emoji": "🥕", "name": "Морковь",     "days": 7,  "reward": 1000},
-    "cactus":    {"emoji": "🌵", "name": "Кактус",      "days": 10, "reward": 1500},
-    "apple":     {"emoji": "🍏", "name": "Яблоня",      "days": 8,  "reward": 1500},
-    "lavender":  {"emoji": "💜", "name": "Лаванда",     "days": 6,  "reward": 2000},
+    # Existing 6 cultures
+    "tomato":    {"emoji": "🍅", "name": "Томаты",      "days": 3,  "reward": 400},
+    "potato":    {"emoji": "🥔", "name": "Картофель",   "days": 5,  "reward": 800},
+    "carrot":    {"emoji": "🥕", "name": "Морковь",     "days": 7,  "reward": 800},
+    "cactus":    {"emoji": "🌵", "name": "Кактус",      "days": 10, "reward": 1100},
+    "apple":     {"emoji": "🍏", "name": "Яблоня",      "days": 8,  "reward": 1100},
+    "lavender":  {"emoji": "💜", "name": "Лаванда",     "days": 6,  "reward": 1500},
     # Fast cultures — daily/short cycle
     "greens":    {"emoji": "🌱", "name": "Зелень",      "days": 1,  "reward": 200},
-    "pepper":    {"emoji": "🌶", "name": "Перчик",      "days": 4,  "reward": 800},
+    "pepper":    {"emoji": "🌶", "name": "Перчик",      "days": 4,  "reward": 600},
     # Mid cultures
-    "cucumber":  {"emoji": "🥒", "name": "Огурец",      "days": 5,  "reward": 1200},
-    "sunflower": {"emoji": "🌻", "name": "Подсолнух",   "days": 6,  "reward": 1400},
-    "strawberry":{"emoji": "🍓", "name": "Клубника",    "days": 7,  "reward": 1800},
+    "cucumber":  {"emoji": "🥒", "name": "Огурец",      "days": 5,  "reward": 900},
+    "sunflower": {"emoji": "🌻", "name": "Подсолнух",   "days": 6,  "reward": 1100},
+    "strawberry":{"emoji": "🍓", "name": "Клубника",    "days": 7,  "reward": 1400},
     # Trees — long cycle, premium reward
-    "grape":     {"emoji": "🍇", "name": "Виноград",    "days": 12, "reward": 3200},
-    "cherry":    {"emoji": "🍒", "name": "Вишня",       "days": 13, "reward": 3600},
-    "lemon":     {"emoji": "🍋", "name": "Лимонное дерево", "days": 16, "reward": 4800},
-    "oak":       {"emoji": "🌳", "name": "Дуб",         "days": 21, "reward": 7000},
+    "grape":     {"emoji": "🍇", "name": "Виноград",    "days": 12, "reward": 2400},
+    "cherry":    {"emoji": "🍒", "name": "Вишня",       "days": 13, "reward": 2700},
+    "lemon":     {"emoji": "🍋", "name": "Лимонное дерево", "days": 16, "reward": 3600},
+    "oak":       {"emoji": "🌳", "name": "Дуб",         "days": 21, "reward": 5300},
 }
-# reward is in kopecks (200 = 2 RUB, 7000 = 70 RUB)
+# reward is in kopecks (200 = 2 RUB, 5300 = 53 RUB) — always a multiple of 100.
 
 
 # Storm shield price tiers (kopecks) — by plant reward
