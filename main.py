@@ -297,6 +297,16 @@ async def main():
         logger.info("Admin notifier task started")
     except Exception as e:
         logger.warning("admin_notifier failed to start: %s", e)
+
+    # Incy deep-link sidecar selftest — spawns the Node sidecar once
+    # with a dummy URL and logs INCY_SELFTEST_OK or _FAIL. Means any
+    # broken deploy (no node, missing npm package, wrong cwd) shows
+    # up in the logs at startup instead of «button doesn't open».
+    try:
+        from app.services import incy_crypto
+        asyncio.create_task(incy_crypto.selftest())
+    except Exception as e:
+        logger.warning("incy_crypto selftest failed to schedule: %s", e)
     
     # ====================================================================================
     # HTTP Health Check Server

@@ -84,6 +84,7 @@ SEGMENT_OPTIONS = {
     "active_subscriptions": "🔐 С активной подпиской",
     "no_subscription": "🚫 Без подписки",
     "no_remnawave": "🆕 Никогда не подключались",
+    "started_7d_cold": "❄️ Холодные за 7 дней (нажали /start, без ключей)",
     "expired_1d": "📅 Истёк 1 день назад",
     "expired_2d": "📅 Истёк 2 дня назад",
     "expired_3d": "📅 Истёк 3 дня назад",

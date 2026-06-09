@@ -8,7 +8,7 @@
     "incy-encode": "node scripts/incy_encode.mjs"
   },
   "dependencies": {
-    "@incy/link-encoder": "*"
+    "@incy/link-encoder": "^1.0.1"
   },
   "engines": {
     "node": ">=18"
