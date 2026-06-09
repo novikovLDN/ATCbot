@@ -795,9 +795,9 @@ _IOS_HAPP_LINKS = {
 }
 
 _DOWNLOAD_LINKS = {
-    # V2RayTun снят со всех платформ (2026-06-08). Рекомендуем Happ
-    # на iOS / Android / macOS / Windows и Hiddify как fallback там,
-    # где Happ исторически менее популярен.
+    # V2RayTun снят со всех платформ (2026-06-08). На Android и
+    # Windows — только Happ. На iOS/macOS Hiddify остаётся как
+    # fallback (Happ там есть, но юзер может уже сидеть на Hiddify).
     "ios": {
         "happ": _IOS_HAPP_LINKS["ru"],
         "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
@@ -810,7 +810,7 @@ _DOWNLOAD_LINKS = {
         "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
     },
     "windows": {
-        "hiddify": "https://github.com/hiddify/hiddify-app/releases/latest",
+        "happ": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
     },
 }
 
@@ -928,7 +928,7 @@ async def callback_setup_platform(callback: CallbackQuery):
             "ios": ["happ", "hiddify"],
             "android": ["happ"],
             "macos": ["happ", "hiddify"],
-            "windows": ["hiddify"],
+            "windows": ["happ"],
         }
         _client_deeplink = {
             "happ": "happ",
