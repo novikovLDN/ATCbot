@@ -735,6 +735,15 @@ async def callback_setup_step2(callback: CallbackQuery):
                 text="🌐 Добавить обход ключ",
                 url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
             )])
+        # Incy — iOS-only, по тому же сценарию: жмёт юзер → редирект
+        # на /open/incy → наш HTML-промежуточник кладёт в
+        # window.location ссылку incy://add/<plain_sub_url>, ОС
+        # ловит схему, открывает Incy с импортом подписки.
+        if platform == "ios":
+            buttons.append([InlineKeyboardButton(
+                text="💚 Добавить в Incy",
+                url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
+            )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
