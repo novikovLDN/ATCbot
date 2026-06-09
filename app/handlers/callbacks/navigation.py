@@ -1049,29 +1049,43 @@ async def callback_setup_manual(callback: CallbackQuery):
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
-    # Build keys section. Encrypted-only — `happ://crypt4/<base64>`
-    # (~700 chars per key) wrapped in <blockquote expandable> so it
-    # collapses to a single visible row with «Show more», and a tap on
-    # the inner <code> copies the link to the clipboard.
+    # Build keys section. For each subscription URL we render up to two
+    # encrypted flavours, each in its own <blockquote expandable>:
     #
-    # Note: this means non-Happ clients (e.g. Incy on iOS) can't
-    # decode the key directly — they use their own deep-link button
-    # ("Добавить ключ в Incy") which goes through /open/incy and
-    # serves the Incy-specific incy://crypt1/<payload> deep link.
-    from app.services import happ_crypto
+    #   ✨ Happ — happ://crypt4/<base64> (~700 chars) — always.
+    #   🟢 Incy — incy://crypt1/<payload> (~150 chars) — iOS only,
+    #             and only when the Node sidecar is alive
+    #             (incy_crypto.is_available()). Without it the block
+    #             is silently skipped so the user never sees a broken
+    #             "Incy key" line.
+    #
+    # Both deeplinks open their respective app on tap+paste — the user
+    # picks the row matching the app they installed. Telegram collapses
+    # both blocks to a single line with «Show more» so the screen stays
+    # tidy even with two ~700-char strings.
+    from app.services import happ_crypto, incy_crypto
 
-    def _key_block(label_key: str, raw_url: str) -> str:
-        crypt = happ_crypto.format_for_user(raw_url)
-        return (
-            "\n" + i18n_get_text(language, label_key) + "\n"
-            f"<blockquote expandable><code>{crypt}</code></blockquote>"
-        )
+    show_incy = platform == "ios" and incy_crypto.is_available()
+
+    async def _key_block(label_key: str, raw_url: str) -> str:
+        out = "\n" + i18n_get_text(language, label_key) + "\n"
+        # Happ — synchronous, pure-Python crypt4.
+        happ_link = happ_crypto.format_for_user(raw_url)
+        out += "✨ <i>для Happ:</i>\n"
+        out += f"<blockquote expandable><code>{happ_link}</code></blockquote>"
+        # Incy — Node sidecar, may return None on broken deploy; skip.
+        if show_incy:
+            incy_link = await incy_crypto.to_incy_link(raw_url)
+            if incy_link:
+                out += "\n🟢 <i>для Incy:</i>\n"
+                out += f"<blockquote expandable><code>{incy_link}</code></blockquote>"
+        return out
 
     keys_section = ""
     if sub_url:
-        keys_section += _key_block("setup.key_vpn_label", sub_url)
+        keys_section += await _key_block("setup.key_vpn_label", sub_url)
     if bypass_url:
-        keys_section += _key_block("setup.key_bypass_label", bypass_url)
+        keys_section += await _key_block("setup.key_bypass_label", bypass_url)
 
     if keys_section:
         text = f"{connect_text}\n{keys_section}"
