@@ -1,8 +1,8 @@
 """
 Deep link redirect endpoint.
 
-Telegram blocks custom URL schemes (happ://, v2raytun://, hiddify://) in
-inline keyboard buttons. This endpoint serves an HTML page that redirects
+Telegram blocks custom URL schemes (happ://, hiddify://) in inline
+keyboard buttons. This endpoint serves an HTML page that redirects
 the browser to the custom scheme, opening the VPN client and importing
 the subscription automatically.
 
@@ -13,7 +13,7 @@ block with a Copy button so the user can import it manually.
 Usage:
     GET /open/{client}?url={subscription_url}
 
-Supported clients: happ, v2raytun, hiddify
+Supported clients: happ, hiddify
 """
 
 import json
@@ -30,13 +30,11 @@ router = APIRouter()
 
 _SCHEMES = {
     "happ": "happ://add/",
-    "v2raytun": "v2raytun://import/",
     "hiddify": "hiddify://import/",
 }
 
 _CLIENT_NAMES = {
     "happ": "Happ",
-    "v2raytun": "V2RayTun",
     "hiddify": "Hiddify",
 }
 

@@ -298,9 +298,9 @@ LANG = {
     'get_key.download_v2raytun': "📲 Download V2RayTun",
     'get_key.instruction_text': "📖 <b>Connection Guide</b>\n\nTap the «📲 Set up device» button below and follow all setup steps.\n\nIf something goes wrong — you can always contact support for help.\n\n⸻\n\n👇 Tap the key to copy:",
     'get_key.no_subscription': "❌ You don't have an active subscription.",
-    'setup.connect_ios': "📱 <b>Connect on iOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nTap <b>+</b> in the top right corner\nSelect «Import from clipboard»\nTap the connect button ▶️\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nOn the main screen tap <b>+</b>\nSelect «Add from clipboard»\nTap the connect button ▶️",
-    'setup.connect_android': "🤖 <b>Connect on Android</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nTap <b>+</b> in the top right corner\nSelect «Import from clipboard»\nTap the connect button ▶️\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nOn the main screen tap <b>+</b>\nSelect «Add from clipboard»\nTap the connect button ▶️",
-    'setup.connect_macos': "🍎 <b>Connect on macOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n━━━━━━━━━━━━━━━\n\n📲 <b>V2RayTun</b>\nTap <b>+</b> in the top right corner\nSelect «Import from clipboard»\nTap the connect button ▶️\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nOn the main screen tap <b>+</b>\nSelect «Add from clipboard»\nTap the connect button ▶️",
+    'setup.connect_ios': "📱 <b>Connect on iOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nOn the main screen tap <b>+</b>\nSelect «Add from clipboard»\nTap the connect button ▶️",
+    'setup.connect_android': "🤖 <b>Connect on Android</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nOn the main screen tap <b>+</b>\nSelect «Add from clipboard»\nTap the connect button ▶️",
+    'setup.connect_macos': "🍎 <b>Connect on macOS</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Happ</b>\nOn the main screen tap the clipboard icon 🗒️ at the bottom\nThe key will be added automatically\nTap the big connect button\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nOn the main screen tap <b>+</b>\nSelect «Add from clipboard»\nTap the connect button ▶️",
     'setup.connect_windows': "🪟 <b>Connect on Windows</b>\n\n<b>Step 1.</b> Copy the key — tap it at the bottom of this message\n\n<b>Step 2.</b> Open the installed app and add the key:\n\n━━━━━━━━━━━━━━━\n\n📲 <b>Hiddify</b>\nOn the main screen click <b>+</b>\nSelect «Add from clipboard»\nClick the connect button ▶️\n\n━━━━━━━━━━━━━━━\n\n📲 <b>v2rayN</b>\nOpen the <b>Servers</b> menu\nSelect «Import from clipboard»\nClick the connect button ▶️",
     'setup.autosetup_ios': "📱 <b>Auto setup — iOS</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
     'setup.autosetup_android': "🤖 <b>Auto setup — Android</b>\n\n⚡️ Tap the button below with the app you installed — the key will be added automatically.\n\nIf the app didn't open — use the detailed instructions.",
@@ -318,7 +318,7 @@ LANG = {
     'setup.qr_standard_btn': "Standard servers (unlimited)",
     'setup.qr_bypass_btn': "Bypass whitelist",
     'setup.qr_bypass_unavailable': "❌ Whitelist bypass is not available.\n\nMake sure you have an active subscription and bypass traffic.",
-    'setup.qr_instruction': "📲 <b>Add device</b>\n\n<b>Via QR code:</b>\nScan the code above in the app:\n├ <b>Happ</b> → 📸 camera icon\n├ <b>V2RayTun</b> → <b>+</b> → «Scan QR»\n└ <b>Hiddify</b> → <b>+</b> → «Scan QR»\n\n<b>Manually:</b>\nTap the key below — it will be copied, then:\n├ <b>Happ</b> → clipboard icon at bottom\n├ <b>V2RayTun</b> → <b>+</b> → «Import from clipboard»\n└ <b>Hiddify</b> → <b>+</b> → «From clipboard»",
+    'setup.qr_instruction': "📲 <b>Add device</b>\n\n<b>Via QR code:</b>\nScan the code above in the app:\n├ <b>Happ</b> → 📸 camera icon\n└ <b>Hiddify</b> → <b>+</b> → «Scan QR»\n\n<b>Manually:</b>\nTap the key below — it will be copied, then:\n├ <b>Happ</b> → clipboard icon at bottom\n└ <b>Hiddify</b> → <b>+</b> → «From clipboard»",
     'setup.download_happ': "📲 Download Happ",
     'setup.download_hiddify': "📲 Download Hiddify",
     'setup.download_v2rayn': "📲 Download v2rayN",
@@ -811,7 +811,7 @@ LANG = {
 
     # --- Traffic / Bypass (Remnawave) ---
     'main.traffic_btn': "📊 My Traffic",
-    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Bypass key</b> <i>(tap to copy)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Alternative key for Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Where to paste:</b>\n├ <b>Happ</b> → Home → <b>+</b> → Paste from clipboard\n└ <b>V2RayTun</b> → Configs → <b>+</b> → Paste from clipboard",
+    'traffic.info': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n📥 {used} / {limit}\n{bar} {pct}%\n\n⏳ Until: {expires}\n\n🔗 <b>Bypass key</b> <i>(tap to copy)</i>\n<blockquote><code>{sub_url}</code></blockquote>\n\n📲 <b>Alternative key for Happ</b>\n<blockquote><code>{happ_url}</code></blockquote>\n\n📲 <b>Where to paste:</b>\n└ <b>Happ</b> → Home → <b>+</b> → Paste from clipboard",
     'traffic.no_subscription': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 No active subscription.",
     'traffic.trial_no_bypass': "📊 <b>Bypass Blocks</b> 🇷🇺\n\n🔒 Bypass is available on Basic and Plus plans.",
     'traffic.trial_upgrade_hint': "Get Basic or Plus subscription to unlock more GB and traffic purchases",
@@ -863,12 +863,7 @@ LANG = {
         "2. Tap <b>+</b> in the top-right corner\n"
         "3. Choose <b>«Add from clipboard»</b>\n"
         "4. Toggle the connection on\n\n"
-        "<b>In V2RayTun:</b>\n"
-        "1. Open V2RayTun\n"
-        "2. Tap <b>+</b> and choose <b>«Import from clipboard»</b>\n"
-        "3. Select the new profile\n"
-        "4. Toggle the connection on\n\n"
-        "<blockquote>💡 The «Add key» buttons above do all of this automatically — no copying needed.</blockquote>"
+        "<blockquote>💡 The «Add key» button above does this automatically — no copying needed.</blockquote>"
     ),
     'bgift_setup.connect_no_key': (
         "⚡️ <b>Connect in one tap</b>\n\n"
