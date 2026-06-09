@@ -607,7 +607,8 @@ async def callback_setup_step1(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "setup.install_app")
-    if platform not in ("windows",):
+    # Android: больше не упоминаем V2RayTun — рекомендуем только Happ
+    if platform not in ("windows", "android"):
         text += i18n_get_text(language, "setup.install_app_v2ray_hint")
 
     buttons = []
@@ -813,9 +814,10 @@ _DOWNLOAD_LINKS = {
         "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
     },
     "android": {
+        # Android: рекомендуем только Happ — V2RayTun / Hiddify
+        # больше не предлагаем юзеру, чтобы не плодить альтернативы
+        # с худшей цензуро-устойчивостью.
         "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
-        "v2raytun": "https://play.google.com/store/apps/details?id=com.v2raytun.android&hl=ru",
-        "hiddify": "https://play.google.com/store/apps/details?id=app.hiddify.com&hl=ru",
     },
     "macos": {
         "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
@@ -948,7 +950,7 @@ async def callback_setup_platform(callback: CallbackQuery):
 
         _platform_clients = {
             "ios": ["happ", "v2raytun", "hiddify"],
-            "android": ["happ", "v2raytun", "hiddify"],
+            "android": ["happ"],  # Android: только Happ — V2RayTun/Hiddify сняты
             "macos": ["happ", "v2raytun", "hiddify"],
             "windows": ["hiddify", "v2rayn"],
         }
