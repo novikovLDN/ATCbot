@@ -164,8 +164,6 @@ async def callback_bgift_step1(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "setup.install_app")
-    if platform != "windows":
-        text += i18n_get_text(language, "setup.install_app_v2ray_hint")
 
     buttons: list = []
     ios_links = _ios_happ_links()
@@ -187,19 +185,10 @@ async def callback_bgift_step1(callback: CallbackQuery):
                 text="📲 Установить Happ",
                 url=links["happ"],
             )])
-        if "v2raytun" in links:
-            buttons.append([InlineKeyboardButton(
-                text="📲 Установить V2RayTun",
-                url=links["v2raytun"],
-            )])
     elif platform == "windows":
         buttons.append([InlineKeyboardButton(
             text="📲 Скачать Happ",
             url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
-        )])
-        buttons.append([InlineKeyboardButton(
-            text="📲 Скачать V2RayTun",
-            url="https://github.com/mdf45/v2raytun/releases/tag/v3.7.10",
         )])
 
     buttons.append([InlineKeyboardButton(
@@ -297,10 +286,6 @@ async def callback_bgift_step2(callback: CallbackQuery):
             buttons.append([InlineKeyboardButton(
                 text="🌐 Добавить ключ в Happ",
                 url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-            )])
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Добавить ключ в V2RayTun",
-                url=f"{base_url}/open/v2raytun?url={quote(sub_url, safe='')}",
             )])
         except Exception as e:
             logger.warning("BGIFT_DEEPLINK_BUILD_FAIL user=%s err=%s", telegram_id, e)

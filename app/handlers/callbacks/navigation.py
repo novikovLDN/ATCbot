@@ -481,7 +481,6 @@ async def callback_get_sub_key(callback: CallbackQuery):
     text = i18n_get_text(language, "get_key.instruction_text",
         "📖 <b>Инструкция по подключению</b>\n\n"
         "<b>Happ</b> — откройте приложение → внизу нажмите на буфер обмена 🗒️ → ключ добавится автоматически\n\n"
-        "<b>V2RayTun</b> — откройте приложение → в правом верхнем углу нажмите <b>+</b> → «Импорт из буфера обмена»\n\n"
         "⸻\n\n"
         "👇 Скопируйте ключ одним нажатием:")
 
@@ -607,9 +606,6 @@ async def callback_setup_step1(callback: CallbackQuery):
     language = await resolve_user_language(telegram_id)
 
     text = i18n_get_text(language, "setup.install_app")
-    # Android: больше не упоминаем V2RayTun — рекомендуем только Happ
-    if platform not in ("windows", "android"):
-        text += i18n_get_text(language, "setup.install_app_v2ray_hint")
 
     buttons = []
 
@@ -629,19 +625,10 @@ async def callback_setup_step1(callback: CallbackQuery):
                 text="📲 Установить Happ",
                 url=links["happ"],
             )])
-        if "v2raytun" in links:
-            buttons.append([InlineKeyboardButton(
-                text="📲 Установить V2RayTun",
-                url=links["v2raytun"],
-            )])
     elif platform == "windows":
         buttons.append([InlineKeyboardButton(
             text="📲 Скачать Happ",
             url="https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
-        )])
-        buttons.append([InlineKeyboardButton(
-            text="📲 Скачать V2RayTun",
-            url="https://github.com/mdf45/v2raytun/releases/tag/v3.7.10",
         )])
 
     buttons.append([InlineKeyboardButton(
@@ -808,25 +795,22 @@ _IOS_HAPP_LINKS = {
 }
 
 _DOWNLOAD_LINKS = {
+    # V2RayTun снят со всех платформ (2026-06-08). Рекомендуем Happ
+    # на iOS / Android / macOS / Windows и Hiddify как fallback там,
+    # где Happ исторически менее популярен.
     "ios": {
         "happ": _IOS_HAPP_LINKS["ru"],
-        "v2raytun": "https://apps.apple.com/tr/app/v2raytun/id6476628951",
         "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
     },
     "android": {
-        # Android: рекомендуем только Happ — V2RayTun / Hiddify
-        # больше не предлагаем юзеру, чтобы не плодить альтернативы
-        # с худшей цензуро-устойчивостью.
         "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
     },
     "macos": {
         "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
-        "v2raytun": "https://apps.apple.com/tr/app/v2raytun/id6476628951",
         "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
     },
     "windows": {
         "hiddify": "https://github.com/hiddify/hiddify-app/releases/latest",
-        "v2rayn": "https://github.com/2dust/v2rayN/releases/latest",
     },
 }
 
@@ -913,20 +897,12 @@ async def callback_setup_platform(callback: CallbackQuery):
                 text=i18n_get_text(language, "setup.download_happ"),
                 url=links["happ"],
             )])
-        # Hiddify + V2RayTun — в одной строке
-        second_row = []
+        # Hiddify — отдельной строкой
         if "hiddify" in links:
-            second_row.append(InlineKeyboardButton(
+            buttons.append([InlineKeyboardButton(
                 text=i18n_get_text(language, "setup.download_hiddify"),
                 url=links["hiddify"],
-            ))
-        if "v2raytun" in links:
-            second_row.append(InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.download_v2raytun"),
-                url=links["v2raytun"],
-            ))
-        if second_row:
-            buttons.append(second_row)
+            )])
     else:
         # Windows: download buttons in pairs
         download_row = []
@@ -949,18 +925,18 @@ async def callback_setup_platform(callback: CallbackQuery):
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         _platform_clients = {
-            "ios": ["happ", "v2raytun", "hiddify"],
-            "android": ["happ"],  # Android: только Happ — V2RayTun/Hiddify сняты
-            "macos": ["happ", "v2raytun", "hiddify"],
-            "windows": ["hiddify", "v2rayn"],
+            "ios": ["happ", "hiddify"],
+            "android": ["happ"],
+            "macos": ["happ", "hiddify"],
+            "windows": ["hiddify"],
         }
         _client_deeplink = {
-            "happ": "happ", "v2raytun": "v2raytun",
-            "hiddify": "hiddify", "v2rayn": "hiddify",
+            "happ": "happ",
+            "hiddify": "hiddify",
         }
         _client_names = {
-            "happ": "Happ", "v2raytun": "V2RayTun",
-            "hiddify": "Hiddify", "v2rayn": "v2rayN",
+            "happ": "Happ",
+            "hiddify": "Hiddify",
         }
 
         # Decorative separator
@@ -1056,10 +1032,10 @@ async def callback_setup_manual(callback: CallbackQuery):
     # collapses to a single visible row with «Show more», and a tap on
     # the inner <code> copies the link to the clipboard.
     #
-    # Note: this means non-Happ clients (V2RayTun / Hiddify) can't
-    # decode the key directly. They still work — those users go through
-    # the auto-redirect path `/open/v2raytun` / `/open/hiddify`, which
-    # serves them the plain subscription URL.
+    # Note: this means non-Happ clients (Hiddify) can't decode the
+    # key directly. They still work — Hiddify users tap "Добавить
+    # ключ в Hiddify" which goes through `/open/hiddify` and serves
+    # the plain subscription URL.
     from app.services import happ_crypto
 
     def _key_block(label_key: str, raw_url: str) -> str:
