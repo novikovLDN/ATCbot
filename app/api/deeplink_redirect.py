@@ -44,12 +44,26 @@ _CLIENT_NAMES = {
 def _build_deep_link(client: str, raw_url: str) -> str:
     """Build the client-specific deep link for a subscription URL.
 
-    For Happ this is currently `happ://add/<url>` — when the Happ V4
-    crypt4 public key is wired in we'll switch to `happ://crypt4/<base64>`
-    by changing exactly this function (everything else — the HTML page,
-    the Copy button, the QR — stays identical, the only difference is
-    what string ends up in `deep_link`).
+    Happ goes through crypt4 — RSA-4096 / PKCS#1 v1.5 sealed payload
+    base64-encoded behind the `happ://crypt4/` scheme. Only the Happ
+    client (with its embedded private key) can decrypt it; the plain
+    sub URL never leaves the server, and DPI/parental controls don't
+    see a recognisable subscription endpoint in the deep link.
+
+    Other clients stay on their plain deep-link schemes — they don't
+    implement crypt4 and would just fail to parse a sealed payload.
     """
+    if client == "happ":
+        try:
+            from app.services import happ_crypto
+            return happ_crypto.to_crypt_link(raw_url)
+        except Exception:
+            # Defensive fallback — happ://add/<plain> still opens Happ
+            # and imports a subscription, just without the sealing.
+            # An ERROR-level log makes this loud in production logs.
+            logger.exception(
+                "HAPP_CRYPT4_BUILD_FAIL — falling back to plain happ://add/"
+            )
     scheme = _SCHEMES[client]
     safe_url = quote(raw_url, safe='/:?&=@%+')
     return f"{scheme}{safe_url}"
