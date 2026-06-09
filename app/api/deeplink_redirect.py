@@ -1,7 +1,7 @@
 """
 Deep link redirect endpoint.
 
-Telegram blocks custom URL schemes (happ://, hiddify://) in inline
+Telegram blocks custom URL schemes (happ://, incy://) in inline
 keyboard buttons. This endpoint serves an HTML page that redirects
 the browser to the custom scheme, opening the VPN client and importing
 the subscription automatically.
@@ -13,7 +13,7 @@ block with a Copy button so the user can import it manually.
 Usage:
     GET /open/{client}?url={subscription_url}
 
-Supported clients: happ, hiddify
+Supported clients: happ, incy
 """
 
 import json
@@ -29,27 +29,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _SCHEMES = {
-    "happ": "happ://add/",
-    "hiddify": "hiddify://import/",
+    # Happ: server-side seals the URL via happ_crypto → happ://crypt4/<base64>.
+    # Incy: server-side awaits incy_crypto.to_incy_link (Node sidecar
+    #       under the hood) → incy://crypt1/<payload>. If Node/package
+    #       is unavailable at request time, falls back to a clean error
+    #       page so the user understands "не получилось", not a 500.
+    "happ": "happ",
+    "incy": "incy",
 }
 
 _CLIENT_NAMES = {
     "happ": "Happ",
-    "hiddify": "Hiddify",
+    "incy": "Incy",
 }
 
 
-def _build_deep_link(client: str, raw_url: str) -> str:
+async def _build_deep_link(client: str, raw_url: str) -> str | None:
     """Build the client-specific deep link for a subscription URL.
 
-    Happ goes through crypt4 — RSA-4096 / PKCS#1 v1.5 sealed payload
-    base64-encoded behind the `happ://crypt4/` scheme. Only the Happ
-    client (with its embedded private key) can decrypt it; the plain
-    sub URL never leaves the server, and DPI/parental controls don't
-    see a recognisable subscription endpoint in the deep link.
-
-    Other clients stay on their plain deep-link schemes — they don't
-    implement crypt4 and would just fail to parse a sealed payload.
+    Happ: pure-Python RSA-4096/PKCS#1v1.5 (happ_crypto), always works.
+    Incy: AES-256-GCM via @incy/link-encoder npm package, behind a
+          Node.js sidecar. Returns None if the sidecar/package is
+          unavailable — caller renders a clean error page.
     """
     if client == "happ":
         try:
@@ -58,13 +59,19 @@ def _build_deep_link(client: str, raw_url: str) -> str:
         except Exception:
             # Defensive fallback — happ://add/<plain> still opens Happ
             # and imports a subscription, just without the sealing.
-            # An ERROR-level log makes this loud in production logs.
             logger.exception(
                 "HAPP_CRYPT4_BUILD_FAIL — falling back to plain happ://add/"
             )
-    scheme = _SCHEMES[client]
-    safe_url = quote(raw_url, safe='/:?&=@%+')
-    return f"{scheme}{safe_url}"
+            safe = quote(raw_url, safe='/:?&=@%+')
+            return f"happ://add/{safe}"
+    if client == "incy":
+        try:
+            from app.services import incy_crypto
+            return await incy_crypto.to_incy_link(raw_url)
+        except Exception:
+            logger.exception("INCY_BUILD_FAIL — returning None")
+            return None
+    return None
 
 
 def _render_page(client: str, deep_link: str) -> str:
@@ -222,6 +229,20 @@ async def deeplink_redirect(client: str, url: str = Query(...)):
     if client not in _SCHEMES:
         return HTMLResponse("<h3>Unknown client</h3>", status_code=400)
 
-    deep_link = _build_deep_link(client, url)
+    deep_link = await _build_deep_link(client, url)
+    if not deep_link:
+        # Currently only the Incy path can return None — happens when the
+        # Node sidecar / @incy/link-encoder package isn't deployed yet.
+        # Surface a friendly page rather than a 500.
+        client_name = html_escape(_CLIENT_NAMES.get(client, client))
+        return HTMLResponse(
+            f"<!doctype html><meta charset='utf-8'>"
+            f"<title>Atlas Secure</title>"
+            f"<body style='font-family:system-ui;padding:40px;text-align:center;color:#333'>"
+            f"<h2>{client_name} временно недоступен</h2>"
+            f"<p>Вернись в бота и попробуй вариант «Открыть в Happ» — "
+            f"подписку всегда можно поднять через него.</p></body>",
+            status_code=503,
+        )
     logger.info("DEEPLINK_REDIRECT client=%s", client)
     return HTMLResponse(_render_page(client, deep_link))
