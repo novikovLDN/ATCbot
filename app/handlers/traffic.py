@@ -447,9 +447,11 @@ async def callback_traffic_info(callback: CallbackQuery):
     elif remaining <= 3 * 1024**3:
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
-    # Subscription URL comes directly from Remnawave API response
-    sub_url = traffic.get("subscriptionUrl", "")
-    happ_url = traffic.get("happ_url", "")
+    # Subscription URL comes directly from Remnawave API response.
+    # User should never see the raw https://sub.atlassecure.ru/... — wrap
+    # it into a Happ crypt4 deeplink so the only visible key is sealed.
+    from app.services import happ_crypto
+    sub_url = happ_crypto.format_for_user(traffic.get("subscriptionUrl", ""))
 
     text = i18n_get_text(
         language,
@@ -460,7 +462,6 @@ async def callback_traffic_info(callback: CallbackQuery):
         pct=pct,
         expires=expires_str,
         sub_url=sub_url,
-        happ_url=happ_url,
     ) + warning
 
     if is_trial:
@@ -571,13 +572,12 @@ async def show_traffic_info_message(message):
     elif remaining <= 3 * 1024**3:
         warning += "\n\n⚠️ " + i18n_get_text(language, "traffic.warning_low", remaining=_format_bytes(remaining))
 
-    sub_url = traffic.get("subscriptionUrl", "")
-    happ_url = traffic.get("happ_url", "")
+    from app.services import happ_crypto
+    sub_url = happ_crypto.format_for_user(traffic.get("subscriptionUrl", ""))
     text = i18n_get_text(
         language, "traffic.info",
         used=_format_bytes(used), limit=_format_bytes(limit),
         bar=bar, pct=pct, expires=expires_str, sub_url=sub_url,
-        happ_url=happ_url,
     ) + warning
 
     if is_trial:

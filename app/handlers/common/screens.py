@@ -479,14 +479,16 @@ async def show_profile(message_or_query, language: str):
                         filled = int(ratio * length)
                         return "🤍" * filled + "🩶" * (length - filled)
 
-                    sub_url = traffic.get("subscriptionUrl", "")
-                    happ_url = traffic.get("happ_url", "")
+                    from app.services import happ_crypto
+                    sub_url = happ_crypto.format_for_user(
+                        traffic.get("subscriptionUrl", "")
+                    )
 
                     text += f"\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n"
                     text += f"<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {_fmt(used)} / {_fmt(limit_bytes)}\n"
                     text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
                     if sub_url:
-                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote><code>{sub_url}</code></blockquote>"
+                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
