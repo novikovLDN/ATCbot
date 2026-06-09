@@ -1,0 +1,16 @@
+{
+  "name": "atlas-bot-incy-sidecar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node sidecar for @incy/link-encoder. The bot is Python; this file only exists so `npm install` provisions the npm package the Python service shells out to.",
+  "type": "module",
+  "scripts": {
+    "incy-encode": "node scripts/incy_encode.mjs"
+  },
+  "dependencies": {
+    "@incy/link-encoder": "*"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

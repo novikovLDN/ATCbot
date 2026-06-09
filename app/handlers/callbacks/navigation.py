@@ -4,6 +4,7 @@ Simple navigation callbacks: menu_main, back_to_main, settings, about, support, 
 import asyncio
 import io
 import logging
+import os
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
@@ -618,6 +619,13 @@ async def callback_setup_step1(callback: CallbackQuery):
             text=i18n_get_text(language, "setup.install_happ_global"),
             url=_IOS_HAPP_LINKS["global"],
         )])
+        if platform == "ios":
+            incy_url = _DOWNLOAD_LINKS.get("ios", {}).get("incy")
+            if incy_url:
+                buttons.append([InlineKeyboardButton(
+                    text="📲 Скачать Incy",
+                    url=incy_url,
+                )])
     elif platform == "android":
         links = _DOWNLOAD_LINKS.get("android", {})
         if "happ" in links:
@@ -795,24 +803,31 @@ _IOS_HAPP_LINKS = {
 }
 
 _DOWNLOAD_LINKS = {
-    # V2RayTun снят со всех платформ (2026-06-08). Рекомендуем Happ
-    # на iOS / Android / macOS / Windows и Hiddify как fallback там,
-    # где Happ исторически менее популярен.
+    # 2026-06-08: V2RayTun снят со всех платформ, Hiddify тоже снят.
+    # Везде остался только Happ; на iOS дополнительно предлагаем Incy
+    # как альтернативу с другим crypt-протоколом (incy://crypt1/...).
+    # Incy сейчас только на iOS — версии для других платформ либо нет,
+    # либо не рекомендуется.
     "ios": {
         "happ": _IOS_HAPP_LINKS["ru"],
-        "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
+        "incy": "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB",
     },
     "android": {
         "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
     },
     "macos": {
         "happ": "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973?l=en-GB",
-        "hiddify": "https://apps.apple.com/tr/app/hiddify-proxy-vpn/id6596777532",
     },
     "windows": {
-        "hiddify": "https://github.com/hiddify/hiddify-app/releases/latest",
+        "happ": "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe",
     },
 }
+
+# Допускаем override через env — чтобы не пересобирать образ ради смены
+# App Store ссылки.
+_incy_url_env = os.getenv("INCY_IOS_APP_URL")
+if _incy_url_env:
+    _DOWNLOAD_LINKS["ios"]["incy"] = _incy_url_env
 
 
 @router.callback_query(F.data == "setup_device")
@@ -897,11 +912,11 @@ async def callback_setup_platform(callback: CallbackQuery):
                 text=i18n_get_text(language, "setup.download_happ"),
                 url=links["happ"],
             )])
-        # Hiddify — отдельной строкой
-        if "hiddify" in links:
+        # Incy — отдельной строкой, только iOS
+        if "incy" in links:
             buttons.append([InlineKeyboardButton(
-                text=i18n_get_text(language, "setup.download_hiddify"),
-                url=links["hiddify"],
+                text="📲 Скачать Incy",
+                url=links["incy"],
             )])
     else:
         # Windows: download buttons in pairs
@@ -924,19 +939,26 @@ async def callback_setup_platform(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
+        # Incy на iOS показывается только если Node-сайдкар жив. Сразу
+        # пробрасываем флаг сюда, чтобы не плодить нерабочих кнопок.
+        from app.services import incy_crypto
+        ios_clients = ["happ"]
+        if incy_crypto.is_available():
+            ios_clients.append("incy")
+
         _platform_clients = {
-            "ios": ["happ", "hiddify"],
+            "ios": ios_clients,
             "android": ["happ"],
-            "macos": ["happ", "hiddify"],
-            "windows": ["hiddify"],
+            "macos": ["happ"],
+            "windows": ["happ"],
         }
         _client_deeplink = {
             "happ": "happ",
-            "hiddify": "hiddify",
+            "incy": "incy",
         }
         _client_names = {
             "happ": "Happ",
-            "hiddify": "Hiddify",
+            "incy": "Incy",
         }
 
         # Decorative separator
@@ -1032,10 +1054,10 @@ async def callback_setup_manual(callback: CallbackQuery):
     # collapses to a single visible row with «Show more», and a tap on
     # the inner <code> copies the link to the clipboard.
     #
-    # Note: this means non-Happ clients (Hiddify) can't decode the
-    # key directly. They still work — Hiddify users tap "Добавить
-    # ключ в Hiddify" which goes through `/open/hiddify` and serves
-    # the plain subscription URL.
+    # Note: this means non-Happ clients (e.g. Incy on iOS) can't
+    # decode the key directly — they use their own deep-link button
+    # ("Добавить ключ в Incy") which goes through /open/incy and
+    # serves the Incy-specific incy://crypt1/<payload> deep link.
     from app.services import happ_crypto
 
     def _key_block(label_key: str, raw_url: str) -> str:

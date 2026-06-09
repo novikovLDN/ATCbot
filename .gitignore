@@ -55,3 +55,6 @@ venv.bak/
 # VPN keys (sensitive data)
 vpn_keys.txt
 
+# Node.js sidecar — installed via `npm install` in Docker / dev shell
+node_modules/
+
