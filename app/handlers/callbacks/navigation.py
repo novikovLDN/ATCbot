@@ -1051,31 +1051,23 @@ async def callback_setup_manual(callback: CallbackQuery):
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
-    # Build keys section. For every URL we show two flavours:
+    # Build keys section. Encrypted-only — `happ://crypt4/<base64>`
+    # (~700 chars per key) wrapped in <blockquote expandable> so it
+    # collapses to a single visible row with «Show more», and a tap on
+    # the inner <code> copies the link to the clipboard.
     #
-    #   1) Encrypted `happ://crypt4/<base64>` (~700 chars) — works in
-    #      Happ only, hides the panel endpoint from DPI / parental
-    #      controls. Wrapped in <blockquote expandable> so it collapses
-    #      to a single line with «Show more» on the Telegram side.
-    #
-    #   2) Plain `https://rmnw.atlassecure.ru/api/sub/<uuid>` (~80 chars)
-    #      — works in V2RayTun / Hiddify / any other client. Regular
-    #      blockquote, stays visible.
-    #
-    # Tapping a code block in Telegram copies it; that's the whole UX
-    # here, so user picks the flavour that matches their app.
+    # Note: this means non-Happ clients (V2RayTun / Hiddify) can't
+    # decode the key directly. They still work — those users go through
+    # the auto-redirect path `/open/v2raytun` / `/open/hiddify`, which
+    # serves them the plain subscription URL.
     from app.services import happ_crypto
 
     def _key_block(label_key: str, raw_url: str) -> str:
         crypt = happ_crypto.format_for_user(raw_url)
-        out = "\n" + i18n_get_text(language, label_key) + "\n"
-        # Encrypted variant — for Happ.
-        out += "✨ <i>для Happ (зашифрованная):</i>\n"
-        out += f"<blockquote expandable><code>{crypt}</code></blockquote>\n"
-        # Plain variant — for everything else.
-        out += "🔗 <i>прямая ссылка (для других приложений):</i>\n"
-        out += f"<blockquote><code>{raw_url}</code></blockquote>"
-        return out
+        return (
+            "\n" + i18n_get_text(language, label_key) + "\n"
+            f"<blockquote expandable><code>{crypt}</code></blockquote>"
+        )
 
     keys_section = ""
     if sub_url:
