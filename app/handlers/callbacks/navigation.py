@@ -1058,43 +1058,25 @@ async def callback_setup_manual(callback: CallbackQuery):
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
-    # Build keys section. For each subscription URL we render up to two
-    # encrypted flavours, each in its own <blockquote expandable>:
-    #
-    #   ✨ Happ — happ://crypt4/<base64> (~700 chars) — always.
-    #   🟢 Incy — incy://crypt1/<payload> (~150 chars) — iOS only,
-    #             and only when the Node sidecar is alive
-    #             (incy_crypto.is_available()). Without it the block
-    #             is silently skipped so the user never sees a broken
-    #             "Incy key" line.
-    #
-    # Both deeplinks open their respective app on tap+paste — the user
-    # picks the row matching the app they installed. Telegram collapses
-    # both blocks to a single line with «Show more» so the screen stays
-    # tidy even with two ~700-char strings.
-    from app.services import happ_crypto, incy_crypto
+    # Build keys section. Only the Happ-sealed crypt4 link goes here —
+    # Incy users have the dedicated «💚 Добавить в Incy» button on the
+    # one-tap setup screen (step2), they don't need a raw key block too.
+    # Showing the same key for two apps just adds noise on the manual
+    # screen for the 99% of users who don't need a fallback.
+    from app.services import happ_crypto
 
-    show_incy = platform == "ios" and incy_crypto.is_available()
-
-    async def _key_block(label_key: str, raw_url: str) -> str:
-        out = "\n" + i18n_get_text(language, label_key) + "\n"
-        # Happ — synchronous, pure-Python crypt4.
+    def _key_block(label_key: str, raw_url: str) -> str:
         happ_link = happ_crypto.format_for_user(raw_url)
-        out += "✨ <i>для Happ:</i>\n"
-        out += f"<blockquote expandable><code>{happ_link}</code></blockquote>"
-        # Incy — Node sidecar, may return None on broken deploy; skip.
-        if show_incy:
-            incy_link = await incy_crypto.to_incy_link(raw_url)
-            if incy_link:
-                out += "\n🟢 <i>для Incy:</i>\n"
-                out += f"<blockquote expandable><code>{incy_link}</code></blockquote>"
-        return out
+        return (
+            "\n" + i18n_get_text(language, label_key) + "\n"
+            f"<blockquote expandable><code>{happ_link}</code></blockquote>"
+        )
 
     keys_section = ""
     if sub_url:
-        keys_section += await _key_block("setup.key_vpn_label", sub_url)
+        keys_section += _key_block("setup.key_vpn_label", sub_url)
     if bypass_url:
-        keys_section += await _key_block("setup.key_bypass_label", bypass_url)
+        keys_section += _key_block("setup.key_bypass_label", bypass_url)
 
     if keys_section:
         text = f"{connect_text}\n{keys_section}"
