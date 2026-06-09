@@ -41,6 +41,11 @@ scripts/
 # Exceptions: scripts launched from the admin dashboard must be in the image.
 !scripts/migrate_samopis_to_remnawave.py
 !scripts/verify_samopis_migration.py
+# Incy deep-link sidecar — invoked by app/services/incy_crypto.py at runtime
+# every time a user opens the iOS «🌐 Incy» button. Without this file in the
+# image, incy_crypto._SCRIPT_PATH.is_file() returns False on startup, the
+# kill-switch flips, and the Incy button never appears in the UI.
+!scripts/incy_encode.mjs
 
 # Audit reports
 *_AUDIT.md
