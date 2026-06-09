@@ -810,10 +810,7 @@ _DOWNLOAD_LINKS = {
     # либо не рекомендуется.
     "ios": {
         "happ": _IOS_HAPP_LINKS["ru"],
-        # TODO: подтвердить точный App Store URL Incy — поставил как
-        # placeholder, чтобы не блочить деплой. Замени через env var
-        # INCY_IOS_APP_URL или прямо здесь, как только подтвердишь.
-        "incy": "https://apps.apple.com/app/incy-vpn",
+        "incy": "https://apps.apple.com/ru/app/incy/id6756943388?l=en-GB",
     },
     "android": {
         "happ": "https://play.google.com/store/apps/details?id=com.happproxy&hl=ru",
