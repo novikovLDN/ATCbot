@@ -67,6 +67,7 @@ async def segments_list():
         ("active_subscriptions", "Активные подписки"),
         ("no_subscription", "Без подписки"),
         ("no_remnawave", "Без Remnawave"),
+        ("started_7d_cold", "Холодные за 7 дней (нажали /start, без ключей)"),
         ("expired_1d", "Истекли вчера"),
         ("expired_2d", "Истекли 2 дня назад"),
         ("expired_3d", "Истекли 3 дня назад"),

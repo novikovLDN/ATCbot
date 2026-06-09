@@ -1124,6 +1124,12 @@ async def get_users_by_segment(segment: str) -> list:
             - expired_1d / expired_2d / expired_3d — подписка истекла
                                      ровно N полных суток назад
                                      (и сейчас нет активной)
+            - started_7d_cold      — холодные лиды: запустили бот за
+                                     последние 7 суток (users.created_at)
+                                     и до сих пор без активной подписки
+                                     И без bypass-entity. У них вообще
+                                     никаких ключей нет — нажали /start
+                                     и не купили.
 
     Returns:
         Список Telegram ID пользователей
@@ -1165,6 +1171,31 @@ async def get_users_by_segment(segment: str) -> list:
                          AND (s.remnawave_premium_uuid IS NOT NULL
                               OR s.remnawave_uuid IS NOT NULL)
                    )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "started_7d_cold":
+            # Холодные лиды для прогрева: запустили бот не позже 7 суток
+            # назад и до сих пор ничего не купили — ни подписку, ни
+            # bypass-ГБ. Условия:
+            #   1) users.created_at >= NOW() - 7 days  → свежий старт
+            #   2) NO subscription row с expires_at > NOW()  → нет
+            #      активной подписки
+            #   3) NO subscription row с remnawave_uuid или
+            #      remnawave_premium_uuid → не сидит на bypass-only
+            #      ключах, оставшихся от триала / прошлой покупки.
+            # 1 + 3 — то самое «никаких ключей вообще».
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE u.created_at >= NOW() - INTERVAL '7 days'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = u.telegram_id
+                           AND (
+                               s.expires_at > NOW()
+                               OR s.remnawave_uuid IS NOT NULL
+                               OR s.remnawave_premium_uuid IS NOT NULL
+                           )
+                     )"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
