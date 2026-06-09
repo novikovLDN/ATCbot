@@ -176,11 +176,6 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
     text = i18n_get_text(language, "traffic.confirm_purchase", gb=gb, price=final_price, balance=balance)
 
     buttons = []
-    if balance >= final_price:
-        buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_balance", price=final_price),
-            callback_data=f"bypass_pay_balance:{gb}",
-        )])
 
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "payment.card"),
@@ -219,10 +214,22 @@ async def callback_buy_bypass_pack(callback: CallbackQuery):
 
 @traffic_router.callback_query(F.data.startswith("bypass_pay_balance:"))
 async def callback_bypass_pay_balance(callback: CallbackQuery):
-    """Оплата bypass-only пакета с баланса. Выдаёт только обход + триал основных серверов."""
+    """Оплата bypass-only пакета с баланса.
+
+    Метод отключён — оставляем хендлер только чтобы старые
+    клавиатуры в чатах юзеров не «молчали»: отвечаем алертом,
+    что опция больше недоступна, и не списываем баланс.
+    """
+    await callback.answer(
+        "Оплата с баланса для пакетов трафика больше недоступна. "
+        "Выберите другой способ: карта, СБП или Telegram Stars.",
+        show_alert=True,
+    )
+    return
+
+    # ── unreachable: legacy body kept for reference only ──
     if not await ensure_db_ready_callback(callback):
         return
-    await callback.answer()
 
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
@@ -748,12 +755,7 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
     if discount_pct > 0:
         text += f"\n🎁 Скидка {discount_pct}%: {_strikethrough(str(base_price))} ₽ → {price} ₽"
 
-    buttons = [
-        [InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.pay_balance", price=price),
-            callback_data=f"traffic_pay_balance:{gb}",
-        )],
-    ]
+    buttons: list = []
 
     # Card (YooKassa) button — requires TG_PROVIDER_TOKEN
     if config.TG_PROVIDER_TOKEN:
@@ -789,7 +791,20 @@ async def callback_buy_traffic_pack(callback: CallbackQuery):
 
 @traffic_router.callback_query(F.data.startswith("traffic_pay_balance:"))
 async def callback_traffic_pay_balance(callback: CallbackQuery):
-    """Pay for traffic pack from balance."""
+    """Pay for traffic pack from balance.
+
+    Метод отключён — кнопка убрана из меню покупки. Этот хендлер
+    сохраняем только чтобы старые клавиатуры у юзеров отвечали
+    нормальным алертом, а не молчали.
+    """
+    await callback.answer(
+        "Оплата с баланса для пакетов трафика больше недоступна. "
+        "Выберите другой способ: карта, СБП, Stars или CryptoBot.",
+        show_alert=True,
+    )
+    return
+
+    # ── unreachable: legacy body kept for reference only ──
     if not await ensure_db_ready_callback(callback):
         return
 
