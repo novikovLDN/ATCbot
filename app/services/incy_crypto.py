@@ -57,8 +57,15 @@ def _mark_disabled(reason: str) -> None:
 
 def is_available() -> bool:
     """Cheap check the bot can call before deciding whether to render
-    the Incy button. False once we've recorded a permanent failure."""
-    return not _disabled and _SCRIPT_PATH.is_file()
+    the Incy button.
+
+    Today `to_incy_link()` is pure-Python (no Node, no encryption —
+    just `incy://add/<plain_url>`), so we always return True. The
+    sidecar / `_disabled` machinery is kept around for the future
+    crypt1 path; once that comes back online we can re-introduce a
+    real availability check, e.g. by routing through
+    `to_incy_link_crypt1()` and checking the kill-switch flag."""
+    return True
 
 
 async def selftest() -> bool:
@@ -149,13 +156,46 @@ async def _spawn(url: str) -> Optional[str]:
 
 
 async def to_incy_link(url: Optional[str]) -> Optional[str]:
-    """Wrap a plain subscription URL into `incy://crypt1/<payload>`.
+    """Wrap a plain subscription URL into an Incy-importable deep link.
 
-    Returns None on:
-      • empty/None input;
-      • node missing, package missing, sub-process timeout / bad output;
-      • the `_disabled` kill-switch having been flipped by an earlier call.
+    Right now we return `incy://add/<plain_url>`:
+
+      • Universal across every shipped Incy version (iOS, Android,
+        Desktop). incy.gitbook.io docs say: «if the data after
+        incy://add/ is an http(s) URL, the profile is downloaded
+        from this URL» — no decoder version required, no shared
+        keymat required.
+      • Doesn't need the Node sidecar → no fragile shell-out, can't
+        be killed by a missing node_modules, broken docker layer,
+        unrooted .dockerignore, npm registry hiccup, etc.
+
+    Trade-off: the subscription URL is plain-text inside the deep
+    link. For Happ we use the sealed `happ://crypt4/<base64>`,
+    so plain-text on Incy is slightly worse for DPI-evasion. We
+    accept that until a published Incy client release actually
+    decodes incy://crypt1/ — the npm @incy/link-encoder package's
+    keymat fingerprint b6bf708471cc… must match the keymat baked
+    into the client app for crypt1 to decode at all. INCY-DEV
+    published the npm package on 2026-06-06 but the App Store
+    iOS client (v2.2.1 in user's screenshot) didn't ship that
+    keymat yet, so crypt1 links surface as
+    «Could not determine link type».
+
+    Crypt1 plumbing below (_spawn, selftest, to_incy_link_crypt1)
+    is kept callable so the switch is a one-liner once a known-good
+    Incy client release lands.
     """
+    from urllib.parse import quote
+    if not url:
+        return None
+    safe = quote(url, safe="/:?&=@%+")
+    return f"incy://add/{safe}"
+
+
+async def to_incy_link_crypt1(url: Optional[str]) -> Optional[str]:
+    """Original crypt1 variant via the Node sidecar. Kept for the day
+    Incy ships a client with the same keymat as `@incy/link-encoder`.
+    See `to_incy_link` for the production path."""
     if not url:
         return None
     if _disabled:
@@ -170,4 +210,5 @@ __all__ = [
     "DEEP_LINK_PREFIX",
     "is_available",
     "to_incy_link",
+    "to_incy_link_crypt1",
 ]
