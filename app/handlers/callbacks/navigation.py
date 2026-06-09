@@ -1051,15 +1051,40 @@ async def callback_setup_manual(callback: CallbackQuery):
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
-    # Build keys section
+    # Build keys section. For every URL we show two flavours:
+    #
+    #   1) Encrypted `happ://crypt4/<base64>` (~700 chars) — works in
+    #      Happ only, hides the panel endpoint from DPI / parental
+    #      controls. Wrapped in <blockquote expandable> so it collapses
+    #      to a single line with «Show more» on the Telegram side.
+    #
+    #   2) Plain `https://rmnw.atlassecure.ru/api/sub/<uuid>` (~80 chars)
+    #      — works in V2RayTun / Hiddify / any other client. Regular
+    #      blockquote, stays visible.
+    #
+    # Tapping a code block in Telegram copies it; that's the whole UX
+    # here, so user picks the flavour that matches their app.
+    from app.services import happ_crypto
+
+    def _key_block(label_key: str, raw_url: str) -> str:
+        crypt = happ_crypto.format_for_user(raw_url)
+        out = "\n" + i18n_get_text(language, label_key) + "\n"
+        # Encrypted variant — for Happ.
+        out += "✨ <i>для Happ (зашифрованная):</i>\n"
+        out += f"<blockquote expandable><code>{crypt}</code></blockquote>\n"
+        # Plain variant — for everything else.
+        out += "🔗 <i>прямая ссылка (для других приложений):</i>\n"
+        out += f"<blockquote><code>{raw_url}</code></blockquote>"
+        return out
+
     keys_section = ""
     if sub_url:
-        keys_section += i18n_get_text(language, "setup.key_vpn_label") + "\n<blockquote><code>" + sub_url + "</code></blockquote>"
+        keys_section += _key_block("setup.key_vpn_label", sub_url)
     if bypass_url:
-        keys_section += "\n" + i18n_get_text(language, "setup.key_bypass_label") + "\n<blockquote><code>" + bypass_url + "</code></blockquote>"
+        keys_section += _key_block("setup.key_bypass_label", bypass_url)
 
     if keys_section:
-        text = f"{connect_text}\n\n{keys_section}"
+        text = f"{connect_text}\n{keys_section}"
     else:
         text = connect_text
 
