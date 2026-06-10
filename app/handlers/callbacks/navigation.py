@@ -1261,12 +1261,25 @@ async def callback_setup_qr_bypass(callback: CallbackQuery):
 
 
 async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, language: str, label_key: str):
-    """Генерация QR-кода и отправка экрана с инструкцией."""
+    """Генерация QR-кода и отправка экрана с инструкцией.
+
+    QR и видимый под ним ключ — оба в crypt4-обёртке:
+    `happ://crypt4/<base64>`. Сырой `https://rmnw.atlassecure.ru/...`
+    юзеру не показывается ни в QR, ни в тексте — Happ всё равно
+    расшифрует крипто-ссылку и подтянет подписку (см. exact spec
+    in app/services/happ_crypto.py)."""
     telegram_id = callback.from_user.id
+
+    # Wrap once, reuse for both the QR payload AND the visible key
+    # block — guarantees they stay in sync. format_for_user falls back
+    # to the raw URL on any encryption failure, so the screen is
+    # never broken even if happ_crypto has a hiccup.
+    from app.services import happ_crypto
+    crypt_url = happ_crypto.format_for_user(url) or url
 
     import qrcode
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
-    qr.add_data(url)
+    qr.add_data(crypt_url)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
 
@@ -1275,7 +1288,12 @@ async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, lang
     buf.seek(0)
 
     qr_text = i18n_get_text(language, "setup.qr_instruction")
-    qr_text += "\n\n" + i18n_get_text(language, label_key) + "\n<blockquote><code>" + url + "</code></blockquote>"
+    # <blockquote expandable> сворачивает длинную (~700 char) crypt4-
+    # ссылку до одной строки с «Show more» — тап по <code> копирует.
+    qr_text += (
+        "\n\n" + i18n_get_text(language, label_key) + "\n"
+        f"<blockquote expandable><code>{crypt_url}</code></blockquote>"
+    )
 
     buttons = [
         [InlineKeyboardButton(
