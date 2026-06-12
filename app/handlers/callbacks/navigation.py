@@ -1115,7 +1115,14 @@ async def callback_setup_done(callback: CallbackQuery, state: FSMContext):
         pass
 
     # 2. Отправляем 🎉
-    msg = await callback.bot.send_message(chat_id=telegram_id, text="🎉", parse_mode="HTML")
+    msg = await callback.bot.send_message(
+        chat_id=telegram_id,
+        # parse_mode=HTML обязателен — иначе Telegram отдаст
+        # текст вместо premium-эмодзи. Fallback внутри тега
+        # (⚡️) увидят non-premium юзеры и старые клиенты.
+        text='<tg-emoji emoji-id="5456140674028019486">⚡️</tg-emoji>',
+        parse_mode="HTML",
+    )
 
     # 3. Ждём 2 секунды
     await asyncio.sleep(2)
