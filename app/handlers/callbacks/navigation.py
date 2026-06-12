@@ -489,8 +489,14 @@ async def callback_get_sub_key(callback: CallbackQuery):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=i18n_get_text(language, "setup.device_button"),
+            # Bot API 9.4: icon_custom_emoji_id ставит slot для Premium
+            # custom emoji слева от текста, style красит кнопку. Дублирующий
+            # префикс 📲 убираем (`.lstrip(...)`) — иначе будут два эмодзи
+            # подряд, а раздел общего i18n-ключа ломать не хочется.
+            text=i18n_get_text(language, "setup.device_button").lstrip("📲 "),
             callback_data="setup_device",
+            icon_custom_emoji_id="5330115548900501467",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
