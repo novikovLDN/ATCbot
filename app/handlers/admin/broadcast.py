@@ -153,7 +153,11 @@ def _build_broadcast_reply_markup(
     rows = []
     for btn in buttons:
         if btn == "buy":
-            rows.append([InlineKeyboardButton(text="🛒 Купить", callback_data="menu_buy_vpn")])
+            rows.append([InlineKeyboardButton(
+                text="Купить",
+                callback_data="menu_buy_vpn",
+                icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            )])
         elif btn == "promo_buy":
             label = f"🎁 Купить со скидкой {discount}%" if discount else "🎁 Купить со скидкой"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"broadcast_promo_buy:{broadcast_id}")])
@@ -189,7 +193,11 @@ def _build_broadcast_reply_markup(
                 url="https://qodev.dev",
             )])
         elif btn == "buy_combo":
-            rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
+            rows.append([InlineKeyboardButton(
+                text="Купить Комбо",
+                callback_data="buy_combo",
+                icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            )])
         elif btn == "proxy":
             rows.append([InlineKeyboardButton(text="🌐 MT Прокси", callback_data="proxy_open")])
 

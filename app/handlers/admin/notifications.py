@@ -313,7 +313,11 @@ async def callback_promo_send(callback: CallbackQuery, state: FSMContext, bot: B
                 )
 
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=f"🛒 Купить со скидкой {discount}%", callback_data="menu_buy_vpn")],
+                    [InlineKeyboardButton(
+                        text=f"Купить со скидкой {discount}%",
+                        callback_data="menu_buy_vpn",
+                        icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                    )],
                 ])
 
                 async with semaphore:
@@ -478,8 +482,16 @@ async def callback_retention_send(callback: CallbackQuery, state: FSMContext, bo
                 reply_markup = None
                 if has_btn:
                     btn_text = i18n_get_text(user_lang, "retention.expired_no_renew_btn")
+                    # Купить-кнопки везде получают ⚡️ через icon_custom_emoji_id;
+                    # text приходит из i18n (retention.expired_no_renew_btn) и
+                    # может нести свой unicode-префикс — снимаем общим хелпером.
+                    from app.handlers.common.keyboards import _strip_lead_emoji
                     reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text=btn_text, callback_data="menu_buy_vpn")]
+                        [InlineKeyboardButton(
+                            text=_strip_lead_emoji(btn_text),
+                            callback_data="menu_buy_vpn",
+                            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                        )]
                     ])
 
                 async with semaphore:

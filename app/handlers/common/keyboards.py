@@ -161,8 +161,9 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             if special_offer:
                 remaining = special_offer["remaining_text"]
                 buttons.append([InlineKeyboardButton(
-                    text=f"🔥 Продлить со скидкой 15% | ⏳ {remaining}",
-                    callback_data="special_offer_buy"
+                    text=f"Продлить со скидкой 15% | ⏳ {remaining}",
+                    callback_data="special_offer_buy",
+                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
                 )])
                 offer_shown = True
         except Exception as e:
@@ -175,8 +176,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         buttons.append([InlineKeyboardButton(
             text="Купить подписку",
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5364040533498932357",  # 💎
-            style="danger",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
         buttons.append([InlineKeyboardButton(
             text="🌐 Только обход блокировок",
@@ -197,16 +197,23 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         if is_bypass_only:
             # Bypass-only: кнопки докупить трафик и купить подписку
             buttons.append([
-                InlineKeyboardButton(text="🌐 Купить ГБ обхода", callback_data="buy_traffic"),
-                InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn"),
+                InlineKeyboardButton(
+                    text="Купить ГБ обхода",
+                    callback_data="buy_traffic",
+                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                ),
+                InlineKeyboardButton(
+                    text="Купить VPN",
+                    callback_data="menu_buy_vpn",
+                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                ),
             ])
         else:
             buttons.append([
                 InlineKeyboardButton(
                     text="Продлить подписку",
                     callback_data="menu_buy_vpn",
-                    icon_custom_emoji_id="5350436817294336466",  # 😂
-                    style="danger",
+                    icon_custom_emoji_id="5199785165735367039",  # ⚡️
                 ),
                 InlineKeyboardButton(
                     text="Подарить",
@@ -368,33 +375,46 @@ def get_profile_keyboard(
     if is_bypass_only and has_active_subscription:
         # Bypass-only: кнопка купить ГБ + купить подписку (не продлить)
         buttons.append([InlineKeyboardButton(
-            text="🌐 Купить ГБ трафика",
+            text="Купить ГБ трафика",
             callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
         buttons.append([InlineKeyboardButton(
-            text="⚡️ Купить подписку VPN",
+            text="Купить подписку VPN",
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     elif is_combo and has_active_subscription:
         # Комбо-подписка: две отдельные кнопки — трафик и продление основной
         buttons.append([InlineKeyboardButton(
-            text="🌐 Купить ГБ трафика",
+            text="Купить ГБ трафика",
             callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
         buttons.append([InlineKeyboardButton(
-            text="⚡️ Продлить основную подписку",
+            text="Продлить основную подписку",
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     else:
         # Row 1: Купить ГБ + Продлить/Купить подписку
         row1 = []
         if show_traffic and not is_trial:
             row1.append(InlineKeyboardButton(
-                text="🌐 Купить ГБ",
+                text="Купить ГБ",
                 callback_data="buy_traffic",
+                icon_custom_emoji_id="5199785165735367039",  # ⚡️
             ))
-        buy_text = i18n_get_text(language, "main.buy_renew") if has_active_subscription else i18n_get_text(language, "main.buy_new")
-        row1.append(InlineKeyboardButton(text=buy_text, callback_data="menu_buy_vpn"))
+        buy_text = _strip_lead_emoji(
+            i18n_get_text(language, "main.buy_renew")
+            if has_active_subscription
+            else i18n_get_text(language, "main.buy_new")
+        )
+        row1.append(InlineKeyboardButton(
+            text=buy_text,
+            callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        ))
         buttons.append(row1)
 
     # Row 2: Автопродление + Пополнить

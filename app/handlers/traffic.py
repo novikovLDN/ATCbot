@@ -310,7 +310,11 @@ async def callback_bypass_pay_balance(callback: CallbackQuery):
 
     buttons = [
         [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
-        [InlineKeyboardButton(text="🌐 Купить ещё ГБ", callback_data="buy_traffic")],
+        [InlineKeyboardButton(
+            text="Купить ещё ГБ",
+            callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        )],
         [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
     ]
 
@@ -469,14 +473,18 @@ async def callback_traffic_info(callback: CallbackQuery):
 
     buttons = []
     if is_trial:
+        from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.buy_subscription"),
+            text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_subscription")),
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     else:
+        from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.buy_traffic_btn"),
+            text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_traffic_btn")),
             callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")])
     buttons.append([InlineKeyboardButton(
@@ -585,14 +593,18 @@ async def show_traffic_info_message(message):
 
     buttons = []
     if is_trial:
+        from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.buy_subscription"),
+            text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_subscription")),
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     else:
+        from app.handlers.common.keyboards import _strip_lead_emoji
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "traffic.buy_traffic_btn"),
+            text=_strip_lead_emoji(i18n_get_text(language, "traffic.buy_traffic_btn")),
             callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     buttons.append([InlineKeyboardButton(text="🔄", callback_data="traffic_refresh")])
     buttons.append([InlineKeyboardButton(
