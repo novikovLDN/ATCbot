@@ -1,15 +1,28 @@
 """
-Global default `style="danger"` + automatic `icon_custom_emoji_id`
+Selective per-pattern `style` + automatic `icon_custom_emoji_id`
 injection for every InlineKeyboardButton in the bot — Bot API 9.4 button color.
+
+Palette policy (post-redesign 2026-06-12):
+    Color = signal, not decoration. Default for most buttons is the
+    Telegram neutral grey (style not set). Three opt-in lists raise
+    a button to a colored state when its text matches:
+
+      ✅ STYLE_SUCCESS_PATTERNS — green: recommended payment methods
+                                  (Банковская карта, СБП, Международные)
+      🔵 STYLE_PRIMARY_PATTERNS — blue: main CTA buttons (купить
+                                  подписку, продлить подписку,
+                                  купить со скидкой)
+      ⚠️  STYLE_DANGER_PATTERNS — red: truly destructive actions only
+                                  (удалить, отозвать, отменить подписку)
+
+    Order of evaluation: success → primary → danger → default (none).
+    Explicit `style=...` from the caller always wins.
 
 How `style` works:
     `InlineKeyboardButton` is a Pydantic v2 model. Pydantic builds field
     descriptors at class-creation time, so changing the field's default
-    afterwards has no effect. Instead, we wrap the class's `__init__`:
-    if `style` wasn't explicitly passed, we inject `"danger"` for most
-    buttons, or `"success"` for the green-paid-method patterns in
-    STYLE_SUCCESS_PATTERNS. Explicit `style="primary"` / `"success"` /
-    `"danger"` from the caller is always respected.
+    afterwards has no effect. Instead, we wrap the class's `__init__`
+    and inject `style` only when a pattern matches.
 
 How `icon_custom_emoji_id` auto-injection works:
     Maintaining premium emoji ids on every call site (hundreds of
@@ -37,7 +50,6 @@ import re
 
 from aiogram.types import InlineKeyboardButton
 
-_DEFAULT_STYLE = "danger"
 _original_init = InlineKeyboardButton.__init__
 
 # Anything that isn't a word char (Unicode-aware) or whitespace at the
@@ -144,21 +156,33 @@ STYLE_SUCCESS_PATTERNS: list[re.Pattern] = [
 # CTA-кнопки покупки/продления подписки. ГБ-трафик намеренно не сюда
 # (он не подписка → остаётся красным).
 STYLE_PRIMARY_PATTERNS: list[re.Pattern] = [
-    # Подписка (новая / продление)
-    re.compile(r"^Купить подписку(?:\s+.+)?$"),       # «Купить подписку», «Купить подписку VPN»
+    # Подписка — основной CTA. ГБ-трафик намеренно сюда не входит:
+    # это альтернатива, а не главное действие, поэтому остаётся
+    # neutral. Если решим выделить — добавим сюда же.
+    re.compile(r"^Купить подписку(?:\s+.+)?$"),
     re.compile(r"^Купить основную(?:\s+подписку)?$"),
     re.compile(r"^Купить VPN$"),
     re.compile(r"^Купить Комбо$"),
-    re.compile(r"^Купить$"),                          # broadcast generic «Купить»
+    re.compile(r"^Купить$"),                          # broadcast CTA
     re.compile(r"^Купить со скидкой\s+\d+%.*$"),
     re.compile(r"^Продлить подписку$"),
     re.compile(r"^Продлить основную подписку$"),
     re.compile(r"^Продлить со скидкой\s+\d+%.*$"),
-    # ГБ-трафик (по просьбе продакта тоже синяя)
-    re.compile(r"^Купить ГБ$"),
-    re.compile(r"^Купить ГБ обхода$"),
-    re.compile(r"^Купить ГБ трафика$"),
-    re.compile(r"^Купить ещё ГБ$"),
+]
+
+# Texts whose buttons should render `style="danger"` (красный) — реально
+# деструктивные действия. Цвет сохраняет силу как "стоп-сигнал" — юзер
+# реально видит и думает прежде чем нажать.
+STYLE_DANGER_PATTERNS: list[re.Pattern] = [
+    re.compile(r"^Удалить.*$"),          # «Удалить», «Удалить ключ», «Удалить аккаунт», «Удалить у юзеров»…
+    re.compile(r"^Отозвать.*$"),         # «Отозвать», «Отозвать доступ», «Отозвать VIP»
+    re.compile(r"^Отменить подписку$"),
+    re.compile(r"^Отключить здесь$"),    # push-уведомления
+    re.compile(r"^Очистить.*$"),         # «Очистить FAQ» (admin)
+    re.compile(r"^Стоп$"),               # стоп удаления рассылки и т.п.
+    re.compile(r"^Delete.*$"),           # английские варианты
+    re.compile(r"^Remove.*$"),
+    re.compile(r"^Revoke.*$"),
 ]
 
 
@@ -168,6 +192,10 @@ def _has_success_style(stripped_text: str) -> bool:
 
 def _has_primary_style(stripped_text: str) -> bool:
     return any(p.fullmatch(stripped_text) for p in STYLE_PRIMARY_PATTERNS)
+
+
+def _has_danger_style(stripped_text: str) -> bool:
+    return any(p.fullmatch(stripped_text) for p in STYLE_DANGER_PATTERNS)
 
 
 def _lookup_emoji(stripped_text: str) -> str | None:
@@ -199,15 +227,17 @@ def _danger_default_init(self, **kwargs):
                 kwargs["text"] = stripped
 
     if "style" not in kwargs:
-        # Priority: success (зелёный — основные оплаты) → primary
-        # (синий — подписка / трафик CTA) → default (красный — всё
-        # остальное).
+        # Priority: success → primary → danger → default (None).
+        # Default means «не ставим style» → Telegram render как
+        # нейтральная сероватая кнопка. 80% UI остаётся таким —
+        # цветом подкрашиваем только акцент.
         if _has_success_style(stripped):
             kwargs["style"] = "success"
         elif _has_primary_style(stripped):
             kwargs["style"] = "primary"
-        else:
-            kwargs["style"] = _DEFAULT_STYLE
+        elif _has_danger_style(stripped):
+            kwargs["style"] = "danger"
+        # else: leave kwargs without `style` — neutral default.
     _original_init(self, **kwargs)
 
 
