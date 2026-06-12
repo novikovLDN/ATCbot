@@ -190,7 +190,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         buttons.append([InlineKeyboardButton(
             text=_strip_lead_emoji(i18n_get_text(language, "main.profile")),
             callback_data="menu_profile",
-            icon_custom_emoji_id="5350404270032166927",  # 🏠
+            icon_custom_emoji_id="6019503133288304110",  # 🧑‍💻
         )])
         if is_bypass_only:
             # Bypass-only: кнопки докупить трафик и купить подписку
