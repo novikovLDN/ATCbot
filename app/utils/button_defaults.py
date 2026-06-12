@@ -114,6 +114,29 @@ TEXT_EMOJI_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 
+# ── Per-button style overrides ───────────────────────────────────
+# Texts whose buttons should render `style="success"` (green) instead
+# of the default `"danger"` (red). Per product owner: «Банковская
+# карта», «СБП», «Международные платежи» — основные платёжные методы
+# выделены зелёным, всё остальное (резервы, Stars, CryptoBot, баланс)
+# — красным. Pattern checked AFTER the leading-emoji strip, exactly
+# like TEXT_EMOJI_MAP — so «🏦 СБП» / «📱 СБП (1234 ₽)» оба
+# попадают на success.
+STYLE_SUCCESS_PATTERNS: list[re.Pattern] = [
+    re.compile(r"^Банковская карта$"),
+    re.compile(r"^Bank Card$"),
+    # «СБП», «СБП (1234 ₽)» — но НЕ «СБП резерв ...»
+    re.compile(r"^СБП(?:\s*\(.+\))?$"),
+    re.compile(r"^SBP(?:\s*[\(\+].+)?$"),
+    re.compile(r"^Международные платежи$"),
+    re.compile(r"^International payments$"),
+]
+
+
+def _has_success_style(stripped_text: str) -> bool:
+    return any(p.fullmatch(stripped_text) for p in STYLE_SUCCESS_PATTERNS)
+
+
 def _lookup_emoji(stripped_text: str) -> str | None:
     eid = TEXT_EMOJI_MAP.get(stripped_text)
     if eid:
@@ -130,9 +153,10 @@ def _danger_default_init(self, **kwargs):
     # icon_custom_emoji_id, style, or non-text-only button like url/web_app)
     # is left untouched on those particular fields.
 
+    raw_text = kwargs.get("text", "") or ""
+    stripped = _LEAD_EMOJI_RE.sub("", raw_text, count=1).strip()
+
     if "icon_custom_emoji_id" not in kwargs:
-        raw_text = kwargs.get("text", "") or ""
-        stripped = _LEAD_EMOJI_RE.sub("", raw_text, count=1).strip()
         emoji_id = _lookup_emoji(stripped)
         if emoji_id:
             kwargs["icon_custom_emoji_id"] = emoji_id
@@ -142,7 +166,10 @@ def _danger_default_init(self, **kwargs):
                 kwargs["text"] = stripped
 
     if "style" not in kwargs:
-        kwargs["style"] = _DEFAULT_STYLE
+        # Per-button green override for primary payment methods —
+        # see STYLE_SUCCESS_PATTERNS above. Anything else stays
+        # on the global default (`"danger"`, red).
+        kwargs["style"] = "success" if _has_success_style(stripped) else _DEFAULT_STYLE
     _original_init(self, **kwargs)
 
 
