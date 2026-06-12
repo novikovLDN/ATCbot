@@ -18,17 +18,38 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    """SECURITY: Reject requests with body larger than max_size (DDoS protection)."""
+    """SECURITY: Reject requests with body larger than max_size (DDoS protection).
+
+    Path-aware: the dashboard broadcast photo-upload endpoint legitimately
+    accepts up to 10 MB images (handler enforces its own 10 MB check at
+    `app/api/dashboard/routes/broadcasts.py:upload_photo`). Cutting it at
+    1 MB here used to fire 413 before the request even reached the
+    handler. Other endpoints (Telegram webhook, payment webhooks,
+    dashboard JSON APIs) stay on the 1 MB default — there's no
+    legitimate reason for any of them to exceed it.
+    """
+
+    # Per-prefix exceptions: prefix → max bytes. First match wins.
+    _PATH_OVERRIDES = (
+        ("/dashboard/api/broadcasts/upload-photo", 10 * 1024 * 1024),
+    )
 
     def __init__(self, app, max_size: int = 1 * 1024 * 1024):
         super().__init__(app)
         self.max_size = max_size
 
+    def _limit_for(self, path: str) -> int:
+        for prefix, lim in self._PATH_OVERRIDES:
+            if path.startswith(prefix):
+                return lim
+        return self.max_size
+
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > self.max_size:
+                lim = self._limit_for(request.url.path)
+                if int(content_length) > lim:
                     return Response(status_code=413, content="Request body too large")
             except (ValueError, TypeError):
                 return Response(status_code=400, content="Invalid Content-Length")
