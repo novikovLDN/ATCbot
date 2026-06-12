@@ -251,7 +251,7 @@ LANG = {
     'buy.tariff_select_basic_button': "⚡️ Select Basic",
     'buy.tariff_select_plus_button': "👑 Select Plus",
     'buy.vpn': "🔐 Buy Subscription",
-    'common.back': "← Back",
+    'common.back': "Back",
     'common.cancel': "❌ Cancel",
     'common.go_to_connection': "🔌 Go to Connection",
     'common.rate_limit_message': "Too many requests. Please try again later.",
