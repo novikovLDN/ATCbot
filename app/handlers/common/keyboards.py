@@ -114,8 +114,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             logger.warning(f"Error checking proxy ownership for main menu: {e}")
 
     proxy_button = InlineKeyboardButton(
-        text=("🧩 Мой прокси" if has_proxy else "🧩 Telegram MT Прокси"),
+        text=("Мой прокси" if has_proxy else "Telegram MT Прокси"),
         callback_data="proxy_menu",
+        icon_custom_emoji_id="5233479338791281256",  # ⭐️
+        style="danger",
     )
 
     buttons = []
@@ -228,12 +230,25 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             ),
         ])
         buttons.append([InlineKeyboardButton(
-            text="💎 Программа лояльности", callback_data="menu_referral",
+            text="Программа лояльности",
+            callback_data="menu_referral",
+            icon_custom_emoji_id="5449601904147440135",  # 👑
+            style="danger",
         )])
         buttons.append([proxy_button])
         buttons.append([
-            InlineKeyboardButton(text="⚙️ Настройки", callback_data="menu_settings"),
-            InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help"),
+            InlineKeyboardButton(
+                text="Настройки",
+                callback_data="menu_settings",
+                icon_custom_emoji_id="5350396951407895212",  # ⚙️
+                style="danger",
+            ),
+            InlineKeyboardButton(
+                text="Помощь",
+                callback_data="menu_help",
+                icon_custom_emoji_id="5188540541922480562",  # ❓
+                style="danger",
+            ),
         ])
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
@@ -244,7 +259,12 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 icon_custom_emoji_id="5323510761077636002",  # 🛍
                 style="danger",
             ),
-            InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help"),
+            InlineKeyboardButton(
+                text="Помощь",
+                callback_data="menu_help",
+                icon_custom_emoji_id="5188540541922480562",  # ❓
+                style="danger",
+            ),
         ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
