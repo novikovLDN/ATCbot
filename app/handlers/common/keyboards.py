@@ -223,7 +223,7 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             InlineKeyboardButton(
                 text="Игровой клуб",
                 callback_data="games_menu",
-                icon_custom_emoji_id="5350447674971660988",  # 🎮
+                icon_custom_emoji_id="5262932983261699334",  # 🎮
             ),
             InlineKeyboardButton(
                 text="Магазин",

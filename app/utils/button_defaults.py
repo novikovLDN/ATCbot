@@ -1,21 +1,15 @@
 """
-Automatic `icon_custom_emoji_id` injection + selective `style="success"`
-for every InlineKeyboardButton in the bot — Bot API 9.4 button color.
+Global default `style="danger"` + automatic `icon_custom_emoji_id`
+injection for every InlineKeyboardButton in the bot — Bot API 9.4 button color.
 
 How `style` works:
     `InlineKeyboardButton` is a Pydantic v2 model. Pydantic builds field
     descriptors at class-creation time, so changing the field's default
     afterwards has no effect. Instead, we wrap the class's `__init__`:
-    if `style` wasn't explicitly passed AND the button's text matches
-    one of the green-paid-method patterns (STYLE_SUCCESS_PATTERNS), we
-    inject `"success"`. Everything else is left untouched — the button
-    renders in the Telegram default (translucent grey). Explicit
-    `style="primary"` / `"success"` / `"danger"` from the caller is
-    always respected.
-
-    (Old behaviour was a global default of `"danger"` — turned out to
-    be too loud, reverted per product owner: «оставим обычные
-    прозрачные. Синие и зелёный не трогай».)
+    if `style` wasn't explicitly passed, we inject `"danger"` for most
+    buttons, or `"success"` for the green-paid-method patterns in
+    STYLE_SUCCESS_PATTERNS. Explicit `style="primary"` / `"success"` /
+    `"danger"` from the caller is always respected.
 
 How `icon_custom_emoji_id` auto-injection works:
     Maintaining premium emoji ids on every call site (hundreds of
@@ -43,6 +37,7 @@ import re
 
 from aiogram.types import InlineKeyboardButton
 
+_DEFAULT_STYLE = "danger"
 _original_init = InlineKeyboardButton.__init__
 
 # Anything that isn't a word char (Unicode-aware) or whitespace at the
@@ -171,11 +166,11 @@ def _danger_default_init(self, **kwargs):
             if stripped != raw_text:
                 kwargs["text"] = stripped
 
-    if "style" not in kwargs and _has_success_style(stripped):
-        # Per-button green override for primary payment methods only
-        # — see STYLE_SUCCESS_PATTERNS above. Everything else stays at
-        # the Telegram default (translucent grey).
-        kwargs["style"] = "success"
+    if "style" not in kwargs:
+        # Per-button green override for primary payment methods —
+        # see STYLE_SUCCESS_PATTERNS above. Anything else stays on
+        # the global default (`"danger"`, red).
+        kwargs["style"] = "success" if _has_success_style(stripped) else _DEFAULT_STYLE
     _original_init(self, **kwargs)
 
 
