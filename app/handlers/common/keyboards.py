@@ -117,7 +117,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
         text=("Мой прокси" if has_proxy else "Telegram MT Прокси"),
         callback_data="proxy_menu",
         icon_custom_emoji_id="5233479338791281256",  # ⭐️
-        style="danger",
     )
 
     buttons = []
@@ -192,7 +191,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             text=_strip_lead_emoji(i18n_get_text(language, "main.profile")),
             callback_data="menu_profile",
             icon_custom_emoji_id="5350404270032166927",  # 🏠
-            style="danger",
         )])
         if is_bypass_only:
             # Bypass-only: кнопки докупить трафик и купить подписку
@@ -219,7 +217,6 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                     text="Подарить",
                     callback_data="gift_subscription",
                     icon_custom_emoji_id="5193085063998224234",  # 🎁
-                    style="danger",
                 ),
             ])
         buttons.append([
@@ -227,20 +224,17 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 text="Игровой клуб",
                 callback_data="games_menu",
                 icon_custom_emoji_id="5350447674971660988",  # 🎮
-                style="danger",
             ),
             InlineKeyboardButton(
                 text="Магазин",
                 callback_data="mini_shop",
                 icon_custom_emoji_id="5323510761077636002",  # 🛍
-                style="danger",
             ),
         ])
         buttons.append([InlineKeyboardButton(
             text="Программа лояльности",
             callback_data="menu_referral",
             icon_custom_emoji_id="5449601904147440135",  # 👑
-            style="danger",
         )])
         buttons.append([proxy_button])
         buttons.append([
@@ -248,13 +242,11 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 text="Настройки",
                 callback_data="menu_settings",
                 icon_custom_emoji_id="5350396951407895212",  # ⚙️
-                style="danger",
             ),
             InlineKeyboardButton(
                 text="Помощь",
                 callback_data="menu_help",
                 icon_custom_emoji_id="5188540541922480562",  # ❓
-                style="danger",
             ),
         ])
     else:
@@ -264,13 +256,11 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
                 text="Магазин",
                 callback_data="mini_shop",
                 icon_custom_emoji_id="5323510761077636002",  # 🛍
-                style="danger",
             ),
             InlineKeyboardButton(
                 text="Помощь",
                 callback_data="menu_help",
                 icon_custom_emoji_id="5188540541922480562",  # ❓
-                style="danger",
             ),
         ])
 
