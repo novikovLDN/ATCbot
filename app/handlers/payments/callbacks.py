@@ -110,8 +110,9 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             callback_data="switch_tariff_menu",
         )],
         [InlineKeyboardButton(
-            text="🌐 Купить ГБ обхода",
+            text="Купить ГБ обхода",
             callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),

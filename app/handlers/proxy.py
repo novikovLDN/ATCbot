@@ -85,7 +85,11 @@ def _sales_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📱 СБП", callback_data="proxy_pay_sbp")],
         [InlineKeyboardButton(text="💳 Банковская карта", callback_data="proxy_pay_lava")],
-        [InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn")],
+        [InlineKeyboardButton(
+            text="Купить VPN",
+            callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+        )],
         [InlineKeyboardButton(text="← Назад", callback_data="menu_main")],
     ])
 
@@ -97,7 +101,11 @@ def _delivery_keyboard() -> InlineKeyboardMarkup:
         )]
         for idx, link in enumerate(_PROXY_LINKS, start=1)
     ]
-    rows.append([InlineKeyboardButton(text="⚡️ Купить VPN", callback_data="menu_buy_vpn")])
+    rows.append([InlineKeyboardButton(
+        text="Купить VPN",
+        callback_data="menu_buy_vpn",
+        icon_custom_emoji_id="5199785165735367039",  # ⚡️
+    )])
     rows.append([InlineKeyboardButton(text="← Назад", callback_data="menu_main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

@@ -802,7 +802,11 @@ async def process_successful_payment(message: Message, state: FSMContext):
                 if _is_bypass:
                     kb = InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu_profile")],
-                        [InlineKeyboardButton(text="🌐 Купить ещё ГБ", callback_data="buy_traffic")],
+                        [InlineKeyboardButton(
+                            text="Купить ещё ГБ",
+                            callback_data="buy_traffic",
+                            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                        )],
                         [InlineKeyboardButton(text="← На главную", callback_data="menu_main")],
                     ])
                 else:

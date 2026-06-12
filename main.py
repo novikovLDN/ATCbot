@@ -11,6 +11,12 @@ import uuid
 from app.core.logging_config import setup_logging
 setup_logging()
 
+# Bot API 9.4 default button style for the whole bot. Patches
+# InlineKeyboardButton.__init__ to inject style="danger" when callers
+# don't pass one explicitly. MUST run before any handler module
+# loads — see docstring for the import-order rationale.
+import app.utils.button_defaults  # noqa: F401
+
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.fsm.storage.memory import MemoryStorage
