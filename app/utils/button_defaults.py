@@ -65,8 +65,15 @@ TEXT_EMOJI_MAP: dict[str, str] = {
     "Карта резерв":              "5375493342966597701",
     "СБП резерв 3%":             "5217961106554769883",
     "СБП резерв":                "5217961106554769883",
-    "Telegram Stars":            "5364173187858839320",
-    "Stars":                     "5364173187858839320",
+    "Telegram Stars":            "5269768891864746432",
+    "Stars":                     "5269768891864746432",
+    "Telegram Premium":          "5987901013032441141",
+    "Пополнить Apple ID":        "5269296209238959231",
+    "Пополнить Steam":           "4956506857901392912",
+    # ── Игры (главное меню Игрового клуба) ─────────────────
+    "Боулинг":                   "5370853837689070338",
+    "Кубики":                    "5972061723400605896",
+    "Бомбер":                    "5280569974404966639",
     "CryptoBot":                 "5463219974132746636",
     "Crypto (CryptoBot)":        "5463219974132746636",
     "Криптовалюта":              "5463219974132746636",
@@ -133,9 +140,34 @@ STYLE_SUCCESS_PATTERNS: list[re.Pattern] = [
     re.compile(r"^International payments$"),
 ]
 
+# Texts whose buttons should render `style="primary"` (синий) — основные
+# CTA-кнопки покупки/продления подписки. ГБ-трафик намеренно не сюда
+# (он не подписка → остаётся красным).
+STYLE_PRIMARY_PATTERNS: list[re.Pattern] = [
+    # Подписка (новая / продление)
+    re.compile(r"^Купить подписку(?:\s+.+)?$"),       # «Купить подписку», «Купить подписку VPN»
+    re.compile(r"^Купить основную(?:\s+подписку)?$"),
+    re.compile(r"^Купить VPN$"),
+    re.compile(r"^Купить Комбо$"),
+    re.compile(r"^Купить$"),                          # broadcast generic «Купить»
+    re.compile(r"^Купить со скидкой\s+\d+%.*$"),
+    re.compile(r"^Продлить подписку$"),
+    re.compile(r"^Продлить основную подписку$"),
+    re.compile(r"^Продлить со скидкой\s+\d+%.*$"),
+    # ГБ-трафик (по просьбе продакта тоже синяя)
+    re.compile(r"^Купить ГБ$"),
+    re.compile(r"^Купить ГБ обхода$"),
+    re.compile(r"^Купить ГБ трафика$"),
+    re.compile(r"^Купить ещё ГБ$"),
+]
+
 
 def _has_success_style(stripped_text: str) -> bool:
     return any(p.fullmatch(stripped_text) for p in STYLE_SUCCESS_PATTERNS)
+
+
+def _has_primary_style(stripped_text: str) -> bool:
+    return any(p.fullmatch(stripped_text) for p in STYLE_PRIMARY_PATTERNS)
 
 
 def _lookup_emoji(stripped_text: str) -> str | None:
@@ -167,10 +199,15 @@ def _danger_default_init(self, **kwargs):
                 kwargs["text"] = stripped
 
     if "style" not in kwargs:
-        # Per-button green override for primary payment methods —
-        # see STYLE_SUCCESS_PATTERNS above. Anything else stays on
-        # the global default (`"danger"`, red).
-        kwargs["style"] = "success" if _has_success_style(stripped) else _DEFAULT_STYLE
+        # Priority: success (зелёный — основные оплаты) → primary
+        # (синий — подписка / трафик CTA) → default (красный — всё
+        # остальное).
+        if _has_success_style(stripped):
+            kwargs["style"] = "success"
+        elif _has_primary_style(stripped):
+            kwargs["style"] = "primary"
+        else:
+            kwargs["style"] = _DEFAULT_STYLE
     _original_init(self, **kwargs)
 
 
