@@ -110,9 +110,18 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     # === ПЕРВАЯ КНОПКА: 3 состояния ===
     if has_active_sub:
         # Состояние 2: Активная подписка → "Подключиться" (ведёт на экран инструкции)
+        #
+        # Bot API 9.4: ставим тестовое сочетание — premium custom emoji
+        # слева (EMOJI["sub"] = 5330115548900501467) + style="primary"
+        # (синий заливочный фон). Префикс «📲 » из текста снят, чтобы
+        # на клиентах с поддержкой API 9.4 не оказалось два эмодзи
+        # подряд. На старых клиентах кнопка выглядит как раньше, просто
+        # без обычного префикса — лучше пустое место, чем плейсхолдер.
         buttons.append([InlineKeyboardButton(
-            text="📲 Подключиться",
+            text="Подключиться",
             callback_data="connect_instruction",
+            icon_custom_emoji_id="5330115548900501467",
+            style="primary",
         )])
     elif telegram_id and database.DB_READY:
         # Проверяем trial
