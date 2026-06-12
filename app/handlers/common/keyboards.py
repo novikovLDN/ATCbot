@@ -2,6 +2,7 @@
 InlineKeyboardMarkup and ReplyKeyboardMarkup builders. Shared across all handler domains.
 """
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +14,18 @@ from app.i18n import get_text as i18n_get_text
 from app.services.trials import service as trial_service
 
 logger = logging.getLogger(__name__)
+
+# Bot API 9.4: когда кнопка получает icon_custom_emoji_id, нужно снять
+# обычный эмодзи из её текста, иначе на новых клиентах получится два
+# эмодзи подряд (custom + plain). Регулярка ловит любые ведущие
+# не-словарные не-пробельные символы (\W в Unicode-режиме покрывает
+# эмодзи, пиктограммы, decorative dingbats) и трейлинг-пробел.
+_LEAD_EMOJI_RE = re.compile(r"^[^\w\s]+\s*", flags=re.UNICODE)
+
+
+def _strip_lead_emoji(s: str) -> str:
+    out = _LEAD_EMOJI_RE.sub("", s, count=1)
+    return out or s
 
 MINI_APP_URL = config.env("MINI_APP_URL", default="https://atlas-miniapp-production.up.railway.app")
 
@@ -158,8 +171,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             pass
 
         buttons.append([InlineKeyboardButton(
-            text="⚡️ Купить подписку",
-            callback_data="menu_buy_vpn"
+            text="Купить подписку",
+            callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5364040533498932357",  # 💎
+            style="danger",
         )])
         buttons.append([InlineKeyboardButton(
             text="🌐 Только обход блокировок",
@@ -172,8 +187,10 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     if has_active_sub:
         # === Кнопки для пользователей С подпиской ===
         buttons.append([InlineKeyboardButton(
-            text=i18n_get_text(language, "main.profile"),
-            callback_data="menu_profile"
+            text=_strip_lead_emoji(i18n_get_text(language, "main.profile")),
+            callback_data="menu_profile",
+            icon_custom_emoji_id="5350404270032166927",  # 🏠
+            style="danger",
         )])
         if is_bypass_only:
             # Bypass-only: кнопки докупить трафик и купить подписку
@@ -183,12 +200,32 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             ])
         else:
             buttons.append([
-                InlineKeyboardButton(text="🔄 Продлить подписку", callback_data="menu_buy_vpn"),
-                InlineKeyboardButton(text="🎁 Подарить", callback_data="gift_subscription"),
+                InlineKeyboardButton(
+                    text="Продлить подписку",
+                    callback_data="menu_buy_vpn",
+                    icon_custom_emoji_id="5350436817294336466",  # 😂
+                    style="danger",
+                ),
+                InlineKeyboardButton(
+                    text="Подарить",
+                    callback_data="gift_subscription",
+                    icon_custom_emoji_id="5193085063998224234",  # 🎁
+                    style="danger",
+                ),
             ])
         buttons.append([
-            InlineKeyboardButton(text="🎮 Игровой клуб", callback_data="games_menu"),
-            InlineKeyboardButton(text="🛍 Магазин", callback_data="mini_shop"),
+            InlineKeyboardButton(
+                text="Игровой клуб",
+                callback_data="games_menu",
+                icon_custom_emoji_id="5319120041780726017",  # 🎮
+                style="danger",
+            ),
+            InlineKeyboardButton(
+                text="Магазин",
+                callback_data="mini_shop",
+                icon_custom_emoji_id="5323510761077636002",  # 🛍
+                style="danger",
+            ),
         ])
         buttons.append([InlineKeyboardButton(
             text="💎 Программа лояльности", callback_data="menu_referral",
@@ -201,7 +238,12 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
     else:
         # === Кнопки для пользователей БЕЗ подписки ===
         buttons.append([
-            InlineKeyboardButton(text="🛍 Магазин", callback_data="mini_shop"),
+            InlineKeyboardButton(
+                text="Магазин",
+                callback_data="mini_shop",
+                icon_custom_emoji_id="5323510761077636002",  # 🛍
+                style="danger",
+            ),
             InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help"),
         ])
 
