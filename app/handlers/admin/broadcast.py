@@ -584,6 +584,10 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
             )])
 
         buttons.append([InlineKeyboardButton(
+            text="📦 Больше объёма →",
+            callback_data=f"broadcast_promo_traffic_ext:{broadcast_id}",
+        )])
+        buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="traffic_info",
         )])
@@ -600,6 +604,69 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception(f"Error applying broadcast traffic promo discount: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast_promo_traffic_ext:"))
+async def callback_broadcast_promo_traffic_ext(callback: CallbackQuery):
+    """Расширенные паки трафика (300+ ГБ) со скидкой из broadcast.
+
+    Юзер нажимает «📦 Больше объёма →» на экране промо-трафика — попадает
+    сюда. Скидка уже применена при первом клике (broadcast_promo_traffic),
+    здесь только рендерим экран с extended-паками.
+    """
+    await callback.answer()
+
+    try:
+        broadcast_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка", show_alert=True)
+        return
+
+    telegram_id = callback.from_user.id
+    language = await resolve_user_language(telegram_id)
+
+    try:
+        discount = await database.get_broadcast_discount(broadcast_id)
+        discount_percent = discount.get("discount_percent", 0) if discount else 0
+
+        import math
+
+        def _strikethrough(text: str) -> str:
+            return "".join(ch + "̶" for ch in str(text))
+
+        buttons = []
+        for gb, pack in config.TRAFFIC_PACKS_EXTENDED.items():
+            base_price = pack["price"]
+            if discount_percent > 0:
+                final_price = math.ceil(base_price * (1 - discount_percent / 100))
+                label = f"{gb} ГБ — {final_price} ₽  {_strikethrough(str(base_price))} ₽  (−{discount_percent}%)"
+            else:
+                label = f"{gb} ГБ — {base_price} ₽"
+                if pack.get("discount"):
+                    label += f"  {pack['discount']}"
+            buttons.append([InlineKeyboardButton(
+                text=label,
+                callback_data=f"buy_traffic_pack:{gb}",
+            )])
+
+        buttons.append([InlineKeyboardButton(
+            text="← Основные паки",
+            callback_data=f"broadcast_promo_traffic:{broadcast_id}",
+        )])
+
+        text = "📦 <b>Большие паки трафика</b>\n\nЧем больше пак — тем дешевле каждый гигабайт."
+        if discount_percent > 0:
+            text = f"🎁 Скидка {discount_percent}% активна 24 часа.\n\n" + text
+
+        await callback.message.answer(
+            text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML",
+        )
+
+    except Exception as e:
+        logger.exception(f"Error rendering extended traffic packs in broadcast: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
