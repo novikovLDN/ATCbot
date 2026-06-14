@@ -416,12 +416,20 @@ def get_profile_keyboard(
     row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
     buttons.append(row2)
 
-    # Row 3: Веб-клиент + Мои подарки
+    # Row 3: Мои устройства + Веб-клиент
     buttons.append([
         InlineKeyboardButton(
-            text="🖥 Веб-клиент",
+            text="🖥 Мои устройства",
+            callback_data="user:devices",
+        ),
+        InlineKeyboardButton(
+            text="🌐 Веб-клиент",
             url="https://qodev.dev",
         ),
+    ])
+
+    # Row 3.5: Мои подарки
+    buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
             callback_data="my_gifts:0",
