@@ -72,6 +72,26 @@ export function BroadcastCreate() {
       toast.error((e as ApiError)?.detail ?? "Не удалось запустить рассылку"),
   });
 
+  // Тест на админе: те же поля, но сообщение уходит ТОЛЬКО админу.
+  // Никаких записей в БД, ничего получателям. Нужен чтобы проверить
+  // разметку, premium-эмодзи, фото и кнопки перед массовой отправкой.
+  const testSelf = useMutation({
+    mutationFn: () =>
+      endpoints.broadcastTestSelf({
+        title: title || "(тест)",
+        message,
+        segment: segment || "active_subscriptions",
+        photo_file_id: photoFileId ?? null,
+        buttons,
+        discount_percent:
+          typeof discountPercent === "number" ? discountPercent : null,
+        discount_hours: typeof discountHours === "number" ? discountHours : null,
+      }),
+    onSuccess: () => toast.success("Тест отправлен — проверь свой чат"),
+    onError: (e: unknown) =>
+      toast.error((e as ApiError)?.detail ?? "Не удалось отправить тест"),
+  });
+
   const audience = useMemo(() => {
     if (!segments.data) return null;
     const s = segments.data.find((x) => x.key === segment);
@@ -391,14 +411,33 @@ export function BroadcastCreate() {
               type="button"
               onClick={() => setStep(3)}
               className="btn-secondary"
-              disabled={create.isPending}
+              disabled={create.isPending || testSelf.isPending}
             >
               <ArrowLeft className="h-3.5 w-3.5" /> Назад
             </button>
             <button
               type="button"
+              onClick={() => testSelf.mutate()}
+              disabled={
+                create.isPending ||
+                testSelf.isPending ||
+                message.trim().length === 0
+              }
+              className="btn-secondary"
+              title="Отправит это сообщение только тебе — проверь рендер и кнопки перед массовой рассылкой"
+            >
+              {testSelf.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
+              Тест на админе
+            </button>
+            <button
+              type="button"
               onClick={() => create.mutate()}
-              disabled={create.isPending || !canConfirm || audience === 0}
+              disabled={
+                create.isPending ||
+                testSelf.isPending ||
+                !canConfirm ||
+                audience === 0
+              }
               className="btn-primary"
             >
               {create.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
