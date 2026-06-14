@@ -231,8 +231,11 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
         is_max = not next_level_name or remaining_connections <= 0
         is_new = total_invited == 0 and active_paid_referrals == 0
 
-        # 1. Header — бренд
-        text = "🎖 <b>Круг Амбассадоров</b>\n\n"
+        # 1. Header — бренд + слоган-подзаголовок
+        text = (
+            "🎖 <b>Круг Амбассадоров</b>\n"
+            "<i>От проводника до амбассадора</i>\n\n"
+        )
 
         # 2. Hero-line по контексту юзера
         if is_new:
