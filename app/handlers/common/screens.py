@@ -26,7 +26,7 @@ from app.handlers.common.keyboards import (
     get_profile_keyboard,
 )
 from app.handlers.common.states import PurchaseState
-from app.constants.loyalty import get_loyalty_screen_attachment
+from app.constants.loyalty import get_loyalty_screen_attachment, tier_emoji_html, tier_genitive
 from app.utils.date_utils import format_date_ru
 
 logger = logging.getLogger(__name__)
@@ -218,48 +218,81 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
             if isinstance(last_activity_at, datetime):
                 last_activity_str = last_activity_at.strftime("%d.%m.%Y")
         
-        # Формируем строку "До следующего уровня"
-        if next_level_name and remaining_connections > 0:
-            next_level_line = i18n_get_text(
-                language,
-                "referral.next_level_line",
-                next_status_name=next_level_name,
-                remaining_invites=remaining_connections
-            )
-        else:
-            next_level_line = i18n_get_text(language, "referral.max_level_reached")
-        
         # Генерируем реферальную ссылку для share URL
         bot_info = await bot.get_me()
         referral_link = await build_referral_link(telegram_id, bot_info.username)
         from urllib.parse import quote
         share_url = f"https://t.me/share/url?url={quote(referral_link)}"
 
-        # Новый формат текста с разделёнными метриками
-        text = (
-            f"{i18n_get_text(language, 'referral.screen_title')}\n\n"
-            f"🏆 {current_level_name} · кешбэк {cashback_percent}%\n"
-            f"💰 Начислено: {total_cashback:.2f} ₽\n\n"
-            f"👤 {total_invited} приглашено · {active_paid_referrals} с подпиской\n\n"
-            f"{next_level_line}"
+        # Структурированный текст: статус-блок + прогресс + ссылка.
+        # Тон по уровню: новичку — приветствие, среднему — азарт прогресса,
+        # амбассадору — фиксация статуса.
+        tier_glyph = tier_emoji_html(current_level_name)
+        is_max = not next_level_name or remaining_connections <= 0
+        is_new = total_invited == 0 and active_paid_referrals == 0
+
+        # 1. Header — бренд
+        text = "🎖 <b>Круг Амбассадоров</b>\n\n"
+
+        # 2. Hero-line по контексту юзера
+        if is_new:
+            text += (
+                "Ты на первой ступени. Делись ссылкой → друг покупает "
+                "подписку → ты получаешь <b>кэшбэк</b> на баланс.\n\n"
+            )
+        elif is_max:
+            text += (
+                "Это вершина. <b>Зафиксировано бессрочно.</b> "
+                "Тебя меньше 1%.\n\n"
+            )
+
+        # 3. Статус-блок
+        status_block = (
+            f"{tier_glyph} <b>{current_level_name}</b> · <b>{cashback_percent}%</b> "
+            f"с каждой покупки\n"
+            f"💰 Заработано: <b>{total_cashback:.2f} ₽</b>"
         )
-        
+        text += f"<blockquote>{status_block}</blockquote>\n\n"
+
+        # 4. Прогресс к следующему уровню (если не максимум)
+        if not is_max:
+            # Найти процент следующего тира для конкретики
+            next_pct_map = {
+                "Хранитель": 20, "Инсайдер": 30, "Лидер": 40, "Амбассадор": 45,
+            }
+            next_pct = next_pct_map.get(next_level_name, "?")
+            progress_block = (
+                f"📈 До <b>{tier_genitive(next_level_name)}</b> ({next_pct}%) — "
+                f"<b>{remaining_connections}</b> купивших.\n"
+                f"Уровень только растёт и не падает."
+            )
+            text += f"<blockquote>{progress_block}</blockquote>\n\n"
+
+        # 5. Реферальная ссылка
+        text += (
+            f"🔗 <b>Твоя ссылка</b> <i>(нажми — скопируется)</i>\n"
+            f"<blockquote expandable><code>{referral_link}</code></blockquote>"
+        )
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "referral.share_button"),
-                url=share_url
+                url=share_url,
+                style="success",
             )],
-            [InlineKeyboardButton(
-                text="🌐 Веб-клиент",
-                url="https://qodev.dev"
-            )],
-            [InlineKeyboardButton(
-                text=i18n_get_text(language, "referral.stats_button"),
-                callback_data="referral_stats"
-            )],
+            [
+                InlineKeyboardButton(
+                    text=i18n_get_text(language, "referral.stats_button"),
+                    callback_data="referral_stats",
+                ),
+                InlineKeyboardButton(
+                    text=i18n_get_text(language, "referral.how_it_works"),
+                    callback_data="referral_how_it_works",
+                ),
+            ],
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "common.back"),
-                callback_data="menu_main"
+                callback_data="menu_main",
             )],
         ])
         

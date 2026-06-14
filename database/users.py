@@ -1392,8 +1392,8 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": int,  # Активных с подпиской
             "total_cashback_earned": float,  # Общий кешбэк в рублях
             "last_activity_at": Optional[datetime],  # Последняя активность реферала
-            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
-            "cashback_percent": int,  # 10, 25, 45
+            "current_level_name": str,  # "Проводник" / "Хранитель" / "Инсайдер" / "Лидер" / "Амбассадор"
+            "cashback_percent": int,  # 10, 20, 30, 40, 45
             "next_level_name": Optional[str],  # Следующий уровень или None
             "remaining_connections": int  # До следующего уровня
         }
@@ -1404,9 +1404,9 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "current_level_name": "Silver Access",
+            "current_level_name": "Проводник",
             "cashback_percent": 10,
-            "next_level_name": "Gold Access",
+            "next_level_name": "Хранитель",
             "remaining_connections": 5
         }
     
@@ -1417,9 +1417,9 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "current_level_name": "Silver Access",
+            "current_level_name": "Проводник",
             "cashback_percent": 10,
-            "next_level_name": "Gold Access",
+            "next_level_name": "Хранитель",
             "remaining_connections": 5
         }
     
@@ -1451,16 +1451,41 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             
             # Рассчитываем уровень СТРОГО по total_invited
             level_info = calculate_referral_level(total_invited)
-            
+
+            # Grandfather floor: пользователи со старой шкалой имеют
+            # cashback_floor_percent=45 — показываем их как «Амбассадор» с 45%
+            # и скрываем прогресс к следующему, иначе UI будет противоречить
+            # реальному проценту начисления.
+            floor_pct = await conn.fetchval(
+                "SELECT cashback_floor_percent FROM users WHERE telegram_id = $1",
+                partner_id,
+            )
+            if floor_pct is not None and floor_pct > level_info["cashback_percent"]:
+                # Маппим floor → тир: 45 = Амбассадор, 40 = Лидер, и т.д.
+                from app.constants.loyalty import LOYALTY_TIERS
+                bumped_tier = None
+                for lo, _hi, name, pct in LOYALTY_TIERS:
+                    if pct == floor_pct:
+                        bumped_tier = name
+                        break
+                if bumped_tier:
+                    level_info = {
+                        "current_level_name": bumped_tier,
+                        "cashback_percent": floor_pct,
+                        "next_level_name": None,
+                        "remaining_connections": 0,
+                    }
+
             # Debug логирование
             logger.info(
                 f"REF_STATS user={partner_id} "
                 f"total={total_invited} "
                 f"active_paid={active_paid_referrals} "
                 f"level={level_info['current_level_name']} "
-                f"remaining={level_info['remaining_connections']}"
+                f"remaining={level_info['remaining_connections']} "
+                f"floor={floor_pct}"
             )
-            
+
             return {
                 "total_invited": total_invited,
                 "active_paid_referrals": active_paid_referrals,
@@ -1478,9 +1503,9 @@ async def get_referral_statistics(partner_id: int) -> Dict[str, Any]:
             "active_paid_referrals": 0,
             "total_cashback_earned": 0.0,
             "last_activity_at": None,
-            "current_level_name": "Silver Access",
+            "current_level_name": "Проводник",
             "cashback_percent": 10,
-            "next_level_name": "Gold Access",
+            "next_level_name": "Хранитель",
             "remaining_connections": 5
         }
 

@@ -48,6 +48,47 @@ _TIER_TO_IMAGE_KEY: dict[str, str] = {
 }
 
 
+# ── Tier emoji (premium emoji_id или unicode fallback) ────────────────
+#
+# Структура: {tier_name: (premium_emoji_id | None, unicode_fallback)}.
+# Если premium_emoji_id задан — рендерим через <tg-emoji>, иначе unicode.
+# Пока premium_emoji_id == None — заглушка цветным кружком из ТЗ.
+# Заменить, когда продакт пришлёт нужные emoji_id для каждого тира.
+TIER_EMOJI: dict[str, Tuple[Optional[str], str]] = {
+    "Проводник":  (None, "🟢"),
+    "Хранитель":  (None, "🔵"),
+    "Инсайдер":   (None, "🟣"),
+    "Лидер":      (None, "🟠"),
+    "Амбассадор": (None, "👑"),
+}
+
+
+# Родительный падеж тиров — для фраз «До Хранителя», «До Амбассадора».
+_TIER_GENITIVE: dict[str, str] = {
+    "Проводник":  "Проводника",
+    "Хранитель":  "Хранителя",
+    "Инсайдер":   "Инсайдера",
+    "Лидер":      "Лидера",
+    "Амбассадор": "Амбассадора",
+}
+
+
+def tier_genitive(tier_name: str) -> str:
+    """Return tier name in genitive case (для конструкций «До <тир>»)."""
+    return _TIER_GENITIVE.get(tier_name, tier_name)
+
+
+def tier_emoji_html(tier_name: str) -> str:
+    """Return HTML-snippet for tier emoji (premium if id set, else unicode)."""
+    entry = TIER_EMOJI.get(tier_name)
+    if not entry:
+        return "🎖"
+    eid, fallback = entry
+    if eid:
+        return f'<tg-emoji emoji-id="{eid}">{fallback}</tg-emoji>'
+    return fallback
+
+
 def get_loyalty_status_names(total_referrals: int) -> Tuple[str, Optional[str]]:
     """Return (current_status_name, next_status_name) by paid referrals count.
 
