@@ -40,7 +40,6 @@ from pydantic import BaseModel, Field, field_validator
 import database
 from app.api.dashboard.deps import require_admin
 from app.events import bus
-from app.handlers.admin.broadcast import _safe_send_with_buttons
 
 logger = logging.getLogger(__name__)
 
@@ -295,24 +294,43 @@ async def broadcast_test_self(
         body.buttons, 0, body.discount_percent,
     )
 
-    semaphore = asyncio.Semaphore(1)
+    # Прямой вызов Bot API — без batch-обёртки, которая глотает
+    # Telegram-ошибки и возвращает None. Здесь нам важно показать админу
+    # ТОЧНУЮ причину отказа («can't parse entities: …», «message is too
+    # long», «PHOTO_INVALID_DIMENSIONS» и т.д.), чтобы он сразу понял,
+    # что чинить в разметке.
+    from aiogram.exceptions import (
+        TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter,
+    )
+
     try:
-        msg_id = await _safe_send_with_buttons(
-            bot, admin_id, message_html, semaphore,
-            reply_markup=reply_markup,
-            photo_file_id=body.photo_file_id,
-            caption=message_html if body.photo_file_id else None,
+        if body.photo_file_id:
+            sent = await bot.send_photo(
+                admin_id,
+                photo=body.photo_file_id,
+                caption=message_html,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+        else:
+            sent = await bot.send_message(
+                admin_id,
+                message_html,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+    except TelegramBadRequest as e:
+        raise HTTPException(400, f"Telegram отклонил сообщение: {e.message}")
+    except TelegramForbiddenError:
+        raise HTTPException(
+            403, "Бот заблокирован у админа — разблокируй и попробуй снова",
         )
+    except TelegramRetryAfter as e:
+        raise HTTPException(429, f"flood_wait: подожди {e.retry_after}с")
     except Exception as e:
         raise HTTPException(500, f"send_failed: {type(e).__name__}: {e}")
 
-    if not msg_id:
-        raise HTTPException(
-            502,
-            "telegram_rejected_message — проверь HTML-разметку и premium-emoji",
-        )
-
-    return {"ok": True, "message_id": msg_id, "to": admin_id}
+    return {"ok": True, "message_id": sent.message_id, "to": admin_id}
 
 
 @router.post("")
