@@ -26,7 +26,7 @@ from app.handlers.common.keyboards import (
     get_profile_keyboard,
 )
 from app.handlers.common.states import PurchaseState
-from app.constants.loyalty import get_loyalty_screen_attachment, tier_emoji_html, tier_genitive
+from app.constants.loyalty import tier_emoji_html, tier_genitive
 from app.utils.date_utils import format_date_ru
 
 logger = logging.getLogger(__name__)
@@ -299,32 +299,17 @@ async def _open_referral_screen(event: Union[Message, CallbackQuery], bot: Bot):
             )],
         ])
         
-        file_id = get_loyalty_screen_attachment(current_level_name)
-        photo_sent = False
-        if file_id:
-            try:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=file_id,
-                    caption=text,
-                    reply_markup=keyboard,
-                    parse_mode="HTML",
-                )
-                photo_sent = True
-            except Exception as photo_err:
-                logger.warning(f"Failed to send loyalty photo for user={telegram_id}, falling back to text: {photo_err}")
-        if not photo_sent:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="HTML",
-            )
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
         logger.debug(
             f"Referral screen opened: user={telegram_id}, "
             f"total_invited={total_invited}, active_paid={active_paid_referrals}, "
             f"level={current_level_name}, percent={cashback_percent}%, "
-            f"cashback={total_cashback:.2f} RUB, remaining={remaining_connections}, with_photo={bool(file_id)}"
+            f"cashback={total_cashback:.2f} RUB, remaining={remaining_connections}"
         )
     except Exception as e:
         logger.exception(f"Error in referral screen handler: user={telegram_id}: {e}")

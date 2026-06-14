@@ -133,7 +133,11 @@ async def callback_referral_how_it_works(callback: CallbackQuery):
             )],
         ])
         
-        await safe_edit_text(callback.message, text, reply_markup=keyboard)
+        # bot=callback.bot нужен: если предыдущее сообщение — фото (главный
+        # экран «Круг Амбассадоров»), safe_edit_text удалит фото и пришлёт
+        # текстовое сообщение, иначе попробует edit_caption и упадёт на
+        # 1024-символьном лимите для caption.
+        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
         await callback.answer()
         
     except Exception as e:
