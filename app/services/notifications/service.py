@@ -370,6 +370,27 @@ def format_referral_notification_text(
     """
     from app.i18n import get_text as i18n_get_text
 
+    # Русские пользователи — новый стиль «Круга Амбассадоров» (рандом из 3 шаблонов).
+    if language == "ru":
+        from app.services.notifications.loyalty_pushes import pick_purchase_push
+        # Определяем следующий тир по количеству оплативших.
+        if paid_referrals_count < 25:
+            next_tier = "Хранитель"
+        elif paid_referrals_count < 50:
+            next_tier = "Инсайдер"
+        elif paid_referrals_count < 75:
+            next_tier = "Лидер"
+        elif paid_referrals_count < 100:
+            next_tier = "Амбассадор"
+        else:
+            next_tier = None
+        return pick_purchase_push(
+            amount=cashback_amount,
+            percent=cashback_percent,
+            next_level_name=next_tier,
+            referrals_needed=referrals_needed,
+        )
+
     if referrals_needed > 0:
         if language == "ru":
             if referrals_needed % 10 == 1 and referrals_needed % 100 != 11:

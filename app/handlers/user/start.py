@@ -376,13 +376,12 @@ async def cmd_start(message: Message, state: FSMContext):
         try:
             referrer_id = referral_result.get("referrer_id")
             if referrer_id:
-                referrer_language = await resolve_user_language(referrer_id)
+                # Текущий тир-процент реферрера для подстановки в пуш.
+                ref_stats = await database.get_referral_statistics(referrer_id)
+                ref_percent = int(ref_stats.get("cashback_percent", 10))
+                from app.services.notifications.loyalty_pushes import pick_signup_push
+                notification_text = pick_signup_push(ref_percent)
 
-                first_payment_msg = i18n_get_text(referrer_language, "referral.first_payment_notification")
-                title = i18n_get_text(referrer_language, "referral.registered_title")
-                date_line = i18n_get_text(referrer_language, "referral.registered_date", date=datetime.now(timezone.utc).strftime('%d.%m.%Y'))
-                notification_text = f"{title}\n\n{date_line}\n\n{first_payment_msg}"
-                
                 await message.bot.send_message(
                     chat_id=referrer_id,
                     text=notification_text,

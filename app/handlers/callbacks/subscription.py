@@ -184,12 +184,12 @@ async def callback_activate_trial(callback: CallbackQuery, state: FSMContext):
                 referrer_id = activation_result.get("referrer_id")
                 if referrer_id:
                     try:
-                        referrer_language_notif = await resolve_user_language(referrer_id)
-
-                        title_trial = i18n_get_text(referrer_language_notif, "referral.trial_activated_title")
-                        trial_period_line = i18n_get_text(referrer_language_notif, "referral.trial_period")
-                        first_payment_msg_notif = i18n_get_text(referrer_language_notif, "referral.first_payment_notification")
-                        notification_text = f"{title_trial}\n\n{trial_period_line}\n\n{first_payment_msg_notif}"
+                        # Текущий тир-процент реферрера — динамическая подстановка.
+                        import database as _db
+                        ref_stats = await _db.get_referral_statistics(referrer_id)
+                        ref_percent = int(ref_stats.get("cashback_percent", 10))
+                        from app.services.notifications.loyalty_pushes import pick_trial_push
+                        notification_text = pick_trial_push(ref_percent)
 
                         await callback.bot.send_message(
                             chat_id=referrer_id,
