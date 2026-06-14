@@ -359,41 +359,36 @@ def get_profile_keyboard(
     is_combo: bool = False,
     is_bypass_only: bool = False,
 ):
-    """Личный кабинет: Купить ГБ + Продлить | Автопродление + Пополнить | Подарки | Назад."""
+    """Личный кабинет: [Купить ГБ][Продлить] 🟢 | Мои устройства 🔴 | Пополнить+Веб | Язык+Подарки | Назад."""
     buttons = []
 
     if is_bypass_only and has_active_subscription:
-        # Bypass-only: кнопка купить ГБ + купить подписку (не продлить)
+        # Bypass-only: купить ГБ + купить подписку (не продлить)
         buttons.append([InlineKeyboardButton(
-            text="Купить ГБ трафика",
+            text="🟢 Купить ГБ трафика",
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
         buttons.append([InlineKeyboardButton(
-            text="Купить подписку VPN",
+            text="🟢 Купить подписку VPN",
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     elif is_combo and has_active_subscription:
-        # Комбо-подписка: две отдельные кнопки — трафик и продление основной
+        # Комбо-подписка: трафик и продление основной
         buttons.append([InlineKeyboardButton(
-            text="Купить ГБ трафика",
+            text="🟢 Купить ГБ трафика",
             callback_data="buy_traffic",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
         buttons.append([InlineKeyboardButton(
-            text="Продлить основную подписку",
+            text="🟢 Продлить основную подписку",
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )])
     else:
-        # Row 1: Купить ГБ + Продлить/Купить подписку
+        # Row 1: [Купить ГБ] [Продлить/Купить подписку] — основные CTA, зелёный акцент
         row1 = []
         if show_traffic and not is_trial:
             row1.append(InlineKeyboardButton(
-                text="Купить ГБ",
+                text="🟢 Купить ГБ",
                 callback_data="buy_traffic",
-                icon_custom_emoji_id="5199785165735367039",  # ⚡️
             ))
         buy_text = _strip_lead_emoji(
             i18n_get_text(language, "main.buy_renew")
@@ -401,45 +396,38 @@ def get_profile_keyboard(
             else i18n_get_text(language, "main.buy_new")
         )
         row1.append(InlineKeyboardButton(
-            text=buy_text,
+            text=f"🟢 {buy_text}",
             callback_data="menu_buy_vpn",
-            icon_custom_emoji_id="5199785165735367039",  # ⚡️
         ))
         buttons.append(row1)
 
-    # Row 2: Автопродление + Пополнить
-    row2 = []
-    if has_active_subscription and not is_bypass_only:
-        ar_text = "🔁 Автопродление ✅" if auto_renew else "🔁 Автопродление"
-        ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
-        row2.append(InlineKeyboardButton(text=ar_text, callback_data=ar_data))
-    row2.append(InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"))
-    buttons.append(row2)
+    # Row 2: Мои устройства — full width, красный акцент
+    buttons.append([InlineKeyboardButton(
+        text="🔴 Мои устройства",
+        callback_data="user:devices",
+    )])
 
-    # Row 3: Мои устройства + Веб-клиент
+    # Row 3: Пополнить + Веб-клиент
     buttons.append([
-        InlineKeyboardButton(
-            text="🖥 Мои устройства",
-            callback_data="user:devices",
-        ),
-        InlineKeyboardButton(
-            text="🌐 Веб-клиент",
-            url="https://qodev.dev",
-        ),
+        InlineKeyboardButton(text="💳 Пополнить", callback_data="topup_balance"),
+        InlineKeyboardButton(text="🌐 Веб-клиент", url="https://qodev.dev"),
     ])
 
-    # Row 3.5: Мои подарки
+    # Row 4: Язык + Подарки
     buttons.append([
+        InlineKeyboardButton(text="🗣 Язык", callback_data="change_language"),
         InlineKeyboardButton(
             text=i18n_get_text(language, "gift.my_gifts_btn", "🎁 Мои подарки"),
             callback_data="my_gifts:0",
         ),
     ])
 
-    # Row 4: Язык + Назад
+    # Row 5: Назад
     buttons.append([
-        InlineKeyboardButton(text="🗣 Язык", callback_data="change_language"),
-        InlineKeyboardButton(text=i18n_get_text(language, "common.back", "← Назад"), callback_data="menu_main"),
+        InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back", "← Назад"),
+            callback_data="menu_main",
+        ),
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
