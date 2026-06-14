@@ -383,6 +383,47 @@ async def reset_user_traffic(uuid: str) -> Optional[Dict[str, Any]]:
     return await _request("POST", f"/api/users/{uuid}/reset-traffic")
 
 
+# ── HWID devices ───────────────────────────────────────────────────────
+#
+# Per-device tracking lives in the optional HWID module on Remnawave
+# (Subscription → Settings → HWID Device Limit). When enabled, the panel
+# records each client that adds the subscription (via `x-hwid` header)
+# and lets admins/end users revoke a specific device.
+#
+# Routes (Remnawave backend-contract v2.8, compatible with v2.7+ panels):
+#   GET  /api/hwid/devices/{userUuid}          — list devices for user
+#   POST /api/hwid/devices/delete              — body: {userUuid, hwid}
+#   POST /api/hwid/devices/delete-all          — body: {userUuid}
+#
+# Device DTO fields: hwid, userId, platform, osVersion, deviceModel,
+# userAgent, requestIp, createdAt, updatedAt. All optional except hwid.
+
+async def get_user_hwid_devices(user_uuid: str) -> Optional[list]:
+    """Return list of HWID device dicts for a user, or None on failure."""
+    result = await _request("GET", f"/api/hwid/devices/{user_uuid}")
+    if result is None:
+        return None
+    return result.get("devices") or []
+
+
+async def delete_user_hwid_device(user_uuid: str, hwid: str) -> bool:
+    """Revoke a single device by hwid. Returns True on success."""
+    result = await _request(
+        "POST", "/api/hwid/devices/delete",
+        json={"userUuid": user_uuid, "hwid": hwid},
+    )
+    return result is not None
+
+
+async def delete_all_user_hwid_devices(user_uuid: str) -> bool:
+    """Revoke every device for a user. Returns True on success."""
+    result = await _request(
+        "POST", "/api/hwid/devices/delete-all",
+        json={"userUuid": user_uuid},
+    )
+    return result is not None
+
+
 async def delete_user(uuid: str) -> Optional[Dict[str, Any]]:
     """DELETE /api/users/{uuid}"""
     return await _request("DELETE", f"/api/users/{uuid}")
