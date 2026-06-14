@@ -359,36 +359,46 @@ def get_profile_keyboard(
     is_combo: bool = False,
     is_bypass_only: bool = False,
 ):
-    """Личный кабинет: [Купить ГБ][Продлить] 🟢 | Мои устройства 🔴 | Пополнить+Веб | Язык+Подарки | Назад."""
+    """Личный кабинет: основные CTA — success-зелёные, «Мои устройства» — danger-красная."""
     buttons = []
 
     if is_bypass_only and has_active_subscription:
         # Bypass-only: купить ГБ + купить подписку (не продлить)
         buttons.append([InlineKeyboardButton(
-            text="🟢 Купить ГБ трафика",
+            text="Купить ГБ трафика",
             callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️ premium
+            style="success",
         )])
         buttons.append([InlineKeyboardButton(
-            text="🟢 Купить подписку VPN",
+            text="Купить подписку VPN",
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            style="success",
         )])
     elif is_combo and has_active_subscription:
         # Комбо-подписка: трафик и продление основной
         buttons.append([InlineKeyboardButton(
-            text="🟢 Купить ГБ трафика",
+            text="Купить ГБ трафика",
             callback_data="buy_traffic",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            style="success",
         )])
         buttons.append([InlineKeyboardButton(
-            text="🟢 Продлить основную подписку",
+            text="Продлить основную подписку",
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            style="success",
         )])
     else:
-        # Row 1: [Купить ГБ] [Продлить/Купить подписку] — основные CTA, зелёный акцент
+        # Row 1: [Купить ГБ] [Продлить/Купить подписку] — основные CTA, success
         row1 = []
         if show_traffic and not is_trial:
             row1.append(InlineKeyboardButton(
-                text="🟢 Купить ГБ",
+                text="Купить ГБ",
                 callback_data="buy_traffic",
+                icon_custom_emoji_id="5199785165735367039",  # ⚡️
+                style="success",
             ))
         buy_text = _strip_lead_emoji(
             i18n_get_text(language, "main.buy_renew")
@@ -396,15 +406,18 @@ def get_profile_keyboard(
             else i18n_get_text(language, "main.buy_new")
         )
         row1.append(InlineKeyboardButton(
-            text=f"🟢 {buy_text}",
+            text=buy_text,
             callback_data="menu_buy_vpn",
+            icon_custom_emoji_id="5199785165735367039",  # ⚡️
+            style="success",
         ))
         buttons.append(row1)
 
-    # Row 2: Мои устройства — full width, красный акцент
+    # Row 2: Мои устройства — full width, danger-красная
     buttons.append([InlineKeyboardButton(
-        text="🔴 Мои устройства",
+        text="🖥 Мои устройства",
         callback_data="user:devices",
+        style="danger",
     )])
 
     # Row 3: Пополнить + Веб-клиент
@@ -422,7 +435,13 @@ def get_profile_keyboard(
         ),
     ])
 
-    # Row 5: Назад
+    # Row 5: Автопродление (списывается с баланса; только при активной подписке)
+    if has_active_subscription and not is_bypass_only:
+        ar_text = "🔁 Автопродление с баланса ✅" if auto_renew else "🔁 Автопродление с баланса"
+        ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
+        buttons.append([InlineKeyboardButton(text=ar_text, callback_data=ar_data)])
+
+    # Row 6: Назад
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "common.back", "← Назад"),

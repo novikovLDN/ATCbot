@@ -405,22 +405,23 @@ async def show_profile(message_or_query, language: str):
             return
 
         # Карточка профиля: единый формат (профиль + трафик)
-        text = f"👤 {display_name}\n\n"
-        text += f"{i18n_get_text(language, 'profile.balance', amount=balance_str)}\n"
+        # Header — имя + Telegram ID
+        text = f"👤 <b>{display_name}</b>\n"
+        text += f"🆔 ID: <code>{telegram_id}</code>\n\n"
 
         is_trial = sub_type == "trial"
         is_combo = subscription.get("is_combo", False) if subscription else False
         is_bypass_only = subscription.get("is_bypass_only", False) if subscription else False
 
+        # Блок «Подписка» — собираем строки, потом оборачиваем в blockquote
+        sub_lines = []
         if has_active_subscription and expires_at:
             date_str = format_date_ru(expires_at)
-
             if is_bypass_only:
-                # Bypass-only: подписки нет, показываем только обход
-                text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
-                text += i18n_get_text(language, "profile.tariff_none") + "\n"
+                sub_lines.append(i18n_get_text(language, "profile.subscription_inactive"))
+                sub_lines.append(i18n_get_text(language, "profile.tariff_none"))
             else:
-                text += i18n_get_text(language, "profile.subscription_active", date=date_str) + "\n"
+                sub_lines.append(i18n_get_text(language, "profile.subscription_active", date=date_str))
                 if config.is_biz_tariff(sub_type):
                     tariff_label = "Business"
                 elif sub_type == "plus":
@@ -429,19 +430,22 @@ async def show_profile(message_or_query, language: str):
                     tariff_label = "Trial"
                 else:
                     tariff_label = "Комбо Basic" if is_combo else "Basic"
-                text += i18n_get_text(language, "profile.tariff", tariff=tariff_label) + "\n"
-
-            if not is_bypass_only:
-                if auto_renew and expires_at:
+                sub_lines.append(i18n_get_text(language, "profile.tariff", tariff=tariff_label))
+                if auto_renew:
                     renewal_window = timedelta(hours=6)
                     next_renewal = expires_at - renewal_window
-                    text += i18n_get_text(language, "profile.auto_renew_on", date=format_date_ru(next_renewal))
+                    sub_lines.append(i18n_get_text(language, "profile.auto_renew_on", date=format_date_ru(next_renewal)))
                 else:
-                    text += i18n_get_text(language, "profile.auto_renew_off")
+                    sub_lines.append(i18n_get_text(language, "profile.auto_renew_off"))
         else:
-            text += i18n_get_text(language, "profile.subscription_inactive") + "\n"
-            text += i18n_get_text(language, "profile.tariff_none") + "\n"
-            text += i18n_get_text(language, "profile.auto_renew_none")
+            sub_lines.append(i18n_get_text(language, "profile.subscription_inactive"))
+            sub_lines.append(i18n_get_text(language, "profile.tariff_none"))
+            sub_lines.append(i18n_get_text(language, "profile.auto_renew_none"))
+
+        text += "<blockquote>" + "\n".join(sub_lines) + "</blockquote>\n\n"
+
+        # Блок «Баланс»
+        text += "<blockquote>" + i18n_get_text(language, "profile.balance", amount=balance_str) + "</blockquote>"
 
         # --- Traffic section: show if Remnawave enabled and user has remnawave_uuid ---
         # Traffic must be visible regardless of main subscription status (bypass GB always work)
@@ -484,11 +488,14 @@ async def show_profile(message_or_query, language: str):
                         traffic.get("subscriptionUrl", "")
                     )
 
-                    text += f"\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n"
-                    text += f"<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {_fmt(used)} / {_fmt(limit_bytes)}\n"
-                    text += f"{_bar(used, limit_bytes)} {pct}%\n\n"
+                    traffic_block = (
+                        f"<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n"
+                        f"<tg-emoji emoji-id=\"5443127283898405358\">📥</tg-emoji> {_fmt(used)} / {_fmt(limit_bytes)}\n"
+                        f"{_bar(used, limit_bytes)} {pct}%"
+                    )
+                    text += f"\n\n<blockquote>{traffic_block}</blockquote>"
                     if sub_url:
-                        text += f"<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>"
+                        text += f"\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
@@ -501,7 +508,7 @@ async def show_profile(message_or_query, language: str):
                         traffic_limit_override=override,
                     )
                 )
-                text += "\n\n<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n\n⏳ Настраиваем... Зайдите через несколько секунд."
+                text += "\n\n<blockquote><tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n⏳ Настраиваем… Зайдите через несколько секунд.</blockquote>"
 
         keyboard = get_profile_keyboard(
             language, has_active_subscription, auto_renew,
