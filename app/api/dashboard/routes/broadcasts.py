@@ -171,6 +171,7 @@ def normalize_premium_emoji(text: str) -> str:
 _BUTTON_TYPES = {
     "buy",
     "promo_buy",
+    "promo_traffic",
     "support",
     "channel",
     "referral",
@@ -439,6 +440,15 @@ def _build_reply_markup(
             label = f"🎁 Купить со скидкой {discount}%" if discount else "🎁 Купить со скидкой"
             rows.append([InlineKeyboardButton(
                 text=label, callback_data=f"broadcast_promo_buy:{broadcast_id}",
+            )])
+        elif btn == "promo_traffic":
+            label = (
+                f"📊 Купить ГБ со скидкой {discount}%"
+                if discount else "📊 Купить ГБ со скидкой"
+            )
+            rows.append([InlineKeyboardButton(
+                text=label,
+                callback_data=f"broadcast_promo_traffic:{broadcast_id}",
             )])
         elif btn == "support":
             rows.append([InlineKeyboardButton(

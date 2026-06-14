@@ -21,6 +21,7 @@ type Step = 1 | 2 | 3 | 4;
 const BUTTON_OPTIONS = [
   { key: "buy", label: "🛒 Купить" },
   { key: "promo_buy", label: "🎁 Купить со скидкой (нужен %)" },
+  { key: "promo_traffic", label: "📊 Купить ГБ со скидкой (нужен %)" },
   { key: "support", label: "💬 Поддержка" },
   { key: "channel", label: "📢 Канал" },
   { key: "referral", label: "👥 Пригласить друга" },
@@ -108,10 +109,12 @@ export function BroadcastCreate() {
 
   const canNext1 = title.trim().length > 0 && message.trim().length > 0;
   const canNext2 = segment.length > 0;
+  const needsDiscountPercent =
+    buttons.includes("promo_buy") || buttons.includes("promo_traffic");
   const canConfirm =
     canNext1 &&
     canNext2 &&
-    (buttons.includes("promo_buy") ? typeof discountPercent === "number" : true);
+    (needsDiscountPercent ? typeof discountPercent === "number" : true);
 
   const onPickPhoto = async (file: File | undefined) => {
     if (!file) return;
@@ -321,10 +324,12 @@ export function BroadcastCreate() {
             })}
           </div>
 
-          {buttons.includes("promo_buy") && (
+          {needsDiscountPercent && (
             <div className="rounded-xl border border-warning/30 bg-warning/10 p-4">
               <div className="text-xs font-medium uppercase tracking-wider text-warning">
-                Параметры скидки (для «Купить со скидкой»)
+                Параметры скидки {buttons.includes("promo_traffic")
+                  ? "(для «Купить ГБ со скидкой»)"
+                  : "(для «Купить со скидкой»)"}
               </div>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <label className="block">
@@ -366,7 +371,7 @@ export function BroadcastCreate() {
             onBack={() => setStep(2)}
             onNext={() => setStep(4)}
             nextDisabled={
-              buttons.includes("promo_buy") && typeof discountPercent !== "number"
+              needsDiscountPercent && typeof discountPercent !== "number"
             }
           />
         </StepCard>
