@@ -94,11 +94,11 @@ async def _build_main_view(telegram_id: int) -> Tuple[str, InlineKeyboardMarkup]
                 callback_data="user:devices:noop",
             )])
             continue
-        traffic = await remnawave_api.get_user_traffic(uuid)
-        online = traffic.get("onlineDevices", 0) if traffic else 0
-        limit = traffic.get("deviceLimit", 0) if traffic else 0
+        devices = await remnawave_api.get_user_hwid_devices(uuid)
+        count = len(devices) if devices else 0
+        label = f"{name} · {count}" if count > 0 else name
         rows.append([InlineKeyboardButton(
-            text=f"{name} · {online}/{limit}",
+            text=label,
             callback_data=f"user:devices:tier:{tier}",
         )])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="menu_profile")])
