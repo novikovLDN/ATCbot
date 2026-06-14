@@ -422,7 +422,13 @@ def get_profile_keyboard(
         ),
     ])
 
-    # Row 5: Назад
+    # Row 5: Автопродление (списывается с баланса; только при активной подписке)
+    if has_active_subscription and not is_bypass_only:
+        ar_text = "🔁 Автопродление с баланса ✅" if auto_renew else "🔁 Автопродление с баланса"
+        ar_data = "toggle_auto_renew:off" if auto_renew else "toggle_auto_renew:on"
+        buttons.append([InlineKeyboardButton(text=ar_text, callback_data=ar_data)])
+
+    # Row 6: Назад
     buttons.append([
         InlineKeyboardButton(
             text=i18n_get_text(language, "common.back", "← Назад"),
