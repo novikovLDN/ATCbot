@@ -87,7 +87,15 @@ export function BroadcastCreate() {
           typeof discountPercent === "number" ? discountPercent : null,
         discount_hours: typeof discountHours === "number" ? discountHours : null,
       }),
-    onSuccess: () => toast.success("Тест отправлен — проверь свой чат"),
+    onSuccess: (data) => {
+      if (data.split) {
+        toast.success(
+          "Тест отправлен. Caption не влез — разбили на 2 сообщения (фото + текст). При массовой рассылке так же не влезет — сократи текст или убери фото.",
+        );
+      } else {
+        toast.success("Тест отправлен — проверь свой чат");
+      }
+    },
     onError: (e: unknown) =>
       toast.error((e as ApiError)?.detail ?? "Не удалось отправить тест"),
   });
@@ -155,8 +163,16 @@ export function BroadcastCreate() {
           <label className="block">
             <div className="mb-1.5 flex items-center justify-between text-xs font-medium uppercase tracking-wider text-fg-subtle">
               <span>Сообщение (HTML)</span>
-              <span className="font-normal normal-case text-fg-subtle">
-                {message.length} / 4000
+              <span
+                className={
+                  "font-normal normal-case " +
+                  (photoFileId && message.length > 1024
+                    ? "text-amber-500"
+                    : "text-fg-subtle")
+                }
+              >
+                {message.length} / {photoFileId ? 1024 : 4000}
+                {photoFileId ? " (caption фото)" : ""}
               </span>
             </div>
             <textarea
@@ -164,8 +180,16 @@ export function BroadcastCreate() {
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               maxLength={4000}
-              placeholder="Поддерживается HTML: <b>жирный</b>, <i>курсив</i>, <a href=...>ссылки</a>, <blockquote>цитаты</blockquote>"
+              placeholder="Поддерживается HTML: <b>жирный</b>, <i>курсив</i>, <a href=...>ссылки</a>, <blockquote>цитаты</blockquote>, <blockquote expandable>скрытая</blockquote>"
             />
+            {photoFileId && message.length > 1024 && (
+              <p className="mt-1.5 text-xs text-amber-500">
+                ⚠️ Caption у фото лимит 1024 символа. У тебя {message.length}.
+                Массовая рассылка упадёт. Либо убери фото, либо сократи текст.
+                «Тест на админе» автоматически разделит на 2 сообщения, чтобы
+                ты увидел рендер blockquote/expandable.
+              </p>
+            )}
           </label>
 
           <div>

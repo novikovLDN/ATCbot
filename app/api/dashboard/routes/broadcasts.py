@@ -299,26 +299,25 @@ async def broadcast_test_self(
     # ТОЧНУЮ причину отказа («can't parse entities: …», «message is too
     # long», «PHOTO_INVALID_DIMENSIONS» и т.д.), чтобы он сразу понял,
     # что чинить в разметке.
+    #
+    # send_with_long_caption_fallback автоматически сплитит на 2
+    # сообщения (фото + текст), если caption у фото вылез за 1024
+    # символа — иначе длинные тексты с blockquote expandable не
+    # помещаются.
     from aiogram.exceptions import (
         TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter,
     )
+    from app.utils.telegram_send import send_with_long_caption_fallback
 
     try:
-        if body.photo_file_id:
-            sent = await bot.send_photo(
-                admin_id,
-                photo=body.photo_file_id,
-                caption=message_html,
-                reply_markup=reply_markup,
-                parse_mode="HTML",
-            )
-        else:
-            sent = await bot.send_message(
-                admin_id,
-                message_html,
-                reply_markup=reply_markup,
-                parse_mode="HTML",
-            )
+        message_ids = await send_with_long_caption_fallback(
+            bot,
+            admin_id,
+            message_html,
+            photo_file_id=body.photo_file_id,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
     except TelegramBadRequest as e:
         raise HTTPException(400, f"Telegram отклонил сообщение: {e.message}")
     except TelegramForbiddenError:
@@ -330,7 +329,12 @@ async def broadcast_test_self(
     except Exception as e:
         raise HTTPException(500, f"send_failed: {type(e).__name__}: {e}")
 
-    return {"ok": True, "message_id": sent.message_id, "to": admin_id}
+    return {
+        "ok": True,
+        "message_ids": message_ids,
+        "split": len(message_ids) > 1,
+        "to": admin_id,
+    }
 
 
 @router.post("")

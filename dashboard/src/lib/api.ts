@@ -221,7 +221,12 @@ export const endpoints = {
     discount_hours?: number | null;
     discount_label?: string | null;
   }) =>
-    api.post<{ ok: boolean; message_id: number; to: number }>(
+    api.post<{
+      ok: boolean;
+      message_ids: number[];
+      split: boolean;
+      to: number;
+    }>(
       "/broadcasts/test-self",
       body,
     ),
