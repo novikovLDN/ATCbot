@@ -232,9 +232,9 @@ async def get_main_menu_keyboard(language: str, telegram_id: int = None):
             ),
         ])
         buttons.append([InlineKeyboardButton(
-            text="Программа лояльности",
+            text="Амбассадор",
             callback_data="menu_referral",
-            icon_custom_emoji_id="5449601904147440135",  # 👑
+            icon_custom_emoji_id="5449601904147440135",  # 👑 premium
         )])
         buttons.append([proxy_button])
         buttons.append([
