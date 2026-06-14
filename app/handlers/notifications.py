@@ -11,10 +11,17 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from typing import Optional
 from urllib.parse import quote
 import logging
+import config
 import database
 from app.utils.referral_link import build_referral_link
 
 logger = logging.getLogger(__name__)
+
+_CASHBACK_PHOTO = {
+    "prod": "AgACAgQAAxkBAAFU1CRqGqoAAS1KI0850DLxvYHcz47qlDQAAsYPaxtaLNFQ8CwBGB-Q9mUBAAMCAAN5AAM7BA",
+    "stage": "AgACAgQAAxkBAAIfoGnenb15W2hobSqm_sQru9uQUjUjAAKnDGsbiHD4Ujk8OCW6NZ8hAQADAgADeQADOwQ",
+}
+
 
 async def send_referral_cashback_notification(
     bot: Bot,
@@ -79,12 +86,22 @@ async def send_referral_cashback_notification(
             )]
         ])
 
-        await bot.send_message(
-            chat_id=referrer_id,
-            text=notification_text,
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
+        photo_id = _CASHBACK_PHOTO.get("prod" if config.IS_PROD else "stage", "")
+        if photo_id:
+            await bot.send_photo(
+                chat_id=referrer_id,
+                photo=photo_id,
+                caption=notification_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            await bot.send_message(
+                chat_id=referrer_id,
+                text=notification_text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
 
         logger.info(
             f"REFERRAL_NOTIFICATION_SENT [referrer={referrer_id}, "
