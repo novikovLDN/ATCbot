@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 from aiogram.types import (
@@ -39,6 +40,7 @@ from pydantic import BaseModel, Field, field_validator
 import database
 from app.api.dashboard.deps import require_admin
 from app.events import bus
+from app.handlers.admin.broadcast import _safe_send_with_buttons
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,28 @@ async def upload_photo(
 # ── CREATE + SEND ────────────────────────────────────────────────────
 
 
+# Telegram-клиент при копировании premium-эмодзи иногда вставляет их
+# в Markdown image-синтаксисе  ![👑](tg://emoji?id=12345).  Бот шлёт
+# broadcast только с parse_mode="HTML" — такой markdown отрисуется как
+# plain text и сломает entity-парсер (отсюда 600/600 ошибок). Чтобы
+# админ мог копи-пастить из любого источника, нормализуем оба формата
+# к HTML-варианту  <tg-emoji emoji-id="12345">👑</tg-emoji>.
+_MD_TG_EMOJI_RE = re.compile(r"!\[([^\]]+?)\]\(tg://emoji\?id=(\d+)\)")
+
+
+def normalize_premium_emoji(text: str) -> str:
+    """Convert Markdown `![emoji](tg://emoji?id=X)` → HTML `<tg-emoji>`.
+
+    Idempotent on text that's already HTML.
+    """
+    if not text:
+        return text
+    return _MD_TG_EMOJI_RE.sub(
+        lambda m: f'<tg-emoji emoji-id="{m.group(2)}">{m.group(1)}</tg-emoji>',
+        text,
+    )
+
+
 _BUTTON_TYPES = {
     "buy",
     "promo_buy",
@@ -249,12 +273,57 @@ async def broadcast_delete_cancel(
     return {"ok": True}
 
 
+@router.post("/test-self")
+async def broadcast_test_self(
+    body: BroadcastCreateRequest,
+    admin: dict = Depends(require_admin),
+):
+    """Отправить тестовое сообщение ТОЛЬКО админу — для проверки текста,
+    разметки, кнопок и фото перед массовой рассылкой.
+
+    Не создаёт row в `broadcasts`, не пишет в `broadcast_send_log`,
+    не публикует bus-события. Сегмент игнорируется. Скидка — тоже
+    (кнопки строятся, но broadcast_id передаётся как 0, поэтому
+    callback на скидочной кнопке у админа просто не сработает — это
+    ок для теста, нам важен только рендер).
+    """
+    bot = _get_bot()
+    admin_id = int(admin["sub"])
+
+    message_html = normalize_premium_emoji(body.message)
+    reply_markup = _build_reply_markup(
+        body.buttons, 0, body.discount_percent,
+    )
+
+    semaphore = asyncio.Semaphore(1)
+    try:
+        msg_id = await _safe_send_with_buttons(
+            bot, admin_id, message_html, semaphore,
+            reply_markup=reply_markup,
+            photo_file_id=body.photo_file_id,
+            caption=message_html if body.photo_file_id else None,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"send_failed: {type(e).__name__}: {e}")
+
+    if not msg_id:
+        raise HTTPException(
+            502,
+            "telegram_rejected_message — проверь HTML-разметку и premium-emoji",
+        )
+
+    return {"ok": True, "message_id": msg_id, "to": admin_id}
+
+
 @router.post("")
 async def broadcast_create(
     body: BroadcastCreateRequest,
     admin: dict = Depends(require_admin),
 ):
     bot = _get_bot()
+
+    # Нормализуем premium-эмодзи (Markdown → HTML) — см. normalize_premium_emoji.
+    message_html = normalize_premium_emoji(body.message)
 
     try:
         user_ids = await database.get_users_by_segment(body.segment)
@@ -266,7 +335,7 @@ async def broadcast_create(
     try:
         broadcast_id = await database.create_broadcast(
             title=body.title,
-            message=body.message,
+            message=message_html,
             broadcast_type="custom",
             segment=body.segment,
             sent_by=int(admin["sub"]),
@@ -299,7 +368,7 @@ async def broadcast_create(
         bot=bot,
         broadcast_id=broadcast_id,
         user_ids=list(user_ids),
-        message=body.message,
+        message=message_html,
         reply_markup=reply_markup,
         photo_file_id=body.photo_file_id,
         admin_telegram_id=int(admin["sub"]),

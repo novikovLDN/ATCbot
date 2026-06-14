@@ -211,6 +211,20 @@ export const endpoints = {
       "/broadcasts",
       body,
     ),
+  broadcastTestSelf: (body: {
+    title: string;
+    message: string;
+    segment: string;
+    photo_file_id?: string | null;
+    buttons: string[];
+    discount_percent?: number | null;
+    discount_hours?: number | null;
+    discount_label?: string | null;
+  }) =>
+    api.post<{ ok: boolean; message_id: number; to: number }>(
+      "/broadcasts/test-self",
+      body,
+    ),
 
   referralsOverall: () =>
     api.get<Record<string, unknown>>("/referrals/overall"),
