@@ -1311,47 +1311,50 @@ async def get_referral_metrics(user_id: int) -> Dict[str, int]:
 def calculate_referral_level(total_referrals: int) -> Dict[str, Any]:
     """
     Рассчитать уровень реферала СТРОГО на основе total_referrals.
-    
+
     ⚠️ ВАЖНО: Уровень определяется СТРОГО по total_referrals.
     НЕ используется active_paid_referrals, rewards, revenue.
-    
-    Пороги соответствуют существующим уровням из loyalty.py:
-    - 0-24: Silver Access (10%)
-    - 25-49: Gold Access (25%)
-    - 50+: Platinum Access (45%)
-    
+
+    Пороги «Круга Амбассадоров» (см. LOYALTY_TIERS в app/constants/loyalty.py):
+    - 0-24:   Проводник  (10%)
+    - 25-49:  Хранитель  (20%)
+    - 50-74:  Инсайдер   (30%)
+    - 75-99:  Лидер      (40%)
+    - 100+:   Амбассадор (45%, фиксируется навсегда)
+
     Args:
-        total_referrals: Общее количество приглашённых рефералов
-    
+        total_referrals: Общее количество оплативших рефералов
+
     Returns:
         {
-            "current_level_name": str,  # "Silver Access", "Gold Access", "Platinum Access"
-            "cashback_percent": int,  # 10, 25, 45
-            "next_level_name": Optional[str],  # Следующий уровень или None
-            "remaining_connections": int  # До следующего уровня (max(0, ...))
+            "current_level_name": str,
+            "cashback_percent": int,
+            "next_level_name": Optional[str],
+            "remaining_connections": int
         }
     """
     # Структура уровней: соответствует LOYALTY_TIERS из app/constants/loyalty.py
-    # Пороги: 0-24 → Silver, 25-49 → Gold, 50+ → Platinum
     REFERRAL_LEVELS = [
-        {"name": "Platinum Access", "threshold": 50, "cashback": 45},
-        {"name": "Gold Access", "threshold": 25, "cashback": 25},
-        {"name": "Silver Access", "threshold": 0, "cashback": 10},  # Базовый уровень
+        {"name": "Амбассадор", "threshold": 100, "cashback": 45},
+        {"name": "Лидер",      "threshold": 75,  "cashback": 40},
+        {"name": "Инсайдер",   "threshold": 50,  "cashback": 30},
+        {"name": "Хранитель",  "threshold": 25,  "cashback": 20},
+        {"name": "Проводник",  "threshold": 0,   "cashback": 10},
     ]
-    
+
     # Сортируем по threshold DESC (от большего к меньшему)
     levels_sorted = sorted(REFERRAL_LEVELS, key=lambda x: x["threshold"], reverse=True)
-    
+
     # Находим текущий уровень (максимальный, где total_referrals >= threshold)
     current_level = None
     for level in levels_sorted:
         if total_referrals >= level["threshold"]:
             current_level = level
             break
-    
+
     # Если не найден (не должно произойти, т.к. есть базовый уровень с threshold=0)
     if current_level is None:
-        current_level = {"name": "Silver Access", "threshold": 0, "cashback": 10}
+        current_level = {"name": "Проводник", "threshold": 0, "cashback": 10}
     
     # Находим следующий уровень (первый, где threshold > total_referrals)
     next_level = None
@@ -1617,14 +1620,29 @@ async def process_referral_reward(
             referrer_id
         ) or 0
         
-        # Определяем процент по прогрессивной шкале
-        if paid_referrals_count >= 50:
+        # Определяем процент по прогрессивной шкале «Круга Амбассадоров»
+        if paid_referrals_count >= 100:
             percent = 45
+        elif paid_referrals_count >= 75:
+            percent = 40
+        elif paid_referrals_count >= 50:
+            percent = 30
         elif paid_referrals_count >= 25:
-            percent = 25
+            percent = 20
         else:
             percent = 10
-        
+
+        # 5a. Grandfather / admin-grant floor.
+        # Пользователи, попавшие под старую шкалу (Platinum=45% при 50+) при
+        # миграции 059, имеют cashback_floor_percent=45 — мы не снижаем им
+        # процент, даже если по новой шкале они меньше.
+        floor = await conn.fetchval(
+            "SELECT cashback_floor_percent FROM users WHERE telegram_id = $1",
+            referrer_id,
+        )
+        if floor is not None and floor > percent:
+            percent = floor
+
         # Вычисляем сколько осталось до следующего уровня
         if paid_referrals_count < 25:
             next_level_threshold = 25
@@ -1632,6 +1650,12 @@ async def process_referral_reward(
         elif paid_referrals_count < 50:
             next_level_threshold = 50
             referrals_needed = 50 - paid_referrals_count
+        elif paid_referrals_count < 75:
+            next_level_threshold = 75
+            referrals_needed = 75 - paid_referrals_count
+        elif paid_referrals_count < 100:
+            next_level_threshold = 100
+            referrals_needed = 100 - paid_referrals_count
         else:
             next_level_threshold = None
             referrals_needed = 0
