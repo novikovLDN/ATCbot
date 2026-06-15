@@ -1127,9 +1127,21 @@ async def get_users_by_segment(segment: str) -> list:
             - started_7d_cold      — холодные лиды: запустили бот за
                                      последние 7 суток (users.created_at)
                                      и до сих пор без активной подписки
-                                     И без bypass-entity. У них вообще
-                                     никаких ключей нет — нажали /start
-                                     и не купили.
+                                     И без bypass-entity.
+            - trial_ends_in_1d     — у юзера ИДЁТ триал и закончится
+                                     в ближайшие 24 часа
+                                     (trial_expires_at ∈ (NOW, NOW+24h])
+            - trial_expired_6h     — триал закончился ~6 часов назад
+                                     (trial_expires_at ∈ [NOW-7h, NOW-6h))
+                                     и сейчас нет активной подписки
+            - trial_expired_3d     — триал закончился ровно 3 полных
+                                     суток назад
+                                     (trial_expires_at ∈ [NOW-4d, NOW-3d))
+                                     и сейчас нет активной подписки
+            - paid_expired_1d      — платная (subscriptions.source='payment')
+                                     истекла ровно 1 сутки назад
+                                     (expires_at ∈ [NOW-2d, NOW-1d))
+                                     и сейчас нет активной подписки
 
     Returns:
         Список Telegram ID пользователей
@@ -1196,6 +1208,70 @@ async def get_users_by_segment(segment: str) -> list:
                                OR s.remnawave_premium_uuid IS NOT NULL
                            )
                      )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "trial_ends_in_1d":
+            # Идёт триал, до конца ≤ 24 часа. Цель — пуш с напоминанием
+            # «триал заканчивается, оформи подписку».
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE u.trial_used_at IS NOT NULL
+                     AND u.trial_expires_at IS NOT NULL
+                     AND u.trial_expires_at >  NOW()
+                     AND u.trial_expires_at <= NOW() + INTERVAL '24 hours'"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "trial_expired_6h":
+            # Триал закончился ~6 часов назад (часовой бакет
+            # [NOW-7h, NOW-6h)). И нет активной платной — иначе юзер
+            # уже купил, незачем ему напоминание.
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE u.trial_used_at IS NOT NULL
+                     AND u.trial_expires_at IS NOT NULL
+                     AND u.trial_expires_at <= NOW() - INTERVAL '6 hours'
+                     AND u.trial_expires_at >  NOW() - INTERVAL '7 hours'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = u.telegram_id
+                           AND s.expires_at > NOW()
+                     )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "trial_expired_3d":
+            # Триал закончился ровно 3 полных суток назад
+            # (бакет [NOW-4d, NOW-3d)). Без активной платной.
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE u.trial_used_at IS NOT NULL
+                     AND u.trial_expires_at IS NOT NULL
+                     AND u.trial_expires_at <= NOW() - INTERVAL '3 days'
+                     AND u.trial_expires_at >  NOW() - INTERVAL '4 days'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = u.telegram_id
+                           AND s.expires_at > NOW()
+                     )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment == "paid_expired_1d":
+            # Платная подписка (source='payment') истекла ровно
+            # 1 сутки назад (бакет [NOW-2d, NOW-1d)). И сейчас нет
+            # активной — это churn-окно, классическая точка реактивации.
+            rows = await conn.fetch(
+                """SELECT u.telegram_id FROM users u
+                   WHERE EXISTS (
+                       SELECT 1 FROM subscriptions s
+                       WHERE s.telegram_id = u.telegram_id
+                         AND s.source = 'payment'
+                         AND s.expires_at <= NOW() - INTERVAL '1 day'
+                         AND s.expires_at >  NOW() - INTERVAL '2 days'
+                   )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM subscriptions s2
+                       WHERE s2.telegram_id = u.telegram_id
+                         AND s2.expires_at > NOW()
+                   )"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
