@@ -1214,12 +1214,20 @@ async def get_users_by_segment(segment: str) -> list:
         elif segment == "trial_ends_in_1d":
             # Идёт триал, до конца ≤ 24 часа. Цель — пуш с напоминанием
             # «триал заканчивается, оформи подписку».
+            #
+            # ВАЖНО про tz: users.trial_expires_at — TIMESTAMP без TZ,
+            # в БД хранится naive UTC (см. _to_db_utc). NOW() возвращает
+            # TIMESTAMPTZ в session-TZ; implicit cast TIMESTAMP→TIMESTAMPTZ
+            # интерпретирует TIMESTAMP в session-TZ и даёт сдвиг, если
+            # session-TZ ≠ UTC. Используем `NOW() AT TIME ZONE 'UTC'` —
+            # это TIMESTAMP-без-TZ в UTC, сравнение с trial_expires_at
+            # надёжно без implicit cast в любой session-TZ.
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
                    WHERE u.trial_used_at IS NOT NULL
                      AND u.trial_expires_at IS NOT NULL
-                     AND u.trial_expires_at >  NOW()
-                     AND u.trial_expires_at <= NOW() + INTERVAL '24 hours'"""
+                     AND u.trial_expires_at >  (NOW() AT TIME ZONE 'UTC')
+                     AND u.trial_expires_at <= (NOW() AT TIME ZONE 'UTC') + INTERVAL '24 hours'"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("trial_expired_6h", "trial_expired_1d", "trial_expired_2d", "trial_expired_3d"):
@@ -1230,13 +1238,14 @@ async def get_users_by_segment(segment: str) -> list:
             #   trial_expired_1d → [NOW-2d, NOW-1d)
             #   trial_expired_2d → [NOW-3d, NOW-2d)
             #   trial_expired_3d → [NOW-4d, NOW-3d)
+            # См. коммент про tz в trial_ends_in_1d.
             if segment == "trial_expired_6h":
-                upper_sql = "NOW() - INTERVAL '6 hours'"
-                lower_sql = "NOW() - INTERVAL '7 hours'"
+                upper_sql = "(NOW() AT TIME ZONE 'UTC') - INTERVAL '6 hours'"
+                lower_sql = "(NOW() AT TIME ZONE 'UTC') - INTERVAL '7 hours'"
             else:
                 days = int(segment.split("_")[-1].rstrip("d"))
-                upper_sql = f"NOW() - INTERVAL '{days} days'"
-                lower_sql = f"NOW() - INTERVAL '{days + 1} days'"
+                upper_sql = f"(NOW() AT TIME ZONE 'UTC') - INTERVAL '{days} days'"
+                lower_sql = f"(NOW() AT TIME ZONE 'UTC') - INTERVAL '{days + 1} days'"
             rows = await conn.fetch(
                 f"""SELECT u.telegram_id FROM users u
                     WHERE u.trial_used_at IS NOT NULL
@@ -1246,7 +1255,7 @@ async def get_users_by_segment(segment: str) -> list:
                       AND NOT EXISTS (
                           SELECT 1 FROM subscriptions s
                           WHERE s.telegram_id = u.telegram_id
-                            AND s.expires_at > NOW()
+                            AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
                       )"""
             )
             return [row["telegram_id"] for row in rows]
@@ -1254,46 +1263,44 @@ async def get_users_by_segment(segment: str) -> list:
             # Платная подписка (source='payment') истекла ровно
             # 1 сутки назад (бакет [NOW-2d, NOW-1d)). И сейчас нет
             # активной — это churn-окно, классическая точка реактивации.
+            # См. коммент про tz в trial_ends_in_1d.
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
                    WHERE EXISTS (
                        SELECT 1 FROM subscriptions s
                        WHERE s.telegram_id = u.telegram_id
                          AND s.source = 'payment'
-                         AND s.expires_at <= NOW() - INTERVAL '1 day'
-                         AND s.expires_at >  NOW() - INTERVAL '2 days'
+                         AND s.expires_at <= (NOW() AT TIME ZONE 'UTC') - INTERVAL '1 day'
+                         AND s.expires_at >  (NOW() AT TIME ZONE 'UTC') - INTERVAL '2 days'
                    )
                      AND NOT EXISTS (
                        SELECT 1 FROM subscriptions s2
                        WHERE s2.telegram_id = u.telegram_id
-                         AND s2.expires_at > NOW()
+                         AND s2.expires_at > (NOW() AT TIME ZONE 'UTC')
                    )"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
             # User's MOST RECENT subscription expired exactly N full days
-            # ago (24-hour bucket). Looking at MAX(expires_at) rather than
-            # any row makes this robust against multiple-row history
-            # (renewal flow uses both UPDATE and INSERT depending on path).
-            # Also implicitly excludes users with an active subscription:
-            # if their latest expires_at is in the past window, then by
-            # definition they have no active row.
+            # ago (24-hour bucket). MAX(expires_at) делает выборку
+            # устойчивой к history-rows (renewal flow создаёт несколько
+            # subscription_row). Также неявно исключает юзеров с активной
+            # подпиской — если их max в прошлом, активной нет.
             #
-            # Using NOW() directly (timestamptz) and `$ * INTERVAL '1 day'`
-            # avoids type-mismatch with naive Python datetimes — asyncpg
-            # serialises tz-naive datetimes in a way that breaks `param -
-            # interval` arithmetic on Postgres.
+            # ВАЖНО про tz: см. коммент в trial_ends_in_1d. Используем
+            # `(NOW() AT TIME ZONE 'UTC')` чтобы сравнение TIMESTAMP-без-TZ
+            # работало стабильно в любой session-TZ.
             days = int(segment.split("_")[1].rstrip("d"))
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
                    WHERE (
                        SELECT MAX(s.expires_at) FROM subscriptions s
                        WHERE s.telegram_id = u.telegram_id
-                   ) >= NOW() - $1 * INTERVAL '1 day'
+                   ) >= (NOW() AT TIME ZONE 'UTC') - $1 * INTERVAL '1 day'
                      AND (
                        SELECT MAX(s.expires_at) FROM subscriptions s
                        WHERE s.telegram_id = u.telegram_id
-                   ) <  NOW() - $2 * INTERVAL '1 day'""",
+                   ) <  (NOW() AT TIME ZONE 'UTC') - $2 * INTERVAL '1 day'""",
                 days + 1, days,
             )
             return [row["telegram_id"] for row in rows]
