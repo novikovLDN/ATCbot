@@ -1131,13 +1131,14 @@ async def get_users_by_segment(segment: str) -> list:
             - trial_ends_in_1d     — у юзера ИДЁТ триал и закончится
                                      в ближайшие 24 часа
                                      (trial_expires_at ∈ (NOW, NOW+24h])
-            - trial_expired_6h     — триал закончился ~6 часов назад
-                                     (trial_expires_at ∈ [NOW-7h, NOW-6h))
-                                     и сейчас нет активной подписки
-            - trial_expired_3d     — триал закончился ровно 3 полных
-                                     суток назад
-                                     (trial_expires_at ∈ [NOW-4d, NOW-3d))
-                                     и сейчас нет активной подписки
+            - trial_expired_6h / 1d / 2d / 3d
+                                   — триал закончился N времени назад
+                                     по фиксированному бакету:
+                                       6h → [NOW-7h, NOW-6h)
+                                       1d → [NOW-2d, NOW-1d)
+                                       2d → [NOW-3d, NOW-2d)
+                                       3d → [NOW-4d, NOW-3d)
+                                     И сейчас нет активной подписки.
             - paid_expired_1d      — платная (subscriptions.source='payment')
                                      истекла ровно 1 сутки назад
                                      (expires_at ∈ [NOW-2d, NOW-1d))
@@ -1221,37 +1222,32 @@ async def get_users_by_segment(segment: str) -> list:
                      AND u.trial_expires_at <= NOW() + INTERVAL '24 hours'"""
             )
             return [row["telegram_id"] for row in rows]
-        elif segment == "trial_expired_6h":
-            # Триал закончился ~6 часов назад (часовой бакет
-            # [NOW-7h, NOW-6h)). И нет активной платной — иначе юзер
-            # уже купил, незачем ему напоминание.
+        elif segment in ("trial_expired_6h", "trial_expired_1d", "trial_expired_2d", "trial_expired_3d"):
+            # Триал закончился N времени назад (фиксированный бакет).
+            # Без активной платной — иначе юзер уже купил, незачем
+            # ему напоминание.
+            #   trial_expired_6h → [NOW-7h, NOW-6h)
+            #   trial_expired_1d → [NOW-2d, NOW-1d)
+            #   trial_expired_2d → [NOW-3d, NOW-2d)
+            #   trial_expired_3d → [NOW-4d, NOW-3d)
+            if segment == "trial_expired_6h":
+                upper_sql = "NOW() - INTERVAL '6 hours'"
+                lower_sql = "NOW() - INTERVAL '7 hours'"
+            else:
+                days = int(segment.split("_")[-1].rstrip("d"))
+                upper_sql = f"NOW() - INTERVAL '{days} days'"
+                lower_sql = f"NOW() - INTERVAL '{days + 1} days'"
             rows = await conn.fetch(
-                """SELECT u.telegram_id FROM users u
-                   WHERE u.trial_used_at IS NOT NULL
-                     AND u.trial_expires_at IS NOT NULL
-                     AND u.trial_expires_at <= NOW() - INTERVAL '6 hours'
-                     AND u.trial_expires_at >  NOW() - INTERVAL '7 hours'
-                     AND NOT EXISTS (
-                         SELECT 1 FROM subscriptions s
-                         WHERE s.telegram_id = u.telegram_id
-                           AND s.expires_at > NOW()
-                     )"""
-            )
-            return [row["telegram_id"] for row in rows]
-        elif segment == "trial_expired_3d":
-            # Триал закончился ровно 3 полных суток назад
-            # (бакет [NOW-4d, NOW-3d)). Без активной платной.
-            rows = await conn.fetch(
-                """SELECT u.telegram_id FROM users u
-                   WHERE u.trial_used_at IS NOT NULL
-                     AND u.trial_expires_at IS NOT NULL
-                     AND u.trial_expires_at <= NOW() - INTERVAL '3 days'
-                     AND u.trial_expires_at >  NOW() - INTERVAL '4 days'
-                     AND NOT EXISTS (
-                         SELECT 1 FROM subscriptions s
-                         WHERE s.telegram_id = u.telegram_id
-                           AND s.expires_at > NOW()
-                     )"""
+                f"""SELECT u.telegram_id FROM users u
+                    WHERE u.trial_used_at IS NOT NULL
+                      AND u.trial_expires_at IS NOT NULL
+                      AND u.trial_expires_at <= {upper_sql}
+                      AND u.trial_expires_at >  {lower_sql}
+                      AND NOT EXISTS (
+                          SELECT 1 FROM subscriptions s
+                          WHERE s.telegram_id = u.telegram_id
+                            AND s.expires_at > NOW()
+                      )"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment == "paid_expired_1d":
