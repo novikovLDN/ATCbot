@@ -86,9 +86,12 @@ export function Dashboard() {
     queryFn: () => endpoints.paymentsRevenueSince(todaySince),
     refetchInterval: 60_000,
   });
-  const daily30 = useQuery({
-    queryKey: ["stats", "daily", 30],
-    queryFn: () => endpoints.statsDaily(30),
+  // Time-range pill: 7д / 30д / 90д. Дневной chart + дельта вычисляются
+  // от выбранного диапазона.
+  const [days, setDays] = useState<7 | 30 | 90>(30);
+  const daily = useQuery({
+    queryKey: ["stats", "daily", days],
+    queryFn: () => endpoints.statsDaily(days),
     refetchInterval: 5 * 60_000,
     staleTime: 60_000,
   });
@@ -153,19 +156,27 @@ export function Dashboard() {
     qc.invalidateQueries({ queryKey: ["stats"] });
   });
 
-  // Pre-computed deltas — для маленькой стрелки рядом с цифрой.
-  // 30d-сумма vs предыдущие 30d (если данных меньше — просто null).
+  // Дельта: вторая половина выбранного окна vs первая половина.
+  // Работает для 7/30/90 — даёт «как изменилось за половину периода».
   const revenueDelta = useMemo(() => {
-    const s = daily30.data?.series ?? [];
-    if (s.length < 60) return null;
-    const last30 = s.slice(-30).reduce((a, r) => a + r.revenue_rubles, 0);
-    const prev30 = s.slice(0, 30).reduce((a, r) => a + r.revenue_rubles, 0);
-    if (prev30 === 0) return null;
-    return ((last30 - prev30) / prev30) * 100;
-  }, [daily30.data]);
+    const s = daily.data?.series ?? [];
+    if (s.length < 4) return null;
+    const half = Math.floor(s.length / 2);
+    const prev = s.slice(0, half).reduce((a, r) => a + r.revenue_rubles, 0);
+    const last = s.slice(-half).reduce((a, r) => a + r.revenue_rubles, 0);
+    if (prev === 0) return null;
+    return ((last - prev) / prev) * 100;
+  }, [daily.data]);
+
+  // Конверсия: started → triallers → payers. Берём из overview/revenue.
+  const totalUsers = asNum(overview.data?.total_users);
+  const activePaid = asNum(
+    overview.data?.active_paid_subscriptions ?? overview.data?.active_subscriptions,
+  );
+  const payingUsers = asNum(revenue.data?.paying_users);
 
   return (
-    <div className="-m-4 -mt-4 min-h-[calc(100vh-4rem)] bg-[#F6F7F9] p-4 text-slate-900 md:-m-6 md:p-6 lg:-m-8 lg:p-8">
+    <div className="text-fg">
       <div className="mx-auto max-w-[1400px] space-y-6">
         {/* Header */}
         <header className="flex flex-wrap items-end justify-between gap-4">
@@ -203,11 +214,11 @@ export function Dashboard() {
                 ? { text: `ARPU ${fmtRub(revenue.data.arpu_rubles)}`, positive: true }
                 : null
             }
-            loading={revenue.isLoading || daily30.isLoading}
+            loading={revenue.isLoading || daily.isLoading}
             chart={
               <RevenueChart
-                data={daily30.data?.series ?? []}
-                loading={daily30.isLoading}
+                data={daily.data?.series ?? []}
+                loading={daily.isLoading}
               />
             }
             className="lg:col-span-2"
@@ -246,13 +257,16 @@ export function Dashboard() {
         {/* Daily breakdown + KPI */}
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <SurfaceCard className="lg:col-span-2">
-            <SurfaceHeader
-              eyebrow="Daily · past 30 days"
-              title="Новые юзеры и платежи"
-            />
+            <div className="flex items-start justify-between gap-3">
+              <SurfaceHeader
+                eyebrow={`Daily · past ${days} days`}
+                title="Новые юзеры и платежи"
+              />
+              <RangePill value={days} onChange={setDays} />
+            </div>
             <DualBarChart
-              data={daily30.data?.series ?? []}
-              loading={daily30.isLoading}
+              data={daily.data?.series ?? []}
+              loading={daily.isLoading}
             />
           </SurfaceCard>
 
@@ -282,6 +296,21 @@ export function Dashboard() {
             </dl>
           </SurfaceCard>
         </section>
+
+        {/* Conversion funnel — простой 3-этапный визуал */}
+        <SurfaceCard>
+          <SurfaceHeader
+            eyebrow="Воронка"
+            title="Конверсия пользователей"
+            sub="всё время · база → платящие"
+          />
+          <ConversionFunnel
+            total={totalUsers}
+            active={activePaid}
+            paying={payingUsers}
+            loading={overview.isLoading || revenue.isLoading}
+          />
+        </SurfaceCard>
 
         {/* Today MSK */}
         <SurfaceCard>
@@ -522,6 +551,114 @@ function KpiRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between text-sm">
       <span className="text-slate-500">{label}</span>
       <span className="font-semibold text-slate-900 tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function RangePill({
+  value,
+  onChange,
+}: {
+  value: 7 | 30 | 90;
+  onChange: (v: 7 | 30 | 90) => void;
+}) {
+  const opts: Array<7 | 30 | 90> = [7, 30, 90];
+  return (
+    <div className="inline-flex shrink-0 rounded-full border border-slate-200 bg-white p-0.5 text-[11px] font-medium shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      {opts.map((o) => (
+        <button
+          key={o}
+          type="button"
+          onClick={() => onChange(o)}
+          className={
+            "rounded-full px-2.5 py-1 transition " +
+            (value === o
+              ? "bg-slate-900 text-white"
+              : "text-slate-500 hover:text-slate-900")
+          }
+        >
+          {o}д
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ConversionFunnel({
+  total,
+  active,
+  paying,
+  loading,
+}: {
+  total: number | undefined;
+  active: number | undefined;
+  paying: number | undefined;
+  loading: boolean;
+}) {
+  const t = total ?? 0;
+  const a = active ?? 0;
+  const p = paying ?? 0;
+  const aPct = t > 0 ? (a / t) * 100 : 0;
+  const pPct = t > 0 ? (p / t) * 100 : 0;
+  const aRel = t > 0 ? Math.max(2, (a / t) * 100) : 0;
+  const pRel = t > 0 ? Math.max(2, (p / t) * 100) : 0;
+  return (
+    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+      <FunnelStage
+        label="Всего пользователей"
+        value={loading ? "…" : fmtNum(t)}
+        sub="нажали /start"
+        pct={100}
+        color="bg-sky-500"
+      />
+      <FunnelStage
+        label="Активные подписки"
+        value={loading ? "…" : fmtNum(a)}
+        sub={t > 0 ? `${aPct.toFixed(1)}% от всех` : undefined}
+        pct={aRel}
+        color="bg-emerald-500"
+      />
+      <FunnelStage
+        label="Платящие"
+        value={loading ? "…" : fmtNum(p)}
+        sub={t > 0 ? `${pPct.toFixed(1)}% от всех` : undefined}
+        pct={pRel}
+        color="bg-violet-500"
+      />
+    </div>
+  );
+}
+
+function FunnelStage({
+  label,
+  value,
+  sub,
+  pct,
+  color,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  pct: number;
+  color: string;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200/70 bg-slate-50/40 p-4">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+        {value}
+      </div>
+      {sub && (
+        <div className="mt-0.5 text-[11px] text-slate-500">{sub}</div>
+      )}
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={`h-full ${color} transition-[width] duration-700`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }
