@@ -128,3 +128,17 @@ async def stats_daily(days: int = Query(30, gt=0, le=180)):
         return await database.get_daily_timeseries(days)
     except Exception as e:
         raise HTTPException(500, f"daily_failed: {e}")
+
+
+@router.get("/hourly")
+async def stats_hourly(days: int = Query(7, gt=0, le=90)):
+    """Hour-of-day breakdown за последние `days` суток.
+
+    Возвращает массив из 24 строк (hour 0..23, Europe/Moscow) с
+    суммарными revenue / payments / new_users / new_subs за окно.
+    Полезно понять, в какие часы юзеры покупают и когда пик.
+    """
+    try:
+        return await database.get_hourly_timeseries(days)
+    except Exception as e:
+        raise HTTPException(500, f"hourly_failed: {e}")

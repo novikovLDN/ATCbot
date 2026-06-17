@@ -141,6 +141,19 @@ export const endpoints = {
         new_paid_subscriptions: number;
       }>;
     }>(`/stats/daily?days=${days}`),
+  statsHourly: (days = 7) =>
+    api.get<{
+      days: number;
+      tz: string;
+      series: Array<{
+        hour: number;
+        revenue_rubles: number;
+        payments_count: number;
+        new_users: number;
+        new_subscriptions: number;
+        new_paid_subscriptions: number;
+      }>;
+    }>(`/stats/hourly?days=${days}`),
 
   userSearch: (q: string) =>
     api.get<{

@@ -214,6 +214,15 @@ export function Dashboard() {
     refetchInterval: 5 * 60_000,
     staleTime: 60_000,
   });
+  // Hourly breakdown: окно 1д / 7д / 30д, тот же metric switcher.
+  const [hourlyDays, setHourlyDays] = useState<1 | 7 | 30>(7);
+  const [hourlyMetric, setHourlyMetric] = useState<MetricKey>("payments_count");
+  const hourly = useQuery({
+    queryKey: ["stats", "hourly", hourlyDays],
+    queryFn: () => endpoints.statsHourly(hourlyDays),
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
+  });
 
   const [live, setLive] = useState<LiveEntry[]>([]);
   useEventStream((e) => {
@@ -565,6 +574,29 @@ export function Dashboard() {
             />
           </SurfaceCard>
         </section>
+
+        {/* Hourly activity — пик активности по часам МСК */}
+        <SurfaceCard>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <SurfaceHeader
+              eyebrow={`Активность по часам · ${hourlyDays}д · МСК`}
+              title="Когда юзеры покупают"
+              sub="распределение по часам — найди пик и слабый момент"
+            />
+            <SegPill<1 | 7 | 30>
+              value={hourlyDays}
+              options={[1, 7, 30]}
+              onChange={setHourlyDays}
+              fmt={(v) => `${v}д`}
+            />
+          </div>
+          <MetricSwitcher value={hourlyMetric} onChange={setHourlyMetric} />
+          <HourlyChart
+            data={hourly.data?.series ?? []}
+            loading={hourly.isLoading}
+            metric={hourlyMetric}
+          />
+        </SurfaceCard>
 
         {/* Conversion funnel — простой 3-этапный визуал */}
         <SurfaceCard>
@@ -1157,6 +1189,89 @@ function DailyMetricChart({
             />
           </AreaChart>
         </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+// HourlyChart — кастомный 24-bar visual без recharts. recharts даёт
+// ровные тонкие столбики, но мы хотим pixel-perfect ширину для
+// всех 24 часов + плавную смену метрики. Делаем вручную: каждая колонка
+// инит-стартует с height=0 и анимируется до своего pct (CSS transition).
+function HourlyChart({
+  data,
+  loading,
+  metric,
+}: {
+  data: Array<{ hour: number } & Record<string, number>>;
+  loading: boolean;
+  metric: MetricKey;
+}) {
+  const def = METRICS.find((m) => m.key === metric) ?? METRICS[0];
+  if (loading || data.length === 0) {
+    return (
+      <div className="mt-6 h-56">
+        <SkeletonBars />
+      </div>
+    );
+  }
+  const values = data.map((d) => Number(d[metric]) || 0);
+  const max = Math.max(1, ...values);
+  const total = values.reduce((a, v) => a + v, 0);
+  const peakIdx = values.indexOf(Math.max(...values));
+  return (
+    <div className="mt-4">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+        <div className="text-2xl font-semibold tabular-nums tracking-tight text-fg md:text-3xl">
+          {def.valueFmt(total)}
+        </div>
+        <div className="text-sm text-fg-muted">
+          пик в{" "}
+          <span
+            className="rounded-md px-1.5 py-0.5 text-xs font-semibold tabular-nums"
+            style={{ background: def.color + "22", color: def.color }}
+          >
+            {String(peakIdx).padStart(2, "0")}:00
+          </span>
+          <span className="ml-2 text-fg-subtle">
+            ({def.valueFmt(values[peakIdx])})
+          </span>
+        </div>
+      </div>
+      <div className="mt-4 flex h-44 items-end gap-1">
+        {data.map((d) => {
+          const v = Number(d[metric]) || 0;
+          const pct = (v / max) * 100;
+          const isPeak = d.hour === peakIdx;
+          return (
+            <div
+              key={d.hour}
+              className="group relative flex flex-1 flex-col items-center justify-end"
+            >
+              <div
+                className="w-full rounded-t-md transition-[height,background-color] duration-500 ease-out"
+                style={{
+                  height: `${Math.max(2, pct)}%`,
+                  background: isPeak ? def.color : def.color + "66",
+                }}
+              />
+              {/* tooltip on hover */}
+              <div className="pointer-events-none absolute bottom-full mb-1 hidden whitespace-nowrap rounded-md border border-border bg-bg-card px-2 py-1 text-[10px] font-medium shadow-md group-hover:block">
+                <span className="tabular-nums">{String(d.hour).padStart(2, "0")}:00</span>
+                <span className="ml-1.5 text-fg-subtle">·</span>
+                <span className="ml-1.5 tabular-nums text-fg">
+                  {def.valueFmt(v)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* Hour axis — 0/6/12/18/24 ticks для краткости */}
+      <div className="mt-2 flex justify-between text-[10px] font-medium tabular-nums text-fg-subtle">
+        {["00", "06", "12", "18", "24"].map((h) => (
+          <span key={h}>{h}</span>
+        ))}
       </div>
     </div>
   );
