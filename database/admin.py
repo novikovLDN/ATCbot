@@ -1238,8 +1238,11 @@ async def get_users_by_segment(segment: str) -> list:
             return [row["telegram_id"] for row in rows]
         elif segment in ("trial_expired_6h", "trial_expired_1d", "trial_expired_2d", "trial_expired_3d"):
             # Триал закончился N времени назад (фиксированный бакет).
-            # Без активной платной — иначе юзер уже купил, незачем
-            # ему напоминание.
+            # Исключаем только тех, у кого есть активная **платная**
+            # подписка — это юзеры, успешно конвертнувшиеся, им пуш
+            # «триал истёк, купи подписку» уже не нужен. Активные
+            # bypass-only/gift/admin_grant не считаем — у них нет
+            # основной подписки, и наш пуш им релевантен.
             #   trial_expired_6h → [NOW-7h, NOW-6h)
             #   trial_expired_1d → [NOW-2d, NOW-1d)
             #   trial_expired_2d → [NOW-3d, NOW-2d)
@@ -1262,6 +1265,7 @@ async def get_users_by_segment(segment: str) -> list:
                       AND NOT EXISTS (
                           SELECT 1 FROM subscriptions s
                           WHERE s.telegram_id = u.telegram_id
+                            AND s.source = 'payment'
                             AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
                       )"""
             )
@@ -1269,7 +1273,9 @@ async def get_users_by_segment(segment: str) -> list:
         elif segment == "paid_expired_1d":
             # Платная подписка (source='payment') истекла ровно
             # 1 сутки назад (бакет [NOW-2d, NOW-1d)). И сейчас нет
-            # активной — это churn-окно, классическая точка реактивации.
+            # активной ПЛАТНОЙ — это churn-окно, классическая точка
+            # реактивации. (Активный bypass/gift тут не считаем —
+            # юзер всё равно без основной подписки.)
             # См. коммент про tz в trial_ends_in_1d.
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
@@ -1283,6 +1289,7 @@ async def get_users_by_segment(segment: str) -> list:
                      AND NOT EXISTS (
                        SELECT 1 FROM subscriptions s2
                        WHERE s2.telegram_id = u.telegram_id
+                         AND s2.source = 'payment'
                          AND s2.expires_at > (NOW() AT TIME ZONE 'UTC')
                    )"""
             )
