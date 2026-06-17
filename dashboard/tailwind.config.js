@@ -6,6 +6,9 @@ export default {
     extend: {
       fontFamily: {
         sans: [
+          // Geist (Vercel) — техно-sans с кириллицей.
+          // Fustat / Inter — fallback на случай блокировки Google Fonts.
+          "Geist",
           "Fustat",
           "Inter",
           "system-ui",
@@ -15,6 +18,7 @@ export default {
           "sans-serif",
         ],
         mono: [
+          "Geist Mono",
           "ui-monospace",
           "SFMono-Regular",
           "Menlo",
