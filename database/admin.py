@@ -1294,6 +1294,46 @@ async def get_users_by_segment(segment: str) -> list:
                    )"""
             )
             return [row["telegram_id"] for row in rows]
+        elif segment in ("paid_expired_30d", "paid_lapsed_any"):
+            # Реактивационные сегменты по subscription_history:
+            #   paid_expired_30d → последний end_date платной транзакции
+            #                      попал в [NOW-30d, NOW-1d], и сейчас
+            #                      нет активной подписки в subscriptions.
+            #   paid_lapsed_any  → когда-либо платил (purchase / renewal /
+            #                      auto_renew) и сейчас неактивен —
+            #                      максимальная реактивационная аудитория.
+            #
+            # Почему через subscription_history, а не subscriptions:
+            # в subscriptions хранится ТЕКУЩЕЕ состояние подписки;
+            # при renewal expires_at UPDATEится в будущее, а старое
+            # значение не сохраняется. История истёкших — только в
+            # subscription_history (см. column end_date).
+            #
+            # action_type для платных: purchase, renewal, auto_renew
+            # (не 'payment' — то поле в subscriptions.source).
+            window_clause = (
+                "AND last_paid_end BETWEEN "
+                "(NOW() AT TIME ZONE 'UTC') - INTERVAL '30 days' "
+                "AND (NOW() AT TIME ZONE 'UTC') - INTERVAL '1 day'"
+                if segment == "paid_expired_30d"
+                else ""
+            )
+            rows = await conn.fetch(
+                f"""WITH paid_history AS (
+                       SELECT telegram_id, MAX(end_date) AS last_paid_end
+                       FROM subscription_history
+                       WHERE action_type IN ('purchase', 'renewal', 'auto_renew')
+                       GROUP BY telegram_id
+                   )
+                   SELECT p.telegram_id FROM paid_history p
+                   WHERE 1=1 {window_clause}
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = p.telegram_id
+                           AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     )"""
+            )
+            return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
             # User's MOST RECENT subscription expired exactly N full days
             # ago (24-hour bucket). MAX(expires_at) делает выборку
