@@ -12,8 +12,6 @@ import {
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -31,6 +29,83 @@ import {
   mskTodayStartIso,
 } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
+
+// ─ Daily chart metric/range config ──────────────────────────────────
+
+type MetricKey =
+  | "revenue_rubles"
+  | "new_users"
+  | "payments_count"
+  | "new_subscriptions"
+  | "new_paid_subscriptions";
+
+interface MetricDef {
+  key: MetricKey;
+  label: string;
+  short: string;
+  color: string;          // line/fill stroke
+  fillId: string;          // <linearGradient id>
+  valueFmt: (v: number) => string;
+  axisFmt: (v: number) => string;
+}
+
+const fmtCompactInt = (v: number): string => {
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(v >= 10_000 ? 0 : 1)}k`;
+  return Math.round(v).toString();
+};
+const fmtCompactRub = (v: number): string => `${fmtCompactInt(v)} ₽`;
+
+const METRICS: readonly MetricDef[] = [
+  {
+    key: "revenue_rubles",
+    label: "Доход",
+    short: "Доход",
+    color: "#0EA5E9",
+    fillId: "metric-revenue",
+    valueFmt: (v) => fmtRub(v),
+    axisFmt: fmtCompactRub,
+  },
+  {
+    key: "new_users",
+    label: "Новые юзеры",
+    short: "Юзеры",
+    color: "#8B5CF6",
+    fillId: "metric-users",
+    valueFmt: (v) => fmtNum(v),
+    axisFmt: fmtCompactInt,
+  },
+  {
+    key: "payments_count",
+    label: "Платежи",
+    short: "Платежи",
+    color: "#10B981",
+    fillId: "metric-payments",
+    valueFmt: (v) => fmtNum(v),
+    axisFmt: fmtCompactInt,
+  },
+  {
+    key: "new_subscriptions",
+    label: "Новые подписки",
+    short: "Подписки",
+    color: "#F59E0B",
+    fillId: "metric-subs",
+    valueFmt: (v) => fmtNum(v),
+    axisFmt: fmtCompactInt,
+  },
+  {
+    key: "new_paid_subscriptions",
+    label: "Платные подписки",
+    short: "Платные",
+    color: "#EC4899",
+    fillId: "metric-paidsubs",
+    valueFmt: (v) => fmtNum(v),
+    axisFmt: fmtCompactInt,
+  },
+] as const;
+
+const RANGE_OPTIONS = [7, 30, 90, 180] as const;
+type RangeDays = (typeof RANGE_OPTIONS)[number];
 
 // ─ Live event ringbuffer ─────────────────────────────────────────────
 
@@ -86,9 +161,12 @@ export function Dashboard() {
     queryFn: () => endpoints.paymentsRevenueSince(todaySince),
     refetchInterval: 60_000,
   });
-  // Time-range pill: 7д / 30д / 90д. Дневной chart + дельта вычисляются
-  // от выбранного диапазона.
-  const [days, setDays] = useState<7 | 30 | 90>(30);
+  // Daily chart controls. Range — горизонт по дням (7/30/90/180).
+  // Metric — какую серию рисовать (доход, юзеры, платежи, подписки).
+  // Запрос един для всех метрик — переключатель только меняет ключ
+  // в данных, без повторного fetch'а.
+  const [days, setDays] = useState<7 | 30 | 90 | 180>(30);
+  const [metric, setMetric] = useState<MetricKey>("revenue_rubles");
   const daily = useQuery({
     queryKey: ["stats", "daily", days],
     queryFn: () => endpoints.statsDaily(days),
@@ -257,16 +335,20 @@ export function Dashboard() {
         {/* Daily breakdown + KPI */}
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <SurfaceCard className="lg:col-span-2">
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <SurfaceHeader
                 eyebrow={`Daily · past ${days} days`}
-                title="Новые юзеры и платежи"
+                title={METRICS.find((m) => m.key === metric)?.label ?? "Daily"}
               />
-              <RangePill value={days} onChange={setDays} />
+              <div className="flex shrink-0 items-center gap-2">
+                <RangePill value={days} onChange={setDays} />
+              </div>
             </div>
-            <DualBarChart
+            <MetricSwitcher value={metric} onChange={setMetric} />
+            <DailyMetricChart
               data={daily.data?.series ?? []}
               loading={daily.isLoading}
+              metric={metric}
             />
           </SurfaceCard>
 
@@ -296,6 +378,100 @@ export function Dashboard() {
             </dl>
           </SurfaceCard>
         </section>
+
+        {/* Финансы — 6 ключевых денежных метрик */}
+        <SurfaceCard>
+          <SurfaceHeader
+            eyebrow="Финансы"
+            title="Денежные метрики"
+            sub="всё время · обновляется каждую минуту"
+          />
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+            <KpiCard
+              label="Доход всего"
+              value={fmtRub(revenue.data?.total_revenue_rubles)}
+              loading={revenue.isLoading}
+              accent
+            />
+            <KpiCard
+              label="ARPU"
+              value={fmtRub(revenue.data?.arpu_rubles)}
+              sub="на юзера"
+              loading={revenue.isLoading}
+            />
+            <KpiCard
+              label="LTV"
+              value={fmtRub(revenue.data?.avg_ltv_rubles)}
+              sub="средний"
+              loading={revenue.isLoading}
+            />
+            <KpiCard
+              label="Средний чек"
+              value={fmtRub(today24Revenue.data?.avg_check_rubles)}
+              sub="сегодня"
+              loading={today24Revenue.isLoading}
+            />
+            <KpiCard
+              label="Доход сегодня"
+              value={fmtRub(today24Revenue.data?.revenue_rubles)}
+              sub={`${fmtNum(today24Revenue.data?.payments_count)} платежей`}
+              loading={today24Revenue.isLoading}
+            />
+            <KpiCard
+              label="Approval rate"
+              value={`${fmtNum(asNum(overview.data?.business_metrics?.approval_rate_percent))}%`}
+              sub={`${fmtSeconds(asNum(overview.data?.business_metrics?.avg_payment_approval_time_seconds))} среднее`}
+              loading={overview.isLoading}
+            />
+          </div>
+        </SurfaceCard>
+
+        {/* Подписки — health */}
+        <SurfaceCard>
+          <SurfaceHeader
+            eyebrow="Подписки"
+            title="Жизнь и health"
+            sub="renewal, lifetime, retention"
+          />
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+            <KpiCard
+              label="Активных (платные)"
+              value={fmtNum(activePaid)}
+              loading={overview.isLoading}
+              accent
+            />
+            <KpiCard
+              label="Активных с триалами"
+              value={fmtNum(asNum(overview.data?.active_subscriptions))}
+              loading={overview.isLoading}
+            />
+            <KpiCard
+              label="Платящих юзеров"
+              value={fmtNum(payingUsers)}
+              loading={revenue.isLoading}
+            />
+            <KpiCard
+              label="Средний lifetime"
+              value={`${fmtNum(asNum(overview.data?.business_metrics?.avg_subscription_lifetime_days))} дн`}
+              loading={overview.isLoading}
+            />
+            <KpiCard
+              label="Продлений/юзер"
+              value={fmtNum(asNum(overview.data?.business_metrics?.avg_renewals_per_user))}
+              loading={overview.isLoading}
+            />
+            <KpiCard
+              label="Conversion paid"
+              value={
+                totalUsers && totalUsers > 0 && payingUsers != null
+                  ? `${((payingUsers / totalUsers) * 100).toFixed(2)}%`
+                  : "—"
+              }
+              sub="платящие / всего"
+              loading={overview.isLoading || revenue.isLoading}
+            />
+          </div>
+        </SurfaceCard>
 
         {/* Conversion funnel — простой 3-этапный визуал */}
         <SurfaceCard>
@@ -555,31 +731,139 @@ function KpiRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+// KpiCard — компактная stat-карточка с лейблом/значением/опц.под-текстом.
+// Используется в финансах и подписках. accent=true → подсвечивает
+// значение sky-цветом (когда метрика «главная» в группе).
+function KpiCard({
+  label,
+  value,
+  sub,
+  loading,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  loading?: boolean;
+  accent?: boolean;
+}) {
+  return (
+    <div className="group rounded-xl border border-slate-200/70 bg-slate-50/40 p-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-[0_4px_14px_-6px_rgba(15,23,42,0.08)]">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+        {label}
+      </div>
+      <div
+        className={
+          "mt-1 text-lg font-semibold tabular-nums tracking-tight md:text-xl " +
+          (accent ? "text-sky-600" : "text-slate-900")
+        }
+      >
+        {loading ? "…" : value}
+      </div>
+      {sub && (
+        <div className="mt-0.5 truncate text-[11px] text-slate-500">{sub}</div>
+      )}
+    </div>
+  );
+}
+
+// SegPill — переиспользуемый segmented control с animated indicator.
+// indicator слайдится между опциями (translate-x + width), сама
+// активная опция получает белый текст. Достижение «плавности» —
+// одна абсолютно-позиционированная пилюля, без re-mount.
+function SegPill<T extends string | number>({
+  value,
+  options,
+  onChange,
+  fmt = (v) => String(v),
+}: {
+  value: T;
+  options: ReadonlyArray<T>;
+  onChange: (v: T) => void;
+  fmt?: (v: T) => string;
+}) {
+  const idx = Math.max(0, options.indexOf(value));
+  const total = options.length;
+  return (
+    <div className="relative inline-flex shrink-0 items-stretch rounded-full border border-border bg-bg-card p-0.5 text-[11px] font-medium shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div
+        aria-hidden
+        className="absolute inset-y-0.5 rounded-full bg-fg shadow-cta transition-[transform,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+        style={{
+          width: `calc((100% - 4px) / ${total})`,
+          transform: `translateX(calc(${idx} * 100%))`,
+          left: 2,
+        }}
+      />
+      {options.map((o) => (
+        <button
+          key={String(o)}
+          type="button"
+          onClick={() => onChange(o)}
+          className={
+            "relative z-10 flex-1 rounded-full px-2.5 py-1 transition-colors duration-200 " +
+            (o === value ? "text-bg-card" : "text-fg-muted hover:text-fg")
+          }
+        >
+          {fmt(o)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function RangePill({
   value,
   onChange,
 }: {
-  value: 7 | 30 | 90;
-  onChange: (v: 7 | 30 | 90) => void;
+  value: RangeDays;
+  onChange: (v: RangeDays) => void;
 }) {
-  const opts: Array<7 | 30 | 90> = [7, 30, 90];
   return (
-    <div className="inline-flex shrink-0 rounded-full border border-slate-200 bg-white p-0.5 text-[11px] font-medium shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      {opts.map((o) => (
-        <button
-          key={o}
-          type="button"
-          onClick={() => onChange(o)}
-          className={
-            "rounded-full px-2.5 py-1 transition " +
-            (value === o
-              ? "bg-slate-900 text-white"
-              : "text-slate-500 hover:text-slate-900")
-          }
-        >
-          {o}д
-        </button>
-      ))}
+    <SegPill
+      value={value}
+      options={RANGE_OPTIONS}
+      onChange={onChange}
+      fmt={(v) => `${v}д`}
+    />
+  );
+}
+
+// Метрика — горизонтальный скроллящийся ряд chip'ов с активным
+// state. Использует тот же animated-indicator, но шире — для метрик
+// делаем chip-row, не сегментированный pill (5 опций трудно влезают
+// в пилюлю на мобайл).
+function MetricSwitcher({
+  value,
+  onChange,
+}: {
+  value: MetricKey;
+  onChange: (k: MetricKey) => void;
+}) {
+  return (
+    <div className="mt-4 -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {METRICS.map((m) => {
+        const active = m.key === value;
+        return (
+          <button
+            key={m.key}
+            type="button"
+            onClick={() => onChange(m.key)}
+            className={
+              "group inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 " +
+              (active
+                ? "border-transparent bg-fg text-bg-card shadow-cta"
+                : "border-border bg-bg-card text-fg-muted hover:border-fg-subtle/40 hover:text-fg")
+            }
+          >
+            <span
+              className="h-2 w-2 rounded-full transition-transform duration-200 group-hover:scale-110"
+              style={{ background: active ? m.color : m.color + "BF" }}
+            />
+            {m.short}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -713,61 +997,88 @@ function RevenueChart({
   );
 }
 
-function DualBarChart({
+// DailyMetricChart — Area по выбранной метрике с плавной сменой
+// формы (recharts animationDuration 500ms ease-out). При смене
+// горизонта recharts перерисовывает плавно сам.
+function DailyMetricChart({
   data,
   loading,
+  metric,
 }: {
-  data: Array<{ date: string; new_users: number; payments_count: number }>;
+  data: Array<Record<string, number | string>>;
   loading: boolean;
+  metric: MetricKey;
 }) {
+  const def = METRICS.find((m) => m.key === metric) ?? METRICS[0];
+  const total = data.reduce((a, r) => a + (Number(r[metric]) || 0), 0);
+
   if (loading || data.length === 0) {
     return (
-      <div className="mt-4 flex h-48 items-end gap-1">
-        {Array.from({ length: 30 }).map((_, i) => (
-          <div
-            key={i}
-            className="flex-1 rounded-sm bg-slate-100"
-            style={{ height: `${10 + Math.random() * 80}%` }}
-          />
-        ))}
+      <div className="mt-4 h-56">
+        <SkeletonBars />
       </div>
     );
   }
   return (
-    <div className="mt-4 h-48">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }} barCategoryGap={6}>
-          <CartesianGrid stroke="#F1F5F9" vertical={false} />
-          <XAxis
-            dataKey="date"
-            tick={{ fill: "#94A3B8", fontSize: 10 }}
-            tickFormatter={fmtShortDate}
-            tickLine={false}
-            axisLine={{ stroke: "#E2E8F0" }}
-            minTickGap={32}
-          />
-          <YAxis
-            tick={{ fill: "#94A3B8", fontSize: 10 }}
-            tickLine={false}
-            axisLine={false}
-            width={32}
-          />
-          <Tooltip
-            content={<ChartTooltip />}
-            cursor={{ fill: "#F8FAFC" }}
-          />
-          <Bar dataKey="new_users" fill="#0EA5E9" radius={[2, 2, 0, 0]} />
-          <Bar dataKey="payments_count" fill="#10B981" radius={[2, 2, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-      <div className="mt-2 flex items-center gap-4 text-[11px] text-slate-500">
-        <div className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-sky-500" /> Новые юзеры
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" /> Платежей
-        </div>
+    <div className="mt-4 space-y-2">
+      <div className="text-2xl font-semibold tabular-nums tracking-tight text-fg md:text-3xl">
+        {def.valueFmt(total)}
       </div>
+      <div className="h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }}>
+            <defs>
+              <linearGradient id={def.fillId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={def.color} stopOpacity={0.32} />
+                <stop offset="100%" stopColor={def.color} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="#F1F5F9" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tick={{ fill: "#94A3B8", fontSize: 10 }}
+              tickFormatter={(v) => fmtShortDate(String(v))}
+              tickLine={false}
+              axisLine={{ stroke: "#E2E8F0" }}
+              minTickGap={36}
+            />
+            <YAxis
+              tick={{ fill: "#94A3B8", fontSize: 10 }}
+              tickLine={false}
+              axisLine={false}
+              width={48}
+              tickFormatter={def.axisFmt}
+            />
+            <Tooltip
+              cursor={{ stroke: "#CBD5E1", strokeDasharray: "3 3" }}
+              content={<ChartTooltip valueFmt={def.valueFmt} label={def.label} />}
+            />
+            <Area
+              type="monotone"
+              dataKey={metric}
+              stroke={def.color}
+              strokeWidth={1.75}
+              fill={`url(#${def.fillId})`}
+              animationDuration={500}
+              animationEasing="ease-out"
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonBars() {
+  return (
+    <div className="flex h-full items-end gap-1">
+      {Array.from({ length: 30 }).map((_, i) => (
+        <div
+          key={i}
+          className="flex-1 rounded-sm bg-slate-100"
+          style={{ height: `${15 + ((i * 7) % 60)}%` }}
+        />
+      ))}
     </div>
   );
 }
