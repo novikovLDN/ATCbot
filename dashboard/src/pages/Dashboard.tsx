@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -298,7 +298,7 @@ export function Dashboard() {
 
   return (
     <div className="text-fg">
-      <div className="mx-auto max-w-[1400px] space-y-6">
+      <div className="stagger-children mx-auto max-w-[1400px] space-y-6">
         {/* Header */}
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -314,9 +314,10 @@ export function Dashboard() {
           </div>
           <Link
             to="/broadcasts/new"
-            className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_20px_-8px_rgba(15,23,42,0.45)] transition hover:bg-slate-800"
+            className="group inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_20px_-8px_rgba(15,23,42,0.45)] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-slate-800 hover:shadow-[0_14px_28px_-10px_rgba(15,23,42,0.55)] active:translate-y-0"
           >
-            <Megaphone className="h-3.5 w-3.5" /> Новая рассылка
+            <Megaphone className="h-3.5 w-3.5 transition-transform duration-300 group-hover:rotate-[-8deg]" />
+            Новая рассылка
           </Link>
         </header>
 
@@ -324,7 +325,8 @@ export function Dashboard() {
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <HeroCard
             label="Total revenue"
-            value={fmtRub(revenue.data?.total_revenue_rubles)}
+            rawValue={revenue.data?.total_revenue_rubles}
+            fmt={fmtRub}
             subline={
               revenueDelta != null
                 ? {
@@ -348,12 +350,11 @@ export function Dashboard() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
             <SmallMetric
               label="Active subs"
-              value={fmtNum(
-                asNum(
-                  overview.data?.active_paid_subscriptions ??
-                    overview.data?.active_subscriptions,
-                ),
+              rawValue={asNum(
+                overview.data?.active_paid_subscriptions ??
+                  overview.data?.active_subscriptions,
               )}
+              fmt={fmtNum}
               hint={
                 overview.data?.active_subscriptions != null &&
                 overview.data?.active_paid_subscriptions != null &&
@@ -366,7 +367,8 @@ export function Dashboard() {
             />
             <SmallMetric
               label="Paying users"
-              value={fmtNum(revenue.data?.paying_users)}
+              rawValue={revenue.data?.paying_users}
+              fmt={fmtNum}
               hint={
                 revenue.data ? `LTV ${fmtRub(revenue.data.avg_ltv_rubles)}` : undefined
               }
@@ -732,14 +734,16 @@ function SurfaceHeader({
 
 function HeroCard({
   label,
-  value,
+  rawValue,
+  fmt,
   subline,
   loading,
   chart,
   className = "",
 }: {
   label: string;
-  value: string;
+  rawValue: number | undefined;
+  fmt: (v: number) => string;
   subline: { text: string; positive: boolean } | null;
   loading: boolean;
   chart?: React.ReactNode;
@@ -749,12 +753,23 @@ function HeroCard({
     <section
       className={`relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-8px_rgba(15,23,42,0.06)] ${className}`}
     >
+      {/* Subtle conic glow вращается медленно — премиум-ощущение, не
+          отвлекает: opacity 0.5, прозрачный через mask. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-32 -top-32 h-72 w-72 opacity-50 animate-glow-rotate"
+        style={{
+          background:
+            "conic-gradient(from 0deg, rgba(14,165,233,0.15), rgba(139,92,246,0.12), rgba(236,72,153,0.10), rgba(14,165,233,0.15))",
+          filter: "blur(40px)",
+        }}
+      />
       <div className="relative z-10">
         <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
           {label}
         </div>
         <div className="mt-2 text-[40px] font-semibold leading-none tracking-tight text-slate-900 tabular-nums md:text-[56px]">
-          {loading ? "…" : value}
+          <AnimatedNum value={rawValue} fmt={fmt} loading={loading} />
         </div>
         {subline && (
           <div
@@ -779,22 +794,24 @@ function HeroCard({
 
 function SmallMetric({
   label,
-  value,
+  rawValue,
+  fmt,
   hint,
   loading,
 }: {
   label: string;
-  value: string;
+  rawValue: number | undefined;
+  fmt: (v: number) => string;
   hint?: string;
   loading: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+    <div className="hover-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
       <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
         {label}
       </div>
       <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 tabular-nums md:text-3xl">
-        {loading ? "…" : value}
+        <AnimatedNum value={rawValue} fmt={fmt} loading={loading} />
       </div>
       {hint && <div className="mt-1 text-[11px] text-slate-400">{hint}</div>}
     </div>
@@ -845,30 +862,14 @@ function TodayBar({
         </div>
       </div>
       <div className="grid grid-cols-2 divide-y divide-border/40 sm:grid-cols-3 sm:divide-y-0 sm:divide-x lg:grid-cols-6">
-        <TodayCell
-          label="Доход"
-          value={fmtRub(revenue)}
-          accent
-          loading={loading}
-        />
-        <TodayCell
-          label="Платежей"
-          value={fmtNum(payments)}
-          loading={loading}
-        />
-        <TodayCell
-          label="Средний чек"
-          value={fmtRub(avgCheck)}
-          loading={loading}
-        />
-        <TodayCell
-          label="Новых юзеров"
-          value={fmtNum(newUsers)}
-          loading={loading}
-        />
+        <TodayCell label="Доход" rawValue={revenue} fmt={fmtRub} accent loading={loading} />
+        <TodayCell label="Платежей" rawValue={payments} fmt={fmtNum} loading={loading} />
+        <TodayCell label="Средний чек" rawValue={avgCheck} fmt={fmtRub} loading={loading} />
+        <TodayCell label="Новых юзеров" rawValue={newUsers} fmt={fmtNum} loading={loading} />
         <TodayCell
           label="Взяли триал"
-          value={fmtNum(trialActivated)}
+          rawValue={trialActivated}
+          fmt={fmtNum}
           sub={
             typeof newUsers === "number" && newUsers > 0 && trialActivated != null
               ? `${((trialActivated / newUsers) * 100).toFixed(0)}% от новых`
@@ -878,7 +879,8 @@ function TodayBar({
         />
         <TodayCell
           label="Без триала"
-          value={fmtNum(noTrial)}
+          rawValue={noTrial}
+          fmt={fmtNum}
           sub={
             typeof newUsers === "number" && newUsers > 0 && noTrial != null
               ? `${((noTrial / newUsers) * 100).toFixed(0)}% от новых`
@@ -893,13 +895,15 @@ function TodayBar({
 
 function TodayCell({
   label,
-  value,
+  rawValue,
+  fmt,
   sub,
   accent,
   loading,
 }: {
   label: string;
-  value: string;
+  rawValue: number | undefined;
+  fmt: (v: number) => string;
   sub?: string;
   accent?: boolean;
   loading?: boolean;
@@ -915,7 +919,7 @@ function TodayCell({
           (accent ? "text-sky-600" : "text-fg")
         }
       >
-        {loading ? "…" : value}
+        <AnimatedNum value={rawValue} fmt={fmt} loading={loading} />
       </div>
       {sub && (
         <div className="mt-0.5 truncate text-[11px] text-fg-subtle">{sub}</div>
@@ -1591,7 +1595,7 @@ function TopReferrersList({
     return (
       <div className="mt-4 space-y-2">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-100" />
+          <div key={i} className="skeleton h-12" />
         ))}
       </div>
     );
@@ -1662,7 +1666,7 @@ function TariffsBlock({
     return (
       <div className="mt-4 space-y-2">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="h-10 animate-pulse rounded-xl bg-slate-100" />
+          <div key={i} className="skeleton h-10" />
         ))}
       </div>
     );
@@ -1745,7 +1749,7 @@ function ProvidersBlock({
     return (
       <div className="mt-4 space-y-2">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-10 animate-pulse rounded-xl bg-slate-100" />
+          <div key={i} className="skeleton h-10" />
         ))}
       </div>
     );
@@ -1814,4 +1818,76 @@ function fmtSeconds(s: number | undefined): string {
   if (s < 60) return `${Math.round(s)}с`;
   if (s < 3600) return `${Math.round(s / 60)}мин`;
   return `${Math.round((s / 3600) * 10) / 10}ч`;
+}
+
+// useCountUp — анимация цифры от предыдущего значения к новому через
+// requestAnimationFrame. Ease-out cubic — быстрый старт, мягкий
+// финиш, ощущается «дорого». Не запускается, если target null/NaN
+// или совпадает с текущим.
+function useCountUp(target: number | undefined, duration = 900): number {
+  const [value, setValue] = useState<number>(target ?? 0);
+  const rafRef = useRef<number | null>(null);
+  const fromRef = useRef<number>(target ?? 0);
+  const lastTargetRef = useRef<number | undefined>(target);
+
+  useEffect(() => {
+    if (target == null || !Number.isFinite(target)) return;
+    if (target === lastTargetRef.current) return;
+    fromRef.current = value;
+    lastTargetRef.current = target;
+    const startedAt = performance.now();
+    const from = fromRef.current;
+    const to = target;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setValue(from + (to - from) * eased);
+      if (t < 1) rafRef.current = requestAnimationFrame(step);
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, duration]);
+
+  return value;
+}
+
+// Stagger — обёртка с CSS animation-delay для последовательного
+// fade-up появления секций. index — порядок в layout.
+function Stagger({
+  index,
+  children,
+}: {
+  index: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="animate-fade-up"
+      style={{ animationDelay: `${index * 60}ms` }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// AnimatedNum — обёртка вокруг useCountUp, форматирует число через
+// переданный formatter. Если loading или target пустой — показывает
+// placeholder без анимации.
+function AnimatedNum({
+  value,
+  fmt,
+  loading,
+  duration,
+}: {
+  value: number | undefined;
+  fmt: (v: number) => string;
+  loading?: boolean;
+  duration?: number;
+}) {
+  const animated = useCountUp(value, duration);
+  if (loading || value == null) return <span>…</span>;
+  return <span>{fmt(animated)}</span>;
 }
