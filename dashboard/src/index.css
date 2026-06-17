@@ -108,14 +108,13 @@
            transition-colors focus:border-accent focus:ring-2 focus:ring-accent/20;
   }
 
-  /* Dark-input — для Login (glass card on dark canvas). Тонкая
-     обводка white/10, glass-bg, focus → sky-glow ring. */
-  .dark-input {
-    @apply w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5
-           text-sm text-white outline-none transition-all duration-200
-           placeholder:text-white/30
-           focus:border-sky-400/60 focus:bg-white/[0.07]
-           focus:ring-2 focus:ring-sky-400/30;
+  /* Light-input — для Login (white card, светлый канвас). Чище и
+     резче чем общий .input — тоньше border, soft focus sky-ring. */
+  .light-input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5
+           text-sm text-slate-900 outline-none transition-all duration-200
+           placeholder:text-slate-400
+           focus:border-sky-400 focus:ring-2 focus:ring-sky-400/20;
   }
 
   .badge {
