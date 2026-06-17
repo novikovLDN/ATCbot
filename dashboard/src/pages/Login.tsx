@@ -4,9 +4,23 @@ import { ApiError, endpoints } from "@/lib/api";
 import { isPasskeySupported, loginWithPasskey } from "@/lib/passkey";
 import { Spinner } from "@/components/Spinner";
 
+// 1.1s — длительность всей success-анимации (ring-pulse + check + lift-out),
+// после которой переходим в дашборд. Совпадает с длительностями в
+// tailwind.config.js → animation keys.
+const SUCCESS_ANIM_MS = 1150;
+
 export function Login({ onDone }: { onDone: () => void }) {
   const [passkeyAvailable, setPasskeyAvailable] = useState(false);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
+  // 'idle' → форма видна, 'success' → success-оверлей, после анимации onDone().
+  const [phase, setPhase] = useState<"idle" | "success">("idle");
+  const [welcomeName, setWelcomeName] = useState<string>("");
+
+  const triggerSuccess = (name: string) => {
+    setWelcomeName(name);
+    setPhase("success");
+    window.setTimeout(() => onDone(), SUCCESS_ANIM_MS);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -27,7 +41,7 @@ export function Login({ onDone }: { onDone: () => void }) {
     setPasskeyBusy(true);
     try {
       await loginWithPasskey();
-      onDone();
+      triggerSuccess("admin");
     } catch (e: unknown) {
       const ae = e as ApiError;
       if (ae?.detail === "cancelled") {
@@ -56,7 +70,7 @@ export function Login({ onDone }: { onDone: () => void }) {
     setErr(null);
     try {
       await endpoints.authLogin({ username: username.trim(), password });
-      onDone();
+      triggerSuccess(username.trim());
     } catch (e: unknown) {
       const ae = e as ApiError;
       if (ae?.status === 401) {
@@ -73,7 +87,15 @@ export function Login({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="grid min-h-full place-items-center px-6 py-12">
-      <div className="card relative w-full max-w-md overflow-hidden p-8 animate-slide-up">
+      {phase === "success" && (
+        <SuccessOverlay name={welcomeName} />
+      )}
+      <div
+        className={
+          "card relative w-full max-w-md overflow-hidden p-8 animate-slide-up " +
+          (phase === "success" ? "animate-lift-out pointer-events-none" : "")
+        }
+      >
         <div className="pointer-events-none absolute -top-32 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-accent/15 blur-3xl" />
         <div className="relative">
           <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-accent to-secondary text-bg shadow-glow">
@@ -172,6 +194,57 @@ export function Login({ onDone }: { onDone: () => void }) {
                 magic-ссылку и придумай новый.
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// SuccessOverlay — успешная аутентификация:
+// 1) расходящееся зелёное кольцо (ring-pulse, 1.1s)
+// 2) checkmark рисуется stroke-dasharray поверх (check-draw, 0.45s,
+//    стартует через 0.15s — синхронно с пиком кольца)
+// 3) welcome-text fade-in
+// 4) форма за оверлеем уходит вверх (lift-out)
+// Всё уложено в 1.15s — после чего Login.onDone() триггерит redirect.
+function SuccessOverlay({ name }: { name: string }) {
+  return (
+    <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center bg-bg-card/80 backdrop-blur-md animate-fade-in">
+      <div className="flex flex-col items-center gap-5">
+        {/* concentric rings + center disk */}
+        <div className="relative grid h-24 w-24 place-items-center">
+          {/* outer ring pulse */}
+          <span className="absolute inset-0 rounded-full ring-2 ring-success/40 animate-ring-pulse" />
+          {/* inner solid disk */}
+          <span className="relative grid h-16 w-16 place-items-center rounded-full bg-success text-bg shadow-[0_0_30px_-2px_rgba(34,197,94,0.6)]">
+            <svg
+              viewBox="0 0 24 24"
+              className="h-7 w-7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path
+                d="M5 12l4.5 4.5L19 7"
+                style={{
+                  strokeDasharray: 24,
+                  strokeDashoffset: 24,
+                  animation:
+                    "check-draw 0.45s cubic-bezier(0.65, 0, 0.35, 1) forwards 0.15s",
+                }}
+              />
+            </svg>
+          </span>
+        </div>
+        <div className="text-center animate-fade-in" style={{ animationDelay: "0.3s", animationFillMode: "both" }}>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-muted">
+            Authenticated
+          </div>
+          <div className="mt-1 text-2xl font-semibold tracking-tight text-fg">
+            Welcome back{name ? `, ${name}` : ""}
           </div>
         </div>
       </div>
