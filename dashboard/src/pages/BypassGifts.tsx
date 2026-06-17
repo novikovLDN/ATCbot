@@ -131,7 +131,7 @@ export function BypassGifts() {
                       onClick={() => setSelected(id)}
                       className={
                         selected === id
-                          ? "flex w-full items-center gap-3 rounded-lg bg-accent/10 px-2 py-3 text-left text-fg shadow-[inset_0_0_0_1px_rgba(171,244,63,0.25)] transition"
+                          ? "flex w-full items-center gap-3 rounded-lg bg-accent/10 px-2 py-3 text-left text-fg shadow-[inset_0_0_0_1px_rgba(14,165,233,0.25)] transition"
                           : "flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition hover:bg-accent/[0.04]"
                       }
                     >

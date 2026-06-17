@@ -375,6 +375,17 @@ export function Dashboard() {
           </div>
         </section>
 
+        {/* Сегодня · МСК — оперативная сводка сразу под hero */}
+        <TodayBar
+          revenue={today24Revenue.data?.revenue_rubles}
+          payments={today24Revenue.data?.payments_count}
+          avgCheck={today24Revenue.data?.avg_check_rubles}
+          newUsers={asNum(today.data?.new_users)}
+          trialActivated={asNum(today.data?.trial_activated)}
+          newSubscriptions={asNum(today.data?.new_subscriptions)}
+          loading={today24Revenue.isLoading || today.isLoading}
+        />
+
         {/* Daily breakdown + KPI */}
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <SurfaceCard className="lg:col-span-2">
@@ -613,38 +624,6 @@ export function Dashboard() {
           />
         </SurfaceCard>
 
-        {/* Today MSK */}
-        <SurfaceCard>
-          <SurfaceHeader
-            eyebrow="Сегодня · МСК"
-            title="Активность"
-            sub="с 00:00 до 23:59 по Москве · сброс ежедневно"
-          />
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-            <Tile
-              label="Платежей"
-              value={fmtNum(today24Revenue.data?.payments_count)}
-            />
-            <Tile
-              label="Доход"
-              value={fmtRub(today24Revenue.data?.revenue_rubles)}
-              tone="accent"
-            />
-            <Tile
-              label="Средний чек"
-              value={fmtRub(today24Revenue.data?.avg_check_rubles)}
-            />
-            <Tile
-              label="Новых юзеров"
-              value={fmtNum(asNum(today.data?.new_users))}
-            />
-            <Tile
-              label="Новых подписок"
-              value={fmtNum(asNum(today.data?.new_subscriptions))}
-            />
-          </div>
-        </SurfaceCard>
-
         {/* Segments */}
         <SegmentsCard
           loading={segments.isLoading}
@@ -822,27 +801,125 @@ function SmallMetric({
   );
 }
 
-function Tile({
+// TodayBar — оперативная сводка сразу под Hero. 6 точечных метрик за
+// день по МСК (00:00→23:59), на белом фоне в одной горизонтальной
+// карточке с тонкими разделителями между ячейками. Иконки слева для
+// мгновенной идентификации, цифры жирно с tabular-nums.
+function TodayBar({
+  revenue,
+  payments,
+  avgCheck,
+  newUsers,
+  trialActivated,
+  newSubscriptions,
+  loading,
+}: {
+  revenue: number | undefined;
+  payments: number | undefined;
+  avgCheck: number | undefined;
+  newUsers: number | undefined;
+  trialActivated: number | undefined;
+  newSubscriptions: number | undefined;
+  loading: boolean;
+}) {
+  // «Без триала» = новые юзеры, не активировавшие пробник.
+  // Может быть отрицательным если activations > new_users (старые
+  // юзеры активировали триал сегодня) — обрезаем до 0.
+  const noTrial =
+    typeof newUsers === "number" && typeof trialActivated === "number"
+      ? Math.max(0, newUsers - trialActivated)
+      : undefined;
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
+            Сегодня · МСК
+          </div>
+          <div className="mt-0.5 text-sm font-medium text-fg">
+            Оперативная сводка
+          </div>
+        </div>
+        <div className="text-[11px] text-fg-subtle">
+          с 00:00 · сброс ежедневно
+        </div>
+      </div>
+      <div className="grid grid-cols-2 divide-y divide-border/40 sm:grid-cols-3 sm:divide-y-0 sm:divide-x lg:grid-cols-6">
+        <TodayCell
+          label="Доход"
+          value={fmtRub(revenue)}
+          accent
+          loading={loading}
+        />
+        <TodayCell
+          label="Платежей"
+          value={fmtNum(payments)}
+          loading={loading}
+        />
+        <TodayCell
+          label="Средний чек"
+          value={fmtRub(avgCheck)}
+          loading={loading}
+        />
+        <TodayCell
+          label="Новых юзеров"
+          value={fmtNum(newUsers)}
+          loading={loading}
+        />
+        <TodayCell
+          label="Взяли триал"
+          value={fmtNum(trialActivated)}
+          sub={
+            typeof newUsers === "number" && newUsers > 0 && trialActivated != null
+              ? `${((trialActivated / newUsers) * 100).toFixed(0)}% от новых`
+              : undefined
+          }
+          loading={loading}
+        />
+        <TodayCell
+          label="Без триала"
+          value={fmtNum(noTrial)}
+          sub={
+            typeof newUsers === "number" && newUsers > 0 && noTrial != null
+              ? `${((noTrial / newUsers) * 100).toFixed(0)}% от новых`
+              : undefined
+          }
+          loading={loading}
+        />
+      </div>
+    </section>
+  );
+}
+
+function TodayCell({
   label,
   value,
-  tone,
+  sub,
+  accent,
+  loading,
 }: {
   label: string;
   value: string;
-  tone?: "accent";
+  sub?: string;
+  accent?: boolean;
+  loading?: boolean;
 }) {
-  const valueClass =
-    tone === "accent"
-      ? "text-sky-600"
-      : "text-slate-900";
   return (
-    <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-4 py-3">
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+    <div className="px-4 py-4 transition-colors hover:bg-bg-subtle/60">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
         {label}
       </div>
-      <div className={`mt-1 text-xl font-semibold tracking-tight tabular-nums md:text-2xl ${valueClass}`}>
-        {value}
+      <div
+        className={
+          "mt-1 text-xl font-semibold tabular-nums tracking-tight md:text-2xl " +
+          (accent ? "text-sky-600" : "text-fg")
+        }
+      >
+        {loading ? "…" : value}
       </div>
+      {sub && (
+        <div className="mt-0.5 truncate text-[11px] text-fg-subtle">{sub}</div>
+      )}
     </div>
   );
 }
