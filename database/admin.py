@@ -1222,12 +1222,18 @@ async def get_users_by_segment(segment: str) -> list:
             # session-TZ ≠ UTC. Используем `NOW() AT TIME ZONE 'UTC'` —
             # это TIMESTAMP-без-TZ в UTC, сравнение с trial_expires_at
             # надёжно без implicit cast в любой session-TZ.
+            #
+            # COALESCE: trial_expires_at добавлен в схему users позже,
+            # чем trial_used_at. У старых триалов поле могло быть NULL.
+            # Fallback на trial_used_at + 3 дня (продолжительность
+            # триала — см. app/handlers/callbacks/subscription.py:143).
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
                    WHERE u.trial_used_at IS NOT NULL
-                     AND u.trial_expires_at IS NOT NULL
-                     AND u.trial_expires_at >  (NOW() AT TIME ZONE 'UTC')
-                     AND u.trial_expires_at <= (NOW() AT TIME ZONE 'UTC') + INTERVAL '24 hours'"""
+                     AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                           >  (NOW() AT TIME ZONE 'UTC')
+                     AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                           <= (NOW() AT TIME ZONE 'UTC') + INTERVAL '24 hours'"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("trial_expired_6h", "trial_expired_1d", "trial_expired_2d", "trial_expired_3d"):
@@ -1238,7 +1244,7 @@ async def get_users_by_segment(segment: str) -> list:
             #   trial_expired_1d → [NOW-2d, NOW-1d)
             #   trial_expired_2d → [NOW-3d, NOW-2d)
             #   trial_expired_3d → [NOW-4d, NOW-3d)
-            # См. коммент про tz в trial_ends_in_1d.
+            # См. коммент про tz и COALESCE в trial_ends_in_1d.
             if segment == "trial_expired_6h":
                 upper_sql = "(NOW() AT TIME ZONE 'UTC') - INTERVAL '6 hours'"
                 lower_sql = "(NOW() AT TIME ZONE 'UTC') - INTERVAL '7 hours'"
@@ -1249,9 +1255,10 @@ async def get_users_by_segment(segment: str) -> list:
             rows = await conn.fetch(
                 f"""SELECT u.telegram_id FROM users u
                     WHERE u.trial_used_at IS NOT NULL
-                      AND u.trial_expires_at IS NOT NULL
-                      AND u.trial_expires_at <= {upper_sql}
-                      AND u.trial_expires_at >  {lower_sql}
+                      AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                            <= {upper_sql}
+                      AND COALESCE(u.trial_expires_at, u.trial_used_at + INTERVAL '3 days')
+                            >  {lower_sql}
                       AND NOT EXISTS (
                           SELECT 1 FROM subscriptions s
                           WHERE s.telegram_id = u.telegram_id
