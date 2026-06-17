@@ -49,16 +49,17 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Не определено",
 };
 
-// Lime → cyan → category colors → neutral. Lime first because it's
-// the brand accent and tends to land on the largest segment.
+// Палитра для donut-сегментов и bar-чарта. Sky-первый — он совпадает
+// с глобальным accent дашборда, ложится на крупный сегмент. Остальные
+// — общая палитра tailwind для cовместимости с другими страницами.
 const CHART_COLORS = [
-  "#ABF43F", // lime
-  "#3FF4E5", // cyan
-  "#A855F7", // purple
-  "#3B82F6", // blue
+  "#0EA5E9", // sky
+  "#8B5CF6", // violet
+  "#EC4899", // pink
+  "#10B981", // emerald
   "#F59E0B", // amber
-  "#F43F5E", // rose
-  "#64748b", // slate fallback
+  "#06B6D4", // cyan
+  "#64748B", // slate fallback
 ];
 
 export function Payments() {
@@ -438,10 +439,11 @@ function ProviderPie({
         </Pie>
         <RTooltip
           contentStyle={{
-            background: "rgb(20 23 32)",
-            border: "1px solid rgb(38 42 54)",
+            background: "#FFFFFF",
+            border: "1px solid #E2E8F0",
             borderRadius: 12,
             fontSize: 12,
+            boxShadow: "0 4px 16px -4px rgba(15,23,42,0.08)",
           }}
           formatter={(value: number, _name: string, item) =>
             [`${fmtRub(value)} · ${fmtNum(item?.payload?.count)} шт`, item?.payload?.name]
@@ -450,7 +452,7 @@ function ProviderPie({
         <Legend
           verticalAlign="bottom"
           iconType="circle"
-          wrapperStyle={{ fontSize: 11, color: "rgb(156 163 175)" }}
+          wrapperStyle={{ fontSize: 11, color: "#64748B" }}
         />
       </PieChart>
     </ResponsiveContainer>
@@ -494,22 +496,26 @@ function TypeBar({
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgb(38 42 54)" />
+        <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
         <XAxis
           dataKey="name"
-          tick={{ fill: "rgb(156 163 175)", fontSize: 11 }}
-          axisLine={{ stroke: "rgb(38 42 54)" }}
+          tick={{ fill: "#94A3B8", fontSize: 11 }}
+          axisLine={{ stroke: "#E2E8F0" }}
+          tickLine={false}
         />
         <YAxis
-          tick={{ fill: "rgb(156 163 175)", fontSize: 11 }}
-          axisLine={{ stroke: "rgb(38 42 54)" }}
+          tick={{ fill: "#94A3B8", fontSize: 11 }}
+          axisLine={false}
+          tickLine={false}
         />
         <RTooltip
+          cursor={{ fill: "#F8FAFC" }}
           contentStyle={{
-            background: "rgb(20 23 32)",
-            border: "1px solid rgb(38 42 54)",
+            background: "#FFFFFF",
+            border: "1px solid #E2E8F0",
             borderRadius: 12,
             fontSize: 12,
+            boxShadow: "0 4px 16px -4px rgba(15,23,42,0.08)",
           }}
           formatter={(value: number, _name: string, item) =>
             item?.dataKey === "revenue"
@@ -521,10 +527,10 @@ function TypeBar({
           verticalAlign="top"
           height={28}
           iconType="circle"
-          wrapperStyle={{ fontSize: 11, color: "rgb(156 163 175)" }}
+          wrapperStyle={{ fontSize: 11, color: "#64748B" }}
         />
-        <Bar dataKey="revenue" name="Доход" fill="#ABF43F" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="count" name="Штук" fill="#3FF4E5" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="revenue" name="Доход" fill="#0EA5E9" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="count" name="Штук" fill="#8B5CF6" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
