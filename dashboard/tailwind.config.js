@@ -94,6 +94,19 @@ export default {
         "check-draw": "check-draw 0.45s cubic-bezier(0.65, 0, 0.35, 1) forwards 0.15s",
         // Уход карточки + контента вверх с лёгким fade.
         "lift-out": "lift-out 0.5s cubic-bezier(0.7, 0, 0.3, 1) forwards 0.65s",
+        // Скелетоны с движущимся бликом (shimmer-bg).
+        "shimmer": "shimmer 1.6s linear infinite",
+        // Медленный gradient-rotation для hero-фонового glow.
+        "glow-rotate": "glow-rotate 18s linear infinite",
+        // Появление секций — fade + slight rise. Используется со
+        // styled animation-delay для stagger-эффекта.
+        "fade-up": "fade-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards",
+        // Login card mount — soft scale + rise.
+        "mount-card": "mount-card 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards",
+        // Floating aurora blobs — длинные drift анимации с разным offset.
+        "blob-slow":   "blob-slow   16s ease-in-out infinite",
+        "blob-slow-2": "blob-slow-2 19s ease-in-out infinite",
+        "blob-slow-3": "blob-slow-3 22s ease-in-out infinite",
       },
       keyframes: {
         "pulse-glow": {
@@ -133,6 +146,36 @@ export default {
         "lift-out": {
           from: { opacity: "1", transform: "translateY(0)" },
           to: { opacity: "0", transform: "translateY(-12px)" },
+        },
+        shimmer: {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
+        "glow-rotate": {
+          "0%": { transform: "rotate(0deg)" },
+          "100%": { transform: "rotate(360deg)" },
+        },
+        "fade-up": {
+          from: { opacity: "0", transform: "translateY(12px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        "mount-card": {
+          from: { opacity: "0", transform: "translateY(16px) scale(0.96)" },
+          to:   { opacity: "1", transform: "translateY(0) scale(1)" },
+        },
+        "blob-slow": {
+          "0%, 100%": { transform: "translate(0, 0) scale(1)" },
+          "33%":      { transform: "translate(40px, -30px) scale(1.1)" },
+          "66%":      { transform: "translate(-20px, 40px) scale(0.95)" },
+        },
+        "blob-slow-2": {
+          "0%, 100%": { transform: "translate(0, 0) scale(1)" },
+          "33%":      { transform: "translate(-50px, 30px) scale(1.1)" },
+          "66%":      { transform: "translate(30px, -20px) scale(0.92)" },
+        },
+        "blob-slow-3": {
+          "0%, 100%": { transform: "translate(0, 0) scale(1)" },
+          "50%":      { transform: "translate(35px, -25px) scale(1.08)" },
         },
       },
     },

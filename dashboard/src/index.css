@@ -108,6 +108,16 @@
            transition-colors focus:border-accent focus:ring-2 focus:ring-accent/20;
   }
 
+  /* Dark-input — для Login (glass card on dark canvas). Тонкая
+     обводка white/10, glass-bg, focus → sky-glow ring. */
+  .dark-input {
+    @apply w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5
+           text-sm text-white outline-none transition-all duration-200
+           placeholder:text-white/30
+           focus:border-sky-400/60 focus:bg-white/[0.07]
+           focus:ring-2 focus:ring-sky-400/30;
+  }
+
   .badge {
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1
            text-xs font-medium;
@@ -158,5 +168,53 @@
   .stat-pill {
     @apply inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5
            text-[11px] font-semibold text-bg-card shadow-glow-sm;
+  }
+
+  /* Shimmer-скелетон — пробегающий блик слева направо. Цветовая
+     гамма slate-100 → white → slate-100. Используется в скелетонах
+     карточек и графиков вместо обычного pulse — выглядит дороже. */
+  .skeleton {
+    @apply rounded-md bg-slate-100;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.85) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+
+  /* Утилити для технологичных карточек: lift на hover (subtle
+     translateY -2px + soft shadow grow), плавно. Применяется через
+     группу классов на интерактивных карточках. */
+  .hover-lift {
+    @apply transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]
+           hover:-translate-y-0.5
+           hover:shadow-[0_8px_24px_-12px_rgba(15,23,42,0.16)];
+  }
+
+  /* Staggered fade-up для children — секций главной. backwards
+     animation-fill-mode (через keyframes config) гарантирует, что
+     при mount элементы стартуют с opacity:0, не моргают. */
+  .stagger-children > * {
+    animation: fade-up 0.55s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+  .stagger-children > *:nth-child(1)  { animation-delay: 0ms; }
+  .stagger-children > *:nth-child(2)  { animation-delay: 60ms; }
+  .stagger-children > *:nth-child(3)  { animation-delay: 120ms; }
+  .stagger-children > *:nth-child(4)  { animation-delay: 180ms; }
+  .stagger-children > *:nth-child(5)  { animation-delay: 240ms; }
+  .stagger-children > *:nth-child(6)  { animation-delay: 300ms; }
+  .stagger-children > *:nth-child(7)  { animation-delay: 360ms; }
+  .stagger-children > *:nth-child(8)  { animation-delay: 420ms; }
+  .stagger-children > *:nth-child(9)  { animation-delay: 480ms; }
+  .stagger-children > *:nth-child(10) { animation-delay: 540ms; }
+  .stagger-children > *:nth-child(11) { animation-delay: 600ms; }
+  .stagger-children > *:nth-child(12) { animation-delay: 660ms; }
+
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 }
