@@ -129,6 +129,18 @@ export const endpoints = {
     ),
   statsBreakdown: () => api.get<Record<string, unknown>>("/stats/purchase-breakdown"),
   statsPromo: () => api.get<unknown[]>("/stats/promo"),
+  statsDaily: (days = 30) =>
+    api.get<{
+      days: number;
+      series: Array<{
+        date: string;
+        revenue_rubles: number;
+        payments_count: number;
+        new_users: number;
+        new_subscriptions: number;
+        new_paid_subscriptions: number;
+      }>;
+    }>(`/stats/daily?days=${days}`),
 
   userSearch: (q: string) =>
     api.get<{

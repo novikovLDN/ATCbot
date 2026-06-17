@@ -1,17 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
-  Users as UsersIcon,
-  Wallet,
-  ShieldCheck,
-  Clock,
-  TrendingUp,
-  CreditCard,
   Activity,
-  Sparkles,
+  ArrowDownRight,
+  ArrowUpRight,
   Megaphone,
+  Sparkles,
+  TrendingUp,
 } from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+
 import { endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
 import {
@@ -21,8 +30,9 @@ import {
   mskDayKey,
   mskTodayStartIso,
 } from "@/lib/format";
-import { StatCard } from "@/components/StatCard";
 import { EmptyState } from "@/components/EmptyState";
+
+// ─ Live event ringbuffer ─────────────────────────────────────────────
 
 interface LiveEntry {
   id: number;
@@ -34,22 +44,29 @@ interface LiveEntry {
 
 let liveCounter = 0;
 
+// ─ Main page ────────────────────────────────────────────────────────
+//
+// Светлая «AURA-style» главная: чистый фон, гигантская типографика
+// для главной метрики, тонкие area-графики с soft-градиентом, мягкие
+// shadow'ы. Остальные страницы пока в тёмной теме — этот компонент
+// локально оборачивает себя в `light-canvas`, не трогая глобальные
+// токены. Когда раскатим на остальные — заменим в tailwind.config.
+
 export function Dashboard() {
   const qc = useQueryClient();
+
   const overview = useQuery({
     queryKey: ["stats", "overview"],
     queryFn: endpoints.statsOverview,
-    refetchInterval: 60000,
+    refetchInterval: 60_000,
   });
   const revenue = useQuery({
     queryKey: ["stats", "revenue"],
     queryFn: endpoints.statsRevenue,
-    refetchInterval: 60000,
+    refetchInterval: 60_000,
   });
-  // "Сегодня (МСК)" — calendar day window from 00:00 to 23:59 Europe/Moscow.
-  // Resets daily at MSK midnight: the queryKey segment flips when the
-  // MSK day changes, which forces a fresh fetch even if the user keeps
-  // the tab open overnight.
+  // "Сегодня (МСК)" — calendar day from 00:00 to 23:59 Europe/Moscow.
+  // Resets daily at MSK midnight via queryKey rotation.
   const [todayKey, setTodayKey] = useState(mskDayKey());
   useEffect(() => {
     const t = setInterval(() => {
@@ -62,32 +79,30 @@ export function Dashboard() {
   const today = useQuery({
     queryKey: ["stats", "period", "msk-today", todayKey],
     queryFn: () => endpoints.statsPeriodSince(todaySince),
-    refetchInterval: 60000,
+    refetchInterval: 60_000,
   });
-  // get_analytics_by_period doesn't compute revenue / payments — pull
-  // those from /payments/revenue so the "today" tile matches what's on
-  // the Payments page rather than reading missing fields.
   const today24Revenue = useQuery({
     queryKey: ["payments", "revenue", "msk-today", todayKey],
     queryFn: () => endpoints.paymentsRevenueSince(todaySince),
-    refetchInterval: 60000,
+    refetchInterval: 60_000,
   });
-  // Сегменты — обновляем реже, запрос тяжёлый (несколько SQL по
-  // users + subscriptions + subscription_history). 5 минут хватает,
-  // когорты двигаются медленно. Ключ совпадает с BroadcastCreate —
-  // если юзер заходит в визард, кеш прогрет.
+  const daily30 = useQuery({
+    queryKey: ["stats", "daily", 30],
+    queryFn: () => endpoints.statsDaily(30),
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
+  });
+  // Segments — same queryKey as BroadcastCreate, кеш общий.
   const segments = useQuery({
     queryKey: ["broadcasts", "segments"],
     queryFn: endpoints.broadcastSegments,
-    refetchInterval: 5 * 60 * 1000,
-    staleTime: 60 * 1000,
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
   });
 
   const [live, setLive] = useState<LiveEntry[]>([]);
-
   useEventStream((e) => {
     if (e.type === "ping") return;
-
     let entry: LiveEntry | null = null;
     if (e.type === "user:registered") {
       entry = {
@@ -129,104 +144,164 @@ export function Dashboard() {
         id: ++liveCounter,
         kind: e.type,
         title: e.type.replace("admin:", "Админ: "),
-        subtitle: typeof e.telegram_id === "number" ? `tg:${e.telegram_id}` : undefined,
+        subtitle:
+          typeof e.telegram_id === "number" ? `tg:${e.telegram_id}` : undefined,
         at: Date.now(),
       };
     }
-
     if (entry) setLive((prev) => [entry!, ...prev].slice(0, 25));
-
-    // Invalidate so cards update soon after the event (debounced by
-    // React Query's stale time + a fresh poll).
     qc.invalidateQueries({ queryKey: ["stats"] });
   });
 
+  // Pre-computed deltas — для маленькой стрелки рядом с цифрой.
+  // 30d-сумма vs предыдущие 30d (если данных меньше — просто null).
+  const revenueDelta = useMemo(() => {
+    const s = daily30.data?.series ?? [];
+    if (s.length < 60) return null;
+    const last30 = s.slice(-30).reduce((a, r) => a + r.revenue_rubles, 0);
+    const prev30 = s.slice(0, 30).reduce((a, r) => a + r.revenue_rubles, 0);
+    if (prev30 === 0) return null;
+    return ((last30 - prev30) / prev30) * 100;
+  }, [daily30.data]);
+
   return (
-    <div className="space-y-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <div className="text-[11px] font-medium uppercase tracking-[0.15em] text-fg-subtle">
-            Atlas Secure
-          </div>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-fg md:text-[40px] md:leading-[1.05]">
-            Добро пожаловать
-          </h1>
-          <p className="mt-2 text-sm text-fg-muted">
-            Сводка по боту обновляется в реальном времени.
-          </p>
-        </div>
-      </header>
-
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
-        <StatCard
-          label="Всего юзеров"
-          value={fmtNum(asNum(overview.data?.total_users))}
-          icon={UsersIcon}
-          tone="accent"
-          loading={overview.isLoading}
-        />
-        <StatCard
-          label="Активные подписки"
-          value={fmtNum(
-            asNum(
-              overview.data?.active_paid_subscriptions ??
-                overview.data?.active_subscriptions,
-            ),
-          )}
-          hint={
-            overview.data?.active_subscriptions != null &&
-            overview.data?.active_paid_subscriptions != null &&
-            overview.data.active_subscriptions !== overview.data.active_paid_subscriptions
-              ? `всего с триалами ${fmtNum(asNum(overview.data.active_subscriptions))}`
-              : undefined
-          }
-          icon={ShieldCheck}
-          tone="success"
-          loading={overview.isLoading}
-        />
-        <StatCard
-          label="Доход всего"
-          value={fmtRub(revenue.data?.total_revenue_rubles)}
-          hint={revenue.data ? `ARPU ${fmtRub(revenue.data.arpu_rubles)}` : undefined}
-          icon={Wallet}
-          loading={revenue.isLoading}
-        />
-        <StatCard
-          label="Платящие"
-          value={fmtNum(revenue.data?.paying_users)}
-          hint={revenue.data ? `LTV ${fmtRub(revenue.data.avg_ltv_rubles)}` : undefined}
-          icon={CreditCard}
-          loading={revenue.isLoading}
-        />
-      </section>
-
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="card p-5 lg:col-span-2">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-                Сегодня · МСК
-              </div>
-              <h2 className="text-lg font-semibold text-fg">Активность</h2>
-              <div className="mt-0.5 text-[11px] text-fg-subtle">
-                с 00:00 до 23:59 по Москве · сброс ежедневно в 00:00 МСК
-              </div>
+    <div className="-m-4 -mt-4 min-h-[calc(100vh-4rem)] bg-[#F6F7F9] p-4 text-slate-900 md:-m-6 md:p-6 lg:-m-8 lg:p-8">
+      <div className="mx-auto max-w-[1400px] space-y-6">
+        {/* Header */}
+        <header className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
+              Atlas Secure · overview
             </div>
-            <Clock className="h-4 w-4 text-fg-subtle" />
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900 md:text-[40px] md:leading-[1.05]">
+              Welcome back
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Сводка по боту обновляется в реальном времени.
+            </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <Link
+            to="/broadcasts/new"
+            className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_20px_-8px_rgba(15,23,42,0.45)] transition hover:bg-slate-800"
+          >
+            <Megaphone className="h-3.5 w-3.5" /> Новая рассылка
+          </Link>
+        </header>
+
+        {/* Hero — revenue + active + paying */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <HeroCard
+            label="Total revenue"
+            value={fmtRub(revenue.data?.total_revenue_rubles)}
+            subline={
+              revenueDelta != null
+                ? {
+                    text: `${revenueDelta >= 0 ? "+" : ""}${revenueDelta.toFixed(1)}% vs prev 30d`,
+                    positive: revenueDelta >= 0,
+                  }
+                : revenue.data
+                ? { text: `ARPU ${fmtRub(revenue.data.arpu_rubles)}`, positive: true }
+                : null
+            }
+            loading={revenue.isLoading || daily30.isLoading}
+            chart={
+              <RevenueChart
+                data={daily30.data?.series ?? []}
+                loading={daily30.isLoading}
+              />
+            }
+            className="lg:col-span-2"
+          />
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
+            <SmallMetric
+              label="Active subs"
+              value={fmtNum(
+                asNum(
+                  overview.data?.active_paid_subscriptions ??
+                    overview.data?.active_subscriptions,
+                ),
+              )}
+              hint={
+                overview.data?.active_subscriptions != null &&
+                overview.data?.active_paid_subscriptions != null &&
+                overview.data.active_subscriptions !==
+                  overview.data.active_paid_subscriptions
+                  ? `с триалами ${fmtNum(asNum(overview.data.active_subscriptions))}`
+                  : undefined
+              }
+              loading={overview.isLoading}
+            />
+            <SmallMetric
+              label="Paying users"
+              value={fmtNum(revenue.data?.paying_users)}
+              hint={
+                revenue.data ? `LTV ${fmtRub(revenue.data.avg_ltv_rubles)}` : undefined
+              }
+              loading={revenue.isLoading}
+            />
+          </div>
+        </section>
+
+        {/* Daily breakdown + KPI */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <SurfaceCard className="lg:col-span-2">
+            <SurfaceHeader
+              eyebrow="Daily · past 30 days"
+              title="Новые юзеры и платежи"
+            />
+            <DualBarChart
+              data={daily30.data?.series ?? []}
+              loading={daily30.isLoading}
+            />
+          </SurfaceCard>
+
+          <SurfaceCard>
+            <SurfaceHeader eyebrow="Бизнес-метрики" title="KPI" icon={<TrendingUp className="h-3.5 w-3.5 text-slate-400" />} />
+            <dl className="mt-4 space-y-3.5">
+              <KpiRow
+                label="Approval rate"
+                value={`${fmtNum(asNum(overview.data?.business_metrics?.approval_rate_percent))}%`}
+              />
+              <KpiRow
+                label="Средний срок жизни"
+                value={`${fmtNum(asNum(overview.data?.business_metrics?.avg_subscription_lifetime_days))} дн`}
+              />
+              <KpiRow
+                label="Продлений на юзера"
+                value={fmtNum(asNum(overview.data?.business_metrics?.avg_renewals_per_user))}
+              />
+              <KpiRow
+                label="Время апрува"
+                value={fmtSeconds(asNum(overview.data?.business_metrics?.avg_payment_approval_time_seconds))}
+              />
+              <KpiRow
+                label="Всего юзеров"
+                value={fmtNum(asNum(overview.data?.total_users))}
+              />
+            </dl>
+          </SurfaceCard>
+        </section>
+
+        {/* Today MSK */}
+        <SurfaceCard>
+          <SurfaceHeader
+            eyebrow="Сегодня · МСК"
+            title="Активность"
+            sub="с 00:00 до 23:59 по Москве · сброс ежедневно"
+          />
+          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
             <Tile
               label="Платежей"
               value={fmtNum(today24Revenue.data?.payments_count)}
             />
             <Tile
               label="Доход"
-              tone="success"
               value={fmtRub(today24Revenue.data?.revenue_rubles)}
+              tone="accent"
             />
             <Tile
               label="Средний чек"
-              tone="accent"
               value={fmtRub(today24Revenue.data?.avg_check_rubles)}
             />
             <Tile
@@ -238,105 +313,181 @@ export function Dashboard() {
               value={fmtNum(asNum(today.data?.new_subscriptions))}
             />
           </div>
-        </div>
+        </SurfaceCard>
 
-        <div className="card relative overflow-hidden p-5">
-          <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-accent/15 blur-3xl" />
-          <div className="relative">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-                  Бизнес-метрики
-                </div>
-                <h2 className="text-lg font-semibold text-fg">KPI</h2>
-              </div>
-              <TrendingUp className="h-4 w-4 text-fg-subtle" />
-            </div>
-            <div className="space-y-3">
-              <Row
-                label="Среднее время апрува"
-                value={fmtSeconds(
-                  asNum(overview.data?.business_metrics?.avg_payment_approval_time_seconds),
-                )}
-              />
-              <Row
-                label="Средний срок жизни"
-                value={`${fmtNum(
-                  asNum(overview.data?.business_metrics?.avg_subscription_lifetime_days),
-                )} дн`}
-              />
-              <Row
-                label="Продлений на юзера"
-                value={fmtNum(
-                  asNum(overview.data?.business_metrics?.avg_renewals_per_user),
-                )}
-              />
-              <Row
-                label="Approval rate"
-                value={`${fmtNum(
-                  asNum(overview.data?.business_metrics?.approval_rate_percent),
-                )}%`}
-              />
-            </div>
-          </div>
-        </div>
-      </section>
+        {/* Segments */}
+        <SegmentsCard
+          loading={segments.isLoading}
+          error={segments.isError}
+          data={segments.data}
+        />
 
-      <SegmentsCard
-        loading={segments.isLoading}
-        error={segments.isError}
-        data={segments.data}
-      />
-
-      <section className="card p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-              Live
-            </div>
-            <h2 className="text-lg font-semibold text-fg">Поток событий</h2>
-          </div>
-          <Activity className="h-4 w-4 text-fg-subtle" />
-        </div>
-
-        {live.length === 0 ? (
-          <EmptyState
-            icon={Sparkles}
-            title="Пока тихо"
-            description="События появятся здесь по мере поступления — новые юзеры, платежи, действия админа."
+        {/* Live */}
+        <SurfaceCard>
+          <SurfaceHeader
+            eyebrow="Live"
+            title="Поток событий"
+            icon={<Activity className="h-3.5 w-3.5 text-slate-400" />}
           />
-        ) : (
-          <ul className="divide-y divide-border/60">
-            {live.map((e) => (
-              <li
-                key={e.id}
-                className="flex items-center gap-3 py-3 text-sm animate-slide-up"
-              >
-                <span
-                  className={
-                    e.kind === "payment:approved"
-                      ? "h-2 w-2 shrink-0 rounded-full bg-success"
-                      : e.kind === "user:registered"
-                      ? "h-2 w-2 shrink-0 rounded-full bg-accent"
-                      : e.kind === "admin:revoke"
-                      ? "h-2 w-2 shrink-0 rounded-full bg-danger"
-                      : "h-2 w-2 shrink-0 rounded-full bg-warning"
-                  }
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium text-fg">{e.title}</div>
-                  {e.subtitle && (
-                    <div className="truncate text-xs text-fg-muted">{e.subtitle}</div>
-                  )}
-                </div>
-                <div className="shrink-0 text-xs text-fg-subtle">
-                  {fmtRelative(new Date(e.at).toISOString())}
-                </div>
-              </li>
-            ))}
-          </ul>
+          {live.length === 0 ? (
+            <div className="mt-2">
+              <EmptyState
+                icon={Sparkles}
+                title="Пока тихо"
+                description="События появятся здесь по мере поступления — новые юзеры, платежи, действия админа."
+              />
+            </div>
+          ) : (
+            <ul className="mt-3 divide-y divide-slate-100">
+              {live.map((e) => (
+                <li
+                  key={e.id}
+                  className="flex items-center gap-3 py-3 text-sm animate-slide-up"
+                >
+                  <span
+                    className={
+                      e.kind === "payment:approved"
+                        ? "h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                        : e.kind === "user:registered"
+                        ? "h-2 w-2 shrink-0 rounded-full bg-sky-500"
+                        : e.kind === "admin:revoke"
+                        ? "h-2 w-2 shrink-0 rounded-full bg-rose-500"
+                        : "h-2 w-2 shrink-0 rounded-full bg-amber-500"
+                    }
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium text-slate-900">
+                      {e.title}
+                    </div>
+                    {e.subtitle && (
+                      <div className="truncate text-xs text-slate-500">
+                        {e.subtitle}
+                      </div>
+                    )}
+                  </div>
+                  <div className="shrink-0 text-xs text-slate-400">
+                    {fmtRelative(new Date(e.at).toISOString())}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SurfaceCard>
+      </div>
+    </div>
+  );
+}
+
+// ─ Cards / primitives ────────────────────────────────────────────────
+
+function SurfaceCard({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={`rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-8px_rgba(15,23,42,0.06)] ${className}`}
+    >
+      {children}
+    </section>
+  );
+}
+
+function SurfaceHeader({
+  eyebrow,
+  title,
+  sub,
+  icon,
+}: {
+  eyebrow: string;
+  title: string;
+  sub?: string;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+          {eyebrow}
+        </div>
+        <h2 className="mt-1 text-base font-semibold text-slate-900">{title}</h2>
+        {sub && <div className="mt-0.5 text-[11px] text-slate-400">{sub}</div>}
+      </div>
+      {icon}
+    </div>
+  );
+}
+
+function HeroCard({
+  label,
+  value,
+  subline,
+  loading,
+  chart,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  subline: { text: string; positive: boolean } | null;
+  loading: boolean;
+  chart?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={`relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-8px_rgba(15,23,42,0.06)] ${className}`}
+    >
+      <div className="relative z-10">
+        <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
+          {label}
+        </div>
+        <div className="mt-2 text-[40px] font-semibold leading-none tracking-tight text-slate-900 tabular-nums md:text-[56px]">
+          {loading ? "…" : value}
+        </div>
+        {subline && (
+          <div
+            className={
+              "mt-2 inline-flex items-center gap-1 text-xs font-medium " +
+              (subline.positive ? "text-emerald-600" : "text-rose-500")
+            }
+          >
+            {subline.positive ? (
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            ) : (
+              <ArrowDownRight className="h-3.5 w-3.5" />
+            )}
+            {subline.text}
+          </div>
         )}
-      </section>
+      </div>
+      {chart && <div className="mt-2 h-32 md:h-40">{chart}</div>}
+    </section>
+  );
+}
+
+function SmallMetric({
+  label,
+  value,
+  hint,
+  loading,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  loading: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 tabular-nums md:text-3xl">
+        {loading ? "…" : value}
+      </div>
+      {hint && <div className="mt-1 text-[11px] text-slate-400">{hint}</div>}
     </div>
   );
 }
@@ -348,63 +499,182 @@ function Tile({
 }: {
   label: string;
   value: string;
-  tone?: "accent" | "success";
+  tone?: "accent";
 }) {
-  const wrapClass =
+  const valueClass =
     tone === "accent"
-      ? "rounded-xl border border-accent/20 bg-accent/5 px-4 py-3 transition-colors hover:border-accent/40"
-      : tone === "success"
-      ? "rounded-xl border border-success/20 bg-success/5 px-4 py-3 transition-colors hover:border-success/40"
-      : "rounded-xl border border-border bg-bg-subtle/60 px-4 py-3 transition-colors hover:border-fg-subtle";
-  const numClass =
-    tone === "accent"
-      ? "mt-1 text-xl font-semibold tracking-tight text-accent md:text-2xl"
-      : tone === "success"
-      ? "mt-1 text-xl font-semibold tracking-tight text-success md:text-2xl"
-      : "mt-1 text-xl font-semibold tracking-tight text-fg md:text-2xl";
+      ? "text-sky-600"
+      : "text-slate-900";
   return (
-    <div className={wrapClass}>
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+    <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-4 py-3">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
         {label}
       </div>
-      <div className={numClass}>{value}</div>
+      <div className={`mt-1 text-xl font-semibold tracking-tight tabular-nums md:text-2xl ${valueClass}`}>
+        {value}
+      </div>
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function KpiRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between text-sm">
-      <span className="text-fg-muted">{label}</span>
-      <span className="font-medium text-fg">{value}</span>
+      <span className="text-slate-500">{label}</span>
+      <span className="font-semibold text-slate-900 tabular-nums">{value}</span>
     </div>
   );
 }
 
-function asNum(v: unknown): number | undefined {
-  if (typeof v === "number") return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : undefined;
+// ─ Charts ───────────────────────────────────────────────────────────
+
+const fmtShortDate = (iso: string) => {
+  const d = new Date(iso + "T00:00:00Z");
+  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+};
+
+function RevenueChart({
+  data,
+  loading,
+}: {
+  data: Array<{ date: string; revenue_rubles: number }>;
+  loading: boolean;
+}) {
+  if (loading || data.length === 0) {
+    return (
+      <div className="flex h-full items-end gap-1">
+        {Array.from({ length: 30 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex-1 rounded-sm bg-slate-100"
+            style={{ height: `${20 + Math.random() * 60}%` }}
+          />
+        ))}
+      </div>
+    );
   }
-  return undefined;
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }}>
+        <defs>
+          <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#0EA5E9" stopOpacity={0.28} />
+            <stop offset="100%" stopColor="#0EA5E9" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <Tooltip content={<ChartTooltip valueFmt={fmtRub} label="Доход" />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "3 3" }} />
+        <Area
+          type="monotone"
+          dataKey="revenue_rubles"
+          stroke="#0EA5E9"
+          strokeWidth={1.75}
+          fill="url(#revGrad)"
+          isAnimationActive={false}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
 }
 
-function fmtSeconds(s: number | undefined): string {
-  if (s == null || !Number.isFinite(s)) return "—";
-  if (s < 60) return `${Math.round(s)}с`;
-  if (s < 3600) return `${Math.round(s / 60)}мин`;
-  return `${Math.round((s / 3600) * 10) / 10}ч`;
+function DualBarChart({
+  data,
+  loading,
+}: {
+  data: Array<{ date: string; new_users: number; payments_count: number }>;
+  loading: boolean;
+}) {
+  if (loading || data.length === 0) {
+    return (
+      <div className="mt-4 flex h-48 items-end gap-1">
+        {Array.from({ length: 30 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex-1 rounded-sm bg-slate-100"
+            style={{ height: `${10 + Math.random() * 80}%` }}
+          />
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4 h-48">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }} barCategoryGap={6}>
+          <CartesianGrid stroke="#F1F5F9" vertical={false} />
+          <XAxis
+            dataKey="date"
+            tick={{ fill: "#94A3B8", fontSize: 10 }}
+            tickFormatter={fmtShortDate}
+            tickLine={false}
+            axisLine={{ stroke: "#E2E8F0" }}
+            minTickGap={32}
+          />
+          <YAxis
+            tick={{ fill: "#94A3B8", fontSize: 10 }}
+            tickLine={false}
+            axisLine={false}
+            width={32}
+          />
+          <Tooltip
+            content={<ChartTooltip />}
+            cursor={{ fill: "#F8FAFC" }}
+          />
+          <Bar dataKey="new_users" fill="#0EA5E9" radius={[2, 2, 0, 0]} />
+          <Bar dataKey="payments_count" fill="#10B981" radius={[2, 2, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="mt-2 flex items-center gap-4 text-[11px] text-slate-500">
+        <div className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full bg-sky-500" /> Новые юзеры
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full bg-emerald-500" /> Платежей
+        </div>
+      </div>
+    </div>
+  );
 }
 
-// ── Сегменты для рассылок ──────────────────────────────────────────
-//
-// Виджет на главной с актуальными счётчиками по всем сегментам:
-// чтобы заходить и сразу видеть, какая когорта живая, а где 0, и
-// без захода в визард понимать, кому и что слать.
-//
-// Группы дублируют backend (segments_list в broadcasts.py) — порядок
-// важен, по нему юзер ориентируется.
+interface ChartTooltipProps {
+  active?: boolean;
+  // recharts передаёт payload — мы лениво типизируем как unknown[].
+  payload?: Array<{ name?: string; value?: number; dataKey?: string; color?: string }>;
+  label?: string | number;
+  valueFmt?: (v: number) => string;
+}
+
+function ChartTooltip({ active, payload, label, valueFmt }: ChartTooltipProps) {
+  if (!active || !payload?.length) return null;
+  const fmt = valueFmt ?? ((v: number) => fmtNum(v));
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
+      <div className="text-[10px] uppercase tracking-wider text-slate-400">
+        {typeof label === "string" ? fmtShortDate(label) : label}
+      </div>
+      {payload.map((p, i) => (
+        <div key={i} className="mt-1 flex items-center gap-2 text-sm">
+          <span
+            className="h-2 w-2 rounded-full"
+            style={{ background: p.color ?? "#0EA5E9" }}
+          />
+          <span className="text-slate-500">{labelForKey(p.dataKey, p.name)}</span>
+          <span className="font-semibold tabular-nums text-slate-900">
+            {p.value != null ? fmt(p.value) : "—"}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function labelForKey(key?: string, fallback?: string): string {
+  if (key === "revenue_rubles") return "Доход";
+  if (key === "new_users") return "Юзеры";
+  if (key === "payments_count") return "Платежи";
+  return fallback ?? key ?? "";
+}
+
+// ─ Segments card (kept) ──────────────────────────────────────────────
 
 const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
   {
@@ -447,37 +717,22 @@ function SegmentsCard({
   data: Array<{ key: string; label: string; count: number }> | undefined;
 }) {
   const byKey = new Map(data?.map((s) => [s.key, s]));
-
   return (
-    <section className="card p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
-            Сегменты
-          </div>
-          <h2 className="text-lg font-semibold text-fg">Аудитории для рассылок</h2>
-          <div className="mt-0.5 text-[11px] text-fg-subtle">
-            обновляется раз в 5 минут · клик по сегменту → создать рассылку
-          </div>
-        </div>
-        <Link
-          to="/broadcasts/new"
-          className="btn-secondary text-xs"
-          title="Создать новую рассылку"
-        >
-          <Megaphone className="h-3.5 w-3.5" /> Рассылка
-        </Link>
-      </div>
-
+    <SurfaceCard>
+      <SurfaceHeader
+        eyebrow="Сегменты"
+        title="Аудитории для рассылок"
+        sub="обновляется каждые 5 минут · клик → создать рассылку"
+      />
       {error ? (
-        <div className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
-          Не удалось загрузить сегменты. Попробуй обновить страницу.
+        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          Не удалось загрузить сегменты.
         </div>
       ) : (
-        <div className="space-y-5">
+        <div className="mt-4 space-y-5">
           {SEGMENT_GROUPS.map((group) => (
             <div key={group.title}>
-              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
                 {group.title}
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -497,7 +752,7 @@ function SegmentsCard({
           ))}
         </div>
       )}
-    </section>
+    </SurfaceCard>
   );
 }
 
@@ -510,27 +765,45 @@ function SegmentRow({
   count: number | undefined;
   loading: boolean;
 }) {
-  const isEmpty = count === 0;
   const isMissing = count == null;
+  const isEmpty = count === 0;
   return (
     <Link
       to="/broadcasts/new"
-      className="group flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-subtle/40 px-3 py-2.5 text-sm transition-colors hover:border-accent/40 hover:bg-accent/5"
+      className="group flex items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-slate-50/40 px-3 py-2.5 text-sm transition hover:border-sky-300 hover:bg-sky-50/60"
     >
-      <span className="truncate text-fg-muted group-hover:text-fg">{label}</span>
+      <span className="truncate text-slate-600 group-hover:text-slate-900">
+        {label}
+      </span>
       <span
         className={
-          loading
-            ? "text-xs text-fg-subtle"
-            : isMissing
-            ? "text-xs text-fg-subtle"
+          loading || isMissing
+            ? "text-xs text-slate-400"
             : isEmpty
-            ? "shrink-0 rounded-md bg-bg-subtle px-2 py-0.5 text-xs font-medium text-fg-subtle"
-            : "shrink-0 rounded-md bg-accent/10 px-2 py-0.5 text-xs font-semibold tabular-nums text-accent"
+            ? "shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-400 tabular-nums"
+            : "shrink-0 rounded-md bg-sky-100/80 px-2 py-0.5 text-xs font-semibold text-sky-700 tabular-nums"
         }
       >
         {loading ? "…" : isMissing ? "—" : fmtNum(count)}
       </span>
     </Link>
   );
+}
+
+// ─ utils ────────────────────────────────────────────────────────────
+
+function asNum(v: unknown): number | undefined {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function fmtSeconds(s: number | undefined): string {
+  if (s == null || !Number.isFinite(s)) return "—";
+  if (s < 60) return `${Math.round(s)}с`;
+  if (s < 3600) return `${Math.round(s / 60)}мин`;
+  return `${Math.round((s / 3600) * 10) / 10}ч`;
 }
