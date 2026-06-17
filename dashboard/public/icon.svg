@@ -1,38 +1,124 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a1a1a"/>
-      <stop offset="100%" stop-color="#090909"/>
-    </linearGradient>
+    <!-- Глубокий navy фон — slate-900 → slate-800 с лёгким радиальным
+         осветлением сверху, как «глубина» под объектом. -->
+    <radialGradient id="bg" cx="50%" cy="20%" r="80%">
+      <stop offset="0%"  stop-color="#1E293B"/>
+      <stop offset="60%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#070A14"/>
+    </radialGradient>
+
+    <!-- Sky → violet gradient для щита (совпадает с Login logo и
+         Hero glow). 135° даёт ощущение «света сверху-слева». -->
     <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#BDF55F"/>
-      <stop offset="100%" stop-color="#ABF43F"/>
+      <stop offset="0%"   stop-color="#38BDF8"/>
+      <stop offset="55%"  stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#A855F7"/>
     </linearGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="22" result="blur"/>
+
+    <!-- Подсветка bottom-right (rim light) — тонкая. -->
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"  stop-color="white" stop-opacity="0"/>
+      <stop offset="80%" stop-color="white" stop-opacity="0"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.18"/>
+    </linearGradient>
+
+    <!-- Top highlight — стеклянный блик сверху-слева на щите. -->
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="white" stop-opacity="0.32"/>
+      <stop offset="60%" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Аура свечения вокруг щита. -->
+    <radialGradient id="aura" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#6366F1" stop-opacity="0.55"/>
+      <stop offset="60%"  stop-color="#38BDF8" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="soft-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+
+    <!-- Тонкий paths шейдер для внутреннего «A» — drop slight glow. -->
+    <filter id="line-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
       <feMerge>
-        <feMergeNode in="blur"/>
+        <feMergeNode in="b"/>
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
   </defs>
+
+  <!-- Подложка с радиусом скругления как у iOS-иконки. -->
   <rect width="512" height="512" rx="112" ry="112" fill="url(#bg)"/>
-  <circle cx="256" cy="256" r="180" fill="#ABF43F" opacity="0.10"/>
-  <g transform="translate(256 256)" filter="url(#glow)">
+
+  <!-- Mesh-сетка тонкая, edge-fade через radial mask. -->
+  <g opacity="0.12">
+    <defs>
+      <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+        <path d="M32 0 L0 0 0 32" fill="none" stroke="#94A3B8" stroke-width="0.5"/>
+      </pattern>
+      <radialGradient id="gridfade" cx="50%" cy="50%" r="60%">
+        <stop offset="0%" stop-color="white" stop-opacity="1"/>
+        <stop offset="100%" stop-color="white" stop-opacity="0"/>
+      </radialGradient>
+      <mask id="m1">
+        <rect width="512" height="512" fill="url(#gridfade)"/>
+      </mask>
+    </defs>
+    <rect width="512" height="512" fill="url(#grid)" mask="url(#m1)"/>
+  </g>
+
+  <!-- Аура за щитом — мягкое цветное свечение. -->
+  <circle cx="256" cy="256" r="200" fill="url(#aura)" filter="url(#soft-glow)"/>
+
+  <!-- Сам щит — современный, чуть скруглённый. -->
+  <g transform="translate(256 256)">
+    <!-- Outer glow (мягкое gradient свечение под щитом). -->
     <path
-      d="M0 -160 L130 -110 L130 30 C130 100 70 150 0 170 C-70 150 -130 100 -130 30 L-130 -110 Z"
+      d="M0 -150 Q120 -150 130 -100 L130 30 Q130 110 0 165 Q-130 110 -130 30 L-130 -100 Q-120 -150 0 -150 Z"
       fill="url(#shield)"
-      stroke="#DCFA9A"
-      stroke-width="6"
-      stroke-linejoin="round"
+      opacity="0.35"
+      filter="url(#soft-glow)"
     />
+    <!-- Основной щит. -->
     <path
-      d="M-50 0 L-15 35 L60 -45"
-      stroke="#090909"
-      stroke-width="22"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      fill="none"
+      d="M0 -150 Q120 -150 130 -100 L130 30 Q130 110 0 165 Q-130 110 -130 30 L-130 -100 Q-120 -150 0 -150 Z"
+      fill="url(#shield)"
     />
+    <!-- Top gloss highlight. -->
+    <path
+      d="M0 -150 Q120 -150 130 -100 L130 30 Q130 110 0 165 Q-130 110 -130 30 L-130 -100 Q-120 -150 0 -150 Z"
+      fill="url(#gloss)"
+    />
+    <!-- Rim light bottom-right. -->
+    <path
+      d="M0 -150 Q120 -150 130 -100 L130 30 Q130 110 0 165 Q-130 110 -130 30 L-130 -100 Q-120 -150 0 -150 Z"
+      fill="url(#rim)"
+    />
+    <!-- Тонкая обводка для чёткости силуэта. -->
+    <path
+      d="M0 -150 Q120 -150 130 -100 L130 30 Q130 110 0 165 Q-130 110 -130 30 L-130 -100 Q-120 -150 0 -150 Z"
+      fill="none"
+      stroke="white"
+      stroke-opacity="0.22"
+      stroke-width="2"
+    />
+
+    <!-- Abstract «A» — стилизованная monogram из трёх линий внутри
+         щита: две диагонали + горизонтальная перемычка. -->
+    <g filter="url(#line-glow)" stroke="white" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <!-- Left diagonal -->
+      <line x1="-55" y1="60" x2="0" y2="-65" stroke-width="14"/>
+      <!-- Right diagonal -->
+      <line x1="55"  y1="60" x2="0" y2="-65" stroke-width="14"/>
+      <!-- Crossbar -->
+      <line x1="-32" y1="15" x2="32" y2="15" stroke-width="12"/>
+    </g>
+
+    <!-- Acsent dot — тонкая точка-свет в кончике, premium-deталь. -->
+    <circle cx="0" cy="-65" r="6" fill="white"/>
+    <circle cx="0" cy="-65" r="14" fill="white" opacity="0.15"/>
   </g>
 </svg>
