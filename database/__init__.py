@@ -296,6 +296,7 @@ from database.admin import (  # noqa: F401
     get_average_ltv,
     get_arpu,
     get_ltv,
+    get_daily_timeseries,
     get_referral_analytics,
     get_daily_summary,
     get_monthly_summary,

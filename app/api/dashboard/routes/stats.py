@@ -114,3 +114,17 @@ async def stats_promo():
         return await database.get_promo_stats()
     except Exception as e:
         raise HTTPException(500, f"promo_failed: {e}")
+
+
+@router.get("/daily")
+async def stats_daily(days: int = Query(30, gt=0, le=180)):
+    """Daily time-series for the dashboard charts.
+
+    Returns one row per UTC day in window [NOW-days, NOW], including
+    empty days (zeros). Single query — frontend builds revenue / new
+    users / new subs charts off this one payload.
+    """
+    try:
+        return await database.get_daily_timeseries(days)
+    except Exception as e:
+        raise HTTPException(500, f"daily_failed: {e}")
