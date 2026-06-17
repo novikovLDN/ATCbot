@@ -2979,6 +2979,78 @@ async def get_daily_timeseries(days: int) -> Dict[str, Any]:
     return {"days": days, "series": series}
 
 
+async def get_hourly_timeseries(days: int) -> Dict[str, Any]:
+    """Hour-of-day аггрегаты за последние `days` суток.
+
+    24 строки (0..23 — час Europe/Moscow). Суммируем revenue, платежи,
+    новых юзеров и новые подписки. Извлекаем час из timestamptz после
+    конвертации в МСК — админу удобнее видеть пики в местном времени,
+    чем в UTC.
+
+    Используем `generate_series(0, 23)` для гарантии полных 24 точек
+    даже если в каком-то часу не было активности.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH hrs AS (
+                SELECT generate_series(0, 23) AS hour
+            ),
+            pay AS (
+                SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int AS hour,
+                       COALESCE(SUM(amount), 0)::bigint AS revenue_kopecks,
+                       COUNT(*)::int AS payments_count
+                FROM payments
+                WHERE status = 'approved'
+                  AND created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
+                GROUP BY 1
+            ),
+            usr AS (
+                SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'Europe/Moscow')::int AS hour,
+                       COUNT(*)::int AS new_users
+                FROM users
+                WHERE created_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
+                GROUP BY 1
+            ),
+            sub AS (
+                SELECT EXTRACT(HOUR FROM activated_at AT TIME ZONE 'Europe/Moscow')::int AS hour,
+                       COUNT(*)::int AS new_subs,
+                       COUNT(*) FILTER (WHERE source = 'payment')::int AS new_paid_subs
+                FROM subscriptions
+                WHERE activated_at IS NOT NULL
+                  AND activated_at >= (NOW() AT TIME ZONE 'UTC') - $1::int * INTERVAL '1 day'
+                GROUP BY 1
+            )
+            SELECT
+                hrs.hour,
+                COALESCE(pay.revenue_kopecks, 0) AS revenue_kopecks,
+                COALESCE(pay.payments_count, 0)  AS payments_count,
+                COALESCE(usr.new_users, 0)       AS new_users,
+                COALESCE(sub.new_subs, 0)        AS new_subs,
+                COALESCE(sub.new_paid_subs, 0)   AS new_paid_subs
+            FROM hrs
+            LEFT JOIN pay ON pay.hour = hrs.hour
+            LEFT JOIN usr ON usr.hour = hrs.hour
+            LEFT JOIN sub ON sub.hour = hrs.hour
+            ORDER BY hrs.hour
+            """,
+            days,
+        )
+    series = [
+        {
+            "hour": int(r["hour"]),
+            "revenue_rubles": float(r["revenue_kopecks"]) / 100.0,
+            "payments_count": int(r["payments_count"]),
+            "new_users": int(r["new_users"]),
+            "new_subscriptions": int(r["new_subs"]),
+            "new_paid_subscriptions": int(r["new_paid_subs"]),
+        }
+        for r in rows
+    ]
+    return {"days": days, "tz": "Europe/Moscow", "series": series}
+
+
 async def get_ltv() -> float:
     """
     Получить средний LTV (Lifetime Value) по всем платящим пользователям

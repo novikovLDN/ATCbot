@@ -181,6 +181,49 @@ export function Dashboard() {
     staleTime: 60_000,
   });
 
+  // Расширенная аналитика — реферальная, тарифы, провайдеры платежей.
+  const referrals = useQuery({
+    queryKey: ["referrals", "overall"],
+    queryFn: endpoints.referralsOverall,
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
+  });
+  const topReferrers = useQuery({
+    queryKey: ["referrals", "top", "revenue", 5],
+    queryFn: () =>
+      endpoints.referralsTop({
+        sort_by: "total_revenue",
+        sort_order: "DESC",
+        limit: 5,
+        offset: 0,
+      }),
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
+  });
+  const breakdown = useQuery({
+    queryKey: ["stats", "breakdown"],
+    queryFn: endpoints.statsBreakdown,
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
+  });
+  // Провайдеры платежей: переключатель окна 24h / 7d / 30d (8760h max).
+  const [providerHours, setProviderHours] = useState<24 | 168 | 720>(720);
+  const providers = useQuery({
+    queryKey: ["payments", "by-provider", providerHours],
+    queryFn: () => endpoints.paymentsByProvider(providerHours),
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
+  });
+  // Hourly breakdown: окно 1д / 7д / 30д, тот же metric switcher.
+  const [hourlyDays, setHourlyDays] = useState<1 | 7 | 30>(7);
+  const [hourlyMetric, setHourlyMetric] = useState<MetricKey>("payments_count");
+  const hourly = useQuery({
+    queryKey: ["stats", "hourly", hourlyDays],
+    queryFn: () => endpoints.statsHourly(hourlyDays),
+    refetchInterval: 5 * 60_000,
+    staleTime: 60_000,
+  });
+
   const [live, setLive] = useState<LiveEntry[]>([]);
   useEventStream((e) => {
     if (e.type === "ping") return;
@@ -332,6 +375,17 @@ export function Dashboard() {
           </div>
         </section>
 
+        {/* Сегодня · МСК — оперативная сводка сразу под hero */}
+        <TodayBar
+          revenue={today24Revenue.data?.revenue_rubles}
+          payments={today24Revenue.data?.payments_count}
+          avgCheck={today24Revenue.data?.avg_check_rubles}
+          newUsers={asNum(today.data?.new_users)}
+          trialActivated={asNum(today.data?.trial_activated)}
+          newSubscriptions={asNum(today.data?.new_subscriptions)}
+          loading={today24Revenue.isLoading || today.isLoading}
+        />
+
         {/* Daily breakdown + KPI */}
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <SurfaceCard className="lg:col-span-2">
@@ -473,6 +527,88 @@ export function Dashboard() {
           </div>
         </SurfaceCard>
 
+        {/* Маркетинг: реферальная программа */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <SurfaceCard className="lg:col-span-1">
+            <SurfaceHeader
+              eyebrow="Реферальная программа"
+              title="Маркетинг"
+              sub="доход от приглашений и выплаченный кэшбэк"
+            />
+            <ReferralBlock
+              data={referrals.data}
+              loading={referrals.isLoading}
+            />
+          </SurfaceCard>
+          <SurfaceCard className="lg:col-span-2">
+            <SurfaceHeader
+              eyebrow="Топ-5 партнёров"
+              title="По выручке от приглашений"
+              sub="клик по строке — в раздел Referrals"
+            />
+            <TopReferrersList
+              data={topReferrers.data}
+              loading={topReferrers.isLoading}
+            />
+          </SurfaceCard>
+        </section>
+
+        {/* Продукт: тарифы + провайдеры платежей */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <SurfaceCard className="lg:col-span-2">
+            <SurfaceHeader
+              eyebrow="Продукт"
+              title="Тарифы и продажи"
+              sub="за всё время · по категориям"
+            />
+            <TariffsBlock
+              data={breakdown.data}
+              loading={breakdown.isLoading}
+            />
+          </SurfaceCard>
+          <SurfaceCard className="lg:col-span-1">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <SurfaceHeader
+                eyebrow={`Провайдеры · ${providerHoursLabel(providerHours)}`}
+                title="Платежи по каналам"
+              />
+              <SegPill<24 | 168 | 720>
+                value={providerHours}
+                options={[24, 168, 720]}
+                onChange={setProviderHours}
+                fmt={providerHoursLabel}
+              />
+            </div>
+            <ProvidersBlock
+              data={providers.data}
+              loading={providers.isLoading}
+            />
+          </SurfaceCard>
+        </section>
+
+        {/* Hourly activity — пик активности по часам МСК */}
+        <SurfaceCard>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <SurfaceHeader
+              eyebrow={`Активность по часам · ${hourlyDays}д · МСК`}
+              title="Когда юзеры покупают"
+              sub="распределение по часам — найди пик и слабый момент"
+            />
+            <SegPill<1 | 7 | 30>
+              value={hourlyDays}
+              options={[1, 7, 30]}
+              onChange={setHourlyDays}
+              fmt={(v) => `${v}д`}
+            />
+          </div>
+          <MetricSwitcher value={hourlyMetric} onChange={setHourlyMetric} />
+          <HourlyChart
+            data={hourly.data?.series ?? []}
+            loading={hourly.isLoading}
+            metric={hourlyMetric}
+          />
+        </SurfaceCard>
+
         {/* Conversion funnel — простой 3-этапный визуал */}
         <SurfaceCard>
           <SurfaceHeader
@@ -486,38 +622,6 @@ export function Dashboard() {
             paying={payingUsers}
             loading={overview.isLoading || revenue.isLoading}
           />
-        </SurfaceCard>
-
-        {/* Today MSK */}
-        <SurfaceCard>
-          <SurfaceHeader
-            eyebrow="Сегодня · МСК"
-            title="Активность"
-            sub="с 00:00 до 23:59 по Москве · сброс ежедневно"
-          />
-          <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
-            <Tile
-              label="Платежей"
-              value={fmtNum(today24Revenue.data?.payments_count)}
-            />
-            <Tile
-              label="Доход"
-              value={fmtRub(today24Revenue.data?.revenue_rubles)}
-              tone="accent"
-            />
-            <Tile
-              label="Средний чек"
-              value={fmtRub(today24Revenue.data?.avg_check_rubles)}
-            />
-            <Tile
-              label="Новых юзеров"
-              value={fmtNum(asNum(today.data?.new_users))}
-            />
-            <Tile
-              label="Новых подписок"
-              value={fmtNum(asNum(today.data?.new_subscriptions))}
-            />
-          </div>
         </SurfaceCard>
 
         {/* Segments */}
@@ -697,27 +801,125 @@ function SmallMetric({
   );
 }
 
-function Tile({
+// TodayBar — оперативная сводка сразу под Hero. 6 точечных метрик за
+// день по МСК (00:00→23:59), на белом фоне в одной горизонтальной
+// карточке с тонкими разделителями между ячейками. Иконки слева для
+// мгновенной идентификации, цифры жирно с tabular-nums.
+function TodayBar({
+  revenue,
+  payments,
+  avgCheck,
+  newUsers,
+  trialActivated,
+  newSubscriptions,
+  loading,
+}: {
+  revenue: number | undefined;
+  payments: number | undefined;
+  avgCheck: number | undefined;
+  newUsers: number | undefined;
+  trialActivated: number | undefined;
+  newSubscriptions: number | undefined;
+  loading: boolean;
+}) {
+  // «Без триала» = новые юзеры, не активировавшие пробник.
+  // Может быть отрицательным если activations > new_users (старые
+  // юзеры активировали триал сегодня) — обрезаем до 0.
+  const noTrial =
+    typeof newUsers === "number" && typeof trialActivated === "number"
+      ? Math.max(0, newUsers - trialActivated)
+      : undefined;
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
+            Сегодня · МСК
+          </div>
+          <div className="mt-0.5 text-sm font-medium text-fg">
+            Оперативная сводка
+          </div>
+        </div>
+        <div className="text-[11px] text-fg-subtle">
+          с 00:00 · сброс ежедневно
+        </div>
+      </div>
+      <div className="grid grid-cols-2 divide-y divide-border/40 sm:grid-cols-3 sm:divide-y-0 sm:divide-x lg:grid-cols-6">
+        <TodayCell
+          label="Доход"
+          value={fmtRub(revenue)}
+          accent
+          loading={loading}
+        />
+        <TodayCell
+          label="Платежей"
+          value={fmtNum(payments)}
+          loading={loading}
+        />
+        <TodayCell
+          label="Средний чек"
+          value={fmtRub(avgCheck)}
+          loading={loading}
+        />
+        <TodayCell
+          label="Новых юзеров"
+          value={fmtNum(newUsers)}
+          loading={loading}
+        />
+        <TodayCell
+          label="Взяли триал"
+          value={fmtNum(trialActivated)}
+          sub={
+            typeof newUsers === "number" && newUsers > 0 && trialActivated != null
+              ? `${((trialActivated / newUsers) * 100).toFixed(0)}% от новых`
+              : undefined
+          }
+          loading={loading}
+        />
+        <TodayCell
+          label="Без триала"
+          value={fmtNum(noTrial)}
+          sub={
+            typeof newUsers === "number" && newUsers > 0 && noTrial != null
+              ? `${((noTrial / newUsers) * 100).toFixed(0)}% от новых`
+              : undefined
+          }
+          loading={loading}
+        />
+      </div>
+    </section>
+  );
+}
+
+function TodayCell({
   label,
   value,
-  tone,
+  sub,
+  accent,
+  loading,
 }: {
   label: string;
   value: string;
-  tone?: "accent";
+  sub?: string;
+  accent?: boolean;
+  loading?: boolean;
 }) {
-  const valueClass =
-    tone === "accent"
-      ? "text-sky-600"
-      : "text-slate-900";
   return (
-    <div className="rounded-xl border border-slate-200/70 bg-slate-50/60 px-4 py-3">
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+    <div className="px-4 py-4 transition-colors hover:bg-bg-subtle/60">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
         {label}
       </div>
-      <div className={`mt-1 text-xl font-semibold tracking-tight tabular-nums md:text-2xl ${valueClass}`}>
-        {value}
+      <div
+        className={
+          "mt-1 text-xl font-semibold tabular-nums tracking-tight md:text-2xl " +
+          (accent ? "text-sky-600" : "text-fg")
+        }
+      >
+        {loading ? "…" : value}
       </div>
+      {sub && (
+        <div className="mt-0.5 truncate text-[11px] text-fg-subtle">{sub}</div>
+      )}
     </div>
   );
 }
@@ -1069,6 +1271,89 @@ function DailyMetricChart({
   );
 }
 
+// HourlyChart — кастомный 24-bar visual без recharts. recharts даёт
+// ровные тонкие столбики, но мы хотим pixel-perfect ширину для
+// всех 24 часов + плавную смену метрики. Делаем вручную: каждая колонка
+// инит-стартует с height=0 и анимируется до своего pct (CSS transition).
+function HourlyChart({
+  data,
+  loading,
+  metric,
+}: {
+  data: Array<{ hour: number } & Record<string, number>>;
+  loading: boolean;
+  metric: MetricKey;
+}) {
+  const def = METRICS.find((m) => m.key === metric) ?? METRICS[0];
+  if (loading || data.length === 0) {
+    return (
+      <div className="mt-6 h-56">
+        <SkeletonBars />
+      </div>
+    );
+  }
+  const values = data.map((d) => Number(d[metric]) || 0);
+  const max = Math.max(1, ...values);
+  const total = values.reduce((a, v) => a + v, 0);
+  const peakIdx = values.indexOf(Math.max(...values));
+  return (
+    <div className="mt-4">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+        <div className="text-2xl font-semibold tabular-nums tracking-tight text-fg md:text-3xl">
+          {def.valueFmt(total)}
+        </div>
+        <div className="text-sm text-fg-muted">
+          пик в{" "}
+          <span
+            className="rounded-md px-1.5 py-0.5 text-xs font-semibold tabular-nums"
+            style={{ background: def.color + "22", color: def.color }}
+          >
+            {String(peakIdx).padStart(2, "0")}:00
+          </span>
+          <span className="ml-2 text-fg-subtle">
+            ({def.valueFmt(values[peakIdx])})
+          </span>
+        </div>
+      </div>
+      <div className="mt-4 flex h-44 items-end gap-1">
+        {data.map((d) => {
+          const v = Number(d[metric]) || 0;
+          const pct = (v / max) * 100;
+          const isPeak = d.hour === peakIdx;
+          return (
+            <div
+              key={d.hour}
+              className="group relative flex flex-1 flex-col items-center justify-end"
+            >
+              <div
+                className="w-full rounded-t-md transition-[height,background-color] duration-500 ease-out"
+                style={{
+                  height: `${Math.max(2, pct)}%`,
+                  background: isPeak ? def.color : def.color + "66",
+                }}
+              />
+              {/* tooltip on hover */}
+              <div className="pointer-events-none absolute bottom-full mb-1 hidden whitespace-nowrap rounded-md border border-border bg-bg-card px-2 py-1 text-[10px] font-medium shadow-md group-hover:block">
+                <span className="tabular-nums">{String(d.hour).padStart(2, "0")}:00</span>
+                <span className="ml-1.5 text-fg-subtle">·</span>
+                <span className="ml-1.5 tabular-nums text-fg">
+                  {def.valueFmt(v)}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* Hour axis — 0/6/12/18/24 ticks для краткости */}
+      <div className="mt-2 flex justify-between text-[10px] font-medium tabular-nums text-fg-subtle">
+        {["00", "06", "12", "18", "24"].map((h) => (
+          <span key={h}>{h}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SkeletonBars() {
   return (
     <div className="flex h-full items-end gap-1">
@@ -1236,6 +1521,281 @@ function SegmentRow({
       </span>
     </Link>
   );
+}
+
+// ─ Referral / tariffs / providers blocks ────────────────────────────
+
+function ReferralBlock({
+  data,
+  loading,
+}: {
+  data: Record<string, unknown> | undefined;
+  loading: boolean;
+}) {
+  const num = (k: string) => asNum(data?.[k]) ?? 0;
+  const revenue = num("total_revenue");
+  const cashback = num("total_cashback_paid");
+  const net = revenue - cashback;
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="rounded-xl border border-slate-200/70 bg-gradient-to-br from-sky-50/60 to-white p-4">
+        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+          Чистая прибыль
+        </div>
+        <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900 md:text-3xl">
+          {loading ? "…" : fmtRub(net)}
+        </div>
+        <div className="mt-1 text-[11px] text-slate-500">
+          выручка − кэшбэк
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="Выручка" value={fmtRub(revenue)} loading={loading} />
+        <MiniStat label="Кэшбэк выплачен" value={fmtRub(cashback)} loading={loading} />
+        <MiniStat label="Рефереров" value={fmtNum(num("total_referrers"))} loading={loading} />
+        <MiniStat label="Приглашённых" value={fmtNum(num("total_referrals"))} loading={loading} />
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({
+  label,
+  value,
+  loading,
+}: {
+  label: string;
+  value: string;
+  loading?: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200/70 bg-slate-50/40 px-3 py-2">
+      <div className="text-[9px] font-medium uppercase tracking-[0.12em] text-slate-400">
+        {label}
+      </div>
+      <div className="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">
+        {loading ? "…" : value}
+      </div>
+    </div>
+  );
+}
+
+function TopReferrersList({
+  data,
+  loading,
+}: {
+  data: Array<Record<string, unknown>> | undefined;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="mt-4 space-y-2">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-100" />
+        ))}
+      </div>
+    );
+  }
+  if (!data?.length) {
+    return (
+      <div className="mt-6 text-sm text-slate-400">
+        Пока нет данных по партнёрам.
+      </div>
+    );
+  }
+  return (
+    <ol className="mt-4 space-y-1.5">
+      {data.slice(0, 5).map((r, i) => {
+        const id = asNum(r.telegram_id) ?? 0;
+        const username = (r.username as string) || "—";
+        const invited = asNum(r.invited_count) ?? 0;
+        const revenue = asNum(r.total_revenue) ?? 0;
+        const cashback = asNum(r.cashback_paid) ?? 0;
+        return (
+          <Link
+            key={String(id) + "_" + i}
+            to={`/referrals`}
+            className="group flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition hover:border-slate-200 hover:bg-slate-50/60"
+          >
+            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-slate-100 text-[11px] font-semibold tabular-nums text-slate-600">
+              {i + 1}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium text-slate-900">
+                {username !== "—" ? `@${username}` : `tg:${id}`}
+              </div>
+              <div className="truncate text-[11px] text-slate-500">
+                {fmtNum(invited)} приглашённых · кэшбэк {fmtRub(cashback)}
+              </div>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-sm font-semibold tabular-nums text-slate-900">
+                {fmtRub(revenue)}
+              </div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-400">
+                выручка
+              </div>
+            </div>
+          </Link>
+        );
+      })}
+    </ol>
+  );
+}
+
+const TARIFF_DEFS = [
+  { key: "basic", label: "Basic", color: "#0EA5E9" },
+  { key: "plus", label: "Plus", color: "#8B5CF6" },
+  { key: "basic_combo", label: "Basic + Combo", color: "#06B6D4" },
+  { key: "plus_combo", label: "Plus + Combo", color: "#EC4899" },
+  { key: "proxy", label: "Прокси", color: "#F59E0B" },
+] as const;
+
+function TariffsBlock({
+  data,
+  loading,
+}: {
+  data: Record<string, unknown> | undefined;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="mt-4 space-y-2">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="h-10 animate-pulse rounded-xl bg-slate-100" />
+        ))}
+      </div>
+    );
+  }
+  const totals = TARIFF_DEFS.map((t) => {
+    const cat = (data?.[t.key] as Record<string, unknown> | undefined) ?? {};
+    const all = (cat["all"] as { count?: number; revenue?: number } | undefined) ?? {};
+    return {
+      ...t,
+      count: Number(all.count ?? 0),
+      revenueKop: Number(all.revenue ?? 0),
+    };
+  });
+  const totalRevenue = totals.reduce((a, t) => a + t.revenueKop, 0);
+  return (
+    <div className="mt-4 space-y-2.5">
+      {totals.map((t) => {
+        const rub = t.revenueKop / 100;
+        const pct = totalRevenue > 0 ? (t.revenueKop / totalRevenue) * 100 : 0;
+        return (
+          <div key={t.key} className="rounded-xl border border-slate-200/70 bg-slate-50/40 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ background: t.color }}
+                />
+                <span className="text-sm font-medium text-slate-900">
+                  {t.label}
+                </span>
+              </div>
+              <div className="text-sm font-semibold tabular-nums text-slate-900">
+                {fmtRub(rub)}
+                <span className="ml-2 text-[11px] font-normal text-slate-400 tabular-nums">
+                  {pct.toFixed(1)}%
+                </span>
+              </div>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full transition-[width] duration-700"
+                style={{ width: `${Math.max(2, pct)}%`, background: t.color }}
+              />
+            </div>
+            <div className="mt-1.5 text-[11px] text-slate-500 tabular-nums">
+              {fmtNum(t.count)} продаж
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  platega: "Platega",
+  cryptobot: "CryptoBot",
+  telegram_stars: "Telegram Stars",
+  lava: "Lava",
+  balance: "С баланса",
+  unknown: "Прочее",
+};
+const PROVIDER_COLORS: Record<string, string> = {
+  platega: "#0EA5E9",
+  cryptobot: "#F59E0B",
+  telegram_stars: "#8B5CF6",
+  lava: "#10B981",
+  balance: "#64748B",
+  unknown: "#94A3B8",
+};
+
+function ProvidersBlock({
+  data,
+  loading,
+}: {
+  data: Array<{ provider: string; count: number; revenue_rubles: number }> | undefined;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="mt-4 space-y-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-10 animate-pulse rounded-xl bg-slate-100" />
+        ))}
+      </div>
+    );
+  }
+  if (!data?.length) {
+    return (
+      <div className="mt-6 text-sm text-slate-400">
+        За выбранный период нет платежей.
+      </div>
+    );
+  }
+  const totalRev = data.reduce((a, r) => a + r.revenue_rubles, 0);
+  const sorted = [...data].sort((a, b) => b.revenue_rubles - a.revenue_rubles);
+  return (
+    <div className="mt-4 space-y-2">
+      {sorted.map((r) => {
+        const pct = totalRev > 0 ? (r.revenue_rubles / totalRev) * 100 : 0;
+        const color = PROVIDER_COLORS[r.provider] ?? "#94A3B8";
+        return (
+          <div key={r.provider} className="rounded-lg border border-slate-200/70 bg-slate-50/30 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+                <span className="text-sm font-medium text-slate-900">
+                  {PROVIDER_LABELS[r.provider] ?? r.provider}
+                </span>
+              </div>
+              <div className="text-sm font-semibold tabular-nums text-slate-900">
+                {fmtRub(r.revenue_rubles)}
+              </div>
+            </div>
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full transition-[width] duration-700"
+                style={{ width: `${Math.max(2, pct)}%`, background: color }}
+              />
+            </div>
+            <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500 tabular-nums">
+              <span>{fmtNum(r.count)} платежей</span>
+              <span>{pct.toFixed(1)}%</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function providerHoursLabel(h: 24 | 168 | 720): string {
+  return h === 24 ? "24ч" : h === 168 ? "7д" : "30д";
 }
 
 // ─ utils ────────────────────────────────────────────────────────────

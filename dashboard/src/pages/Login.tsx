@@ -98,7 +98,7 @@ export function Login({ onDone }: { onDone: () => void }) {
       >
         <div className="pointer-events-none absolute -top-32 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-accent/15 blur-3xl" />
         <div className="relative">
-          <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-accent to-secondary text-bg shadow-glow">
+          <div className="mb-6 grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-accent to-secondary text-white shadow-glow">
             <ShieldCheck className="h-5 w-5" strokeWidth={2.5} />
           </div>
 
@@ -217,7 +217,7 @@ function SuccessOverlay({ name }: { name: string }) {
           {/* outer ring pulse */}
           <span className="absolute inset-0 rounded-full ring-2 ring-success/40 animate-ring-pulse" />
           {/* inner solid disk */}
-          <span className="relative grid h-16 w-16 place-items-center rounded-full bg-success text-bg shadow-[0_0_30px_-2px_rgba(34,197,94,0.6)]">
+          <span className="relative grid h-16 w-16 place-items-center rounded-full bg-success text-white shadow-[0_0_30px_-2px_rgba(34,197,94,0.6)]">
             <svg
               viewBox="0 0 24 24"
               className="h-7 w-7"
