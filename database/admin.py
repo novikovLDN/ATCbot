@@ -1238,8 +1238,11 @@ async def get_users_by_segment(segment: str) -> list:
             return [row["telegram_id"] for row in rows]
         elif segment in ("trial_expired_6h", "trial_expired_1d", "trial_expired_2d", "trial_expired_3d"):
             # Триал закончился N времени назад (фиксированный бакет).
-            # Без активной платной — иначе юзер уже купил, незачем
-            # ему напоминание.
+            # Исключаем только тех, у кого есть активная **платная**
+            # подписка — это юзеры, успешно конвертнувшиеся, им пуш
+            # «триал истёк, купи подписку» уже не нужен. Активные
+            # bypass-only/gift/admin_grant не считаем — у них нет
+            # основной подписки, и наш пуш им релевантен.
             #   trial_expired_6h → [NOW-7h, NOW-6h)
             #   trial_expired_1d → [NOW-2d, NOW-1d)
             #   trial_expired_2d → [NOW-3d, NOW-2d)
@@ -1262,6 +1265,7 @@ async def get_users_by_segment(segment: str) -> list:
                       AND NOT EXISTS (
                           SELECT 1 FROM subscriptions s
                           WHERE s.telegram_id = u.telegram_id
+                            AND s.source = 'payment'
                             AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
                       )"""
             )
@@ -1269,7 +1273,9 @@ async def get_users_by_segment(segment: str) -> list:
         elif segment == "paid_expired_1d":
             # Платная подписка (source='payment') истекла ровно
             # 1 сутки назад (бакет [NOW-2d, NOW-1d)). И сейчас нет
-            # активной — это churn-окно, классическая точка реактивации.
+            # активной ПЛАТНОЙ — это churn-окно, классическая точка
+            # реактивации. (Активный bypass/gift тут не считаем —
+            # юзер всё равно без основной подписки.)
             # См. коммент про tz в trial_ends_in_1d.
             rows = await conn.fetch(
                 """SELECT u.telegram_id FROM users u
@@ -1283,8 +1289,49 @@ async def get_users_by_segment(segment: str) -> list:
                      AND NOT EXISTS (
                        SELECT 1 FROM subscriptions s2
                        WHERE s2.telegram_id = u.telegram_id
+                         AND s2.source = 'payment'
                          AND s2.expires_at > (NOW() AT TIME ZONE 'UTC')
                    )"""
+            )
+            return [row["telegram_id"] for row in rows]
+        elif segment in ("paid_expired_30d", "paid_lapsed_any"):
+            # Реактивационные сегменты по subscription_history:
+            #   paid_expired_30d → последний end_date платной транзакции
+            #                      попал в [NOW-30d, NOW-1d], и сейчас
+            #                      нет активной подписки в subscriptions.
+            #   paid_lapsed_any  → когда-либо платил (purchase / renewal /
+            #                      auto_renew) и сейчас неактивен —
+            #                      максимальная реактивационная аудитория.
+            #
+            # Почему через subscription_history, а не subscriptions:
+            # в subscriptions хранится ТЕКУЩЕЕ состояние подписки;
+            # при renewal expires_at UPDATEится в будущее, а старое
+            # значение не сохраняется. История истёкших — только в
+            # subscription_history (см. column end_date).
+            #
+            # action_type для платных: purchase, renewal, auto_renew
+            # (не 'payment' — то поле в subscriptions.source).
+            window_clause = (
+                "AND last_paid_end BETWEEN "
+                "(NOW() AT TIME ZONE 'UTC') - INTERVAL '30 days' "
+                "AND (NOW() AT TIME ZONE 'UTC') - INTERVAL '1 day'"
+                if segment == "paid_expired_30d"
+                else ""
+            )
+            rows = await conn.fetch(
+                f"""WITH paid_history AS (
+                       SELECT telegram_id, MAX(end_date) AS last_paid_end
+                       FROM subscription_history
+                       WHERE action_type IN ('purchase', 'renewal', 'auto_renew')
+                       GROUP BY telegram_id
+                   )
+                   SELECT p.telegram_id FROM paid_history p
+                   WHERE 1=1 {window_clause}
+                     AND NOT EXISTS (
+                         SELECT 1 FROM subscriptions s
+                         WHERE s.telegram_id = p.telegram_id
+                           AND s.expires_at > (NOW() AT TIME ZONE 'UTC')
+                     )"""
             )
             return [row["telegram_id"] for row in rows]
         elif segment in ("expired_1d", "expired_2d", "expired_3d"):
