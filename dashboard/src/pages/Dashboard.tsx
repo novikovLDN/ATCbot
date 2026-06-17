@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   Users as UsersIcon,
   Wallet,
@@ -9,6 +10,7 @@ import {
   CreditCard,
   Activity,
   Sparkles,
+  Megaphone,
 } from "lucide-react";
 import { endpoints } from "@/lib/api";
 import { useEventStream, type BusEvent } from "@/lib/ws";
@@ -69,6 +71,16 @@ export function Dashboard() {
     queryKey: ["payments", "revenue", "msk-today", todayKey],
     queryFn: () => endpoints.paymentsRevenueSince(todaySince),
     refetchInterval: 60000,
+  });
+  // Сегменты — обновляем реже, запрос тяжёлый (несколько SQL по
+  // users + subscriptions + subscription_history). 5 минут хватает,
+  // когорты двигаются медленно. Ключ совпадает с BroadcastCreate —
+  // если юзер заходит в визард, кеш прогрет.
+  const segments = useQuery({
+    queryKey: ["broadcasts", "segments"],
+    queryFn: endpoints.broadcastSegments,
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 60 * 1000,
   });
 
   const [live, setLive] = useState<LiveEntry[]>([]);
@@ -270,6 +282,12 @@ export function Dashboard() {
         </div>
       </section>
 
+      <SegmentsCard
+        loading={segments.isLoading}
+        error={segments.isError}
+        data={segments.data}
+      />
+
       <section className="card p-5">
         <div className="mb-4 flex items-center justify-between">
           <div>
@@ -377,4 +395,142 @@ function fmtSeconds(s: number | undefined): string {
   if (s < 60) return `${Math.round(s)}с`;
   if (s < 3600) return `${Math.round(s / 60)}мин`;
   return `${Math.round((s / 3600) * 10) / 10}ч`;
+}
+
+// ── Сегменты для рассылок ──────────────────────────────────────────
+//
+// Виджет на главной с актуальными счётчиками по всем сегментам:
+// чтобы заходить и сразу видеть, какая когорта живая, а где 0, и
+// без захода в визард понимать, кому и что слать.
+//
+// Группы дублируют backend (segments_list в broadcasts.py) — порядок
+// важен, по нему юзер ориентируется.
+
+const SEGMENT_GROUPS: { title: string; keys: string[] }[] = [
+  {
+    title: "База",
+    keys: [
+      "all_users",
+      "active_subscriptions",
+      "no_subscription",
+      "no_remnawave",
+      "started_7d_cold",
+    ],
+  },
+  {
+    title: "Истёкли (любая подписка)",
+    keys: ["expired_1d", "expired_2d", "expired_3d"],
+  },
+  {
+    title: "Триал-воронка",
+    keys: [
+      "trial_ends_in_1d",
+      "trial_expired_6h",
+      "trial_expired_1d",
+      "trial_expired_2d",
+      "trial_expired_3d",
+    ],
+  },
+  {
+    title: "Реактивация платных",
+    keys: ["paid_expired_1d", "paid_expired_30d", "paid_lapsed_any"],
+  },
+];
+
+function SegmentsCard({
+  loading,
+  error,
+  data,
+}: {
+  loading: boolean;
+  error: boolean;
+  data: Array<{ key: string; label: string; count: number }> | undefined;
+}) {
+  const byKey = new Map(data?.map((s) => [s.key, s]));
+
+  return (
+    <section className="card p-5">
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
+            Сегменты
+          </div>
+          <h2 className="text-lg font-semibold text-fg">Аудитории для рассылок</h2>
+          <div className="mt-0.5 text-[11px] text-fg-subtle">
+            обновляется раз в 5 минут · клик по сегменту → создать рассылку
+          </div>
+        </div>
+        <Link
+          to="/broadcasts/new"
+          className="btn-secondary text-xs"
+          title="Создать новую рассылку"
+        >
+          <Megaphone className="h-3.5 w-3.5" /> Рассылка
+        </Link>
+      </div>
+
+      {error ? (
+        <div className="rounded-lg border border-danger/30 bg-danger/5 px-4 py-3 text-sm text-danger">
+          Не удалось загрузить сегменты. Попробуй обновить страницу.
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {SEGMENT_GROUPS.map((group) => (
+            <div key={group.title}>
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
+                {group.title}
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {group.keys.map((k) => {
+                  const s = byKey.get(k);
+                  return (
+                    <SegmentRow
+                      key={k}
+                      label={s?.label ?? k}
+                      count={s?.count}
+                      loading={loading}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SegmentRow({
+  label,
+  count,
+  loading,
+}: {
+  label: string;
+  count: number | undefined;
+  loading: boolean;
+}) {
+  const isEmpty = count === 0;
+  const isMissing = count == null;
+  return (
+    <Link
+      to="/broadcasts/new"
+      className="group flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-subtle/40 px-3 py-2.5 text-sm transition-colors hover:border-accent/40 hover:bg-accent/5"
+    >
+      <span className="truncate text-fg-muted group-hover:text-fg">{label}</span>
+      <span
+        className={
+          loading
+            ? "text-xs text-fg-subtle"
+            : isMissing
+            ? "text-xs text-fg-subtle"
+            : isEmpty
+            ? "shrink-0 rounded-md bg-bg-subtle px-2 py-0.5 text-xs font-medium text-fg-subtle"
+            : "shrink-0 rounded-md bg-accent/10 px-2 py-0.5 text-xs font-semibold tabular-nums text-accent"
+        }
+      >
+        {loading ? "…" : isMissing ? "—" : fmtNum(count)}
+      </span>
+    </Link>
+  );
 }
