@@ -145,6 +145,8 @@ export const endpoints = {
         current_source: string | null;
         current_is_combo: boolean;
         proposed_expires_at: string | null;
+        history_end_date: string | null;
+        grace_will_apply: boolean;
         last_paid_action_type: string | null;
         history: Array<{
           id: number;
