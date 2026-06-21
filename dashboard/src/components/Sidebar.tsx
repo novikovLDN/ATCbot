@@ -11,6 +11,7 @@ import {
   Gift,
   Tag,
   Wrench,
+  Stethoscope,
   CreditCard,
   Settings as SettingsIcon,
 } from "lucide-react";
@@ -53,6 +54,7 @@ const sections: Section[] = [
     label: "System",
     items: [
       { to: "/audit", label: "Аудит", icon: ScrollText },
+      { to: "/bypass-audit", label: "Bypass Audit", icon: Stethoscope },
       { to: "/service", label: "Сервис", icon: Wrench },
       { to: "/settings", label: "Настройки", icon: SettingsIcon },
     ],

@@ -2901,6 +2901,240 @@ async def get_arpu() -> float:
         return arpu
 
 
+# ── Bypass-overwrite audit & recovery ──────────────────────────────
+#
+# Ловит юзеров, пострадавших от старого бага `ensure_bypass_only_*`:
+# у них стоит `is_bypass_only=TRUE` и `expires_at` > NOW+3 года, но
+# в истории есть платные subscription_history-записи (purchase /
+# renewal / auto_renew) — значит реальная подписка была premium,
+# а функция её переписала.
+
+
+async def get_bypass_overwrite_victims() -> List[Dict[str, Any]]:
+    """Список пострадавших от bypass-overwrite бага с детализацией.
+
+    Для каждого юзера:
+      - текущая subscription row;
+      - все subscription_history записи покупок/продлений;
+      - все traffic_purchases;
+      - вычисленный корректный expires_at = max(end_date) по
+        последней платной транзакции;
+      - вердикт `can_fix`: достаточно ли данных для восстановления.
+
+    Не делает никаких UPDATE — только read-only аудит.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        suspects = await conn.fetch(
+            """
+            SELECT s.telegram_id,
+                   u.username,
+                   s.expires_at AS current_expires_at,
+                   s.is_bypass_only,
+                   s.subscription_type AS current_subscription_type,
+                   s.source AS current_source,
+                   s.is_combo
+            FROM subscriptions s
+            JOIN users u ON u.telegram_id = s.telegram_id
+            WHERE s.is_bypass_only = TRUE
+              AND s.expires_at > (NOW() AT TIME ZONE 'UTC') + INTERVAL '3 years'
+              AND EXISTS (
+                  SELECT 1 FROM subscription_history sh
+                  WHERE sh.telegram_id = s.telegram_id
+                    AND sh.action_type IN ('purchase', 'renewal', 'auto_renew')
+              )
+            ORDER BY s.expires_at DESC
+            """
+        )
+
+        victims: List[Dict[str, Any]] = []
+        for row in suspects:
+            tg = int(row["telegram_id"])
+            history = await conn.fetch(
+                """
+                SELECT id, action_type, start_date, end_date, created_at, vpn_key
+                FROM subscription_history
+                WHERE telegram_id = $1
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+                tg,
+            )
+            traffic = await conn.fetch(
+                """
+                SELECT id, gb_amount, price_rub, created_at
+                FROM traffic_purchases
+                WHERE telegram_id = $1
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+                tg,
+            )
+            payments = await conn.fetch(
+                """
+                SELECT id, tariff, amount, paid_at, created_at, purchase_id
+                FROM payments
+                WHERE telegram_id = $1 AND status = 'approved'
+                ORDER BY COALESCE(paid_at, created_at) DESC
+                LIMIT 50
+                """,
+                tg,
+            )
+
+            # Источник истины для корректного expires_at — самая поздняя
+            # end_date по платным action_type'ам в subscription_history.
+            last_paid_end = await conn.fetchval(
+                """
+                SELECT MAX(end_date) FROM subscription_history
+                WHERE telegram_id = $1
+                  AND action_type IN ('purchase', 'renewal', 'auto_renew')
+                """,
+                tg,
+            )
+            last_paid_action = await conn.fetchrow(
+                """
+                SELECT action_type, end_date, created_at
+                FROM subscription_history
+                WHERE telegram_id = $1
+                  AND action_type IN ('purchase', 'renewal', 'auto_renew')
+                ORDER BY end_date DESC NULLS LAST
+                LIMIT 1
+                """,
+                tg,
+            )
+
+            traffic_total_gb = sum(int(t["gb_amount"] or 0) for t in traffic)
+            payments_count = len(payments)
+            premium_payments_count = len(
+                [p for p in payments if (p["tariff"] or "").startswith(("basic", "plus"))]
+            )
+
+            # Вердикт: восстановим только если у нас есть валидная
+            # end_date в истории И она > NOW (т.е. подписка могла быть
+            # ещё активной на момент бага). Если end_date в прошлом —
+            # подписка истекла, тогда фикс = снять bypass_only=FALSE и
+            # выставить expires_at на end_date (запись будет истёкшая,
+            # юзер увидит честное состояние, без 10-летнего срока).
+            can_fix = last_paid_end is not None
+
+            victims.append(
+                {
+                    "telegram_id": tg,
+                    "username": row["username"],
+                    "current_expires_at": row["current_expires_at"],
+                    "current_is_bypass_only": bool(row["is_bypass_only"]),
+                    "current_subscription_type": row["current_subscription_type"],
+                    "current_source": row["current_source"],
+                    "current_is_combo": bool(row["is_combo"]) if row["is_combo"] is not None else False,
+                    "proposed_expires_at": last_paid_end,
+                    "last_paid_action_type": (
+                        last_paid_action["action_type"] if last_paid_action else None
+                    ),
+                    "history": [
+                        {
+                            "id": int(h["id"]),
+                            "action_type": h["action_type"],
+                            "start_date": h["start_date"],
+                            "end_date": h["end_date"],
+                            "created_at": h["created_at"],
+                        }
+                        for h in history
+                    ],
+                    "payments": [
+                        {
+                            "id": int(p["id"]),
+                            "tariff": p["tariff"],
+                            "amount_rubles": float((p["amount"] or 0)) / 100.0,
+                            "paid_at": p["paid_at"],
+                            "created_at": p["created_at"],
+                            "purchase_id": p["purchase_id"],
+                        }
+                        for p in payments
+                    ],
+                    "traffic_purchases": [
+                        {
+                            "id": int(t["id"]),
+                            "gb_amount": int(t["gb_amount"] or 0),
+                            "price_rub": int(t["price_rub"] or 0),
+                            "created_at": t["created_at"],
+                        }
+                        for t in traffic
+                    ],
+                    "traffic_total_gb": traffic_total_gb,
+                    "payments_count": payments_count,
+                    "premium_payments_count": premium_payments_count,
+                    "can_fix": can_fix,
+                }
+            )
+
+        return victims
+
+
+async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
+    """Восстановить корректную подписку для одного пострадавшего юзера.
+
+    Алгоритм:
+      1. Найти max(end_date) среди subscription_history с
+         action_type IN ('purchase','renewal','auto_renew').
+      2. UPDATE subscriptions: is_bypass_only=FALSE,
+         expires_at=<correct>, source='payment',
+         subscription_type — оставить как есть, кроме случая
+         'bypass_only' → 'basic' (на бэке нет точного знания о
+         плане без покупки tariff'а; админ может дозаполнить
+         вручную).
+
+    Не трогает Remnawave — там трафик хранится отдельно и его
+    реставрировать не нужно (бypass GB всё равно у юзера остались).
+
+    Returns dict с before/after для логирования.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            before = await conn.fetchrow(
+                "SELECT expires_at, is_bypass_only, subscription_type, source FROM subscriptions WHERE telegram_id = $1",
+                telegram_id,
+            )
+            if not before:
+                return {"ok": False, "reason": "no_subscription_row"}
+
+            correct_end = await conn.fetchval(
+                """
+                SELECT MAX(end_date) FROM subscription_history
+                WHERE telegram_id = $1
+                  AND action_type IN ('purchase', 'renewal', 'auto_renew')
+                """,
+                telegram_id,
+            )
+            if correct_end is None:
+                return {"ok": False, "reason": "no_paid_history_to_recover_from"}
+
+            await conn.execute(
+                """
+                UPDATE subscriptions
+                SET is_bypass_only = FALSE,
+                    expires_at = $2,
+                    source = CASE WHEN source = 'bypass_only' THEN 'payment' ELSE source END,
+                    subscription_type = CASE WHEN subscription_type IS NULL OR subscription_type = ''
+                                              THEN 'basic' ELSE subscription_type END
+                WHERE telegram_id = $1
+                """,
+                telegram_id,
+                correct_end,
+            )
+            after = await conn.fetchrow(
+                "SELECT expires_at, is_bypass_only, subscription_type, source FROM subscriptions WHERE telegram_id = $1",
+                telegram_id,
+            )
+
+    return {
+        "ok": True,
+        "telegram_id": telegram_id,
+        "before": dict(before),
+        "after": dict(after) if after else None,
+    }
+
+
 async def get_daily_timeseries(days: int) -> Dict[str, Any]:
     """Daily аггрегаты за последние `days` суток UTC.
 

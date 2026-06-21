@@ -129,6 +129,68 @@ export const endpoints = {
     ),
   statsBreakdown: () => api.get<Record<string, unknown>>("/stats/purchase-breakdown"),
   statsPromo: () => api.get<unknown[]>("/stats/promo"),
+
+  // Bypass-overwrite audit — список пострадавших + восстановление.
+  bypassAuditList: () =>
+    api.get<{
+      total: number;
+      can_fix: number;
+      total_traffic_gb_purchased: number;
+      victims: Array<{
+        telegram_id: number;
+        username: string | null;
+        current_expires_at: string | null;
+        current_is_bypass_only: boolean;
+        current_subscription_type: string | null;
+        current_source: string | null;
+        current_is_combo: boolean;
+        proposed_expires_at: string | null;
+        last_paid_action_type: string | null;
+        history: Array<{
+          id: number;
+          action_type: string;
+          start_date: string | null;
+          end_date: string | null;
+          created_at: string | null;
+        }>;
+        payments: Array<{
+          id: number;
+          tariff: string;
+          amount_rubles: number;
+          paid_at: string | null;
+          created_at: string | null;
+          purchase_id: string | null;
+        }>;
+        traffic_purchases: Array<{
+          id: number;
+          gb_amount: number;
+          price_rub: number;
+          created_at: string | null;
+        }>;
+        traffic_total_gb: number;
+        payments_count: number;
+        premium_payments_count: number;
+        can_fix: boolean;
+      }>;
+    }>("/bypass-audit"),
+  bypassAuditFixOne: (telegram_id: number) =>
+    api.post<{
+      ok: boolean;
+      telegram_id: number;
+      before: Record<string, unknown> | null;
+      after: Record<string, unknown> | null;
+    }>(`/bypass-audit/fix/${telegram_id}`),
+  bypassAuditFixAll: () =>
+    api.post<{
+      total: number;
+      fixed: number;
+      failed: number;
+      results: Array<{
+        telegram_id: number;
+        ok: boolean;
+        reason?: string;
+      }>;
+    }>("/bypass-audit/fix-all"),
   statsDaily: (days = 30) =>
     api.get<{
       days: number;
