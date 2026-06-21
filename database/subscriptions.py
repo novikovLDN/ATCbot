@@ -379,11 +379,26 @@ async def set_bypass_only_flag(telegram_id: int, is_bypass_only: bool = True):
 
 
 async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
-    """Create a subscription row for bypass-only user if none exists.
+    """Создать bypass-only subscription row, если её нет.
 
-    Sets status='active', is_bypass_only=True, expires_at far in the future (10 years).
-    If subscription already exists, just sets is_bypass_only=True.
-    Returns True on success.
+    Поведение:
+      • Если subscription отсутствует — INSERT bypass_only row на 10 лет.
+      • Если существует и **истёкшая** ИЛИ уже bypass_only — UPDATE:
+        status='active', is_bypass_only=TRUE, expires_at=far_future,
+        source='bypass_only' (если истёкшая).
+      • Если существует и это **активная платная** подписка
+        (expires_at > NOW() AND NOT is_bypass_only) — **НЕ трогаем**.
+        Покупка bypass-трафика премиум-юзером — это просто +ГБ в
+        Remnawave; основная подписка остаётся как есть.
+
+    Раньше код безусловно делал `expires_at = GREATEST(expires_at,
+    +10y)` и `is_bypass_only=TRUE` для любого row — это **переводило
+    активную premium-подписку на 10 лет и помечало её как bypass**,
+    что и порождало баг «premium на 10 лет» у юзеров, докупивших
+    пакет трафика.
+
+    Returns:
+        True on success.
     """
     pool = await get_pool()
     if pool is None:
@@ -396,17 +411,34 @@ async def ensure_bypass_only_subscription(telegram_id: int) -> bool:
         except Exception:
             pass
         existing = await conn.fetchrow(
-            "SELECT telegram_id FROM subscriptions WHERE telegram_id = $1", telegram_id
+            """SELECT telegram_id, expires_at, is_bypass_only, status
+               FROM subscriptions WHERE telegram_id = $1""",
+            telegram_id,
         )
         far_future = datetime.now(timezone.utc) + timedelta(days=3650)
         if existing:
-            # Update existing: set bypass-only, ensure active status and far-future expiry
-            # (old expired subscription may have expires_at in the past)
+            is_active_paid = (
+                existing["expires_at"] is not None
+                and _from_db_utc(existing["expires_at"]) > datetime.now(timezone.utc)
+                and not bool(existing["is_bypass_only"])
+            )
+            if is_active_paid:
+                # Юзер с активной платной — bypass-пак добавляется
+                # только в Remnawave (трафик), subscription не трогаем.
+                logger.info(
+                    "ensure_bypass_only_subscription: SKIP active paid sub "
+                    "(user=%s expires=%s) — only Remnawave traffic top-up",
+                    telegram_id, existing["expires_at"],
+                )
+                return True
+            # Истёкшая или уже bypass_only — продлеваем на 10 лет и
+            # помечаем как bypass_only.
             await conn.execute(
                 """UPDATE subscriptions
                    SET is_bypass_only = TRUE, status = 'active',
-                       expires_at = GREATEST(expires_at, $2),
-                       source = CASE WHEN status = 'expired' OR expires_at < NOW() THEN 'bypass_only' ELSE source END
+                       expires_at = $2,
+                       source = CASE WHEN status = 'expired' OR expires_at < NOW()
+                                     THEN 'bypass_only' ELSE source END
                    WHERE telegram_id = $1""",
                 telegram_id, _to_db_utc(far_future),
             )
