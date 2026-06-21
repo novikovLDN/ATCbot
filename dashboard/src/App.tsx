@@ -15,6 +15,7 @@ import { Broadcasts } from "@/pages/Broadcasts";
 import { BroadcastCreate } from "@/pages/BroadcastCreate";
 import { Referrals } from "@/pages/Referrals";
 import { BypassGifts } from "@/pages/BypassGifts";
+import { BypassAudit } from "@/pages/BypassAudit";
 import { PromoCodes } from "@/pages/PromoCodes";
 import { Service } from "@/pages/Service";
 import { Payments } from "@/pages/Payments";
@@ -104,6 +105,7 @@ export default function App() {
               <Route path="broadcasts/new" element={<BroadcastCreate />} />
               <Route path="referrals" element={<Referrals />} />
               <Route path="bgift" element={<BypassGifts />} />
+              <Route path="bypass-audit" element={<BypassAudit />} />
               <Route path="audit" element={<Audit />} />
               <Route path="promo" element={<PromoCodes />} />
               <Route path="service" element={<Service />} />
