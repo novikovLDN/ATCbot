@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { endpoints, ApiError } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
-import { toast } from "@/components/Toaster";
+import { toast } from "@/store/toast";
 
 // Bypass-audit — таблица пострадавших от бага «premium на 10 лет».
 // Backend (см. database/admin.py:get_bypass_overwrite_victims) ловит
