@@ -3009,13 +3009,20 @@ async def get_bypass_overwrite_victims() -> List[Dict[str, Any]]:
                 [p for p in payments if (p["tariff"] or "").startswith(("basic", "plus"))]
             )
 
-            # Вердикт: восстановим только если у нас есть валидная
-            # end_date в истории И она > NOW (т.е. подписка могла быть
-            # ещё активной на момент бага). Если end_date в прошлом —
-            # подписка истекла, тогда фикс = снять bypass_only=FALSE и
-            # выставить expires_at на end_date (запись будет истёкшая,
-            # юзер увидит честное состояние, без 10-летнего срока).
+            # Вердикт: восстановим если есть end_date в истории.
+            # Grace-period: если эта end_date уже в прошлом, при
+            # применении fix'а будет NOW + 1 day (Remnawave не
+            # принимает даты в прошлом как активную подписку).
             can_fix = last_paid_end is not None
+            now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+            grace_will_apply = (
+                last_paid_end is not None and last_paid_end <= now_utc_naive
+            )
+            proposed_after_grace = (
+                _to_db_utc(datetime.now(timezone.utc) + timedelta(days=1))
+                if grace_will_apply
+                else last_paid_end
+            )
 
             victims.append(
                 {
@@ -3026,7 +3033,9 @@ async def get_bypass_overwrite_victims() -> List[Dict[str, Any]]:
                     "current_subscription_type": row["current_subscription_type"],
                     "current_source": row["current_source"],
                     "current_is_combo": bool(row["is_combo"]) if row["is_combo"] is not None else False,
-                    "proposed_expires_at": last_paid_end,
+                    "proposed_expires_at": proposed_after_grace,
+                    "history_end_date": last_paid_end,
+                    "grace_will_apply": grace_will_apply,
                     "last_paid_action_type": (
                         last_paid_action["action_type"] if last_paid_action else None
                     ),
@@ -3076,17 +3085,20 @@ async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
     Алгоритм:
       1. Найти max(end_date) среди subscription_history с
          action_type IN ('purchase','renewal','auto_renew').
-      2. UPDATE subscriptions: is_bypass_only=FALSE,
-         expires_at=<correct>, source='payment',
+      2. Если эта end_date уже в прошлом — Remnawave-панель не
+         примет дату из прошлого как активную подписку. Поэтому
+         даём минимальный grace-period: NOW + 1 day. Юзер увидит
+         «истекает завтра», что технически даёт ему 1 сутки и
+         корректно проставится в панели.
+      3. UPDATE subscriptions: is_bypass_only=FALSE,
+         expires_at=<correct_or_grace>, source='payment',
          subscription_type — оставить как есть, кроме случая
-         'bypass_only' → 'basic' (на бэке нет точного знания о
-         плане без покупки tariff'а; админ может дозаполнить
-         вручную).
+         'bypass_only' → 'basic'.
 
     Не трогает Remnawave — там трафик хранится отдельно и его
-    реставрировать не нужно (бypass GB всё равно у юзера остались).
+    реставрировать не нужно (bypass GB всё равно у юзера остались).
 
-    Returns dict с before/after для логирования.
+    Returns dict с before/after + grace_applied для логирования.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -3098,7 +3110,7 @@ async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
             if not before:
                 return {"ok": False, "reason": "no_subscription_row"}
 
-            correct_end = await conn.fetchval(
+            history_end = await conn.fetchval(
                 """
                 SELECT MAX(end_date) FROM subscription_history
                 WHERE telegram_id = $1
@@ -3106,8 +3118,17 @@ async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
                 """,
                 telegram_id,
             )
-            if correct_end is None:
+            if history_end is None:
                 return {"ok": False, "reason": "no_paid_history_to_recover_from"}
+
+            # Grace-period: если правильная end_date уже в прошлом —
+            # ставим NOW + 1 сутки. Иначе берём saved end_date.
+            now_utc = datetime.now(timezone.utc)
+            history_end_aware = _from_db_utc(history_end)
+            grace_applied = history_end_aware <= now_utc
+            target_expires_at = (
+                _to_db_utc(now_utc + timedelta(days=1)) if grace_applied else history_end
+            )
 
             await conn.execute(
                 """
@@ -3120,7 +3141,7 @@ async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
                 WHERE telegram_id = $1
                 """,
                 telegram_id,
-                correct_end,
+                target_expires_at,
             )
             after = await conn.fetchrow(
                 "SELECT expires_at, is_bypass_only, subscription_type, source FROM subscriptions WHERE telegram_id = $1",
@@ -3130,6 +3151,8 @@ async def fix_bypass_overwrite_victim(telegram_id: int) -> Dict[str, Any]:
     return {
         "ok": True,
         "telegram_id": telegram_id,
+        "grace_applied": grace_applied,
+        "history_end_date": history_end,
         "before": dict(before),
         "after": dict(after) if after else None,
     }

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { endpoints, ApiError } from "@/lib/api";
 import { fmtNum, fmtRub } from "@/lib/format";
-import { toast } from "@/components/Toaster";
+import { toast } from "@/store/toast";
 
 // Bypass-audit — таблица пострадавших от бага «premium на 10 лет».
 // Backend (см. database/admin.py:get_bypass_overwrite_victims) ловит
@@ -370,7 +370,8 @@ function VictimRow({
 }) {
   const currDays = daysDiff(v.current_expires_at);
   const propDays = daysDiff(v.proposed_expires_at);
-  const propIsExpired = propDays != null && propDays < 0;
+  const historyDays = daysDiff(v.history_end_date);
+  const grace = v.grace_will_apply;
   const totalPaidRub = v.payments.reduce((a, p) => a + (p.amount_rubles || 0), 0);
 
   return (
@@ -425,31 +426,27 @@ function VictimRow({
           <ChevronRight className="h-3 w-3 shrink-0 text-fg-subtle" />
           <div
             className={
-              "rounded-lg px-2.5 py-1 text-right " +
-              (propIsExpired
-                ? "border border-slate-200 bg-slate-50"
-                : "border border-emerald-200 bg-emerald-50")
+              "rounded-lg px-2.5 py-1 text-right border " +
+              (grace
+                ? "border-sky-200 bg-sky-50"
+                : "border-emerald-200 bg-emerald-50")
             }
           >
             <div
               className={
                 "text-[9px] font-medium uppercase tracking-wider " +
-                (propIsExpired ? "text-slate-500" : "text-emerald-700")
+                (grace ? "text-sky-700" : "text-emerald-700")
               }
             >
-              Будет
+              {grace ? "Grace +1д" : "Будет"}
             </div>
             <div
               className={
                 "text-xs font-semibold tabular-nums " +
-                (propIsExpired ? "text-slate-700" : "text-emerald-900")
+                (grace ? "text-sky-900" : "text-emerald-900")
               }
             >
-              {propDays != null
-                ? propIsExpired
-                  ? `истёк ${Math.abs(propDays).toLocaleString("ru-RU")} дн назад`
-                  : `+${propDays.toLocaleString("ru-RU")} дн`
-                : "—"}
+              {propDays != null ? `+${propDays.toLocaleString("ru-RU")} дн` : "—"}
             </div>
           </div>
         </div>
@@ -489,16 +486,22 @@ function VictimRow({
               <KV label="type" value={v.current_subscription_type ?? "—"} />
               <KV label="source" value={v.current_source ?? "—"} />
             </DetailBlock>
-            <DetailBlock title="Будет применено" tone={propIsExpired ? "muted" : "success"}>
+            <DetailBlock title="Будет применено" tone={grace ? "info" : "success"}>
               <KV label="expires_at" value={fmtDateTime(v.proposed_expires_at)} />
               <KV
-                label={propIsExpired ? "истёк" : "через"}
-                value={
-                  propDays != null
-                    ? `${Math.abs(propDays).toLocaleString("ru-RU")} дн`
-                    : "—"
-                }
+                label="через"
+                value={propDays != null ? `${propDays.toLocaleString("ru-RU")} дн` : "—"}
               />
+              {grace && (
+                <KV
+                  label="grace"
+                  value={
+                    historyDays != null
+                      ? `+1 день (история истекла ${Math.abs(historyDays).toLocaleString("ru-RU")} дн назад)`
+                      : "+1 день"
+                  }
+                />
+              )}
               <KV label="is_bypass_only" value="FALSE" />
               <KV label="source" value="payment (если был bypass_only)" />
               <KV label="источник" value={v.last_paid_action_type ?? "—"} />
@@ -618,7 +621,7 @@ function DetailBlock({
   children,
 }: {
   title: string;
-  tone: "warning" | "success" | "muted";
+  tone: "warning" | "success" | "muted" | "info";
   children: React.ReactNode;
 }) {
   const ringClass =
@@ -626,6 +629,8 @@ function DetailBlock({
       ? "border-amber-200 bg-amber-50/50"
       : tone === "success"
       ? "border-emerald-200 bg-emerald-50/50"
+      : tone === "info"
+      ? "border-sky-200 bg-sky-50/50"
       : "border-slate-200 bg-slate-50/50";
   return (
     <div className={`rounded-xl border ${ringClass} p-3`}>
