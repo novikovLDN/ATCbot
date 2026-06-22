@@ -587,10 +587,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
     await state.set_state(PurchaseState.choose_tariff)
     
     text = (
-        f"💎 <b>Выберите тариф</b>\n\n"
+        f'<tg-emoji emoji-id="5427168083074628963">💎</tg-emoji> <b>Выберите тариф</b>\n\n'
         f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
         f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-        f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
+        f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n'
         f"<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>"
     )
 
@@ -606,7 +606,7 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             f"Для основной подписки выберите тариф:\n\n"
             f"{i18n_get_text(language, 'buy.tariff_basic')}\n\n"
             f"{i18n_get_text(language, 'buy.tariff_plus')}\n\n"
-            f"🚀 <b>Комбо</b> — VPN + обход в одном пакете\n"
+            f'<tg-emoji emoji-id="5445284980978621387">🚀</tg-emoji> <b>Комбо</b> — VPN + обход в одном пакете\n'
             f"<blockquote>Трафик обхода включён · от 329 ₽/мес</blockquote>"
         )
 

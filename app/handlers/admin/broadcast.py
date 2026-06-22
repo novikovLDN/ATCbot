@@ -649,8 +649,9 @@ async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMCont
     chat_id = callback.message.chat.id if callback.message else telegram_id
 
     try:
-        # 1) эмодзи 👀 — интрига
-        await callback.bot.send_message(
+        # 1) эмодзи 👀 — интрига. Сохраняем message_id, чтобы удалить
+        # его одновременно с появлением reveal-сообщения через 2 сек.
+        eyes_msg = await callback.bot.send_message(
             chat_id,
             _GIFT_REVEAL_EMOJI,
             parse_mode="HTML",
@@ -659,10 +660,18 @@ async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMCont
         # 2) держим паузу 2 секунды для эффекта
         await asyncio.sleep(2.0)
 
-        # 3) raveal-сообщение с подарком
+        # 3) удаляем «👀» (исчезает) и тут же шлём reveal — визуально
+        # одно сменяется другим. Если delete упал (юзер сам удалил
+        # сообщение или Telegram отказал) — это не критично, продолжаем.
+        try:
+            await callback.bot.delete_message(chat_id, eyes_msg.message_id)
+        except Exception:
+            pass
+
+        # 4) raveal-сообщение с подарком — жирным
         await callback.bot.send_message(
             chat_id,
-            f"Для тебя подарок 20% скидка на любую подписку! {_GIFT_REVEAL_PRESENT}",
+            f"<b>Для тебя подарок 20% скидка на любую подписку!</b> {_GIFT_REVEAL_PRESENT}",
             parse_mode="HTML",
         )
 
