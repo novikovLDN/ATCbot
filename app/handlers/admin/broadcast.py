@@ -689,13 +689,38 @@ async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMCont
 
         # 6) показываем экран выбора тарифов — get_user_discount внутри
         # автоматически подставит -20% на basic / plus / combo_basic /
-        # combo_plus.
+        # combo_plus. Маркер `from_broadcast=True` нужен, чтобы кнопка
+        # «Назад» с экрана выбора периода возвращала на этот же экран
+        # выбора тарифов (а не на «Управление подпиской», куда
+        # `menu_buy_vpn` уводит юзеров с активной подпиской).
+        await state.update_data(from_broadcast=True)
         from app.handlers.common.screens import show_tariffs_main_screen
         await show_tariffs_main_screen(callback, state)
 
     except Exception as e:
         logger.exception(f"Error in broadcast_gift_reveal: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
+
+@admin_broadcast_router.callback_query(F.data == "broadcast_back_to_tariffs")
+async def callback_broadcast_back_to_tariffs(callback: CallbackQuery, state: FSMContext):
+    """«Назад» с экрана выбора периода → обратно на экран выбора тарифа.
+
+    Используется только в broadcast-flow (gift_reveal и подобных), где
+    юзер ходит между «выбрать тариф → посмотреть период → назад». В
+    обычном flow «Назад» по-прежнему ведёт на menu_buy_vpn («Управление
+    подпиской»), это поведение не меняется.
+
+    Маркер `from_broadcast=True` НЕ снимаем — юзер ещё внутри flow и
+    может зайти в другой тариф. Снимется естественно при выходе из
+    state (main menu, cabinet и т.п.).
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    from app.handlers.common.screens import show_tariffs_main_screen
+    await show_tariffs_main_screen(callback, state)
 
 
 @admin_broadcast_router.callback_query(F.data.startswith("broadcast_promo_traffic_ext:"))
