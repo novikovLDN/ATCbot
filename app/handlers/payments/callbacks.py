@@ -509,8 +509,26 @@ async def callback_tariff_type(callback: CallbackQuery, state: FSMContext):
             callback_data=f"period:{tariff_type}:{period_days}"
         )])
     
-    # Кнопка назад: для бизнес-тарифов → каталог бизнес, для обычных → главный экран тарифов
-    back_callback = "corporate_access_request" if config.is_biz_tariff(tariff_type) else "menu_buy_vpn"
+    # Кнопка назад:
+    # — бизнес-тарифы → каталог бизнес;
+    # — обычные → по умолчанию `menu_buy_vpn` (показывает либо экран
+    #   «Управление подпиской» если есть активная подписка, либо
+    #   выбор тарифа). В flow из рассылки (gift_reveal etc.) юзер
+    #   уже на экране выбора тарифа, и «Назад» должна возвращать
+    #   ровно туда же — иначе он попадает на управление подпиской.
+    #   Маркер `from_broadcast` ставится при заходе из broadcast-CTA
+    #   (callback_broadcast_gift_reveal) и переживает все клики
+    #   tariff/period пока FSM-state не сброшен.
+    fsm_data = await state.get_data()
+    from_broadcast = bool(fsm_data.get("from_broadcast"))
+
+    if config.is_biz_tariff(tariff_type):
+        back_callback = "corporate_access_request"
+    elif from_broadcast:
+        back_callback = "broadcast_back_to_tariffs"
+    else:
+        back_callback = "menu_buy_vpn"
+
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "common.back"),
         callback_data=back_callback
