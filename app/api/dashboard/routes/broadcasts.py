@@ -183,6 +183,7 @@ _BUTTON_TYPES = {
     "buy",
     "promo_buy",
     "promo_traffic",
+    "gift_reveal",
     "support",
     "channel",
     "referral",
@@ -460,6 +461,20 @@ def _build_reply_markup(
             rows.append([InlineKeyboardButton(
                 text=label,
                 callback_data=f"broadcast_promo_traffic:{broadcast_id}",
+            )])
+        elif btn == "gift_reveal":
+            # «Посмотреть подарок» — теплично-CTA. Хардкоженная фишка:
+            # 20% скидка на подписку, 48 часов. Параметры discount_percent /
+            # discount_hours дашборда не используются — здесь свой реверс-
+            # сюрприз flow с premium-эмодзи и delayed reveal в handler'е.
+            # Красная кнопка задаётся явным style="danger" (см. monkey-patch
+            # в app/utils/button_defaults.py — fallback по text-pattern
+            # не сработает на эту фразу, передаём руками).
+            rows.append([InlineKeyboardButton(
+                text="Посмотреть подарок",
+                callback_data=f"broadcast_gift_reveal:{broadcast_id}",
+                style="danger",
+                icon_custom_emoji_id="5210956306952758910",
             )])
         elif btn == "support":
             rows.append([InlineKeyboardButton(

@@ -22,6 +22,10 @@ const BUTTON_OPTIONS = [
   { key: "buy", label: "🛒 Купить" },
   { key: "promo_buy", label: "🎁 Купить со скидкой (нужен %)" },
   { key: "promo_traffic", label: "📊 Купить ГБ со скидкой (нужен %)" },
+  // gift_reveal — фиксированный 20%/48ч-подарок с reveal-сценкой
+  // (эмодзи 👀 → 2с → 🎁 → экран тарифов со скидкой). % из формы
+  // не используется, поэтому не требует discount_percent.
+  { key: "gift_reveal", label: "👀 Посмотреть подарок (−20% / 48ч)" },
   { key: "support", label: "💬 Поддержка" },
   { key: "channel", label: "📢 Канал" },
   { key: "referral", label: "👥 Пригласить друга" },
