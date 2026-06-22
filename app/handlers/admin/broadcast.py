@@ -4,7 +4,7 @@ Admin broadcast handlers: create broadcasts, A/B tests, no-subscription broadcas
 import logging
 import asyncio
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramRetryAfter
@@ -604,6 +604,88 @@ async def callback_broadcast_promo_traffic(callback: CallbackQuery):
 
     except Exception as e:
         logger.exception(f"Error applying broadcast traffic promo discount: {e}")
+        await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Gift Reveal — кнопка «Посмотреть подарок» в рассылке.
+#
+# UX flow:
+#  1. Юзер кликает красную кнопку «Посмотреть подарок» в сообщении
+#     рассылки.
+#  2. В чат отправляется premium-эмодзи 👀 (id 5210956306952758910) —
+#     один символ, эффект интриги.
+#  3. Через 2 секунды — текст «Для тебя подарок 20% скидка на любую
+#     подписку!» с premium 🎁 (id 5449800250032143374).
+#  4. Через ~30 ms (просто отделить от reveal-сообщения, не моргание) —
+#     экран выбора тарифов с уже применённой скидкой.
+#
+# Скидка: 20%, 48 часов. Параметры зафиксированы (не из dashboard-
+# конфига broadcast'а) — это тематический подарок, единый для всех
+# таких кнопок.
+#
+# Скидка применяется через стандартную `create_user_discount` — она
+# работает на все основные тарифы (basic / plus / combo_basic /
+# combo_plus) автоматически на экране тарифов через `get_user_discount`.
+
+_GIFT_REVEAL_PERCENT = 20
+_GIFT_REVEAL_HOURS = 48
+_GIFT_REVEAL_EMOJI = '<tg-emoji emoji-id="5210956306952758910">👀</tg-emoji>'
+_GIFT_REVEAL_PRESENT = '<tg-emoji emoji-id="5449800250032143374">🎁</tg-emoji>'
+
+
+@admin_broadcast_router.callback_query(F.data.startswith("broadcast_gift_reveal:"))
+async def callback_broadcast_gift_reveal(callback: CallbackQuery, state: FSMContext):
+    """Кликнули «Посмотреть подарок» в рассылке — играем reveal-сценку
+    и применяем 20%-скидку на 48ч, открываем экран тарифов.
+
+    Тематически: интрига 2s, потом раскрытие. Скидка зашита,
+    параметры broadcast_id не нужны (но принимаем, чтобы дёшево
+    аудитить какая рассылка сгенерировала клик).
+    """
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    chat_id = callback.message.chat.id if callback.message else telegram_id
+
+    try:
+        # 1) эмодзи 👀 — интрига
+        await callback.bot.send_message(
+            chat_id,
+            _GIFT_REVEAL_EMOJI,
+            parse_mode="HTML",
+        )
+
+        # 2) держим паузу 2 секунды для эффекта
+        await asyncio.sleep(2.0)
+
+        # 3) raveal-сообщение с подарком
+        await callback.bot.send_message(
+            chat_id,
+            f"Для тебя подарок 20% скидка на любую подписку! {_GIFT_REVEAL_PRESENT}",
+            parse_mode="HTML",
+        )
+
+        # 4) применяем скидку 20% / 48ч
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=_GIFT_REVEAL_HOURS)
+        await database.create_user_discount(
+            telegram_id=telegram_id,
+            discount_percent=_GIFT_REVEAL_PERCENT,
+            expires_at=expires_at,
+            created_by=config.ADMIN_TELEGRAM_ID,
+        )
+
+        # 5) короткая пауза перед экраном тарифов — отделить визуально
+        await asyncio.sleep(0.03)
+
+        # 6) показываем экран выбора тарифов — get_user_discount внутри
+        # автоматически подставит -20% на basic / plus / combo_basic /
+        # combo_plus.
+        from app.handlers.common.screens import show_tariffs_main_screen
+        await show_tariffs_main_screen(callback, state)
+
+    except Exception as e:
+        logger.exception(f"Error in broadcast_gift_reveal: {e}")
         await callback.answer("Произошла ошибка, попробуйте позже", show_alert=True)
 
 
