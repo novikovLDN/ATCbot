@@ -158,9 +158,21 @@ def should_send_reminder(
     
     time_until_expiry = calculate_time_until_expiry(expires_at, now)
 
-    # Skip trial subscriptions — they have their own notification system (trial_notifications.py)
+    # Skip trial subscriptions — они обслуживаются отдельным worker'ом
+    # (trial_notifications.py), который ориентируется на
+    # users.trial_expires_at, а не на subscriptions.expires_at.
+    #
+    # ВАЖНО: триальная subscription_row обычно создаётся с
+    #   subscription_type='basic' (или 'plus'), source='trial'.
+    # Поэтому фильтровать только по subscription_type недостаточно —
+    # юзеры с триалом пройдут фильтр и получат paid-reminder
+    # параллельно с trial-reminder'ом (видели в логах двойные
+    # уведомления «Пробный период заканчивается завтра» + «Подписка
+    # заканчивается завтра» с разницей в 4 минуты). Дополнительно
+    # ловим триал по source.
     subscription_type = (subscription.get("subscription_type") or "").strip().lower()
-    if subscription_type == "trial":
+    source = (subscription.get("source") or "").strip().lower()
+    if subscription_type == "trial" or source == "trial":
         return ReminderDecision(
             should_send=False,
             reminder_type=None,
