@@ -611,6 +611,14 @@ async def callback_setup_step1(callback: CallbackQuery):
     buttons = []
 
     if platform in ("ios", "macos"):
+        # Incy — на первом месте (по запросу), только для iOS.
+        if platform == "ios":
+            incy_url = _DOWNLOAD_LINKS.get("ios", {}).get("incy")
+            if incy_url:
+                buttons.append([InlineKeyboardButton(
+                    text="📲 Скачать Incy",
+                    url=incy_url,
+                )])
         buttons.append([InlineKeyboardButton(
             text=i18n_get_text(language, "setup.install_happ_ru"),
             url=_IOS_HAPP_LINKS["ru"],
@@ -619,13 +627,6 @@ async def callback_setup_step1(callback: CallbackQuery):
             text=i18n_get_text(language, "setup.install_happ_global"),
             url=_IOS_HAPP_LINKS["global"],
         )])
-        if platform == "ios":
-            incy_url = _DOWNLOAD_LINKS.get("ios", {}).get("incy")
-            if incy_url:
-                buttons.append([InlineKeyboardButton(
-                    text="📲 Скачать Incy",
-                    url=incy_url,
-                )])
     elif platform == "android":
         links = _DOWNLOAD_LINKS.get("android", {})
         if "happ" in links:
@@ -716,6 +717,16 @@ async def callback_setup_step2(callback: CallbackQuery):
     buttons = []
 
     # === Auto-setup deeplinks ===
+    # Layout по запросу:
+    #   [VPN (Happ)]      [Incy VPN]       — primary | success
+    #   [Обход (Happ)]    [Incy Обход]     — primary | success
+    #   [Готово]                            — danger
+    #   [Установить вручную]                — primary
+    #   [Нужна помощь]
+    #   [Назад]
+    # Incy-кнопки только на iOS. Без bypass_url вторая строка
+    # отсутствует. Без sub_url — обе строки отсутствуют (вообще
+    # не должно случаться, но safeguard).
     if sub_url:
         from urllib.parse import quote, urlparse
         if config.PUBLIC_BASE_URL:
@@ -724,43 +735,47 @@ async def callback_setup_step2(callback: CallbackQuery):
             parsed = urlparse(config.WEBHOOK_URL)
             base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-        # VPN key buttons
-        buttons.append([InlineKeyboardButton(
-            text="🔑 Добавить VPN ключ",
+        is_ios = (platform == "ios")
+
+        # Ряд 1: VPN-ключ (Happ + Incy)
+        row_vpn = [InlineKeyboardButton(
+            text="Добавить VPN (Happ)",
             url=f"{base_url}/open/happ?url={quote(sub_url, safe='')}",
-        )])
-        # Bypass key buttons
-        if bypass_url:
-            buttons.append([InlineKeyboardButton(
-                text="🌐 Добавить обход ключ",
-                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
-            )])
-        # Incy — iOS-only, по тому же сценарию: жмёт юзер → редирект
-        # на /open/incy → наш HTML-промежуточник кладёт в
-        # window.location ссылку incy://add/<plain_sub_url>, ОС
-        # ловит схему, открывает Incy с импортом подписки.
-        if platform == "ios":
-            buttons.append([InlineKeyboardButton(
-                text="💚 Добавить в Incy",
+            style="primary",
+        )]
+        if is_ios:
+            row_vpn.append(InlineKeyboardButton(
+                text="Incy VPN",
                 url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
-            )])
-            # Incy для bypass-ключа — тот же deeplink-механизм, но с
-            # bypass_url. Показываем только если bypass-ключ выдан
-            # (юзер купил пакет ГБ обхода или комбо).
-            if bypass_url:
-                buttons.append([InlineKeyboardButton(
-                    text="💚 Incy Обход",
+                style="success",
+            ))
+        buttons.append(row_vpn)
+
+        # Ряд 2: Обход (Happ + Incy) — только если есть bypass_url
+        if bypass_url:
+            row_bypass = [InlineKeyboardButton(
+                text="Добавить Обход (Happ)",
+                url=f"{base_url}/open/happ?url={quote(bypass_url, safe='')}",
+                style="primary",
+            )]
+            if is_ios:
+                row_bypass.append(InlineKeyboardButton(
+                    text="Incy Обход",
                     url=f"{base_url}/open/incy?url={quote(bypass_url, safe='')}",
-                )])
+                    style="success",
+                ))
+            buttons.append(row_bypass)
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_done"),
         callback_data="setup_done",
+        style="danger",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_manual"),
         callback_data=f"setup_manual:{platform}",
+        style="primary",
     )])
     buttons.append([InlineKeyboardButton(
         text=i18n_get_text(language, "setup.btn_need_help"),
