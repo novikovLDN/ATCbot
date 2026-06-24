@@ -115,6 +115,10 @@ async def callback_buy_vpn(callback: CallbackQuery, state: FSMContext):
             icon_custom_emoji_id="5199785165735367039",  # ⚡️
         )],
         [InlineKeyboardButton(
+            text="🎁 Подарить VPN",
+            callback_data="gift_subscription",
+        )],
+        [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
             callback_data="menu_profile",
         )],
