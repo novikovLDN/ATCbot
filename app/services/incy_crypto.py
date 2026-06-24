@@ -158,36 +158,37 @@ async def _spawn(url: str) -> Optional[str]:
 async def to_incy_link(url: Optional[str]) -> Optional[str]:
     """Wrap a plain subscription URL into an Incy-importable deep link.
 
-    Right now we return `incy://add/<plain_url>`:
+    Поведение:
+      1. Сначала пробуем `incy://crypt1/<payload>` через Node-sidecar
+         (@incy/link-encoder, AES-256-GCM). Это рекомендуемый формат
+         с офиц. сайта Incy — не палит домен подписки в публичных
+         чатах, обходит модерацию и регулярки.
+      2. Если sidecar недоступен (no node, no package, или клиент
+         клиента Incy ещё не понимает crypt1) → graceful fallback на
+         `incy://add/<plain_url>`. Универсальный pre-crypt1 формат:
+         «if the data after incy://add/ is an http(s) URL, the
+         profile is downloaded from this URL» — работает на всех
+         выпущенных Incy-клиентах.
 
-      • Universal across every shipped Incy version (iOS, Android,
-        Desktop). incy.gitbook.io docs say: «if the data after
-        incy://add/ is an http(s) URL, the profile is downloaded
-        from this URL» — no decoder version required, no shared
-        keymat required.
-      • Doesn't need the Node sidecar → no fragile shell-out, can't
-        be killed by a missing node_modules, broken docker layer,
-        unrooted .dockerignore, npm registry hiccup, etc.
+    Trade-off: при fallback'е URL в чистом виде попадает в deeplink.
+    Это менее DPI-устойчиво, но гарантирует что юзер не упрётся в
+    «Could not determine link type» если что-то пошло не так с
+    sidecar'ом.
 
-    Trade-off: the subscription URL is plain-text inside the deep
-    link. For Happ we use the sealed `happ://crypt4/<base64>`,
-    so plain-text on Incy is slightly worse for DPI-evasion. We
-    accept that until a published Incy client release actually
-    decodes incy://crypt1/ — the npm @incy/link-encoder package's
-    keymat fingerprint b6bf708471cc… must match the keymat baked
-    into the client app for crypt1 to decode at all. INCY-DEV
-    published the npm package on 2026-06-06 but the App Store
-    iOS client (v2.2.1 in user's screenshot) didn't ship that
-    keymat yet, so crypt1 links surface as
-    «Could not determine link type».
-
-    Crypt1 plumbing below (_spawn, selftest, to_incy_link_crypt1)
-    is kept callable so the switch is a one-liner once a known-good
-    Incy client release lands.
+    Когда Incy выпустит crypt2/ — `to_incy_link_crypt1` останется
+    работать вечно по обещанию INCY-DEV: «клиенты никогда не удаляют
+    старые схемы из decode-таблицы». Существующие ссылки в чатах
+    продолжают открываться.
     """
-    from urllib.parse import quote
     if not url:
         return None
+    # 1) Пробуем crypt1 через sidecar — основной путь.
+    crypt1 = await to_incy_link_crypt1(url)
+    if crypt1:
+        return crypt1
+    # 2) Fallback: incy://add/<plain_url>. Подходит для любых Incy-
+    # клиентов, не требует Node на сервере.
+    from urllib.parse import quote
     safe = quote(url, safe="/:?&=@%+")
     return f"incy://add/{safe}"
 
