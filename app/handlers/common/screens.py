@@ -504,10 +504,12 @@ async def show_profile(message_or_query, language: str):
                         filled = int(ratio * length)
                         return "🤍" * filled + "🩶" * (length - filled)
 
-                    from app.services import happ_crypto
-                    sub_url = happ_crypto.format_for_user(
-                        traffic.get("subscriptionUrl", "")
-                    )
+                    from app.services import happ_crypto, incy_crypto
+                    raw_sub_url = traffic.get("subscriptionUrl", "") or ""
+                    happ_link = happ_crypto.format_for_user(raw_sub_url)
+                    # Incy crypt1 через Node-sidecar; если sidecar упал —
+                    # вернёт fallback `incy://add/<plain>` либо None.
+                    incy_link = await incy_crypto.to_incy_link(raw_sub_url) if raw_sub_url else None
 
                     traffic_block = (
                         f"<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n"
@@ -515,8 +517,18 @@ async def show_profile(message_or_query, language: str):
                         f"{_bar(used, limit_bytes)} {pct}%"
                     )
                     text += f"\n\n<blockquote>{traffic_block}</blockquote>"
-                    if sub_url:
-                        text += f"\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>"
+                    if happ_link:
+                        text += (
+                            "\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji>"
+                            " <b>Ключ обхода Happ</b> <i>(нажми — скопируется)</i>\n"
+                            f"<blockquote expandable><code>{happ_link}</code></blockquote>"
+                        )
+                    if incy_link:
+                        text += (
+                            "\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji>"
+                            " <b>Ключ обхода Incy</b> <i>(нажми — скопируется)</i>\n"
+                            f"<blockquote expandable><code>{incy_link}</code></blockquote>"
+                        )
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")
