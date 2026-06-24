@@ -744,6 +744,14 @@ async def callback_setup_step2(callback: CallbackQuery):
                 text="💚 Добавить в Incy",
                 url=f"{base_url}/open/incy?url={quote(sub_url, safe='')}",
             )])
+            # Incy для bypass-ключа — тот же deeplink-механизм, но с
+            # bypass_url. Показываем только если bypass-ключ выдан
+            # (юзер купил пакет ГБ обхода или комбо).
+            if bypass_url:
+                buttons.append([InlineKeyboardButton(
+                    text="💚 Incy Обход",
+                    url=f"{base_url}/open/incy?url={quote(bypass_url, safe='')}",
+                )])
 
     # === Bottom buttons ===
     buttons.append([InlineKeyboardButton(
