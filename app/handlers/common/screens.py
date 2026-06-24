@@ -638,6 +638,10 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
             callback_data="buy_combo"
         )],
         [InlineKeyboardButton(
+            text="🎁 Подарить VPN",
+            callback_data="gift_subscription"
+        )],
+        [InlineKeyboardButton(
             text="🎟 У меня промокод",
             callback_data="enter_promo"
         )],
