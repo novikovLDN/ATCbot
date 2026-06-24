@@ -1081,25 +1081,40 @@ async def callback_setup_manual(callback: CallbackQuery):
 
     connect_text = i18n_get_text(language, f"setup.connect_{platform}")
 
-    # Build keys section. Only the Happ-sealed crypt4 link goes here —
-    # Incy users have the dedicated «💚 Добавить в Incy» button on the
-    # one-tap setup screen (step2), they don't need a raw key block too.
-    # Showing the same key for two apps just adds noise on the manual
-    # screen for the 99% of users who don't need a fallback.
-    from app.services import happ_crypto
+    # Build keys section.
+    # — Happ-ключи (sealed crypt4) для всех платформ;
+    # — Incy-ключи (crypt1) только iOS (Incy iOS-only).
+    # Все ключи в свёрнутой цитате (blockquote expandable) — экран
+    # компактный по умолчанию, юзер раскрывает только нужный ключ.
+    from app.services import happ_crypto, incy_crypto
 
-    def _key_block(label_key: str, raw_url: str) -> str:
+    def _happ_key_block(label_key: str, raw_url: str) -> str:
         happ_link = happ_crypto.format_for_user(raw_url)
         return (
             "\n" + i18n_get_text(language, label_key) + "\n"
             f"<blockquote expandable><code>{happ_link}</code></blockquote>"
         )
 
+    async def _incy_key_block(label_key: str, raw_url: str) -> str:
+        incy_link = await incy_crypto.to_incy_link(raw_url)
+        # Если sidecar не вернул даже fallback — пропускаем блок.
+        if not incy_link:
+            return ""
+        return (
+            "\n" + i18n_get_text(language, label_key) + "\n"
+            f"<blockquote expandable><code>{incy_link}</code></blockquote>"
+        )
+
     keys_section = ""
     if sub_url:
-        keys_section += _key_block("setup.key_vpn_label", sub_url)
+        keys_section += _happ_key_block("setup.key_vpn_label", sub_url)
     if bypass_url:
-        keys_section += _key_block("setup.key_bypass_label", bypass_url)
+        keys_section += _happ_key_block("setup.key_bypass_label", bypass_url)
+    if platform == "ios":
+        if sub_url:
+            keys_section += await _incy_key_block("setup.key_vpn_incy_label", sub_url)
+        if bypass_url:
+            keys_section += await _incy_key_block("setup.key_bypass_incy_label", bypass_url)
 
     if keys_section:
         text = f"{connect_text}\n{keys_section}"
