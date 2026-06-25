@@ -1278,10 +1278,12 @@ async def _show_qr_app_choice(callback: CallbackQuery, platform: str, kind: str,
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.qr_app_btn_incy"),
             callback_data=f"setup_qr_app:incy:{kind}:{platform}",
+            style="success",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "setup.qr_app_btn_happ"),
             callback_data=f"setup_qr_app:happ:{kind}:{platform}",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
