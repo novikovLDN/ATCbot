@@ -370,7 +370,7 @@ LANG = {
     'setup.qr_choose_type': "📲 <b>Добавить устройство</b>\n\nВыберите тип подключения:",
     'setup.qr_choose_app': "📲 <b>Добавить устройство</b>\n\nВыберите приложение, в котором будете подключаться:",
     'setup.qr_app_btn_incy': "💚 Incy",
-    'setup.qr_app_btn_happ': "🟦 Happ",
+    'setup.qr_app_btn_happ': "Happ",
     'setup.qr_standard_btn': "Обычные сервера (безлимит)",
     'setup.qr_bypass_btn': "Обход белых списков",
     'setup.qr_bypass_unavailable': "❌ Обход белых списков недоступен.\n\nУбедитесь, что у вас есть активная подписка и трафик обхода.",
