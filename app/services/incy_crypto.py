@@ -43,6 +43,16 @@ _SCRIPT_PATH = (
 _disabled: bool = False
 _disabled_reason: Optional[str] = None
 
+# In-memory cache: sub_url → ready incy://crypt1/<…> link.
+# Профиль зовёт `to_incy_link()` при каждом открытии экрана; без кэша
+# каждый рендер форкал бы Node-sidecar (~150 ms на холодный старт),
+# что блокирует event-loop и юзерам казалось «бот не отвечает».
+# sub_url меняется только при выдаче новой подписки → кэш почти не
+# инвалидируется. Лимит 4096 — защита от утечки если URL-генератор
+# где-то начнёт сыпать вариации.
+_link_cache: dict[str, str] = {}
+_LINK_CACHE_LIMIT = 4096
+
 
 def _mark_disabled(reason: str) -> None:
     global _disabled, _disabled_reason
@@ -125,7 +135,11 @@ async def _spawn(url: str) -> Optional[str]:
         return None
 
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        # 2s достаточно: node-startup ~150 ms + AES-GCM <10 ms.
+        # Раньше было 10s — при флапающем sidecar event-loop тормозит
+        # для всех юзеров одновременно. 2s — комфортный потолок, и
+        # все hot-path-callers оборачивают вызов в кэш.
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2.0)
     except asyncio.TimeoutError:
         try:
             proc.kill()
@@ -182,15 +196,41 @@ async def to_incy_link(url: Optional[str]) -> Optional[str]:
     """
     if not url:
         return None
+    # 0) Кэш: hot-path-экраны (профиль, ручная установка) дёргают
+    # функцию при каждом рендере; без кэша каждый раз форкаем Node
+    # → блокируем event-loop. Кэш сохраняет результат пожизненно
+    # внутри процесса (sub_url меняется только при выдаче новой
+    # подписки), при превышении лимита самый старый вытесняется.
+    cached = _link_cache.get(url)
+    if cached:
+        return cached
+
     # 1) Пробуем crypt1 через sidecar — основной путь.
     crypt1 = await to_incy_link_crypt1(url)
     if crypt1:
+        _store_in_cache(url, crypt1)
         return crypt1
+
     # 2) Fallback: incy://add/<plain_url>. Подходит для любых Incy-
     # клиентов, не требует Node на сервере.
     from urllib.parse import quote
     safe = quote(url, safe="/:?&=@%+")
-    return f"incy://add/{safe}"
+    fallback = f"incy://add/{safe}"
+    _store_in_cache(url, fallback)
+    return fallback
+
+
+def _store_in_cache(key: str, value: str) -> None:
+    """FIFO-вытеснение при переполнении кэша — простой защитник
+    от утечки если генератор URL'ов где-то начнёт плодить варианты."""
+    if len(_link_cache) >= _LINK_CACHE_LIMIT:
+        # Удаляем самый старый ключ (dict сохраняет порядок вставки в 3.7+)
+        try:
+            oldest = next(iter(_link_cache))
+            del _link_cache[oldest]
+        except StopIteration:
+            pass
+    _link_cache[key] = value
 
 
 async def to_incy_link_crypt1(url: Optional[str]) -> Optional[str]:

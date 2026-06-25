@@ -504,10 +504,11 @@ async def show_profile(message_or_query, language: str):
                         filled = int(ratio * length)
                         return "🤍" * filled + "🩶" * (length - filled)
 
-                    from app.services import happ_crypto
-                    sub_url = happ_crypto.format_for_user(
-                        traffic.get("subscriptionUrl", "")
-                    )
+                    # Ключи обхода (Happ + Incy) на этом экране намеренно
+                    # не показываются — они доступны на экране подключения
+                    # (callback_setup_step2 / callback_setup_manual). На
+                    # профиле остаётся только traffic-block с прогресс-баром,
+                    # чтобы экран не разрастался.
 
                     traffic_block = (
                         f"<tg-emoji emoji-id=\"5190806721286657692\">📊</tg-emoji> <b>Обход блокировок</b> 🇷🇺\n"
@@ -515,8 +516,6 @@ async def show_profile(message_or_query, language: str):
                         f"{_bar(used, limit_bytes)} {pct}%"
                     )
                     text += f"\n\n<blockquote>{traffic_block}</blockquote>"
-                    if sub_url:
-                        text += f"\n\n<tg-emoji emoji-id=\"5271604874419647061\">🔗</tg-emoji> <b>Ключ обхода</b> <i>(нажми — скопируется)</i>\n<blockquote expandable><code>{sub_url}</code></blockquote>"
 
                     if is_trial:
                         text += "\n\n💎 " + i18n_get_text(language, "traffic.trial_upgrade_hint")

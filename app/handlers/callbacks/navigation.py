@@ -1242,85 +1242,160 @@ async def callback_setup_qr(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("setup_qr_standard:"))
 async def callback_setup_qr_standard(callback: CallbackQuery):
-    """QR-код обычных серверов."""
+    """Выбор приложения (Happ / Incy) для обычных серверов."""
     try:
         await callback.answer()
     except Exception:
         pass
 
     platform = callback.data.split(":")[1]
-    telegram_id = callback.from_user.id
-    language = await resolve_user_language(telegram_id)
-
-    subscription = await database.get_subscription(telegram_id)
-    if subscription:
-        from app.services.user_subscription_links import get_user_primary_subscription_url
-        sub_url = await get_user_primary_subscription_url(telegram_id)
-    else:
-        sub_url = None
-
-    if not sub_url:
-        text = i18n_get_text(language, "get_key.no_subscription")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_qr:{platform}",
-        )]])
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
-        return
-
-    await _send_qr_screen(callback, platform, sub_url, language, label_key="setup.key_vpn_label")
+    language = await resolve_user_language(callback.from_user.id)
+    await _show_qr_app_choice(callback, platform, "standard", language)
 
 
 @router.callback_query(F.data.startswith("setup_qr_bypass:"))
 async def callback_setup_qr_bypass(callback: CallbackQuery):
-    """QR-код обхода белых списков."""
+    """Выбор приложения (Happ / Incy) для обхода белых списков."""
     try:
         await callback.answer()
     except Exception:
         pass
 
     platform = callback.data.split(":")[1]
+    language = await resolve_user_language(callback.from_user.id)
+    await _show_qr_app_choice(callback, platform, "bypass", language)
+
+
+async def _show_qr_app_choice(callback: CallbackQuery, platform: str, kind: str, language: str):
+    """Экран «Выберите приложение» — Incy / Happ.
+
+    kind: 'standard' (обычные сервера) либо 'bypass' (обход).
+    Кнопки ведут на единый хендлер setup_qr_app:{client}:{kind}:{platform},
+    который уже забирает URL подписки и рендерит QR через _send_qr_screen."""
+    text = i18n_get_text(language, "setup.qr_choose_app")
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.qr_app_btn_incy"),
+            callback_data=f"setup_qr_app:incy:{kind}:{platform}",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "setup.qr_app_btn_happ"),
+            callback_data=f"setup_qr_app:happ:{kind}:{platform}",
+        )],
+        [InlineKeyboardButton(
+            text=i18n_get_text(language, "common.back"),
+            callback_data=f"setup_qr:{platform}",
+        )],
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("setup_qr_app:"))
+async def callback_setup_qr_app(callback: CallbackQuery):
+    """QR-код подписки для выбранного приложения (Happ / Incy).
+
+    Формат callback'а: setup_qr_app:{client}:{kind}:{platform}
+      client  — 'happ' | 'incy'
+      kind    — 'standard' (обычные сервера) | 'bypass' (обход)
+      platform — ios/android/macos/windows (для back-навигации)
+    """
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        return
+    _, client, kind, platform = parts
+    if client not in ("happ", "incy") or kind not in ("standard", "bypass"):
+        return
+
     telegram_id = callback.from_user.id
     language = await resolve_user_language(telegram_id)
 
-    # Bypass key: available independently of main subscription
-    bypass_url = None
-    if config.REMNAWAVE_ENABLED:
-        from app.services import remnawave_api
-        rmn_uuid = await database.get_remnawave_uuid(telegram_id)
-        if rmn_uuid:
-            traffic = await remnawave_api.get_user_traffic(rmn_uuid)
-            if traffic:
-                bypass_url = traffic.get("subscriptionUrl", "") or None
+    if kind == "standard":
+        subscription = await database.get_subscription(telegram_id)
+        if subscription:
+            from app.services.user_subscription_links import get_user_primary_subscription_url
+            url = await get_user_primary_subscription_url(telegram_id)
+        else:
+            url = None
 
-    if not bypass_url:
-        text = i18n_get_text(language, "setup.qr_bypass_unavailable")
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_qr:{platform}",
-        )]])
-        await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
-        return
+        if not url:
+            text = i18n_get_text(language, "get_key.no_subscription")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data=f"setup_qr_standard:{platform}",
+            )]])
+            await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot)
+            return
 
-    await _send_qr_screen(callback, platform, bypass_url, language, label_key="setup.key_bypass_label")
+        label_key = "setup.key_vpn_incy_label" if client == "incy" else "setup.key_vpn_label"
+    else:
+        url = None
+        if config.REMNAWAVE_ENABLED:
+            from app.services import remnawave_api
+            rmn_uuid = await database.get_remnawave_uuid(telegram_id)
+            if rmn_uuid:
+                traffic = await remnawave_api.get_user_traffic(rmn_uuid)
+                if traffic:
+                    url = traffic.get("subscriptionUrl", "") or None
+
+        if not url:
+            text = i18n_get_text(language, "setup.qr_bypass_unavailable")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text=i18n_get_text(language, "common.back"),
+                callback_data=f"setup_qr_bypass:{platform}",
+            )]])
+            await safe_edit_text(callback.message, text, reply_markup=keyboard, bot=callback.bot, parse_mode="HTML")
+            return
+
+        label_key = "setup.key_bypass_incy_label" if client == "incy" else "setup.key_bypass_label"
+
+    await _send_qr_screen(
+        callback, platform, url, language,
+        label_key=label_key, client=client, kind=kind,
+    )
 
 
-async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, language: str, label_key: str):
+async def _send_qr_screen(
+    callback: CallbackQuery,
+    platform: str,
+    url: str,
+    language: str,
+    label_key: str,
+    client: str = "happ",
+    kind: str = "standard",
+):
     """Генерация QR-кода и отправка экрана с инструкцией.
 
-    QR и видимый под ним ключ — оба в crypt4-обёртке:
-    `happ://crypt4/<base64>`. Сырой `https://rmnw.atlassecure.ru/...`
-    юзеру не показывается ни в QR, ни в тексте — Happ всё равно
-    расшифрует крипто-ссылку и подтянет подписку (см. exact spec
-    in app/services/happ_crypto.py)."""
+    Happ → `happ://crypt4/<base64>` (pure-Python RSA-4096 sealing).
+    Incy → `incy://crypt1/<payload>` (AES-256-GCM через Node sidecar;
+    при недоступности sidecar'а incy_crypto само деградирует до
+    `incy://add/<plain_url>` — экран всё равно живой)."""
     telegram_id = callback.from_user.id
 
-    # Wrap once, reuse for both the QR payload AND the visible key
-    # block — guarantees they stay in sync. format_for_user falls back
-    # to the raw URL on any encryption failure, so the screen is
-    # never broken even if happ_crypto has a hiccup.
-    from app.services import happ_crypto
-    crypt_url = happ_crypto.format_for_user(url) or url
+    if client == "incy":
+        # incy_crypto.to_incy_link сам кэширует, делает graceful
+        # fallback и ловит исключения от sidecar'а. На совсем редкий
+        # случай (например, наша обёртка кинула TypeError) — ловим
+        # тут, чтобы экран всё равно отрендерился с сырой ссылкой.
+        from app.services import incy_crypto
+        try:
+            wrapped = await incy_crypto.to_incy_link(url)
+        except Exception:
+            wrapped = None
+        crypt_url = wrapped or url
+        instruction_key = "setup.qr_instruction_incy"
+    else:
+        # format_for_user сам падает в raw URL при ошибке шифрования,
+        # экран всегда отдаст рабочую ссылку.
+        from app.services import happ_crypto
+        crypt_url = happ_crypto.format_for_user(url) or url
+        instruction_key = "setup.qr_instruction"
 
     import qrcode
     qr = qrcode.QRCode(version=1, box_size=10, border=2)
@@ -1332,13 +1407,17 @@ async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, lang
     img.save(buf, format="PNG")
     buf.seek(0)
 
-    qr_text = i18n_get_text(language, "setup.qr_instruction")
-    # <blockquote expandable> сворачивает длинную (~700 char) crypt4-
-    # ссылку до одной строки с «Show more» — тап по <code> копирует.
+    qr_text = i18n_get_text(language, instruction_key)
+    # <blockquote expandable> сворачивает длинную (~700 char) ссылку
+    # до одной строки с «Show more» — тап по <code> копирует.
     qr_text += (
         "\n\n" + i18n_get_text(language, label_key) + "\n"
         f"<blockquote expandable><code>{crypt_url}</code></blockquote>"
     )
+
+    # Back → возвращаемся на экран выбора приложения (тот же handler
+    # setup_qr_standard/bypass, что теперь рендерит app-picker).
+    back_cb = f"setup_qr_{kind}:{platform}"
 
     buttons = [
         [InlineKeyboardButton(
@@ -1347,7 +1426,7 @@ async def _send_qr_screen(callback: CallbackQuery, platform: str, url: str, lang
         )],
         [InlineKeyboardButton(
             text=i18n_get_text(language, "common.back"),
-            callback_data=f"setup_qr:{platform}",
+            callback_data=back_cb,
         )],
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
