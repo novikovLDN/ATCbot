@@ -34,6 +34,11 @@ const BUTTON_OPTIONS = [
   { key: "happ_ios", label: "📲 Happ iOS" },
   { key: "happ_android", label: "📲 Happ Android" },
   { key: "web_client", label: "🌐 Веб-клиент" },
+  // Получатель таппает → бот открывает экран «Подари другу скидку 30%».
+  // Внутри — кнопка share с его личной refd-ссылкой. Друг по ссылке
+  // получает 30%/24ч (lifetime-once). Без extra discount-параметров —
+  // и %, и продолжительность зашиты в коде (см. start.py refd_-handler).
+  { key: "share_discount", label: "🎁 Поделиться скидкой (друг = −30% / 24ч)" },
 ];
 
 export function BroadcastCreate() {

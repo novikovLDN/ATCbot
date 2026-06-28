@@ -172,7 +172,7 @@ async def callback_share_discount_open(callback: CallbackQuery):
             f"&text={quote(share_text, safe='')}"
         )
 
-        text = i18n_get_text(language, "share_discount.screen")
+        text = i18n_get_text(language, "share_discount.screen", link=share_link)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
                 text=i18n_get_text(language, "share_discount.send_button"),
