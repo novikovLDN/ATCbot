@@ -287,6 +287,8 @@ from database.admin import (  # noqa: F401
     get_user_discount,
     create_user_discount,
     delete_user_discount,
+    has_claimed_referral_share_discount,
+    record_referral_share_discount_claim,
     is_vip_user,
     grant_vip_status,
     revoke_vip_status,

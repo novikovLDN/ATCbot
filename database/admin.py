@@ -2635,6 +2635,70 @@ async def create_user_discount(telegram_id: int, discount_percent: int, expires_
             return False
 
 
+# ==================== REFERRAL SHARE-DISCOUNT CLAIMS ====================
+#
+# Lifetime registry of users who have already activated the «Поделиться
+# скидкой» broadcast deep-link. Each telegram_id can claim only once,
+# enforced via PRIMARY KEY on telegram_id. See migration 060.
+
+
+async def has_claimed_referral_share_discount(telegram_id: int) -> bool:
+    """True если пользователь уже когда-либо активировал refd-скидку.
+
+    Используется в start.py при обработке `refd_<code>` — если True,
+    показываем «уже было активировано», без повторной выдачи."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM referral_share_discount_claims WHERE telegram_id = $1",
+                telegram_id,
+            )
+            return row is not None
+        except Exception as e:
+            # Если таблицы ещё нет (миграция не накатана) — считаем что
+            # не клеймил, чтобы фича не падала. После миграции всё
+            # выровняется естественным путём.
+            logger.warning(
+                "REFDC_CHECK_FAIL user=%s error=%s — treating as not-claimed",
+                telegram_id, e,
+            )
+            return False
+
+
+async def record_referral_share_discount_claim(
+    telegram_id: int,
+    referrer_id: int,
+    discount_percent: int,
+    duration_hours: int,
+    expires_at: datetime,
+) -> bool:
+    """Зафиксировать факт активации refd-скидки этим юзером.
+
+    PRIMARY KEY на telegram_id даёт идемпотентность: повторный INSERT
+    с тем же id просто упадёт по конфликту → возвращаем False, чтобы
+    вызывающий не выдал скидку повторно (race в один и тот же tick)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            result = await conn.execute(
+                """INSERT INTO referral_share_discount_claims
+                   (telegram_id, referrer_id, discount_percent, duration_hours, expires_at)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (telegram_id) DO NOTHING""",
+                telegram_id, referrer_id, discount_percent, duration_hours,
+                _to_db_utc(expires_at),
+            )
+            # asyncpg возвращает 'INSERT 0 1' при успехе, 'INSERT 0 0' при конфликте
+            return result.endswith(" 1")
+        except Exception as e:
+            logger.exception(
+                "REFDC_RECORD_FAIL user=%s referrer=%s error=%s",
+                telegram_id, referrer_id, e,
+            )
+            return False
+
+
 async def delete_user_discount(telegram_id: int, deleted_by: int) -> bool:
     """Удалить персональную скидку пользователя
 
