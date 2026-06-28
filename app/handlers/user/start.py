@@ -367,7 +367,7 @@ async def cmd_start(message: Message, state: FSMContext):
         if len(start_parts) > 1 and start_parts[1].startswith("refd_"):
             refd_code = start_parts[1][5:]  # strip "refd_"
             handled = await _handle_share_discount_start(
-                message, telegram_id, refd_code, is_new_user,
+                message, state, telegram_id, refd_code, is_new_user,
             )
             if handled:
                 return  # Already rendered final screen — done.
@@ -431,6 +431,7 @@ _SHARE_DISCOUNT_HOURS = 24
 
 async def _handle_share_discount_start(
     message: Message,
+    state: FSMContext,
     telegram_id: int,
     refd_code: str,
     is_new_user: bool,
@@ -442,16 +443,20 @@ async def _handle_share_discount_start(
     оказался кривой и мы хотим показать обычное приветствие).
 
     Семантика:
-      • self-referral → блок, показать сообщение, return True
-      • lifetime claim уже есть → «уже активировано» + меню, True
+      • self-referral → блок + main-меню (нечего здесь покупать)
+      • lifetime claim уже есть → notice + экран тарифов (юзер всё
+        равно мог прийти выбирать тариф; если активная скидка ещё
+        жива — увидит её на экране автоматически)
       • новый юзер → закрепить referrer_id через стандартный pipeline
         (process_referral_registration с конвертацией refd_→ref_)
       • выдать 30% / 24ч personal discount (если нет более выгодной)
       • записать в referral_share_discount_claims
-      • показать success-экран
+      • показать notice + экран тарифов (скидка автоматически
+        отрисуется в ценах — _open_buy_screen зовёт get_user_discount)
     """
     from datetime import timedelta
     from app.services.referrals import process_referral_registration
+    from app.handlers.common.screens import show_tariffs_main_screen
 
     # Sanity: код — alphanumeric, 4–12 символов (наш формат 6).
     if not refd_code or len(refd_code) > 32 or not refd_code.replace("_", "").isalnum():
@@ -485,7 +490,8 @@ async def _handle_share_discount_start(
         )
         return False
 
-    # Self-referral block
+    # Self-referral block — main-меню, чтобы не подталкивать к покупке
+    # через манипуляцию собственной ссылкой.
     if referrer_id == telegram_id:
         logger.info("REFDC_SELF_BLOCKED user=%s", telegram_id)
         text = i18n_get_text(language, "share_discount.self_blocked")
@@ -493,12 +499,15 @@ async def _handle_share_discount_start(
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
         return True
 
-    # Lifetime-once guard
+    # Lifetime-once guard. Покажем notice отдельным сообщением, потом
+    # отрисуем экран тарифов — юзер пришёл сюда явно за подпиской.
     if await database.has_claimed_referral_share_discount(telegram_id):
         logger.info("REFDC_ALREADY_CLAIMED user=%s", telegram_id)
-        text = i18n_get_text(language, "share_discount.already_claimed")
-        keyboard = await get_main_menu_keyboard(language, telegram_id)
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await message.answer(
+            i18n_get_text(language, "share_discount.already_claimed"),
+            parse_mode="HTML",
+        )
+        await show_tariffs_main_screen(message, state)
         return True
 
     # Новый юзер → закрепить referrer_id через стандартный пайплайн.
@@ -540,11 +549,14 @@ async def _handle_share_discount_start(
     )
     if not recorded:
         # Race-condition: между нашим has_claimed-чеком и INSERT'ом
-        # успели вставить параллельным процессом. Покажем «уже активировано».
+        # успели вставить параллельным процессом. Покажем notice +
+        # тарифы (скидка от первого «победителя» уже в DB).
         logger.info("REFDC_RACE_LOST user=%s — claim insert returned 0", telegram_id)
-        text = i18n_get_text(language, "share_discount.already_claimed")
-        keyboard = await get_main_menu_keyboard(language, telegram_id)
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        await message.answer(
+            i18n_get_text(language, "share_discount.already_claimed"),
+            parse_mode="HTML",
+        )
+        await show_tariffs_main_screen(message, state)
         return True
 
     logger.info(
@@ -552,9 +564,14 @@ async def _handle_share_discount_start(
         telegram_id, referrer_id, _SHARE_DISCOUNT_PERCENT, _SHARE_DISCOUNT_HOURS,
     )
 
-    text = i18n_get_text(language, "share_discount.activated")
-    keyboard = await get_main_menu_keyboard(language, telegram_id)
-    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    # Notice об активации + экран тарифов. _open_buy_screen внутри
+    # show_tariffs_main_screen сам подтянет get_user_discount и
+    # отрисует уже скидочные цены — двойной работы нет.
+    await message.answer(
+        i18n_get_text(language, "share_discount.activated"),
+        parse_mode="HTML",
+    )
+    await show_tariffs_main_screen(message, state)
     return True
 
 
