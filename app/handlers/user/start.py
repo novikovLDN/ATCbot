@@ -356,6 +356,22 @@ async def cmd_start(message: Message, state: FSMContext):
                     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                     return
 
+    # SHARE-DISCOUNT LINK: /start refd_<code> — recipient gets 30%/24h
+    # discount on basic/plus/combo. Lifetime-once per telegram_id (claim
+    # tracked in `referral_share_discount_claims`). For new users we ALSO
+    # set up the referral relationship (immutable), per product spec.
+    # Handled BEFORE the regular `ref_` branch — `refd_` doesn't match
+    # `ref_` via startswith, but order is also clearer this way.
+    if message.text:
+        start_parts = message.text.strip().split(maxsplit=1)
+        if len(start_parts) > 1 and start_parts[1].startswith("refd_"):
+            refd_code = start_parts[1][5:]  # strip "refd_"
+            handled = await _handle_share_discount_start(
+                message, telegram_id, refd_code, is_new_user,
+            )
+            if handled:
+                return  # Already rendered final screen — done.
+
     # 1. REFERRAL REGISTRATION: Process ONLY for new users
     # Protects against: self-referral and existing users clicking referral links later
     referral_result = None
@@ -407,6 +423,139 @@ async def cmd_start(message: Message, state: FSMContext):
     # Phase 4: ALWAYS show language selection first (pre-language-binding screen)
     text = i18n_get_text(start_language, "lang.select_title")
     await message.answer(text, reply_markup=get_language_keyboard(start_language), parse_mode="HTML")
+
+
+_SHARE_DISCOUNT_PERCENT = 30
+_SHARE_DISCOUNT_HOURS = 24
+
+
+async def _handle_share_discount_start(
+    message: Message,
+    telegram_id: int,
+    refd_code: str,
+    is_new_user: bool,
+) -> bool:
+    """Process /start refd_<code> — share-discount activation.
+
+    Возвращает True, если экран отрендерен полностью и cmd_start должен
+    выйти. False — продолжаем стандартный flow (например, payload
+    оказался кривой и мы хотим показать обычное приветствие).
+
+    Семантика:
+      • self-referral → блок, показать сообщение, return True
+      • lifetime claim уже есть → «уже активировано» + меню, True
+      • новый юзер → закрепить referrer_id через стандартный pipeline
+        (process_referral_registration с конвертацией refd_→ref_)
+      • выдать 30% / 24ч personal discount (если нет более выгодной)
+      • записать в referral_share_discount_claims
+      • показать success-экран
+    """
+    from datetime import timedelta
+    from app.services.referrals import process_referral_registration
+
+    # Sanity: код — alphanumeric, 4–12 символов (наш формат 6).
+    if not refd_code or len(refd_code) > 32 or not refd_code.replace("_", "").isalnum():
+        logger.warning(
+            "REFDC_INVALID_PAYLOAD user=%s code=%s",
+            telegram_id, refd_code[:30],
+        )
+        return False  # fall through to normal /start
+
+    language = await resolve_user_language(telegram_id)
+
+    # Найти владельца кода. Сначала opaque referral_code, затем legacy
+    # numeric telegram_id (та же логика, что в process_referral_registration).
+    referrer_user = await database.find_user_by_referral_code(refd_code)
+    referrer_id: int | None = None
+    if referrer_user:
+        referrer_id = referrer_user.get("telegram_id")
+    else:
+        try:
+            maybe = int(refd_code)
+            legacy = await database.get_user(maybe)
+            if legacy:
+                referrer_id = maybe
+        except (ValueError, TypeError):
+            pass
+
+    if referrer_id is None:
+        logger.warning(
+            "REFDC_UNKNOWN_CODE user=%s code=%s — falling back to normal /start",
+            telegram_id, refd_code[:30],
+        )
+        return False
+
+    # Self-referral block
+    if referrer_id == telegram_id:
+        logger.info("REFDC_SELF_BLOCKED user=%s", telegram_id)
+        text = i18n_get_text(language, "share_discount.self_blocked")
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        return True
+
+    # Lifetime-once guard
+    if await database.has_claimed_referral_share_discount(telegram_id):
+        logger.info("REFDC_ALREADY_CLAIMED user=%s", telegram_id)
+        text = i18n_get_text(language, "share_discount.already_claimed")
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        return True
+
+    # Новый юзер → закрепить referrer_id через стандартный пайплайн.
+    # Конвертируем refd_<code> → ref_<code>, чтобы переиспользовать
+    # validation/loop-detection/audit, который уже отлажен.
+    if is_new_user:
+        try:
+            await process_referral_registration(telegram_id, f"ref_{refd_code}")
+        except Exception:
+            logger.exception("REFDC_REFERRAL_REGISTRATION_FAIL user=%s", telegram_id)
+
+    # Выдать personal-discount. Если у юзера уже есть скидка ≥30% —
+    # не перезаписываем, оставляем выгоднее. create_user_discount
+    # делает ON CONFLICT DO UPDATE безусловно, поэтому проверяем сами.
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=_SHARE_DISCOUNT_HOURS)
+    existing = await database.get_user_discount(telegram_id)
+    keep_existing = bool(
+        existing and existing.get("discount_percent", 0) >= _SHARE_DISCOUNT_PERCENT
+    )
+    if not keep_existing:
+        try:
+            await database.create_user_discount(
+                telegram_id=telegram_id,
+                discount_percent=_SHARE_DISCOUNT_PERCENT,
+                expires_at=expires_at,
+                created_by=referrer_id,
+            )
+        except Exception:
+            logger.exception("REFDC_DISCOUNT_CREATE_FAIL user=%s", telegram_id)
+            # Не критично — продолжаем, claim всё равно фиксируем чтобы
+            # юзер не мог попытаться снова и снова.
+
+    recorded = await database.record_referral_share_discount_claim(
+        telegram_id=telegram_id,
+        referrer_id=referrer_id,
+        discount_percent=_SHARE_DISCOUNT_PERCENT,
+        duration_hours=_SHARE_DISCOUNT_HOURS,
+        expires_at=expires_at,
+    )
+    if not recorded:
+        # Race-condition: между нашим has_claimed-чеком и INSERT'ом
+        # успели вставить параллельным процессом. Покажем «уже активировано».
+        logger.info("REFDC_RACE_LOST user=%s — claim insert returned 0", telegram_id)
+        text = i18n_get_text(language, "share_discount.already_claimed")
+        keyboard = await get_main_menu_keyboard(language, telegram_id)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        return True
+
+    logger.info(
+        "REFDC_CLAIMED user=%s referrer=%s pct=%s hours=%s",
+        telegram_id, referrer_id, _SHARE_DISCOUNT_PERCENT, _SHARE_DISCOUNT_HOURS,
+    )
+
+    text = i18n_get_text(language, "share_discount.activated")
+    keyboard = await get_main_menu_keyboard(language, telegram_id)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    return True
 
 
 # ── STAGE-only: new-user gate ──────────────────────────────────────────────

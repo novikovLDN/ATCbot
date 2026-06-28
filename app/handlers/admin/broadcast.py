@@ -200,6 +200,15 @@ def _build_broadcast_reply_markup(
             )])
         elif btn == "proxy":
             rows.append([InlineKeyboardButton(text="🌐 MT Прокси", callback_data="proxy_open")])
+        elif btn == "share_discount":
+            # Recipient таппает → переходит на экран «подари другу
+            # скидку 30%» (callback share_discount_open). Там уже его
+            # личная share-ссылка на t.me/share/url, открывающая
+            # нативный picker Telegram.
+            rows.append([InlineKeyboardButton(
+                text="🎁 Поделиться скидкой",
+                callback_data="share_discount_open",
+            )])
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
@@ -1181,6 +1190,7 @@ def _btn_label(btn_type: str) -> str:
         "web_client": "🌐 Веб-клиент QoDev",
         "buy_combo": "🏆 Купить Комбо",
         "proxy": "🌐 MT Прокси",
+        "share_discount": "🎁 Поделиться скидкой",
     }
     return labels.get(btn_type, btn_type)
 

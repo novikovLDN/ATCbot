@@ -192,6 +192,7 @@ _BUTTON_TYPES = {
     "happ_android",
     "web_client",
     "buy_combo",
+    "share_discount",
 }
 
 
@@ -508,6 +509,15 @@ def _build_reply_markup(
             )])
         elif btn == "buy_combo":
             rows.append([InlineKeyboardButton(text="🏆 Купить Комбо", callback_data="buy_combo")])
+        elif btn == "share_discount":
+            # Callback share_discount_open рендерится в referrals.py:
+            # экран «Подари другу скидку 30%» + кнопка share с личной
+            # refd-ссылкой получателя. broadcast_id здесь не нужен —
+            # callback статический.
+            rows.append([InlineKeyboardButton(
+                text="🎁 Поделиться скидкой",
+                callback_data="share_discount_open",
+            )])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
