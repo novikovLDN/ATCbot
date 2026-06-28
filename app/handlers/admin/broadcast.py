@@ -281,9 +281,11 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
         # Get discount from DB
         discount = await database.get_broadcast_discount(broadcast_id)
         if not discount:
-            # No discount found, just redirect to tariff selection
+            # No discount found, just redirect to tariff selection.
+            # force_new_message=True — сохраняем оригинал рассылки в чате,
+            # экран тарифов уходит свежим сообщением сверху.
             from app.handlers.common.screens import show_tariffs_main_screen
-            await show_tariffs_main_screen(callback, state)
+            await show_tariffs_main_screen(callback, state, force_new_message=True)
             return
 
         discount_percent = discount.get("discount_percent", 0)
@@ -300,9 +302,10 @@ async def callback_broadcast_promo_buy(callback: CallbackQuery, state: FSMContex
             created_by=config.ADMIN_TELEGRAM_ID,
         )
 
-        # Redirect to tariff screen
+        # Redirect to tariff screen. force_new_message=True — рассылка
+        # остаётся (юзер видит, на какой именно акции кликнул).
         from app.handlers.common.screens import show_tariffs_main_screen
-        await show_tariffs_main_screen(callback, state)
+        await show_tariffs_main_screen(callback, state, force_new_message=True)
 
         language = await resolve_user_language(telegram_id)
         await callback.message.answer(
