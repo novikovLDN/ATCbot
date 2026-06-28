@@ -564,12 +564,24 @@ async def show_profile(message_or_query, language: str):
                 logger.exception(f"Critical: Failed to send error message to user {telegram_id}: {e3}")
 
 
-async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state: FSMContext):
+async def _open_buy_screen(
+    event: Union[Message, CallbackQuery],
+    bot: Bot,
+    state: FSMContext,
+    *,
+    force_new_message: bool = False,
+):
     """
     Купить VPN - выбор типа тарифа (Basic/Plus). Reusable for callback and /buy command.
-    
+
     CANONICAL TARIFF SCREEN BUILDER - единственный источник правды для экрана тарифов.
     Используется везде: после промокода, при нажатии "Купить доступ", и т.д.
+
+    force_new_message: если True — экран тарифов уходит ОТДЕЛЬНЫМ сообщением
+    даже когда инвок пришёл из CallbackQuery. Нужно для broadcast-кнопок
+    («Купить со скидкой» и т.п.): юзер должен видеть саму рассылку рядом
+    с экраном тарифов, а не вместо неё. По умолчанию False — стандартная
+    in-place навигация (edit или delete-and-resend).
     """
     if isinstance(event, CallbackQuery):
         try:
@@ -650,10 +662,19 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         )],
     ])
     
-    # If message is a photo (e.g. no-sub main screen), delete and send new
-    if isinstance(event, Message):
+    # Если caller явно попросил «новое сообщение» (broadcast-CTA, где
+    # сообщение рассылки должно остаться) — шлём в чат свежим, ничего
+    # не редактируя и не удаляя. Все остальные ветки сохраняют прежнее
+    # поведение in-place навигации.
+    if force_new_message:
+        chat_id = msg.chat.id if msg else telegram_id
+        await bot.send_message(chat_id, text, reply_markup=keyboard, parse_mode="HTML")
+    elif isinstance(event, Message):
         await event.answer(text, reply_markup=keyboard, parse_mode="HTML")
     elif msg.photo:
+        # In-place: для фото-сообщений edit_text сломан Telegram'ом
+        # (caption-limit 1024, текст тарифов часто длиннее), поэтому
+        # стандартный fallback — delete + send.
         try:
             await msg.delete()
         except Exception:
@@ -663,16 +684,23 @@ async def _open_buy_screen(event: Union[Message, CallbackQuery], bot: Bot, state
         await safe_edit_text(msg, text, reply_markup=keyboard, bot=bot)
 
 
-async def show_tariffs_main_screen(event: Union[Message, CallbackQuery], state: FSMContext):
+async def show_tariffs_main_screen(
+    event: Union[Message, CallbackQuery],
+    state: FSMContext,
+    *,
+    force_new_message: bool = False,
+):
     """
     CANONICAL TARIFF SCREEN - единый builder для экрана тарифов.
-    
+
     Используется после применения промокода и везде, где нужно показать экран тарифов.
     Гарантирует единообразие UI и отсутствие дублирования кода.
-    
+
     Args:
         event: Message или CallbackQuery объект
         state: FSM context
+        force_new_message: см. _open_buy_screen — True для broadcast-CTA,
+            чтобы оригинальное сообщение рассылки осталось в чате.
     """
     bot = event.bot if isinstance(event, CallbackQuery) else event.bot
-    await _open_buy_screen(event, bot, state)
+    await _open_buy_screen(event, bot, state, force_new_message=force_new_message)
