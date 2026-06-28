@@ -6,10 +6,11 @@ export default {
     extend: {
       fontFamily: {
         sans: [
-          // Geist (Vercel) — техно-sans с кириллицей.
-          // Fustat / Inter — fallback на случай блокировки Google Fonts.
+          // Urbanist — гео-sans из референса (футуристично, читаемо,
+          // кириллица из коробки). Geist / Inter — fallback на случай
+          // блокировки Google Fonts.
+          "Urbanist",
           "Geist",
-          "Fustat",
           "Inter",
           "system-ui",
           "-apple-system",
@@ -18,6 +19,7 @@ export default {
           "sans-serif",
         ],
         mono: [
+          "JetBrains Mono",
           "Geist Mono",
           "ui-monospace",
           "SFMono-Regular",
@@ -28,47 +30,48 @@ export default {
         ],
       },
       colors: {
-        // Светлая AURA-палитра: чистые белые поверхности, slate-tint
-        // канвас, чёрно-графитовый текст. Все компоненты, использующие
-        // существующие токены (bg / fg / border / accent), автоматически
-        // перейдут в светлый стиль — править их не нужно.
+        // Тёмная FINPATH-палитра: глубокий канвас, дифференцированные
+        // уровни поверхностей, off-white текст, lime-акцент. Цвета и
+        // отметки HEX взяты из brand-deck (см. /docs).
+        // Все компоненты на токенах (bg / fg / border / accent)
+        // переходят в новый стиль автоматически.
         bg: {
-          DEFAULT: "#F6F7F9",          // канвас
-          subtle: "#EEF0F4",            // под-фон секций
-          card: "#FFFFFF",              // карточка
-          elevated: "#F1F3F6",          // лёгкая «пилюля» / квадрат с иконкой на белой карточке
+          DEFAULT: "#0A0A0A",          // канвас — самый тёмный слой
+          subtle: "#101010",            // под-фон секций
+          card: "#161616",              // карточка
+          elevated: "#212121",          // приподнятая поверхность (пилюли, активные tab'ы, чипы)
         },
         border: {
-          DEFAULT: "#E5E7EB",           // основной border (slate-200)
-          subtle: "#F1F3F6",             // тонкий разделитель
+          DEFAULT: "#262626",           // основной border на dark
+          subtle: "#1C1C1C",             // тонкий разделитель
         },
         fg: {
-          DEFAULT: "#0B0F19",           // почти чёрный, чуть теплее pure black
-          muted: "#475569",              // slate-600 для secondary текста
-          subtle: "#94A3B8",             // slate-400 для подсказок / labels
+          DEFAULT: "#FCFCFC",           // off-white — основной текст
+          muted: "#A1A1AA",              // zinc-400 для secondary
+          subtle: "#71717A",             // zinc-500 для labels / подсказок
         },
-        // Primary accent — sky-500. Технологичный, спокойный, читается
-        // на белом, не «электро»-неон. Чёрно-белый CTA — через
-        // отдельные классы (bg-fg / text-bg) в компонентах.
+        // Primary accent — lime #D7FF67. Используется ТОЧЕЧНО:
+        // active state, CTA, прогресс-бары, выделенные карточки.
+        // Тёмный текст на акцентном фоне (bg.card) — высокий контраст.
         accent: {
-          DEFAULT: "#0EA5E9",
-          hover: "#0284C7",
-          dark: "#0369A1",
+          DEFAULT: "#D7FF67",
+          hover: "#C6F255",
+          dark: "#A6CC3F",
         },
         secondary: {
-          DEFAULT: "#06B6D4",            // cyan-500
-          hover: "#0891B2",
+          DEFAULT: "#A6FFB3",            // soft-mint accent для «income» / +%
+          hover: "#8AE39E",
         },
-        success: "#10B981",              // emerald-500
-        danger: "#EF4444",
-        warning: "#F59E0B",
-        // Category tag tints — used by tag-* badges so different
-        // segments get a distinct vibe without screaming.
-        tagpurple: "#A855F7",
-        tagblue: "#3B82F6",
-        taggreen: "#22C55E",
-        tagamber: "#F59E0B",
-        tagrose: "#F43F5E",
+        success: "#A6FFB3",              // мятный — +% и положительные дельты
+        danger: "#FF6B6B",               // мягкий красный, не выжигает на dark
+        warning: "#FFD66B",              // тёплый янтарь
+        // Category tag tints — desaturated так, чтобы не конкурировать
+        // с лаймовым акцентом, но различимы между собой.
+        tagpurple: "#B794F4",
+        tagblue: "#7AB8FF",
+        taggreen: "#A6FFB3",
+        tagamber: "#FFD66B",
+        tagrose: "#FF9DAE",
       },
       opacity: {
         "12": "0.12",
@@ -77,12 +80,16 @@ export default {
         "35": "0.35",
       },
       boxShadow: {
-        // Soft layered shadows для светлой темы (slate-tint, не pure black).
-        glow: "0 8px 28px -8px rgba(14,165,233,0.35)",
-        "glow-sm": "0 4px 14px -4px rgba(14,165,233,0.25)",
-        card: "0 1px 2px rgba(15,23,42,0.04), 0 4px 16px -8px rgba(15,23,42,0.06)",
-        // Для чёрного CTA — мягкая «приподнятая» тень.
-        cta: "0 8px 20px -8px rgba(11,15,25,0.45)",
+        // Тёмная тема: тени почти не работают как глубина, поэтому
+        // glow становится лаймовым свечением вокруг активных
+        // элементов (CTA, выделенный bar в графике, чекбоксы).
+        glow: "0 8px 28px -8px rgba(215,255,103,0.45)",
+        "glow-sm": "0 4px 14px -4px rgba(215,255,103,0.30)",
+        // .card — внутренний тонкий «inset»-блик сверху для подъёма
+        // от канваса, тёмный drop под низ.
+        card: "0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 24px -16px rgba(0,0,0,0.5)",
+        // CTA shadow на dark canvas — слабее, чем на light, и теплее.
+        cta: "0 8px 20px -8px rgba(0,0,0,0.6), 0 0 0 1px rgba(215,255,103,0.18) inset",
       },
       animation: {
         "pulse-glow": "pulse-glow 2.5s ease-in-out infinite",
@@ -112,11 +119,11 @@ export default {
         "pulse-glow": {
           "0%, 100%": {
             opacity: "1",
-            boxShadow: "0 0 0 0 rgba(14,165,233,0.5)",
+            boxShadow: "0 0 0 0 rgba(215,255,103,0.55)",
           },
           "50%": {
             opacity: "0.8",
-            boxShadow: "0 0 0 10px rgba(14,165,233,0)",
+            boxShadow: "0 0 0 10px rgba(215,255,103,0)",
           },
         },
         "fade-in": {

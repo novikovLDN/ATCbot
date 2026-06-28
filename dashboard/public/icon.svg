@@ -1,39 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <!-- Глубокий navy фон — slate-900 → slate-800 с лёгким радиальным
-         осветлением сверху, как «глубина» под объектом. -->
+    <!-- Тёмный obsidian фон — почти #0A0A0A с лёгким углублением. -->
     <radialGradient id="bg" cx="50%" cy="20%" r="80%">
-      <stop offset="0%"  stop-color="#1E293B"/>
-      <stop offset="60%" stop-color="#0F172A"/>
-      <stop offset="100%" stop-color="#070A14"/>
+      <stop offset="0%"  stop-color="#1A1A1A"/>
+      <stop offset="60%" stop-color="#0F0F0F"/>
+      <stop offset="100%" stop-color="#050505"/>
     </radialGradient>
 
-    <!-- Sky → violet gradient для щита (совпадает с Login logo и
-         Hero glow). 135° даёт ощущение «света сверху-слева». -->
+    <!-- Solid lime — основной акцент бренда. -->
     <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%"   stop-color="#38BDF8"/>
-      <stop offset="55%"  stop-color="#6366F1"/>
-      <stop offset="100%" stop-color="#A855F7"/>
+      <stop offset="0%"   stop-color="#E2FF85"/>
+      <stop offset="55%"  stop-color="#D7FF67"/>
+      <stop offset="100%" stop-color="#A6CC3F"/>
     </linearGradient>
 
-    <!-- Подсветка bottom-right (rim light) — тонкая. -->
+    <!-- Rim — тонкая подсветка bottom-right. -->
     <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%"  stop-color="white" stop-opacity="0"/>
       <stop offset="80%" stop-color="white" stop-opacity="0"/>
       <stop offset="100%" stop-color="white" stop-opacity="0.18"/>
     </linearGradient>
 
-    <!-- Top highlight — стеклянный блик сверху-слева на щите. -->
+    <!-- Top gloss — стеклянный блик сверху. -->
     <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%"  stop-color="white" stop-opacity="0.32"/>
       <stop offset="60%" stop-color="white" stop-opacity="0"/>
     </linearGradient>
 
-    <!-- Аура свечения вокруг щита. -->
+    <!-- Лаймовое halo вокруг щита. -->
     <radialGradient id="aura" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#6366F1" stop-opacity="0.55"/>
-      <stop offset="60%"  stop-color="#38BDF8" stop-opacity="0.18"/>
-      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"/>
+      <stop offset="0%"   stop-color="#D7FF67" stop-opacity="0.55"/>
+      <stop offset="60%"  stop-color="#D7FF67" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#D7FF67" stop-opacity="0"/>
     </radialGradient>
 
     <filter id="soft-glow" x="-50%" y="-50%" width="200%" height="200%">
@@ -97,28 +95,25 @@
       d="M0 -150 Q120 -150 130 -100 L130 30 Q130 110 0 165 Q-130 110 -130 30 L-130 -100 Q-120 -150 0 -150 Z"
       fill="url(#rim)"
     />
-    <!-- Тонкая обводка для чёткости силуэта. -->
+    <!-- Тонкая обводка для чёткости силуэта (тёмная — под brand text). -->
     <path
       d="M0 -150 Q120 -150 130 -100 L130 30 Q130 110 0 165 Q-130 110 -130 30 L-130 -100 Q-120 -150 0 -150 Z"
       fill="none"
-      stroke="white"
-      stroke-opacity="0.22"
+      stroke="#0A0A0A"
+      stroke-opacity="0.25"
       stroke-width="2"
     />
 
-    <!-- Abstract «A» — стилизованная monogram из трёх линий внутри
-         щита: две диагонали + горизонтальная перемычка. -->
-    <g filter="url(#line-glow)" stroke="white" stroke-linecap="round" stroke-linejoin="round" fill="none">
-      <!-- Left diagonal -->
+    <!-- Abstract «A» monogram — тёмный stroke на лаймовом щите,
+         матчит Urbanist «A» из brand-deck (чёрный bold). -->
+    <g stroke="#0A0A0A" stroke-linecap="round" stroke-linejoin="round" fill="none">
       <line x1="-55" y1="60" x2="0" y2="-65" stroke-width="14"/>
-      <!-- Right diagonal -->
       <line x1="55"  y1="60" x2="0" y2="-65" stroke-width="14"/>
-      <!-- Crossbar -->
       <line x1="-32" y1="15" x2="32" y2="15" stroke-width="12"/>
     </g>
 
-    <!-- Acsent dot — тонкая точка-свет в кончике, premium-deталь. -->
-    <circle cx="0" cy="-65" r="6" fill="white"/>
-    <circle cx="0" cy="-65" r="14" fill="white" opacity="0.15"/>
+    <!-- Acsent dot — тонкая тёмная точка-узел в вершине. -->
+    <circle cx="0" cy="-65" r="6" fill="#0A0A0A"/>
+    <circle cx="0" cy="-65" r="14" fill="#0A0A0A" opacity="0.2"/>
   </g>
 </svg>

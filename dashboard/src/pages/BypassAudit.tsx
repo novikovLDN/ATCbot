@@ -289,12 +289,12 @@ function SummaryCard({
 }) {
   const toneClass =
     tone === "warning"
-      ? "text-amber-500 bg-amber-50 ring-amber-200"
+      ? "text-warning bg-warning/10 ring-warning/30"
       : tone === "accent"
-      ? "text-sky-600 bg-sky-50 ring-sky-200"
+      ? "text-accent bg-accent/10 ring-accent/25"
       : tone === "info"
-      ? "text-violet-600 bg-violet-50 ring-violet-200"
-      : "text-slate-500 bg-slate-50 ring-slate-200";
+      ? "text-tagpurple bg-tagpurple/10 ring-tagpurple/25"
+      : "text-fg-muted bg-bg-subtle ring-border";
   return (
     <div className="card p-4">
       <div className="flex items-start justify-between gap-3">
@@ -399,7 +399,7 @@ function VictimRow({
               tg:{v.telegram_id}
             </span>
             {v.current_is_combo && (
-              <span className="badge bg-violet-100 text-violet-700 ring-1 ring-violet-200">combo</span>
+              <span className="badge bg-tagpurple/20 text-tagpurple ring-1 ring-tagpurple/25">combo</span>
             )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-fg-muted">
@@ -415,11 +415,11 @@ function VictimRow({
 
         {/* Before / After capsule */}
         <div className="hidden shrink-0 items-center gap-2 sm:flex">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-right">
-            <div className="text-[9px] font-medium uppercase tracking-wider text-amber-700">
+          <div className="rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1 text-right">
+            <div className="text-[9px] font-medium uppercase tracking-wider text-warning">
               Сейчас
             </div>
-            <div className="text-xs font-semibold tabular-nums text-amber-900">
+            <div className="text-xs font-semibold tabular-nums text-warning">
               {currDays != null ? `+${currDays.toLocaleString("ru-RU")} дн` : "—"}
             </div>
           </div>
@@ -428,14 +428,14 @@ function VictimRow({
             className={
               "rounded-lg px-2.5 py-1 text-right border " +
               (grace
-                ? "border-sky-200 bg-sky-50"
-                : "border-emerald-200 bg-emerald-50")
+                ? "border-accent/30 bg-accent/10"
+                : "border-success/30 bg-success/10")
             }
           >
             <div
               className={
                 "text-[9px] font-medium uppercase tracking-wider " +
-                (grace ? "text-sky-700" : "text-emerald-700")
+                (grace ? "text-accent" : "text-success")
               }
             >
               {grace ? "Grace +1д" : "Будет"}
@@ -443,7 +443,7 @@ function VictimRow({
             <div
               className={
                 "text-xs font-semibold tabular-nums " +
-                (grace ? "text-sky-900" : "text-emerald-900")
+                (grace ? "text-accent" : "text-success")
               }
             >
               {propDays != null ? `+${propDays.toLocaleString("ru-RU")} дн` : "—"}
@@ -469,7 +469,7 @@ function VictimRow({
             Восстановить
           </button>
         ) : (
-          <span className="badge bg-slate-100 text-slate-500 ring-1 ring-slate-200">
+          <span className="badge bg-bg-elevated text-fg-muted ring-1 ring-border">
             нет истории
           </span>
         )}
@@ -572,8 +572,8 @@ function VictimRow({
                               className={
                                 "badge text-[10px] " +
                                 (isPaid
-                                  ? "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200"
-                                  : "bg-slate-100 text-slate-600 ring-1 ring-slate-200")
+                                  ? "bg-success/15 text-success ring-1 ring-success/25"
+                                  : "bg-bg-elevated text-fg-muted ring-1 ring-border")
                               }
                             >
                               {h.action_type}
@@ -626,12 +626,12 @@ function DetailBlock({
 }) {
   const ringClass =
     tone === "warning"
-      ? "border-amber-200 bg-amber-50/50"
+      ? "border-warning/30 bg-warning/10"
       : tone === "success"
-      ? "border-emerald-200 bg-emerald-50/50"
+      ? "border-success/30 bg-success/8"
       : tone === "info"
-      ? "border-sky-200 bg-sky-50/50"
-      : "border-slate-200 bg-slate-50/50";
+      ? "border-accent/30 bg-accent/8"
+      : "border-border bg-bg-subtle/50";
   return (
     <div className={`rounded-xl border ${ringClass} p-3`}>
       <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">

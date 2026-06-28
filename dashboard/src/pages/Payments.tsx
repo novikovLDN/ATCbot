@@ -53,12 +53,12 @@ const PROVIDER_LABELS: Record<string, string> = {
 // с глобальным accent дашборда, ложится на крупный сегмент. Остальные
 // — общая палитра tailwind для cовместимости с другими страницами.
 const CHART_COLORS = [
-  "#0EA5E9", // sky
-  "#8B5CF6", // violet
+  "#D7FF67", // sky
+  "#A6FFB3", // violet
   "#EC4899", // pink
   "#10B981", // emerald
   "#F59E0B", // amber
-  "#06B6D4", // cyan
+  "#FFD66B", // cyan
   "#64748B", // slate fallback
 ];
 
@@ -443,7 +443,7 @@ function ProviderPie({
             border: "1px solid #E2E8F0",
             borderRadius: 12,
             fontSize: 12,
-            boxShadow: "0 4px 16px -4px rgba(15,23,42,0.08)",
+            boxShadow: "0 4px 16px -4px rgba(0,0,0,0.08)",
           }}
           formatter={(value: number, _name: string, item) =>
             [`${fmtRub(value)} · ${fmtNum(item?.payload?.count)} шт`, item?.payload?.name]
@@ -509,13 +509,13 @@ function TypeBar({
           tickLine={false}
         />
         <RTooltip
-          cursor={{ fill: "#F8FAFC" }}
+          cursor={{ fill: "#161616" }}
           contentStyle={{
             background: "#FFFFFF",
             border: "1px solid #E2E8F0",
             borderRadius: 12,
             fontSize: 12,
-            boxShadow: "0 4px 16px -4px rgba(15,23,42,0.08)",
+            boxShadow: "0 4px 16px -4px rgba(0,0,0,0.08)",
           }}
           formatter={(value: number, _name: string, item) =>
             item?.dataKey === "revenue"
@@ -529,8 +529,8 @@ function TypeBar({
           iconType="circle"
           wrapperStyle={{ fontSize: 11, color: "#64748B" }}
         />
-        <Bar dataKey="revenue" name="Доход" fill="#0EA5E9" radius={[4, 4, 0, 0]} />
-        <Bar dataKey="count" name="Штук" fill="#8B5CF6" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="revenue" name="Доход" fill="#D7FF67" radius={[4, 4, 0, 0]} />
+        <Bar dataKey="count" name="Штук" fill="#A6FFB3" radius={[4, 4, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
