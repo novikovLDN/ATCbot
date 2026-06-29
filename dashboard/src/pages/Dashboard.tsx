@@ -61,7 +61,7 @@ const METRICS: readonly MetricDef[] = [
     key: "revenue_rubles",
     label: "Доход",
     short: "Доход",
-    color: "#0EA5E9",
+    color: "#D7FF67",
     fillId: "metric-revenue",
     valueFmt: (v) => fmtRub(v),
     axisFmt: fmtCompactRub,
@@ -70,7 +70,7 @@ const METRICS: readonly MetricDef[] = [
     key: "new_users",
     label: "Новые юзеры",
     short: "Юзеры",
-    color: "#8B5CF6",
+    color: "#A6FFB3",
     fillId: "metric-users",
     valueFmt: (v) => fmtNum(v),
     axisFmt: fmtCompactInt,
@@ -302,19 +302,19 @@ export function Dashboard() {
         {/* Header */}
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
+            <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
               Atlas Secure · overview
             </div>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900 md:text-[40px] md:leading-[1.05]">
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-fg md:text-[40px] md:leading-[1.05]">
               Welcome back
             </h1>
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-fg-muted">
               Сводка по боту обновляется в реальном времени.
             </p>
           </div>
           <Link
             to="/broadcasts/new"
-            className="group inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_20px_-8px_rgba(15,23,42,0.45)] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-slate-800 hover:shadow-[0_14px_28px_-10px_rgba(15,23,42,0.55)] active:translate-y-0"
+            className="group inline-flex items-center gap-2 rounded-full bg-fg px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_20px_-8px_rgba(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-fg/90 hover:shadow-[0_14px_28px_-10px_rgba(0,0,0,0.55)] active:translate-y-0"
           >
             <Megaphone className="h-3.5 w-3.5 transition-transform duration-300 group-hover:rotate-[-8deg]" />
             Новая рассылка
@@ -409,7 +409,7 @@ export function Dashboard() {
           </SurfaceCard>
 
           <SurfaceCard>
-            <SurfaceHeader eyebrow="Бизнес-метрики" title="KPI" icon={<TrendingUp className="h-3.5 w-3.5 text-slate-400" />} />
+            <SurfaceHeader eyebrow="Бизнес-метрики" title="KPI" icon={<TrendingUp className="h-3.5 w-3.5 text-fg-subtle" />} />
             <dl className="mt-4 space-y-3.5">
               <KpiRow
                 label="Approval rate"
@@ -638,7 +638,7 @@ export function Dashboard() {
           <SurfaceHeader
             eyebrow="Live"
             title="Поток событий"
-            icon={<Activity className="h-3.5 w-3.5 text-slate-400" />}
+            icon={<Activity className="h-3.5 w-3.5 text-fg-subtle" />}
           />
           {live.length === 0 ? (
             <div className="mt-2">
@@ -649,7 +649,7 @@ export function Dashboard() {
               />
             </div>
           ) : (
-            <ul className="mt-3 divide-y divide-slate-100">
+            <ul className="mt-3 divide-y divide-border">
               {live.map((e) => (
                 <li
                   key={e.id}
@@ -658,25 +658,25 @@ export function Dashboard() {
                   <span
                     className={
                       e.kind === "payment:approved"
-                        ? "h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                        ? "h-2 w-2 shrink-0 rounded-full bg-success"
                         : e.kind === "user:registered"
-                        ? "h-2 w-2 shrink-0 rounded-full bg-sky-500"
+                        ? "h-2 w-2 shrink-0 rounded-full bg-accent"
                         : e.kind === "admin:revoke"
-                        ? "h-2 w-2 shrink-0 rounded-full bg-rose-500"
-                        : "h-2 w-2 shrink-0 rounded-full bg-amber-500"
+                        ? "h-2 w-2 shrink-0 rounded-full bg-danger"
+                        : "h-2 w-2 shrink-0 rounded-full bg-warning"
                     }
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium text-slate-900">
+                    <div className="truncate font-medium text-fg">
                       {e.title}
                     </div>
                     {e.subtitle && (
-                      <div className="truncate text-xs text-slate-500">
+                      <div className="truncate text-xs text-fg-muted">
                         {e.subtitle}
                       </div>
                     )}
                   </div>
-                  <div className="shrink-0 text-xs text-slate-400">
+                  <div className="shrink-0 text-xs text-fg-subtle">
                     {fmtRelative(new Date(e.at).toISOString())}
                   </div>
                 </li>
@@ -700,7 +700,7 @@ function SurfaceCard({
 }) {
   return (
     <section
-      className={`rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-8px_rgba(15,23,42,0.06)] ${className}`}
+      className={`rounded-2xl border border-border bg-bg-card p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_-8px_rgba(0,0,0,0.06)] ${className}`}
     >
       {children}
     </section>
@@ -721,11 +721,11 @@ function SurfaceHeader({
   return (
     <div className="flex items-start justify-between gap-4">
       <div>
-        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
           {eyebrow}
         </div>
-        <h2 className="mt-1 text-base font-semibold text-slate-900">{title}</h2>
-        {sub && <div className="mt-0.5 text-[11px] text-slate-400">{sub}</div>}
+        <h2 className="mt-1 text-base font-semibold text-fg">{title}</h2>
+        {sub && <div className="mt-0.5 text-[11px] text-fg-subtle">{sub}</div>}
       </div>
       {icon}
     </div>
@@ -751,7 +751,7 @@ function HeroCard({
 }) {
   return (
     <section
-      className={`relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-8px_rgba(15,23,42,0.06)] ${className}`}
+      className={`relative overflow-hidden rounded-2xl border border-border bg-bg-card p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_16px_-8px_rgba(0,0,0,0.06)] ${className}`}
     >
       {/* Subtle conic glow вращается медленно — премиум-ощущение, не
           отвлекает: opacity 0.5, прозрачный через mask. */}
@@ -760,22 +760,22 @@ function HeroCard({
         className="pointer-events-none absolute -right-32 -top-32 h-72 w-72 opacity-50 animate-glow-rotate"
         style={{
           background:
-            "conic-gradient(from 0deg, rgba(14,165,233,0.15), rgba(139,92,246,0.12), rgba(236,72,153,0.10), rgba(14,165,233,0.15))",
+            "conic-gradient(from 0deg, rgba(215,255,103,0.15), rgba(166,255,179,0.12), rgba(255,214,107,0.10), rgba(215,255,103,0.15))",
           filter: "blur(40px)",
         }}
       />
       <div className="relative z-10">
-        <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
+        <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
           {label}
         </div>
-        <div className="mt-2 text-[40px] font-semibold leading-none tracking-tight text-slate-900 tabular-nums md:text-[56px]">
+        <div className="mt-2 text-[40px] font-semibold leading-none tracking-tight text-fg tabular-nums md:text-[56px]">
           <AnimatedNum value={rawValue} fmt={fmt} loading={loading} />
         </div>
         {subline && (
           <div
             className={
               "mt-2 inline-flex items-center gap-1 text-xs font-medium " +
-              (subline.positive ? "text-emerald-600" : "text-rose-500")
+              (subline.positive ? "text-success" : "text-danger")
             }
           >
             {subline.positive ? (
@@ -806,14 +806,14 @@ function SmallMetric({
   loading: boolean;
 }) {
   return (
-    <div className="hover-lift rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
+    <div className="hover-lift rounded-2xl border border-border bg-bg-card p-5 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-fg-subtle">
         {label}
       </div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-900 tabular-nums md:text-3xl">
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-fg tabular-nums md:text-3xl">
         <AnimatedNum value={rawValue} fmt={fmt} loading={loading} />
       </div>
-      {hint && <div className="mt-1 text-[11px] text-slate-400">{hint}</div>}
+      {hint && <div className="mt-1 text-[11px] text-fg-subtle">{hint}</div>}
     </div>
   );
 }
@@ -916,7 +916,7 @@ function TodayCell({
       <div
         className={
           "mt-1 text-xl font-semibold tabular-nums tracking-tight md:text-2xl " +
-          (accent ? "text-sky-600" : "text-fg")
+          (accent ? "text-accent" : "text-fg")
         }
       >
         <AnimatedNum value={rawValue} fmt={fmt} loading={loading} />
@@ -931,8 +931,8 @@ function TodayCell({
 function KpiRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between text-sm">
-      <span className="text-slate-500">{label}</span>
-      <span className="font-semibold text-slate-900 tabular-nums">{value}</span>
+      <span className="text-fg-muted">{label}</span>
+      <span className="font-semibold text-fg tabular-nums">{value}</span>
     </div>
   );
 }
@@ -954,20 +954,20 @@ function KpiCard({
   accent?: boolean;
 }) {
   return (
-    <div className="group rounded-xl border border-slate-200/70 bg-slate-50/40 p-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:shadow-[0_4px_14px_-6px_rgba(15,23,42,0.08)]">
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+    <div className="group rounded-xl border border-border bg-bg-subtle/40 p-3.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-border hover:bg-bg-card hover:shadow-[0_4px_14px_-6px_rgba(0,0,0,0.08)]">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
         {label}
       </div>
       <div
         className={
           "mt-1 text-lg font-semibold tabular-nums tracking-tight md:text-xl " +
-          (accent ? "text-sky-600" : "text-slate-900")
+          (accent ? "text-accent" : "text-fg")
         }
       >
         {loading ? "…" : value}
       </div>
       {sub && (
-        <div className="mt-0.5 truncate text-[11px] text-slate-500">{sub}</div>
+        <div className="mt-0.5 truncate text-[11px] text-fg-muted">{sub}</div>
       )}
     </div>
   );
@@ -991,7 +991,7 @@ function SegPill<T extends string | number>({
   const idx = Math.max(0, options.indexOf(value));
   const total = options.length;
   return (
-    <div className="relative inline-flex shrink-0 items-stretch rounded-full border border-border bg-bg-card p-0.5 text-[11px] font-medium shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+    <div className="relative inline-flex shrink-0 items-stretch rounded-full border border-border bg-bg-card p-0.5 text-[11px] font-medium shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
       <div
         aria-hidden
         className="absolute inset-y-0.5 rounded-full bg-fg shadow-cta transition-[transform,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
@@ -1099,21 +1099,21 @@ function ConversionFunnel({
         value={loading ? "…" : fmtNum(t)}
         sub="нажали /start"
         pct={100}
-        color="bg-sky-500"
+        color="bg-accent"
       />
       <FunnelStage
         label="Активные подписки"
         value={loading ? "…" : fmtNum(a)}
         sub={t > 0 ? `${aPct.toFixed(1)}% от всех` : undefined}
         pct={aRel}
-        color="bg-emerald-500"
+        color="bg-success"
       />
       <FunnelStage
         label="Платящие"
         value={loading ? "…" : fmtNum(p)}
         sub={t > 0 ? `${pPct.toFixed(1)}% от всех` : undefined}
         pct={pRel}
-        color="bg-violet-500"
+        color="bg-tagpurple"
       />
     </div>
   );
@@ -1133,17 +1133,17 @@ function FunnelStage({
   color: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200/70 bg-slate-50/40 p-4">
-      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+    <div className="rounded-xl border border-border bg-bg-subtle/40 p-4">
+      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
         {label}
       </div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-slate-900">
+      <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-fg">
         {value}
       </div>
       {sub && (
-        <div className="mt-0.5 text-[11px] text-slate-500">{sub}</div>
+        <div className="mt-0.5 text-[11px] text-fg-muted">{sub}</div>
       )}
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-bg-elevated">
         <div
           className={`h-full ${color} transition-[width] duration-700`}
           style={{ width: `${pct}%` }}
@@ -1173,7 +1173,7 @@ function RevenueChart({
         {Array.from({ length: 30 }).map((_, i) => (
           <div
             key={i}
-            className="flex-1 rounded-sm bg-slate-100"
+            className="flex-1 rounded-sm bg-bg-elevated"
             style={{ height: `${20 + Math.random() * 60}%` }}
           />
         ))}
@@ -1185,15 +1185,15 @@ function RevenueChart({
       <AreaChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 4 }}>
         <defs>
           <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#0EA5E9" stopOpacity={0.28} />
-            <stop offset="100%" stopColor="#0EA5E9" stopOpacity={0} />
+            <stop offset="0%" stopColor="#D7FF67" stopOpacity={0.28} />
+            <stop offset="100%" stopColor="#D7FF67" stopOpacity={0} />
           </linearGradient>
         </defs>
         <Tooltip content={<ChartTooltip valueFmt={fmtRub} label="Доход" />} cursor={{ stroke: "#CBD5E1", strokeDasharray: "3 3" }} />
         <Area
           type="monotone"
           dataKey="revenue_rubles"
-          stroke="#0EA5E9"
+          stroke="#D7FF67"
           strokeWidth={1.75}
           fill="url(#revGrad)"
           isAnimationActive={false}
@@ -1364,7 +1364,7 @@ function SkeletonBars() {
       {Array.from({ length: 30 }).map((_, i) => (
         <div
           key={i}
-          className="flex-1 rounded-sm bg-slate-100"
+          className="flex-1 rounded-sm bg-bg-elevated"
           style={{ height: `${15 + ((i * 7) % 60)}%` }}
         />
       ))}
@@ -1384,18 +1384,18 @@ function ChartTooltip({ active, payload, label, valueFmt }: ChartTooltipProps) {
   if (!active || !payload?.length) return null;
   const fmt = valueFmt ?? ((v: number) => fmtNum(v));
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-md">
-      <div className="text-[10px] uppercase tracking-wider text-slate-400">
+    <div className="rounded-lg border border-border bg-bg-card px-3 py-2 shadow-md">
+      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
         {typeof label === "string" ? fmtShortDate(label) : label}
       </div>
       {payload.map((p, i) => (
         <div key={i} className="mt-1 flex items-center gap-2 text-sm">
           <span
             className="h-2 w-2 rounded-full"
-            style={{ background: p.color ?? "#0EA5E9" }}
+            style={{ background: p.color ?? "#D7FF67" }}
           />
-          <span className="text-slate-500">{labelForKey(p.dataKey, p.name)}</span>
-          <span className="font-semibold tabular-nums text-slate-900">
+          <span className="text-fg-muted">{labelForKey(p.dataKey, p.name)}</span>
+          <span className="font-semibold tabular-nums text-fg">
             {p.value != null ? fmt(p.value) : "—"}
           </span>
         </div>
@@ -1462,14 +1462,14 @@ function SegmentsCard({
         sub="обновляется каждые 5 минут · клик → создать рассылку"
       />
       {error ? (
-        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
           Не удалось загрузить сегменты.
         </div>
       ) : (
         <div className="mt-4 space-y-5">
           {SEGMENT_GROUPS.map((group) => (
             <div key={group.title}>
-              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+              <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
                 {group.title}
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -1507,18 +1507,18 @@ function SegmentRow({
   return (
     <Link
       to="/broadcasts/new"
-      className="group flex items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-slate-50/40 px-3 py-2.5 text-sm transition hover:border-sky-300 hover:bg-sky-50/60"
+      className="group flex items-center justify-between gap-3 rounded-xl border border-border bg-bg-subtle/40 px-3 py-2.5 text-sm transition hover:border-accent/40 hover:bg-accent/10"
     >
-      <span className="truncate text-slate-600 group-hover:text-slate-900">
+      <span className="truncate text-fg-muted group-hover:text-fg">
         {label}
       </span>
       <span
         className={
           loading || isMissing
-            ? "text-xs text-slate-400"
+            ? "text-xs text-fg-subtle"
             : isEmpty
-            ? "shrink-0 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-400 tabular-nums"
-            : "shrink-0 rounded-md bg-sky-100/80 px-2 py-0.5 text-xs font-semibold text-sky-700 tabular-nums"
+            ? "shrink-0 rounded-md bg-bg-elevated px-2 py-0.5 text-xs font-medium text-fg-subtle tabular-nums"
+            : "shrink-0 rounded-md bg-accent/20 px-2 py-0.5 text-xs font-semibold text-accent tabular-nums"
         }
       >
         {loading ? "…" : isMissing ? "—" : fmtNum(count)}
@@ -1542,14 +1542,14 @@ function ReferralBlock({
   const net = revenue - cashback;
   return (
     <div className="mt-4 space-y-3">
-      <div className="rounded-xl border border-slate-200/70 bg-gradient-to-br from-sky-50/60 to-white p-4">
-        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-slate-400">
+      <div className="rounded-xl border border-border bg-gradient-to-br from-accent/5 to-white p-4">
+        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
           Чистая прибыль
         </div>
-        <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900 md:text-3xl">
+        <div className="mt-1 text-2xl font-semibold tabular-nums text-fg md:text-3xl">
           {loading ? "…" : fmtRub(net)}
         </div>
-        <div className="mt-1 text-[11px] text-slate-500">
+        <div className="mt-1 text-[11px] text-fg-muted">
           выручка − кэшбэк
         </div>
       </div>
@@ -1573,11 +1573,11 @@ function MiniStat({
   loading?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200/70 bg-slate-50/40 px-3 py-2">
-      <div className="text-[9px] font-medium uppercase tracking-[0.12em] text-slate-400">
+    <div className="rounded-lg border border-border bg-bg-subtle/40 px-3 py-2">
+      <div className="text-[9px] font-medium uppercase tracking-[0.12em] text-fg-subtle">
         {label}
       </div>
-      <div className="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">
+      <div className="mt-0.5 text-sm font-semibold tabular-nums text-fg">
         {loading ? "…" : value}
       </div>
     </div>
@@ -1602,7 +1602,7 @@ function TopReferrersList({
   }
   if (!data?.length) {
     return (
-      <div className="mt-6 text-sm text-slate-400">
+      <div className="mt-6 text-sm text-fg-subtle">
         Пока нет данных по партнёрам.
       </div>
     );
@@ -1619,24 +1619,24 @@ function TopReferrersList({
           <Link
             key={String(id) + "_" + i}
             to={`/referrals`}
-            className="group flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition hover:border-slate-200 hover:bg-slate-50/60"
+            className="group flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition hover:border-border hover:bg-bg-subtle/60"
           >
-            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-slate-100 text-[11px] font-semibold tabular-nums text-slate-600">
+            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-bg-elevated text-[11px] font-semibold tabular-nums text-fg-muted">
               {i + 1}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-slate-900">
+              <div className="truncate text-sm font-medium text-fg">
                 {username !== "—" ? `@${username}` : `tg:${id}`}
               </div>
-              <div className="truncate text-[11px] text-slate-500">
+              <div className="truncate text-[11px] text-fg-muted">
                 {fmtNum(invited)} приглашённых · кэшбэк {fmtRub(cashback)}
               </div>
             </div>
             <div className="shrink-0 text-right">
-              <div className="text-sm font-semibold tabular-nums text-slate-900">
+              <div className="text-sm font-semibold tabular-nums text-fg">
                 {fmtRub(revenue)}
               </div>
-              <div className="text-[10px] uppercase tracking-wider text-slate-400">
+              <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
                 выручка
               </div>
             </div>
@@ -1648,9 +1648,9 @@ function TopReferrersList({
 }
 
 const TARIFF_DEFS = [
-  { key: "basic", label: "Basic", color: "#0EA5E9" },
-  { key: "plus", label: "Plus", color: "#8B5CF6" },
-  { key: "basic_combo", label: "Basic + Combo", color: "#06B6D4" },
+  { key: "basic", label: "Basic", color: "#D7FF67" },
+  { key: "plus", label: "Plus", color: "#A6FFB3" },
+  { key: "basic_combo", label: "Basic + Combo", color: "#FFD66B" },
   { key: "plus_combo", label: "Plus + Combo", color: "#EC4899" },
   { key: "proxy", label: "Прокси", color: "#F59E0B" },
 ] as const;
@@ -1687,31 +1687,31 @@ function TariffsBlock({
         const rub = t.revenueKop / 100;
         const pct = totalRevenue > 0 ? (t.revenueKop / totalRevenue) * 100 : 0;
         return (
-          <div key={t.key} className="rounded-xl border border-slate-200/70 bg-slate-50/40 p-3">
+          <div key={t.key} className="rounded-xl border border-border bg-bg-subtle/40 p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span
                   className="h-2.5 w-2.5 rounded-full"
                   style={{ background: t.color }}
                 />
-                <span className="text-sm font-medium text-slate-900">
+                <span className="text-sm font-medium text-fg">
                   {t.label}
                 </span>
               </div>
-              <div className="text-sm font-semibold tabular-nums text-slate-900">
+              <div className="text-sm font-semibold tabular-nums text-fg">
                 {fmtRub(rub)}
-                <span className="ml-2 text-[11px] font-normal text-slate-400 tabular-nums">
+                <span className="ml-2 text-[11px] font-normal text-fg-subtle tabular-nums">
                   {pct.toFixed(1)}%
                 </span>
               </div>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-bg-elevated">
               <div
                 className="h-full transition-[width] duration-700"
                 style={{ width: `${Math.max(2, pct)}%`, background: t.color }}
               />
             </div>
-            <div className="mt-1.5 text-[11px] text-slate-500 tabular-nums">
+            <div className="mt-1.5 text-[11px] text-fg-muted tabular-nums">
               {fmtNum(t.count)} продаж
             </div>
           </div>
@@ -1730,9 +1730,9 @@ const PROVIDER_LABELS: Record<string, string> = {
   unknown: "Прочее",
 };
 const PROVIDER_COLORS: Record<string, string> = {
-  platega: "#0EA5E9",
+  platega: "#D7FF67",
   cryptobot: "#F59E0B",
-  telegram_stars: "#8B5CF6",
+  telegram_stars: "#A6FFB3",
   lava: "#10B981",
   balance: "#64748B",
   unknown: "#94A3B8",
@@ -1756,7 +1756,7 @@ function ProvidersBlock({
   }
   if (!data?.length) {
     return (
-      <div className="mt-6 text-sm text-slate-400">
+      <div className="mt-6 text-sm text-fg-subtle">
         За выбранный период нет платежей.
       </div>
     );
@@ -1769,25 +1769,25 @@ function ProvidersBlock({
         const pct = totalRev > 0 ? (r.revenue_rubles / totalRev) * 100 : 0;
         const color = PROVIDER_COLORS[r.provider] ?? "#94A3B8";
         return (
-          <div key={r.provider} className="rounded-lg border border-slate-200/70 bg-slate-50/30 p-3">
+          <div key={r.provider} className="rounded-lg border border-border bg-bg-subtle/30 p-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full" style={{ background: color }} />
-                <span className="text-sm font-medium text-slate-900">
+                <span className="text-sm font-medium text-fg">
                   {PROVIDER_LABELS[r.provider] ?? r.provider}
                 </span>
               </div>
-              <div className="text-sm font-semibold tabular-nums text-slate-900">
+              <div className="text-sm font-semibold tabular-nums text-fg">
                 {fmtRub(r.revenue_rubles)}
               </div>
             </div>
-            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-100">
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-bg-elevated">
               <div
                 className="h-full transition-[width] duration-700"
                 style={{ width: `${Math.max(2, pct)}%`, background: color }}
               />
             </div>
-            <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500 tabular-nums">
+            <div className="mt-1 flex items-center justify-between text-[11px] text-fg-muted tabular-nums">
               <span>{fmtNum(r.count)} платежей</span>
               <span>{pct.toFixed(1)}%</span>
             </div>

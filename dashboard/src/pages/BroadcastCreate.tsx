@@ -179,7 +179,7 @@ export function BroadcastCreate() {
                 className={
                   "font-normal normal-case " +
                   (photoFileId && message.length > 1024
-                    ? "text-amber-500"
+                    ? "text-warning"
                     : "text-fg-subtle")
                 }
               >
@@ -195,7 +195,7 @@ export function BroadcastCreate() {
               placeholder="Поддерживается HTML: <b>жирный</b>, <i>курсив</i>, <a href=...>ссылки</a>, <blockquote>цитаты</blockquote>, <blockquote expandable>скрытая</blockquote>"
             />
             {photoFileId && message.length > 1024 && (
-              <p className="mt-1.5 text-xs text-amber-500">
+              <p className="mt-1.5 text-xs text-warning">
                 ⚠️ Caption у фото лимит 1024 символа. У тебя {message.length}.
                 Массовая рассылка упадёт. Либо убери фото, либо сократи текст.
                 «Тест на админе» автоматически разделит на 2 сообщения, чтобы

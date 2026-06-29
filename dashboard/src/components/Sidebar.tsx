@@ -65,12 +65,12 @@ export function Sidebar() {
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-bg-subtle/40 px-4 py-6 md:flex">
       <div className="mb-8 flex items-center gap-3 px-2">
-        <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-accent to-secondary text-white shadow-glow-sm">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-accent text-bg shadow-glow-sm">
           <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={2.5} />
         </div>
         <div>
           <div className="text-sm font-semibold leading-tight text-fg">Atlas</div>
-          <div className="text-[11px] uppercase tracking-wider text-fg-subtle">Admin</div>
+          <div className="text-[11px] uppercase tracking-[0.18em] text-fg-subtle">Admin</div>
         </div>
       </div>
 
@@ -90,8 +90,8 @@ export function Sidebar() {
                     cn(
                       "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all",
                       isActive
-                        ? "bg-fg text-white shadow-cta"
-                        : "text-fg-muted hover:bg-bg-card hover:text-fg",
+                        ? "bg-accent text-bg shadow-glow-sm"
+                        : "text-fg-muted hover:bg-bg-elevated hover:text-fg",
                     )
                   }
                 >
@@ -100,7 +100,7 @@ export function Sidebar() {
                       <it.icon
                         className={cn(
                           "h-4 w-4 transition-colors",
-                          isActive ? "text-white" : "text-fg-subtle group-hover:text-fg-muted",
+                          isActive ? "text-bg" : "text-fg-subtle group-hover:text-fg-muted",
                         )}
                         strokeWidth={isActive ? 2.5 : 2}
                       />
