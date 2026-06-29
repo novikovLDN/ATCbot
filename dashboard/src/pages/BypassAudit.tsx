@@ -333,7 +333,7 @@ function Filter({
     { key: "all", label: "Все", count: total },
   ];
   return (
-    <div className="inline-flex rounded-full border border-border bg-bg-card p-0.5 text-xs font-medium">
+    <div className="inline-flex rounded-full border border-border bg-bg-elevated p-0.5 text-xs font-medium">
       {opts.map((o) => (
         <button
           key={o.key}
@@ -342,7 +342,7 @@ function Filter({
           className={
             "rounded-full px-3 py-1.5 transition-colors " +
             (value === o.key
-              ? "bg-fg text-bg-card"
+              ? "bg-accent font-semibold text-bg shadow-glow-sm"
               : "text-fg-muted hover:text-fg")
           }
         >
