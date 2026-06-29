@@ -1673,30 +1673,73 @@ async def callback_combo_pay_balance(callback: CallbackQuery):
     await database.decrease_balance(telegram_id, price, source="combo_purchase", description=f"Combo {base_tariff} {period_days}d + {gb}GB bypass")
 
     # 3. Finalize purchase (activates subscription, creates VPN key, etc.)
+    result = None
+    expires_at = None
     try:
         result = await subscription_service.finalize_purchase(
             purchase_id=purchase_id,
             payment_provider="balance",
             amount_rubles=float(price),
         )
-        if not result.get("success"):
-            logger.error(f"Combo finalize failed: {result}")
+        if not result or not result.get("success"):
+            logger.error(f"Combo finalize failed: user={telegram_id} purchase={purchase_id} result={result}")
+        else:
+            expires_at = result.get("expires_at")
     except Exception as e:
-        logger.error(f"Combo finalize error: {e}")
+        logger.exception(f"Combo finalize error: user={telegram_id} purchase={purchase_id}: {e}")
 
-    # 4. Add bypass traffic
+    # 4. Add bypass traffic.
+    #
+    # КРИТИЧНО: используем add_bypass_traffic, а НЕ add_traffic.
+    # add_traffic возвращает False, если у юзера ещё нет remnawave_uuid
+    # (первая покупка комбо!). add_bypass_traffic делает fallback в
+    # create_remnawave_user(traffic_limit_override=...) — именно так
+    # GB корректно ложатся и на свежий, и на существующий аккаунт.
+    # Та же логика уже работает в payments_callbacks.callback_pay_balance,
+    # process_successful_payment (TG Payments) и confirmation._handle_subscription_confirmation
+    # (webhook-провайдеры). Этот хендлер исторически использовал старый
+    # add_traffic — отсюда и пропавшие ГБ у combo-покупателей через
+    # «С баланса» кнопку на экране комбо-периода.
     from app.services import remnawave_service
     traffic_bytes = gb * 1024**3
+    rmn_success = False
     try:
-        rmn_success = await remnawave_service.add_traffic(telegram_id, traffic_bytes)
+        rmn_success = await remnawave_service.add_bypass_traffic(
+            telegram_id,
+            traffic_bytes,
+            subscription_type=base_tariff,
+            subscription_end=expires_at,
+            period_days=period_days,
+        )
         if not rmn_success:
-            logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_FAIL user={telegram_id} gb={gb}")
+            logger.error(
+                "COMBO_PAY_BALANCE_TRAFFIC_FAIL user=%s gb=%s purchase=%s — "
+                "subscription активирована, ГБ не легли",
+                telegram_id, gb, purchase_id,
+            )
     except Exception as traffic_err:
-        logger.warning(f"COMBO_PAY_BALANCE_TRAFFIC_ERROR user={telegram_id}: {traffic_err}")
+        logger.exception(
+            "COMBO_PAY_BALANCE_TRAFFIC_ERROR user=%s gb=%s: %s",
+            telegram_id, gb, traffic_err,
+        )
 
-    # 5. Record traffic purchase + mark as combo
-    await database.record_traffic_purchase(telegram_id, gb, 0)
-    await database.set_combo_flag(telegram_id, True)
+    # 5. Record traffic purchase + mark as combo — только при успехе,
+    # чтобы статистика и is_combo-флаг не врали.
+    if rmn_success:
+        try:
+            await database.record_traffic_purchase(telegram_id, gb, 0)
+        except Exception as rec_err:
+            logger.warning(
+                "COMBO_PAY_BALANCE_RECORD_FAIL user=%s gb=%s: %s",
+                telegram_id, gb, rec_err,
+            )
+        try:
+            await database.set_combo_flag(telegram_id, True)
+        except Exception as flag_err:
+            logger.warning(
+                "COMBO_PAY_BALANCE_FLAG_FAIL user=%s: %s",
+                telegram_id, flag_err,
+            )
 
     months = period_days // 30
     text = i18n_get_text(language, "combo.purchase_success",
