@@ -234,17 +234,28 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
   const fix = useMutation({
     mutationFn: () => endpoints.reconciliationFix(telegram_id),
     onSuccess: (data) => {
+      const fb =
+        data.fallback_applied === "past_date"
+          ? " (fallback: расчёт дал прошлое, поставлен NOW+1д)"
+          : data.fallback_applied === "would_extend"
+          ? " (fallback: расчёт дал больше текущего, поставлен NOW+1д)"
+          : data.fallback_applied === "no_payments"
+          ? " (нет платежей и admin_grant, поставлен NOW+1д)"
+          : "";
       toast.success(
-        `Исправлено: снято ${fmtDays(data.days_removed)} по ${data.proof_payment_ids.length} платежам`,
+        `Панель Remnawave подрезана: снято ${fmtDays(data.days_removed)}` +
+          fb,
       );
       qc.invalidateQueries({ queryKey: ["reconciliation"] });
     },
     onError: (e: unknown) => {
       const err = e as ApiError;
-      if (err.status === 409) {
+      if (err.status === 502) {
         toast.error(
-          "Не могу подрезать: расчёт даёт срок ДЛИННЕЕ текущего. Проверь платежи вручную.",
+          "Не удалось обновить Remnawave-панель. Повтори — есть встроенный retry, но 3 попытки исчерпаны.",
         );
+      } else if (err.status === 503) {
+        toast.error("БД недоступна — попробуй позже.");
       } else {
         toast.error(err.detail ?? "Не удалось применить фикс");
       }
@@ -305,7 +316,8 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
         />
       </div>
 
-      {/* Panel mismatch hint — DB vs Remnawave */}
+      {/* Panel mismatch hint — DB vs Remnawave. Bot-DB не правим — только
+          подрезаем panel expireAt, чтобы отрубить реальный VPN-доступ. */}
       {d.panel.available && !d.panel.matches_db && (
         <div className="rounded-lg border border-accent/30 bg-accent/10 p-3 text-fg">
           <div className="font-semibold text-accent">
@@ -316,10 +328,22 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
             {" · "}
             В Remnawave (<span className="font-mono">tg_{telegram_id}_premium</span>):{" "}
             <span className="font-mono">{fmtDate(d.panel.expires_at)}</span>.
-            «Исправить» подрежет expires_at в bot-DB (Remnawave не трогаем — там уже корректный срок).
           </div>
         </div>
       )}
+
+      <div className="rounded-lg border border-border bg-bg-elevated/40 p-3 text-fg-muted">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">
+          Что делает «Исправить»
+        </div>
+        <div className="mt-1">
+          Подрезает <b className="font-mono">expireAt</b> у Remnawave-энтити{" "}
+          <span className="font-mono">tg_{telegram_id}_premium</span> до
+          ожидаемой даты. Bot-DB не трогаем. Если платежей и admin_grant
+          нет — ставим NOW + 1 день, дальше юзер естественно теряет
+          премиум-доступ.
+        </div>
+      </div>
 
       {/* Reason */}
       <div className="rounded-lg border border-warning/30 bg-warning/10 p-3">
@@ -423,18 +447,22 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
         </details>
       )}
 
-      {/* Fix button */}
+      {/* Fix button — правит только Remnawave-панель, bot-DB нетронут.
+          Если expected в будущем/длиннее текущего/пусто — fallback на NOW+1д. */}
       <div className="flex items-center gap-2 pt-1">
         <button
           type="button"
           className="btn-primary"
-          disabled={fix.isPending || wouldExtend}
+          disabled={fix.isPending}
           onClick={() => {
+            const target = wouldExtend
+              ? `NOW + 1 день (расчёт бы дал ${fmtDate(d.expected_expires_at)} — это дольше текущего)`
+              : fmtDate(d.expected_expires_at);
             if (
               window.confirm(
-                `Подрезать expires_at у ${telegram_id} до ${fmtDate(d.expected_expires_at)}?\n\n` +
-                  `Снимется ~${fmtDays(delta)}.\n` +
-                  `Доказательство: ${d.payments.filter((p) => p.counted).length} платежей + ${d.subscription.admin_grant_days} дней admin_grant.`,
+                `Подрезать expireAt у tg_${telegram_id}_premium в Remnawave до ${target}?\n\n` +
+                  `Доказательство: ${d.payments.filter((p) => p.counted).length} платежей + ${d.subscription.admin_grant_days} дней admin_grant.\n\n` +
+                  `Bot-DB не трогаем.`,
               )
             ) {
               fix.mutate();
@@ -446,7 +474,7 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
         </button>
         {wouldExtend && (
           <span className="text-fg-subtle">
-            Правка не требуется — expected ≥ actual.
+            Расчёт даёт больше текущего → применится NOW + 1 день.
           </span>
         )}
       </div>

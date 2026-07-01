@@ -557,6 +557,10 @@ export const endpoints = {
       total_paid_days: number;
       admin_grant_days_kept: number;
       proof_payment_ids: number[];
+      fallback_applied: "past_date" | "would_extend" | "no_payments" | null;
+      panel_updated: boolean;
+      panel_error: string | null;
+      is_bypass_only: boolean;
     }>(
       `/reconciliation/fix/${telegram_id}${
         reason ? `?reason=${encodeURIComponent(reason)}` : ""
