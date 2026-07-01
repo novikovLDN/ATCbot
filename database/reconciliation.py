@@ -451,23 +451,35 @@ async def get_reconciliation_detail(telegram_id: int) -> Dict[str, Any]:
             # Non-counted (traffic pack / gift / topup) — still surface for context.
             proof_payments.append(item)
 
-    # Expected expiry = activated_at + total_paid_days + admin_grant_days.
-    # If activated_at is unknown, fall back to earliest paid_at.
-    base_start = activated_at
-    if base_start is None and proof_payments:
-        first_paid = next(
-            (
-                _from_db_utc_str(p["paid_at"]) or _from_db_utc_str(p["created_at"])
-                for p in proof_payments if p.get("counted")
-            ),
-            None,
-        )
-        base_start = first_paid
-    if base_start is None:
-        base_start = now  # last-resort: treat as starting today
-
-    total_days = total_paid_days + int(admin_grant_days or 0)
-    expected_expires_at = base_start + timedelta(days=total_days)
+    # Expected expiry — simulate the bot's real renewal logic:
+    # каждый оплаченный платёж либо стартует новое окно (если была
+    # дырка), либо продлевает текущее (если ещё не истекло на момент
+    # оплаты). admin_grant_days ложится поверх. Ровно так, как это
+    # делает production grant_access при обычной активации.
+    #
+    # Пример: платёж 01.07.2026 basic_30 → ожидание 31.07.2026,
+    # НЕ activated_at + 30 (это давало странные даты в прошлом для
+    # старых юзеров, у которых activated_at был много лет назад).
+    counted_for_sim = []
+    for p in proof_payments:
+        if not p.get("counted"):
+            continue
+        eff_iso = p.get("paid_at") or p.get("created_at")
+        eff = _from_db_utc_str(eff_iso)
+        if eff:
+            counted_for_sim.append({
+                "effective_at": eff,
+                "period_days": p["period_days"],
+            })
+    counted_for_sim.sort(key=lambda x: x["effective_at"])
+    expected_expires_at = _simulate_expiry_from_payments(
+        counted_for_sim, int(admin_grant_days or 0),
+    )
+    if expected_expires_at is None:
+        # Нет платежей И нет admin_grant — считаем что подписки быть
+        # не должно вообще; для UI ставим NOW, чтобы delta показал
+        # ровно текущий разрыв.
+        expected_expires_at = now
 
     actual_days_from_now = (expires_at - now).days if expires_at else 0
     expected_days_from_now = (expected_expires_at - now).days
@@ -550,6 +562,58 @@ def _from_db_utc_str(iso: Optional[str]) -> Optional[datetime]:
     return dt
 
 
+def _simulate_expiry_from_payments(
+    counted_payments: List[Dict[str, Any]],
+    admin_grant_days: int,
+) -> Optional[datetime]:
+    """Compute the "correct" expires_at by simulating the standard bot renewal
+    logic over the user's payment history.
+
+    Each counted payment either:
+      • starts a fresh subscription window (if there is no prior window OR
+        the previous window has already ended by the time this payment was
+        made — gap in subscription);
+      • extends the current window (if paid while still-active — like the
+        standard "renewal" branch in grant_access).
+
+    Admin grant days (subscriptions.admin_grant_days) are added on TOP of
+    the resulting end. Mirrors how admins actually use the grant flow:
+    they hand out extra days after the standard payment history.
+
+    Example (matches product spec):
+      payments=[(01.07.2026, 30)], admin=0 → 31.07.2026
+      payments=[(01.06, 30), (25.06, 30)], admin=0 → 31.07 (extend)
+      payments=[(01.01.2020, 30), (01.07.2026, 30)], admin=0 → 31.07.2026
+        — 6-year gap → last payment starts fresh.
+
+    Args:
+        counted_payments: sorted ascending by effective_at, each with keys
+            `effective_at: datetime` and `period_days: int`.
+        admin_grant_days: total admin_grant_days from subscriptions row.
+
+    Returns None if there are neither payments nor admin grants — caller
+    should treat as "no legit subscription time exists → clamp to NOW+1d".
+    """
+    current_end: Optional[datetime] = None
+    for p in counted_payments:
+        paid_at = p["effective_at"]
+        period = int(p["period_days"] or 0)
+        if paid_at is None or period <= 0:
+            continue
+        if current_end is None or paid_at > current_end:
+            # Gap or first payment: start fresh from this payment.
+            current_end = paid_at + timedelta(days=period)
+        else:
+            # Renewal — extend current window.
+            current_end += timedelta(days=period)
+
+    if admin_grant_days and admin_grant_days > 0:
+        base = current_end or datetime.now(timezone.utc)
+        current_end = base + timedelta(days=admin_grant_days)
+
+    return current_end
+
+
 # ──────────────────────────────────────────────────────────────────────
 #  3. Fix — apply reconciliation
 # ──────────────────────────────────────────────────────────────────────
@@ -603,8 +667,8 @@ async def apply_reconciliation_fix(
             )
 
             proof_ids: List[int] = []
+            counted_for_sim: List[Dict[str, Any]] = []
             total_paid_days = 0
-            earliest_effective: Optional[datetime] = None
             for p in payment_rows:
                 period_days = _extract_period_days_from_tariff((p["tariff"] or "").strip())
                 if not period_days:
@@ -612,26 +676,36 @@ async def apply_reconciliation_fix(
                 proof_ids.append(p["id"])
                 total_paid_days += period_days
                 eff = _from_db_utc(p["effective_at"]) if p["effective_at"] else None
-                if eff and (earliest_effective is None or eff < earliest_effective):
-                    earliest_effective = eff
+                if eff:
+                    counted_for_sim.append({
+                        "effective_at": eff,
+                        "period_days": period_days,
+                    })
+            counted_for_sim.sort(key=lambda x: x["effective_at"])
 
-            base_start = activated_at or earliest_effective or now
-            total_days = total_paid_days + int(admin_grant_days or 0)
-            new_expires_at = base_start + timedelta(days=total_days)
+            # Симулируем стандартный renewal (см. _simulate_expiry_from_payments).
+            # Ровно то, что делает бот в grant_access: платёж без дырки
+            # продлевает окно, с дыркой — стартует новое от paid_at.
+            # admin_grant_days ложится поверх итога.
+            new_expires_at = _simulate_expiry_from_payments(
+                counted_for_sim, int(admin_grant_days or 0),
+            )
 
-            # Safety guards:
-            #  – never move expires_at further into the future than it was.
-            #  – if the calculated new_expires_at is in the past (e.g. user paid
-            #    for basic_30 four years ago and never renewed), we still write
-            #    it — the standard expiry cleanup worker will pick it up next
-            #    cycle and either mark expired or transition to bypass-only.
-            if old_expires_at and new_expires_at > old_expires_at:
-                return {
-                    "success": False,
-                    "error": "would_extend_not_shorten",
-                    "old_expires_at": old_expires_at.isoformat(),
-                    "new_expires_at": new_expires_at.isoformat(),
-                }
+            # Clamp: если счёт даёт None (нет ни платежей, ни грантов),
+            # прошлое ИЛИ длиннее текущего expires_at — ставим NOW + 1 день.
+            # Так Remnawave не сбоит от отрицательного expireAt, и стандартный
+            # expiry-cleanup через ~24ч штатно переведёт юзера в expired.
+            fallback_applied: Optional[str] = None
+            min_new = now + timedelta(days=1)
+            if new_expires_at is None:
+                new_expires_at = min_new
+                fallback_applied = "no_payments"
+            elif new_expires_at < now:
+                new_expires_at = min_new
+                fallback_applied = "past_date"
+            elif old_expires_at and new_expires_at > old_expires_at:
+                new_expires_at = min_new
+                fallback_applied = "would_extend"
 
             days_removed = (
                 (old_expires_at - new_expires_at).days
@@ -645,6 +719,22 @@ async def apply_reconciliation_fix(
                 _to_db_utc(new_expires_at),
                 telegram_id,
             )
+
+            log_reason = reason
+            if fallback_applied == "past_date":
+                log_reason += (
+                    " [fallback: past-date computed, clamped to NOW+1d]"
+                )
+            elif fallback_applied == "would_extend":
+                log_reason += (
+                    " [fallback: recomputed date longer than current, "
+                    "clamped to NOW+1d]"
+                )
+            elif fallback_applied == "no_payments":
+                log_reason += (
+                    " [fallback: no counted payments and no admin_grant, "
+                    "clamped to NOW+1d]"
+                )
 
             log_id = await conn.fetchval(
                 """INSERT INTO subscription_reconciliation_log (
@@ -661,7 +751,7 @@ async def apply_reconciliation_fix(
                 (old_expires_at - now).days if old_expires_at else 0,
                 (new_expires_at - now).days,
                 days_removed,
-                reason,
+                log_reason,
                 proof_ids,
                 total_paid_days,
                 int(admin_grant_days or 0),
@@ -690,6 +780,7 @@ async def apply_reconciliation_fix(
         "total_paid_days": total_paid_days,
         "admin_grant_days_kept": int(admin_grant_days or 0),
         "proof_payment_ids": proof_ids,
+        "fallback_applied": fallback_applied,
     }
 
 
