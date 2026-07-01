@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  RefreshCw,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
@@ -50,17 +51,29 @@ const fmtDays = (days: number) => {
 };
 
 export function ReconciliationSection() {
+  // Auto-refetch выключен: candidates-endpoint делает полный скан
+  // Remnawave-панели (get_all_users, ~10 запросов, ~5-8 сек), а
+  // over-issuance-endpoint читает лог DB. Каждый обновляется вручную
+  // через кнопку «Обновить» — так не мешаем воркерам (auto-renewal,
+  // expiry-cleanup, watchdog) и не долбим Remnawave-API.
   const candidates = useQuery({
     queryKey: ["reconciliation", "candidates"],
     queryFn: endpoints.reconciliationCandidates,
-    // Not every navigation, but often enough to reflect fresh state.
-    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
   });
   const overIssuance = useQuery({
     queryKey: ["reconciliation", "over-issuance"],
     queryFn: endpoints.reconciliationOverIssuanceLog,
-    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
   });
+
+  const isFetching = candidates.isFetching || overIssuance.isFetching;
+  const refresh = () => {
+    candidates.refetch();
+    overIssuance.refetch();
+  };
 
   return (
     <section className="animate-fade-up rounded-2xl border border-border bg-bg-card p-5 md:p-6">
@@ -79,12 +92,28 @@ export function ReconciliationSection() {
             подрезать expires_at до фактически купленного срока.
           </p>
         </div>
-        <div className="text-right">
-          <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
-            Кандидатов
-          </div>
-          <div className="mt-0.5 text-2xl font-semibold text-fg tabular-nums md:text-3xl">
-            {candidates.isLoading ? "—" : fmtNum(candidates.data?.total ?? 0)}
+        <div className="flex items-start gap-3">
+          <button
+            type="button"
+            className="btn-secondary text-xs"
+            onClick={refresh}
+            disabled={isFetching}
+            title="Пересканировать Remnawave-панель и лог"
+          >
+            <RefreshCw
+              className={
+                "h-3.5 w-3.5 " + (isFetching ? "animate-spin" : "")
+              }
+            />
+            Обновить
+          </button>
+          <div className="text-right">
+            <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
+              Кандидатов
+            </div>
+            <div className="mt-0.5 text-2xl font-semibold text-fg tabular-nums md:text-3xl">
+              {candidates.isLoading ? "—" : fmtNum(candidates.data?.total ?? 0)}
+            </div>
           </div>
         </div>
       </header>
@@ -124,7 +153,7 @@ export function ReconciliationSection() {
             Авто-детект новых выдач &gt; 8 лет
           </div>
           <div className="text-[10px] text-fg-subtle">
-            обновляется каждые 60с
+            обновляется по кнопке
           </div>
         </div>
         {overIssuance.isLoading ? (
