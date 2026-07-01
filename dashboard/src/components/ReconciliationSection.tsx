@@ -179,13 +179,18 @@ function CandidateRow({ row }: { row: CandidateRow }) {
         </div>
         <div className="text-right">
           <div className="text-[10px] uppercase tracking-wider text-fg-subtle">
-            до истечения
+            в панели Remnawave
           </div>
           <div className="mt-0.5 font-semibold tabular-nums text-warning">
             {row.years_from_now} лет
           </div>
           <div className="text-[10px] text-fg-subtle">
-            {fmtDate(row.expires_at)}
+            {fmtDate(row.panel_expires_at ?? row.expires_at)}
+            {!row.panel_available && (
+              <span className="ml-1 text-fg-subtle">
+                (панель недоступна · показан DB)
+              </span>
+            )}
           </div>
         </div>
         {open ? (
@@ -247,9 +252,24 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
 
   return (
     <div className="space-y-3 border-t border-border px-4 py-4 text-xs">
-      {/* Delta summary */}
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-        <Metric label="Сейчас" value={fmtDays(d.actual_days_from_now)} />
+      {/* Delta summary — 5 tiles: DB + panel + paid + admin + expected */}
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+        <Metric label="DB expires_at" value={fmtDays(d.actual_days_from_now)} />
+        <Metric
+          label="панель Remnawave"
+          value={
+            d.panel.available
+              ? d.panel.days_from_now !== null
+                ? fmtDays(d.panel.days_from_now)
+                : "—"
+              : "недоступна"
+          }
+          tone={
+            d.panel.available && d.panel.days_from_now !== null && d.panel.days_from_now > 8 * 365
+              ? "danger"
+              : "muted"
+          }
+        />
         <Metric
           label="Оплачено (счит.)"
           value={`${fmtNum(d.total_paid_days)} д`}
@@ -264,6 +284,22 @@ function CandidateDetail({ telegram_id }: { telegram_id: number }) {
           tone={delta > 0 ? "danger" : "muted"}
         />
       </div>
+
+      {/* Panel mismatch hint — DB vs Remnawave */}
+      {d.panel.available && !d.panel.matches_db && (
+        <div className="rounded-lg border border-accent/30 bg-accent/10 p-3 text-fg">
+          <div className="font-semibold text-accent">
+            DB и панель расходятся
+          </div>
+          <div className="mt-1 text-fg-muted">
+            В bot-DB: <span className="font-mono">{fmtDate(d.subscription.expires_at)}</span>
+            {" · "}
+            В Remnawave (<span className="font-mono">tg_{telegram_id}_premium</span>):{" "}
+            <span className="font-mono">{fmtDate(d.panel.expires_at)}</span>.
+            «Исправить» подрежет expires_at в bot-DB (Remnawave не трогаем — там уже корректный срок).
+          </div>
+        </div>
+      )}
 
       {/* Reason */}
       <div className="rounded-lg border border-warning/30 bg-warning/10 p-3">
