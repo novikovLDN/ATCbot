@@ -143,19 +143,50 @@ async def _bulk_fetch_panel_expires_at(
 #  1. Candidates (list)
 # ──────────────────────────────────────────────────────────────────────
 
+import re
+
+# Matches the default premium-entity username pattern `tg_{telegram_id}_premium`.
+# See app/services/remnawave_premium.py:build_premium_username. If deployment
+# uses a custom REMNAWAVE_PREMIUM_USERNAME_PATTERN, the tail/head is customised
+# but the telegram_id digits are always present as the numeric group.
+_PREMIUM_USERNAME_RE = re.compile(r"^tg_(\d+)_premium$")
+
+
+def _parse_remnawave_dt(raw) -> Optional[datetime]:
+    """Parse Remnawave-returned expireAt into a UTC-aware datetime."""
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]]:
-    """List premium subscriptions with expires_at > NOW + 8 years — AND whose
-    Remnawave premium entity (`tg_{telegram_id}_premium`) also shows > 8 years
-    in the panel. The panel is authoritative for real VPN access; if the panel
-    says 30 days but the bot DB says 10 years, the bot DB is just stale — not
-    a genuine over-issuance, so we filter it out.
+    """List users whose Remnawave premium entity (`tg_{telegram_id}_premium`)
+    has expireAt > NOW + 8 years.
 
-    Ordering: most-suspicious first (largest PANEL expires_at). Rows whose
-    panel value we couldn't fetch fall back to the DB expires_at so they're
-    still surfaced instead of silently disappearing.
+    Panel-driven: the Remnawave panel is the source of truth for real VPN
+    access, so we scan it directly and then enrich with bot-DB data.
+    The alternative (start from `subscriptions.expires_at > NOW+8y`) misses
+    users where the bot DB was already patched but the panel still carries
+    the anomaly.
 
-    Bypass-only rows (is_bypass_only=TRUE / source='bypass_only') are excluded
-    at SQL — those legitimately sit at NOW + 10 years.
+    Ordering: most-suspicious first (largest panel expires_at).
+
+    Bypass-only DB rows would legitimately have expires_at at NOW+10y — but
+    those users don't own a `tg_<id>_premium` entity, so they never appear
+    in this list.
     """
     pool = await get_pool()
     if pool is None:
@@ -163,6 +194,66 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
     now = datetime.now(timezone.utc)
     cutoff = now + _EIGHT_YEARS
 
+    # ── Step 1: scan the Remnawave panel ──────────────────────────────
+    try:
+        from app.services import remnawave_api
+    except Exception as e:
+        logger.error("find_over_issuance_candidates: remnawave_api import failed: %s", e)
+        return []
+
+    all_users = await remnawave_api.get_all_users()
+    if all_users is None:
+        # Cannot list — fail loudly with a marker row so the dashboard
+        # renders a warning rather than an empty list masquerading as OK.
+        logger.error(
+            "find_over_issuance_candidates: get_all_users returned None — panel unreachable"
+        )
+        return [{
+            "telegram_id": 0,
+            "username": None,
+            "subscription_type": None,
+            "source": None,
+            "status": None,
+            "admin_grant_days": None,
+            "is_bypass_only": False,
+            "expires_at": None,
+            "panel_expires_at": None,
+            "panel_available": False,
+            "activated_at": None,
+            "days_from_now": 0,
+            "years_from_now": 0,
+            "panel_unreachable": True,
+        }]
+
+    over_from_panel: List[Dict[str, Any]] = []
+    for u in all_users:
+        username = (u.get("username") or "").strip()
+        m = _PREMIUM_USERNAME_RE.match(username)
+        if not m:
+            continue
+        try:
+            tg_id = int(m.group(1))
+        except (ValueError, TypeError):
+            continue
+        panel_expires_at = _parse_remnawave_dt(u.get("expireAt"))
+        if not panel_expires_at or panel_expires_at <= cutoff:
+            continue
+        over_from_panel.append({
+            "telegram_id": tg_id,
+            "panel_username": username,
+            "panel_expires_at": panel_expires_at,
+            "panel_uuid": u.get("uuid"),
+            "panel_status": u.get("status"),
+        })
+
+    if not over_from_panel:
+        return []
+
+    over_from_panel.sort(key=lambda x: x["panel_expires_at"], reverse=True)
+    over_from_panel = over_from_panel[:limit]
+
+    # ── Step 2: enrich with bot-DB (subscriptions + users) ────────────
+    tg_ids = [x["telegram_id"] for x in over_from_panel]
     async with pool.acquire() as conn:
         try:
             rows = await conn.fetch(
@@ -179,65 +270,48 @@ async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]
                        COALESCE(u.username, '') AS username
                    FROM subscriptions s
                    LEFT JOIN users u ON u.telegram_id = s.telegram_id
-                   WHERE s.expires_at > $1
-                     AND COALESCE(s.is_bypass_only, FALSE) = FALSE
-                     AND (s.source IS NULL OR s.source <> 'bypass_only')
-                   ORDER BY s.expires_at DESC
-                   LIMIT $2""",
-                _to_db_utc(cutoff),
-                limit,
+                   WHERE s.telegram_id = ANY($1::bigint[])""",
+                tg_ids,
             )
         except (asyncpg.UndefinedColumnError, asyncpg.PostgresError) as e:
-            logger.warning("find_over_issuance_candidates: schema mismatch: %s", e)
-            return []
+            logger.warning(
+                "find_over_issuance_candidates: DB enrichment failed: %s", e,
+            )
+            rows = []
 
-    # Batch-fetch panel expireAt for cross-check. Uses semaphore-limited
-    # concurrency; None on any fetch failure → keep the row (safer than
-    # silently dropping — admin sees it and can decide).
-    raw_rows = [dict(r) for r in rows]
-    panel_map = await _bulk_fetch_panel_expires_at(raw_rows)
+    db_map = {r["telegram_id"]: dict(r) for r in rows}
 
     out: List[Dict[str, Any]] = []
-    for r in raw_rows:
-        tg = r["telegram_id"]
-        db_expires_at = _from_db_utc(r["expires_at"])
-        panel_expires_at = panel_map.get(tg)
-
-        # Cross-check: if panel shows ≤ 8 years, real premium is fine — the
-        # bot DB is just stale/misleading. Skip so admin isn't shown a false
-        # positive. If panel couldn't be fetched → keep the row (fail-open).
-        if panel_expires_at is not None and panel_expires_at <= cutoff:
-            continue
-
-        # Use panel value for the "actual" days_from_now if we have it.
-        effective_expires_at = panel_expires_at or db_expires_at
-        days_from_now = (
-            (effective_expires_at - now).days if effective_expires_at else 0
+    for entry in over_from_panel:
+        tg = entry["telegram_id"]
+        db = db_map.get(tg) or {}
+        db_expires_at = (
+            _from_db_utc(db["expires_at"]) if db.get("expires_at") else None
         )
+        panel_expires_at = entry["panel_expires_at"]
+        panel_days = (panel_expires_at - now).days
 
         out.append({
             "telegram_id": tg,
-            "username": r["username"] or None,
-            "subscription_type": r["subscription_type"],
-            "source": r["source"],
-            "status": r["status"],
-            "admin_grant_days": r["admin_grant_days"],
-            "is_bypass_only": r["is_bypass_only"],
+            "username": (db.get("username") or None) or None,
+            "subscription_type": db.get("subscription_type"),
+            "source": db.get("source"),
+            "status": db.get("status"),
+            "admin_grant_days": db.get("admin_grant_days"),
+            "is_bypass_only": db.get("is_bypass_only", False),
             "expires_at": db_expires_at.isoformat() if db_expires_at else None,
-            "panel_expires_at": (
-                panel_expires_at.isoformat() if panel_expires_at else None
-            ),
-            "panel_available": panel_expires_at is not None,
+            "panel_expires_at": panel_expires_at.isoformat(),
+            "panel_available": True,
+            "panel_username": entry["panel_username"],
             "activated_at": (
-                _from_db_utc(r["activated_at"]).isoformat()
-                if r["activated_at"] else None
+                _from_db_utc(db["activated_at"]).isoformat()
+                if db.get("activated_at") else None
             ),
-            "days_from_now": days_from_now,
-            "years_from_now": round(days_from_now / 365.0, 2),
+            "days_from_now": panel_days,
+            "years_from_now": round(panel_days / 365.0, 2),
+            "db_row_missing": tg not in db_map,
         })
 
-    # Re-sort by effective days_from_now DESC after the panel cross-check.
-    out.sort(key=lambda x: x["days_from_now"], reverse=True)
     return out
 
 
@@ -287,7 +361,42 @@ async def get_reconciliation_detail(telegram_id: int) -> Dict[str, Any]:
             telegram_id,
         )
         if not sub_row:
-            return {"telegram_id": telegram_id, "found": False}
+            # No bot-DB row — user may still exist in the Remnawave panel
+            # (that's exactly the case we want to surface). Return an empty
+            # snapshot with panel data so the dashboard can still render.
+            panel_expires_at = await _fetch_panel_expires_at(telegram_id, None)
+            panel_days_from_now = (
+                (panel_expires_at - now).days if panel_expires_at else None
+            )
+            return {
+                "telegram_id": telegram_id,
+                "found": bool(panel_expires_at),
+                "db_row_missing": True,
+                "subscription": {
+                    "expires_at": None,
+                    "activated_at": None,
+                    "subscription_type": None,
+                    "source": None,
+                    "status": None,
+                    "is_bypass_only": False,
+                    "admin_grant_days": 0,
+                },
+                "panel": {
+                    "expires_at": (
+                        panel_expires_at.isoformat() if panel_expires_at else None
+                    ),
+                    "days_from_now": panel_days_from_now,
+                    "available": panel_expires_at is not None,
+                    "matches_db": False,
+                },
+                "payments": [],
+                "total_paid_days": 0,
+                "actual_days_from_now": 0,
+                "expected_days_from_now": 0,
+                "expected_expires_at": now.isoformat(),
+                "delta_days": 0,
+                "over_issuance_events": [],
+            }
 
         payment_rows = await conn.fetch(
             """SELECT id, tariff, amount, status, paid_at, created_at, purchase_id

@@ -97,9 +97,16 @@ export function ReconciliationSection() {
         <div className="rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
           Ошибка загрузки: {(candidates.error as ApiError)?.detail ?? "…"}
         </div>
+      ) : candidates.data?.items[0]?.panel_unreachable ? (
+        <div className="rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
+          Не удалось получить список пользователей из Remnawave.
+          Проверь REMNAWAVE_API_URL / TOKEN и логи —
+          <code className="ml-1 font-mono">get_all_users</code> вернул None.
+        </div>
       ) : (candidates.data?.items.length ?? 0) === 0 ? (
         <div className="rounded-xl border border-border bg-bg-subtle/40 p-6 text-center text-sm text-fg-muted">
-          Кандидатов нет — все премиум-подписки укладываются в 8-летний коридор.
+          Кандидатов нет — все премиум-энтити в Remnawave укладываются
+          в 8-летний коридор.
         </div>
       ) : (
         <div className="space-y-2.5">
@@ -164,6 +171,11 @@ function CandidateRow({ row }: { row: CandidateRow }) {
                 @{row.username}
               </div>
             )}
+            {row.db_row_missing && (
+              <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
+                нет строки в DB
+              </span>
+            )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
             <span>{row.subscription_type ?? "?"}</span>
@@ -175,6 +187,14 @@ function CandidateRow({ row }: { row: CandidateRow }) {
                 <span>admin_grant: {row.admin_grant_days} д</span>
               </>
             ) : null}
+            {row.panel_username && (
+              <>
+                <span className="text-fg-subtle">·</span>
+                <span className="font-mono text-[10px]">
+                  {row.panel_username}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <div className="text-right">

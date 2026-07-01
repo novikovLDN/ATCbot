@@ -490,9 +490,12 @@ export const endpoints = {
         expires_at: string | null;
         panel_expires_at: string | null;
         panel_available: boolean;
+        panel_username?: string | null;
         activated_at: string | null;
         days_from_now: number;
         years_from_now: number;
+        db_row_missing?: boolean;
+        panel_unreachable?: boolean;
       }>;
     }>("/reconciliation/candidates"),
   reconciliationDetail: (telegram_id: number) =>
