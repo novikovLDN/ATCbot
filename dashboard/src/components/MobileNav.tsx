@@ -78,12 +78,16 @@ export function MobileNav() {
             end={it.to === "/"}
             className={({ isActive }) =>
               cn(
-                "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 text-[10px] font-medium transition-colors",
-                isActive ? "text-accent" : "text-fg-subtle hover:text-fg",
+                "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 text-[10px] font-medium transition-all duration-200",
+                // Active = solid lime pill с тёмным текстом и shadow-glow
+                // (как «Dashboard» внизу из brand-deck).
+                isActive
+                  ? "bg-accent text-bg font-semibold shadow-glow-sm"
+                  : "text-fg-subtle hover:text-fg",
               )
             }
           >
-            <it.icon className="h-4 w-4" strokeWidth={2} />
+            <it.icon className="h-4 w-4" strokeWidth={2.25} />
             {it.label}
           </NavLink>
         ))}
@@ -91,11 +95,13 @@ export function MobileNav() {
           type="button"
           onClick={() => setOpen(true)}
           className={cn(
-            "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 text-[10px] font-medium transition-colors",
-            inMore ? "text-accent" : "text-fg-subtle hover:text-fg",
+            "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-2 py-1.5 text-[10px] font-medium transition-all duration-200",
+            inMore
+              ? "bg-accent text-bg font-semibold shadow-glow-sm"
+              : "text-fg-subtle hover:text-fg",
           )}
         >
-          <MoreHorizontal className="h-4 w-4" strokeWidth={2} />
+          <MoreHorizontal className="h-4 w-4" strokeWidth={2.25} />
           Ещё
         </button>
       </nav>

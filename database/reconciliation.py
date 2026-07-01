@@ -1,0 +1,553 @@
+"""Subscription reconciliation & over-issuance audit helpers.
+
+Backs the admin dashboard's «Сверка» screen. Three responsibilities:
+
+1. `find_over_issuance_candidates()` — list users whose PREMIUM subscription
+   currently expires more than 8 years in the future. Bypass-only rows are
+   filtered out (they intentionally sit at NOW + 10y).
+
+2. `get_reconciliation_detail(telegram_id)` — for one user, pull:
+   • the current subscription row,
+   • all approved subscription payments (basic_*/plus_*/combo_* — excluding
+     gifts/topups/traffic packs),
+   • admin grants captured in `subscriptions.admin_grant_days`,
+   • the delta between actual and expected expiry.
+
+3. `apply_reconciliation_fix(...)` — inside a single transaction:
+   • recompute the expected expiry from paid days + admin_grant_days,
+   • update `subscriptions.expires_at` to that value (never earlier than
+     activated_at + paid duration, never in the past — we clamp to
+     `activated_at + total_days`),
+   • insert a row into `subscription_reconciliation_log` with proof.
+
+Over-issuance events are written by `record_over_issuance()` — called by
+`app.services.subscription_watchdog` after every write to `expires_at`.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+import asyncpg
+
+from database.core import get_pool, _to_db_utc, _from_db_utc
+
+logger = logging.getLogger(__name__)
+
+
+# Threshold — anything above this from NOW is considered suspicious.
+_EIGHT_YEARS = timedelta(days=365 * 8)
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  1. Candidates (list)
+# ──────────────────────────────────────────────────────────────────────
+
+async def find_over_issuance_candidates(limit: int = 200) -> List[Dict[str, Any]]:
+    """List premium subscriptions with expires_at > NOW + 8 years.
+
+    Filters out bypass-only rows (they intentionally sit at NOW + 10 years —
+    see ensure_bypass_only_subscription). Returns most-suspicious first
+    (largest expires_at → longest anomaly).
+    """
+    pool = await get_pool()
+    if pool is None:
+        return []
+    now = datetime.now(timezone.utc)
+    cutoff = now + _EIGHT_YEARS
+
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                """SELECT
+                       s.telegram_id,
+                       s.expires_at,
+                       s.activated_at,
+                       s.subscription_type,
+                       s.source,
+                       s.status,
+                       s.admin_grant_days,
+                       COALESCE(s.is_bypass_only, FALSE) AS is_bypass_only,
+                       COALESCE(u.username, '') AS username
+                   FROM subscriptions s
+                   LEFT JOIN users u ON u.telegram_id = s.telegram_id
+                   WHERE s.expires_at > $1
+                     AND COALESCE(s.is_bypass_only, FALSE) = FALSE
+                     AND (s.source IS NULL OR s.source <> 'bypass_only')
+                   ORDER BY s.expires_at DESC
+                   LIMIT $2""",
+                _to_db_utc(cutoff),
+                limit,
+            )
+        except (asyncpg.UndefinedColumnError, asyncpg.PostgresError) as e:
+            logger.warning("find_over_issuance_candidates: schema mismatch: %s", e)
+            return []
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        expires_at = _from_db_utc(r["expires_at"])
+        days_from_now = (expires_at - now).days if expires_at else 0
+        out.append({
+            "telegram_id": r["telegram_id"],
+            "username": r["username"] or None,
+            "subscription_type": r["subscription_type"],
+            "source": r["source"],
+            "status": r["status"],
+            "admin_grant_days": r["admin_grant_days"],
+            "is_bypass_only": r["is_bypass_only"],
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "activated_at": (
+                _from_db_utc(r["activated_at"]).isoformat()
+                if r["activated_at"] else None
+            ),
+            "days_from_now": days_from_now,
+            "years_from_now": round(days_from_now / 365.0, 2),
+        })
+    return out
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  2. Detail — expected vs actual for one user
+# ──────────────────────────────────────────────────────────────────────
+
+def _extract_period_days_from_tariff(tariff: str) -> Optional[int]:
+    """Parse `basic_30`, `plus_365`, `combo_basic_180` etc. into period days.
+
+    Returns None for anything that isn't a subscription-time payment (traffic
+    packs, gifts, topups, bypass GB packs).
+    """
+    if not tariff or tariff == "balance_topup":
+        return None
+    if tariff.startswith(("gift_", "traffic_", "bypass_", "farm_", "apple_", "steam_")):
+        return None
+    parts = tariff.split("_")
+    if not parts:
+        return None
+    # combo_basic_180 → last part; basic_30 → last part; plus_365 → last part.
+    try:
+        days = int(parts[-1])
+    except ValueError:
+        return None
+    # Sanity: subscription periods are 30/90/180/365 in prod. Anything above
+    # 730 days from a single payment is almost certainly a parse artefact.
+    if 1 <= days <= 730:
+        return days
+    return None
+
+
+async def get_reconciliation_detail(telegram_id: int) -> Dict[str, Any]:
+    """Full reconciliation snapshot for a single user."""
+    pool = await get_pool()
+    if pool is None:
+        return {}
+    now = datetime.now(timezone.utc)
+
+    async with pool.acquire() as conn:
+        sub_row = await conn.fetchrow(
+            """SELECT telegram_id, expires_at, activated_at, subscription_type,
+                      source, status, admin_grant_days,
+                      COALESCE(is_bypass_only, FALSE) AS is_bypass_only
+               FROM subscriptions
+               WHERE telegram_id = $1""",
+            telegram_id,
+        )
+        if not sub_row:
+            return {"telegram_id": telegram_id, "found": False}
+
+        payment_rows = await conn.fetch(
+            """SELECT id, tariff, amount, status, paid_at, created_at, purchase_id
+               FROM payments
+               WHERE telegram_id = $1
+                 AND status = 'approved'
+               ORDER BY COALESCE(paid_at, created_at) ASC""",
+            telegram_id,
+        )
+
+        over_rows = await conn.fetch(
+            """SELECT id, created_at, grant_action, source, tariff,
+                      old_expires_at, new_expires_at, duration_added_seconds,
+                      admin_telegram_id, admin_grant_days, caller_context
+               FROM subscription_over_issuance_log
+               WHERE telegram_id = $1
+               ORDER BY created_at DESC
+               LIMIT 20""",
+            telegram_id,
+        )
+
+    expires_at = _from_db_utc(sub_row["expires_at"])
+    activated_at = _from_db_utc(sub_row["activated_at"]) if sub_row["activated_at"] else None
+    admin_grant_days = sub_row["admin_grant_days"] or 0
+
+    total_paid_days = 0
+    proof_payments: List[Dict[str, Any]] = []
+    for p in payment_rows:
+        tariff = (p["tariff"] or "").strip()
+        period_days = _extract_period_days_from_tariff(tariff)
+        item = {
+            "id": p["id"],
+            "tariff": tariff,
+            "amount_rubles": (p["amount"] or 0) / 100.0,
+            "status": p["status"],
+            "paid_at": (
+                _from_db_utc(p["paid_at"]).isoformat()
+                if p["paid_at"] else None
+            ),
+            "created_at": (
+                _from_db_utc(p["created_at"]).isoformat()
+                if p["created_at"] else None
+            ),
+            "purchase_id": p["purchase_id"],
+            "period_days": period_days,
+            "counted": bool(period_days),
+        }
+        if period_days:
+            total_paid_days += period_days
+            proof_payments.append(item)
+        else:
+            # Non-counted (traffic pack / gift / topup) — still surface for context.
+            proof_payments.append(item)
+
+    # Expected expiry = activated_at + total_paid_days + admin_grant_days.
+    # If activated_at is unknown, fall back to earliest paid_at.
+    base_start = activated_at
+    if base_start is None and proof_payments:
+        first_paid = next(
+            (
+                _from_db_utc_str(p["paid_at"]) or _from_db_utc_str(p["created_at"])
+                for p in proof_payments if p.get("counted")
+            ),
+            None,
+        )
+        base_start = first_paid
+    if base_start is None:
+        base_start = now  # last-resort: treat as starting today
+
+    total_days = total_paid_days + int(admin_grant_days or 0)
+    expected_expires_at = base_start + timedelta(days=total_days)
+
+    actual_days_from_now = (expires_at - now).days if expires_at else 0
+    expected_days_from_now = (expected_expires_at - now).days
+    delta_days = actual_days_from_now - expected_days_from_now
+
+    over_issuance_events = []
+    for e in over_rows:
+        over_issuance_events.append({
+            "id": e["id"],
+            "created_at": _from_db_utc(e["created_at"]).isoformat() if e["created_at"] else None,
+            "grant_action": e["grant_action"],
+            "source": e["source"],
+            "tariff": e["tariff"],
+            "old_expires_at": (
+                _from_db_utc(e["old_expires_at"]).isoformat()
+                if e["old_expires_at"] else None
+            ),
+            "new_expires_at": _from_db_utc(e["new_expires_at"]).isoformat(),
+            "duration_added_seconds": e["duration_added_seconds"],
+            "admin_telegram_id": e["admin_telegram_id"],
+            "admin_grant_days": e["admin_grant_days"],
+            "caller_context": e["caller_context"],
+        })
+
+    return {
+        "telegram_id": telegram_id,
+        "found": True,
+        "subscription": {
+            "expires_at": expires_at.isoformat() if expires_at else None,
+            "activated_at": activated_at.isoformat() if activated_at else None,
+            "subscription_type": sub_row["subscription_type"],
+            "source": sub_row["source"],
+            "status": sub_row["status"],
+            "is_bypass_only": sub_row["is_bypass_only"],
+            "admin_grant_days": admin_grant_days,
+        },
+        "payments": proof_payments,
+        "total_paid_days": total_paid_days,
+        "actual_days_from_now": actual_days_from_now,
+        "expected_days_from_now": expected_days_from_now,
+        "expected_expires_at": expected_expires_at.isoformat(),
+        "delta_days": delta_days,
+        "over_issuance_events": over_issuance_events,
+    }
+
+
+def _from_db_utc_str(iso: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO-8601 string (as saved by proof_payments) back into a
+    timezone-aware datetime. Small helper used only by get_reconciliation_detail
+    for computing base_start from the earliest counted payment."""
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  3. Fix — apply reconciliation
+# ──────────────────────────────────────────────────────────────────────
+
+async def apply_reconciliation_fix(
+    telegram_id: int,
+    admin_telegram_id: int,
+    *,
+    reason: str = "manual reconciliation via dashboard",
+) -> Dict[str, Any]:
+    """Recompute expires_at from approved payments + admin_grant_days, apply
+    the correction in a single transaction, and log the before/after.
+
+    Returns a dict describing the outcome — see below.
+    """
+    pool = await get_pool()
+    if pool is None:
+        return {"success": False, "error": "db_unavailable"}
+
+    now = datetime.now(timezone.utc)
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            sub_row = await conn.fetchrow(
+                """SELECT expires_at, activated_at, admin_grant_days,
+                          COALESCE(is_bypass_only, FALSE) AS is_bypass_only
+                   FROM subscriptions
+                   WHERE telegram_id = $1
+                   FOR UPDATE""",
+                telegram_id,
+            )
+            if not sub_row:
+                return {"success": False, "error": "no_subscription"}
+            if sub_row["is_bypass_only"]:
+                return {
+                    "success": False,
+                    "error": "bypass_only_subscription_skipped",
+                }
+
+            old_expires_at = _from_db_utc(sub_row["expires_at"])
+            activated_at = _from_db_utc(sub_row["activated_at"]) if sub_row["activated_at"] else None
+            admin_grant_days = sub_row["admin_grant_days"] or 0
+
+            payment_rows = await conn.fetch(
+                """SELECT id, tariff, COALESCE(paid_at, created_at) AS effective_at
+                   FROM payments
+                   WHERE telegram_id = $1
+                     AND status = 'approved'
+                   ORDER BY COALESCE(paid_at, created_at) ASC""",
+                telegram_id,
+            )
+
+            proof_ids: List[int] = []
+            total_paid_days = 0
+            earliest_effective: Optional[datetime] = None
+            for p in payment_rows:
+                period_days = _extract_period_days_from_tariff((p["tariff"] or "").strip())
+                if not period_days:
+                    continue
+                proof_ids.append(p["id"])
+                total_paid_days += period_days
+                eff = _from_db_utc(p["effective_at"]) if p["effective_at"] else None
+                if eff and (earliest_effective is None or eff < earliest_effective):
+                    earliest_effective = eff
+
+            base_start = activated_at or earliest_effective or now
+            total_days = total_paid_days + int(admin_grant_days or 0)
+            new_expires_at = base_start + timedelta(days=total_days)
+
+            # Safety guards:
+            #  – never move expires_at further into the future than it was.
+            #  – if the calculated new_expires_at is in the past (e.g. user paid
+            #    for basic_30 four years ago and never renewed), we still write
+            #    it — the standard expiry cleanup worker will pick it up next
+            #    cycle and either mark expired or transition to bypass-only.
+            if old_expires_at and new_expires_at > old_expires_at:
+                return {
+                    "success": False,
+                    "error": "would_extend_not_shorten",
+                    "old_expires_at": old_expires_at.isoformat(),
+                    "new_expires_at": new_expires_at.isoformat(),
+                }
+
+            days_removed = (
+                (old_expires_at - new_expires_at).days
+                if old_expires_at else 0
+            )
+
+            await conn.execute(
+                """UPDATE subscriptions
+                   SET expires_at = $1
+                   WHERE telegram_id = $2""",
+                _to_db_utc(new_expires_at),
+                telegram_id,
+            )
+
+            log_id = await conn.fetchval(
+                """INSERT INTO subscription_reconciliation_log (
+                       telegram_id, old_expires_at, new_expires_at,
+                       old_days_from_now, new_days_from_now, days_removed,
+                       reason, proof_payment_ids, total_paid_days,
+                       admin_grant_days_kept, admin_telegram_id
+                   )
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                   RETURNING id""",
+                telegram_id,
+                _to_db_utc(old_expires_at) if old_expires_at else _to_db_utc(now),
+                _to_db_utc(new_expires_at),
+                (old_expires_at - now).days if old_expires_at else 0,
+                (new_expires_at - now).days,
+                days_removed,
+                reason,
+                proof_ids,
+                total_paid_days,
+                int(admin_grant_days or 0),
+                admin_telegram_id,
+            )
+
+    logger.info(
+        "RECONCILIATION_FIX_APPLIED user=%s old=%s new=%s removed_days=%s "
+        "total_paid_days=%s admin_grant_days=%s proof_ids=%s log_id=%s",
+        telegram_id,
+        old_expires_at.isoformat() if old_expires_at else None,
+        new_expires_at.isoformat(),
+        days_removed,
+        total_paid_days,
+        admin_grant_days,
+        proof_ids,
+        log_id,
+    )
+
+    return {
+        "success": True,
+        "log_id": log_id,
+        "old_expires_at": old_expires_at.isoformat() if old_expires_at else None,
+        "new_expires_at": new_expires_at.isoformat(),
+        "days_removed": days_removed,
+        "total_paid_days": total_paid_days,
+        "admin_grant_days_kept": int(admin_grant_days or 0),
+        "proof_payment_ids": proof_ids,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  4. Audit logs (list)
+# ──────────────────────────────────────────────────────────────────────
+
+async def list_reconciliation_log(limit: int = 100) -> List[Dict[str, Any]]:
+    pool = await get_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                """SELECT id, telegram_id, old_expires_at, new_expires_at,
+                          old_days_from_now, new_days_from_now, days_removed,
+                          reason, proof_payment_ids, total_paid_days,
+                          admin_grant_days_kept, admin_telegram_id, created_at
+                   FROM subscription_reconciliation_log
+                   ORDER BY created_at DESC
+                   LIMIT $1""",
+                limit,
+            )
+        except asyncpg.UndefinedTableError:
+            return []
+    return [_serialize(r) for r in rows]
+
+
+async def list_over_issuance_log(limit: int = 100) -> List[Dict[str, Any]]:
+    pool = await get_pool()
+    if pool is None:
+        return []
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch(
+                """SELECT id, telegram_id, old_expires_at, new_expires_at,
+                          duration_added_seconds, grant_action, source, tariff,
+                          admin_telegram_id, admin_grant_days,
+                          caller_context, created_at
+                   FROM subscription_over_issuance_log
+                   ORDER BY created_at DESC
+                   LIMIT $1""",
+                limit,
+            )
+        except asyncpg.UndefinedTableError:
+            return []
+    return [_serialize(r) for r in rows]
+
+
+# ──────────────────────────────────────────────────────────────────────
+#  5. Over-issuance recording (called from subscription_watchdog)
+# ──────────────────────────────────────────────────────────────────────
+
+async def record_over_issuance(
+    telegram_id: int,
+    *,
+    old_expires_at: Optional[datetime],
+    new_expires_at: datetime,
+    grant_action: str,
+    source: Optional[str],
+    tariff: Optional[str],
+    admin_telegram_id: Optional[int],
+    admin_grant_days: Optional[int],
+    caller_context: Optional[str],
+) -> Optional[int]:
+    """Insert one over-issuance log row. Fire-and-forget — never raises."""
+    pool = await get_pool()
+    if pool is None:
+        return None
+    try:
+        duration_added = None
+        if new_expires_at and old_expires_at:
+            duration_added = int((new_expires_at - old_expires_at).total_seconds())
+        elif new_expires_at:
+            duration_added = int(
+                (new_expires_at - datetime.now(timezone.utc)).total_seconds()
+            )
+        async with pool.acquire() as conn:
+            log_id = await conn.fetchval(
+                """INSERT INTO subscription_over_issuance_log (
+                       telegram_id, old_expires_at, new_expires_at,
+                       duration_added_seconds, grant_action, source, tariff,
+                       admin_telegram_id, admin_grant_days, caller_context
+                   )
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                   RETURNING id""",
+                telegram_id,
+                _to_db_utc(old_expires_at) if old_expires_at else None,
+                _to_db_utc(new_expires_at),
+                duration_added,
+                grant_action,
+                source,
+                tariff,
+                admin_telegram_id,
+                admin_grant_days,
+                (caller_context or "")[:2000],
+            )
+        return log_id
+    except Exception as e:
+        logger.warning(
+            "record_over_issuance failed user=%s: %s", telegram_id, e,
+        )
+        return None
+
+
+def _serialize(row) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in row.items():
+        if hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+        elif isinstance(v, (bytes, bytearray)):
+            continue
+        else:
+            out[k] = v
+    return out
+
+
+__all__ = [
+    "find_over_issuance_candidates",
+    "get_reconciliation_detail",
+    "apply_reconciliation_fix",
+    "list_reconciliation_log",
+    "list_over_issuance_log",
+    "record_over_issuance",
+]

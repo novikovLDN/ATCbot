@@ -28,6 +28,7 @@ from app.api.dashboard.routes import payments as _payments
 from app.api.dashboard.routes import settings as _settings
 from app.api.dashboard.routes import activations as _activations
 from app.api.dashboard.routes import bypass_audit as _bypass_audit
+from app.api.dashboard.routes import reconciliation as _reconciliation
 from app.api.dashboard import auth as _auth
 from app.api.dashboard import ws as _ws
 
@@ -47,6 +48,7 @@ router.include_router(_payments.router, prefix="/payments", tags=["payments"])
 router.include_router(_activations.router, prefix="/activations", tags=["activations"])
 router.include_router(_settings.router, prefix="/settings", tags=["settings"])
 router.include_router(_bypass_audit.router, prefix="/bypass-audit", tags=["bypass-audit"])
+router.include_router(_reconciliation.router, prefix="/reconciliation", tags=["reconciliation"])
 
 # Separate router for the WebSocket endpoint — FastAPI requires WS
 # routes to be on a router (or app) that hasn't had a `prefix` applied

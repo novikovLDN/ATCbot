@@ -474,6 +474,118 @@ export const endpoints = {
     api.post<{ ok: boolean; count: number; delay_seconds: number }>(
       "/settings/notifications/test",
     ),
+
+  // ── Reconciliation («Сверка») ─────────────────────────────────────
+  reconciliationCandidates: () =>
+    api.get<{
+      total: number;
+      items: Array<{
+        telegram_id: number;
+        username: string | null;
+        subscription_type: string | null;
+        source: string | null;
+        status: string | null;
+        admin_grant_days: number | null;
+        is_bypass_only: boolean;
+        expires_at: string | null;
+        activated_at: string | null;
+        days_from_now: number;
+        years_from_now: number;
+      }>;
+    }>("/reconciliation/candidates"),
+  reconciliationDetail: (telegram_id: number) =>
+    api.get<{
+      telegram_id: number;
+      found: boolean;
+      subscription: {
+        expires_at: string | null;
+        activated_at: string | null;
+        subscription_type: string | null;
+        source: string | null;
+        status: string | null;
+        is_bypass_only: boolean;
+        admin_grant_days: number;
+      };
+      payments: Array<{
+        id: number;
+        tariff: string;
+        amount_rubles: number;
+        status: string;
+        paid_at: string | null;
+        created_at: string | null;
+        purchase_id: string | null;
+        period_days: number | null;
+        counted: boolean;
+      }>;
+      total_paid_days: number;
+      actual_days_from_now: number;
+      expected_days_from_now: number;
+      expected_expires_at: string;
+      delta_days: number;
+      over_issuance_events: Array<{
+        id: number;
+        created_at: string | null;
+        grant_action: string | null;
+        source: string | null;
+        tariff: string | null;
+        old_expires_at: string | null;
+        new_expires_at: string;
+        duration_added_seconds: number | null;
+        admin_telegram_id: number | null;
+        admin_grant_days: number | null;
+        caller_context: string | null;
+      }>;
+    }>(`/reconciliation/candidates/${telegram_id}`),
+  reconciliationFix: (telegram_id: number, reason?: string) =>
+    api.post<{
+      success: boolean;
+      log_id: number;
+      old_expires_at: string | null;
+      new_expires_at: string;
+      days_removed: number;
+      total_paid_days: number;
+      admin_grant_days_kept: number;
+      proof_payment_ids: number[];
+    }>(
+      `/reconciliation/fix/${telegram_id}${
+        reason ? `?reason=${encodeURIComponent(reason)}` : ""
+      }`,
+    ),
+  reconciliationAuditLog: () =>
+    api.get<
+      Array<{
+        id: number;
+        telegram_id: number;
+        old_expires_at: string;
+        new_expires_at: string;
+        old_days_from_now: number;
+        new_days_from_now: number;
+        days_removed: number;
+        reason: string;
+        proof_payment_ids: number[];
+        total_paid_days: number;
+        admin_grant_days_kept: number;
+        admin_telegram_id: number | null;
+        created_at: string;
+      }>
+    >("/reconciliation/audit-log"),
+  reconciliationOverIssuanceLog: () =>
+    api.get<
+      Array<{
+        id: number;
+        telegram_id: number;
+        old_expires_at: string | null;
+        new_expires_at: string;
+        duration_added_seconds: number | null;
+        grant_action: string | null;
+        source: string | null;
+        tariff: string | null;
+        admin_telegram_id: number | null;
+        admin_grant_days: number | null;
+        caller_context: string | null;
+        created_at: string;
+      }>
+    >("/reconciliation/over-issuance-log"),
 };
 
 // Auth-aware CSV download via fetch + blob. Returns nothing; triggers

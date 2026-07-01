@@ -29,6 +29,7 @@ import {
   mskTodayStartIso,
 } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
+import { ReconciliationSection } from "@/components/ReconciliationSection";
 
 // ─ Daily chart metric/range config ──────────────────────────────────
 
@@ -314,7 +315,7 @@ export function Dashboard() {
           </div>
           <Link
             to="/broadcasts/new"
-            className="group inline-flex items-center gap-2 rounded-full bg-fg px-5 py-2.5 text-sm font-medium text-white shadow-[0_8px_20px_-8px_rgba(0,0,0,0.45)] transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-fg/90 hover:shadow-[0_14px_28px_-10px_rgba(0,0,0,0.55)] active:translate-y-0"
+            className="group inline-flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 text-sm font-semibold text-bg shadow-glow transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 hover:bg-accent-hover hover:shadow-[0_14px_28px_-10px_rgba(215,255,103,0.45)] active:translate-y-0"
           >
             <Megaphone className="h-3.5 w-3.5 transition-transform duration-300 group-hover:rotate-[-8deg]" />
             Новая рассылка
@@ -684,6 +685,10 @@ export function Dashboard() {
             </ul>
           )}
         </SurfaceCard>
+
+        {/* «Сверка» — reconciliation of premium subscriptions vs. paid history.
+            Lives at the very bottom of the main dashboard per product spec. */}
+        <ReconciliationSection />
       </div>
     </div>
   );
@@ -991,10 +996,10 @@ function SegPill<T extends string | number>({
   const idx = Math.max(0, options.indexOf(value));
   const total = options.length;
   return (
-    <div className="relative inline-flex shrink-0 items-stretch rounded-full border border-border bg-bg-card p-0.5 text-[11px] font-medium shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+    <div className="relative inline-flex shrink-0 items-stretch rounded-full border border-border bg-bg-elevated p-0.5 text-[11px] font-medium">
       <div
         aria-hidden
-        className="absolute inset-y-0.5 rounded-full bg-fg shadow-cta transition-[transform,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+        className="absolute inset-y-0.5 rounded-full bg-accent shadow-glow-sm transition-[transform,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
         style={{
           width: `calc((100% - 4px) / ${total})`,
           transform: `translateX(calc(${idx} * 100%))`,
@@ -1008,7 +1013,7 @@ function SegPill<T extends string | number>({
           onClick={() => onChange(o)}
           className={
             "relative z-10 flex-1 rounded-full px-2.5 py-1 transition-colors duration-200 " +
-            (o === value ? "text-bg-card" : "text-fg-muted hover:text-fg")
+            (o === value ? "font-semibold text-bg" : "text-fg-muted hover:text-fg")
           }
         >
           {fmt(o)}
@@ -1058,8 +1063,8 @@ function MetricSwitcher({
             className={
               "group inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200 " +
               (active
-                ? "border-transparent bg-fg text-bg-card shadow-cta"
-                : "border-border bg-bg-card text-fg-muted hover:border-fg-subtle/40 hover:text-fg")
+                ? "border-transparent bg-accent text-bg shadow-glow-sm font-semibold"
+                : "border-border bg-bg-card text-fg-muted hover:border-accent/40 hover:text-fg")
             }
           >
             <span
@@ -1319,7 +1324,7 @@ function HourlyChart({
           </span>
         </div>
       </div>
-      <div className="mt-4 flex h-44 items-end gap-1">
+      <div className="relative mt-4 flex h-44 items-end gap-1">
         {data.map((d) => {
           const v = Number(d[metric]) || 0;
           const pct = (v / max) * 100;
@@ -1329,21 +1334,56 @@ function HourlyChart({
               key={d.hour}
               className="group relative flex flex-1 flex-col items-center justify-end"
             >
+              {/* Бар. Peak — solid lime с верхним brighter градиентом
+                  + glow snippet. Прочие — приглушённый зинк. Так
+                  «один лаймовый» бар читается как фокус-точка
+                  (brand-deck $16,021 / Cashflow). */}
               <div
                 className="w-full rounded-t-md transition-[height,background-color] duration-500 ease-out"
                 style={{
                   height: `${Math.max(2, pct)}%`,
-                  background: isPeak ? def.color : def.color + "66",
+                  background: isPeak
+                    ? "linear-gradient(180deg, #E2FF85 0%, #D7FF67 70%, #A6CC3F 100%)"
+                    : "#262626",
+                  boxShadow: isPeak
+                    ? "0 8px 22px -10px rgba(215,255,103,0.55)"
+                    : undefined,
                 }}
               />
-              {/* tooltip on hover */}
-              <div className="pointer-events-none absolute bottom-full mb-1 hidden whitespace-nowrap rounded-md border border-border bg-bg-card px-2 py-1 text-[10px] font-medium shadow-md group-hover:block">
-                <span className="tabular-nums">{String(d.hour).padStart(2, "0")}:00</span>
-                <span className="ml-1.5 text-fg-subtle">·</span>
-                <span className="ml-1.5 tabular-nums text-fg">
-                  {def.valueFmt(v)}
-                </span>
-              </div>
+              {/* Постоянный tooltip-pill над peak-баром (вне hover). */}
+              {isPeak && (
+                <>
+                  <div className="pointer-events-none absolute bottom-full mb-2 whitespace-nowrap rounded-full bg-accent px-2.5 py-1 text-[10px] font-semibold tabular-nums text-bg shadow-glow-sm">
+                    {def.valueFmt(v)}
+                    <span
+                      aria-hidden
+                      className="absolute -bottom-0.5 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rotate-45 bg-accent"
+                    />
+                  </div>
+                  {/* Пунктирная вертикальная линия от вершины
+                      peak-бара к базе — отметка «фокус-точки». */}
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-y-0 left-1/2 -z-10 w-px -translate-x-1/2"
+                    style={{
+                      backgroundImage:
+                        "linear-gradient(to bottom, rgba(252,252,252,0.35) 50%, transparent 0%)",
+                      backgroundSize: "1px 4px",
+                      backgroundRepeat: "repeat-y",
+                    }}
+                  />
+                </>
+              )}
+              {/* Hover-tooltip для non-peak — даём контекст. */}
+              {!isPeak && (
+                <div className="pointer-events-none absolute bottom-full mb-1 hidden whitespace-nowrap rounded-md border border-border bg-bg-card px-2 py-1 text-[10px] font-medium shadow-md group-hover:block">
+                  <span className="tabular-nums">{String(d.hour).padStart(2, "0")}:00</span>
+                  <span className="ml-1.5 text-fg-subtle">·</span>
+                  <span className="ml-1.5 tabular-nums text-fg">
+                    {def.valueFmt(v)}
+                  </span>
+                </div>
+              )}
             </div>
           );
         })}
