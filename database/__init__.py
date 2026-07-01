@@ -322,3 +322,13 @@ from database.admin import (  # noqa: F401
     update_subscription_expires_at_bulk,
     get_active_trial_telegram_ids,
 )
+
+# Subscription reconciliation & over-issuance watchdog
+from database.reconciliation import (  # noqa: F401
+    find_over_issuance_candidates,
+    get_reconciliation_detail,
+    apply_reconciliation_fix,
+    list_reconciliation_log,
+    list_over_issuance_log,
+    record_over_issuance,
+)

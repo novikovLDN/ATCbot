@@ -17,6 +17,45 @@ from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING, List
 import config
 import vpn_utils
 import database.core as _core
+
+
+def _notify_watchdog_expires_at(
+    telegram_id: int,
+    *,
+    grant_action: str,
+    old_expires_at: Optional[datetime],
+    new_expires_at: datetime,
+    source: Optional[str] = None,
+    tariff: Optional[str] = None,
+    admin_telegram_id: Optional[int] = None,
+    admin_grant_days: Optional[int] = None,
+) -> None:
+    """Fire-and-forget bridge to app.services.subscription_watchdog.
+
+    Called after every UPDATE/INSERT that writes `subscriptions.expires_at`.
+    Never raises. If the new value is > NOW + 8 years for a PREMIUM row,
+    the watchdog logs it to `subscription_over_issuance_log` and sends a
+    Telegram admin alert. Bypass-only rows are filtered out here — the
+    watchdog also checks, but this is a fast early-out.
+    """
+    if not new_expires_at:
+        return
+    try:
+        from app.services.subscription_watchdog import notify_expires_at_write
+        notify_expires_at_write(
+            telegram_id,
+            old_expires_at=old_expires_at,
+            new_expires_at=new_expires_at,
+            grant_action=grant_action,
+            source=source,
+            tariff=tariff,
+            admin_telegram_id=admin_telegram_id,
+            admin_grant_days=admin_grant_days,
+            is_bypass_only=False,
+        )
+    except Exception:
+        # Watchdog must never break the grant flow.
+        pass
 from database.core import (
     get_pool,
     _to_db_utc, _from_db_utc, _ensure_utc,
@@ -1481,6 +1520,15 @@ async def grant_access(
                            WHERE telegram_id = $3""",
                         _to_db_utc(subscription_end), source, telegram_id
                     )
+                    _notify_watchdog_expires_at(
+                        telegram_id,
+                        grant_action="basic_to_plus_upgrade",
+                        old_expires_at=old_expires_at,
+                        new_expires_at=subscription_end,
+                        source=source, tariff="plus",
+                        admin_telegram_id=admin_telegram_id,
+                        admin_grant_days=admin_grant_days,
+                    )
                     vpn_key_existing = subscription.get("vpn_key")
                     vpn_key_plus_existing = subscription.get("vpn_key_plus")
                     await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
@@ -1546,6 +1594,15 @@ async def grant_access(
                            reminder_3h_sent = FALSE, reminder_6h_sent = FALSE, activation_status = 'active'
                        WHERE telegram_id = $3""",
                     _to_db_utc(subscription_end), source, telegram_id
+                )
+                _notify_watchdog_expires_at(
+                    telegram_id,
+                    grant_action="plus_to_basic_downgrade",
+                    old_expires_at=old_expires_at,
+                    new_expires_at=subscription_end,
+                    source=source, tariff="basic",
+                    admin_telegram_id=admin_telegram_id,
+                    admin_grant_days=admin_grant_days,
                 )
                 await _log_subscription_history_atomic(conn, telegram_id, vpn_key_existing or uuid, subscription_start, subscription_end, "renewal")
                 logger.info(
@@ -1658,6 +1715,16 @@ async def grant_access(
                         error_msg = f"Failed to verify subscription renewal for user {telegram_id}"
                         logger.error(f"grant_access: ERROR_RENEWAL_VERIFICATION [user={telegram_id}, error={error_msg}]")
                         raise Exception(error_msg)
+
+                    _notify_watchdog_expires_at(
+                        telegram_id,
+                        grant_action="renewal",
+                        old_expires_at=old_expires_at,
+                        new_expires_at=subscription_end,
+                        source=source, tariff=incoming_tariff,
+                        admin_telegram_id=admin_telegram_id,
+                        admin_grant_days=admin_grant_days,
+                    )
                     
                     logger.info(
                         f"grant_access: RENEWAL_SYNC_SUCCESS [telegram_id={telegram_id}, uuid={uuid[:8]}..., "
@@ -1864,7 +1931,16 @@ async def grant_access(
                            country = COALESCE($6, subscriptions.country),
                            subscription_type = COALESCE($7, subscriptions.subscription_type),
                            is_bypass_only = FALSE""",
-                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type
+                    telegram_id, _to_db_utc(subscription_end), source, admin_grant_days, _to_db_utc(subscription_start), country, pending_sub_type,
+                )
+                _notify_watchdog_expires_at(
+                    telegram_id,
+                    grant_action="new_issuance_pending",
+                    old_expires_at=None,
+                    new_expires_at=subscription_end,
+                    source=source, tariff=pending_sub_type,
+                    admin_telegram_id=admin_telegram_id,
+                    admin_grant_days=admin_grant_days,
                 )
                 
                 # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
@@ -2170,7 +2246,16 @@ async def grant_access(
                        is_bypass_only = FALSE""",
                 *args
             )
-            
+            _notify_watchdog_expires_at(
+                telegram_id,
+                grant_action="new_issuance",
+                old_expires_at=None,
+                new_expires_at=subscription_end,
+                source=source, tariff=subscription_type_value,
+                admin_telegram_id=admin_telegram_id,
+                admin_grant_days=admin_grant_days,
+            )
+
             # ВАЛИДАЦИЯ: Проверяем что запись действительно сохранена
             saved_subscription = await conn.fetchrow(
                 "SELECT uuid, expires_at, status FROM subscriptions WHERE telegram_id = $1",

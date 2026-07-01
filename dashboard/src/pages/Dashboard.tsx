@@ -29,6 +29,7 @@ import {
   mskTodayStartIso,
 } from "@/lib/format";
 import { EmptyState } from "@/components/EmptyState";
+import { ReconciliationSection } from "@/components/ReconciliationSection";
 
 // ─ Daily chart metric/range config ──────────────────────────────────
 
@@ -684,6 +685,10 @@ export function Dashboard() {
             </ul>
           )}
         </SurfaceCard>
+
+        {/* «Сверка» — reconciliation of premium subscriptions vs. paid history.
+            Lives at the very bottom of the main dashboard per product spec. */}
+        <ReconciliationSection />
       </div>
     </div>
   );
